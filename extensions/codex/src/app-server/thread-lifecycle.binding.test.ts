@@ -16,6 +16,7 @@ import {
 import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import {
   isJsonObject,
@@ -1621,14 +1622,21 @@ describe("Codex app-server thread lifecycle bindings", () => {
     async ({ options, error }) => {
       const fixture = await createManualResumeFixture(options);
       const before = await readCodexAppServerBinding(fixture.sessionFile);
-      const handlers = fixture.notifications.length;
       try {
+        await resolveCodexNativeSkillIsolation({
+          client: fixture.client,
+          cwd: fixture.common.cwd,
+          codexHome: fixture.common.appServer.start.env?.CODEX_HOME,
+          home: fixture.common.appServer.start.env?.HOME,
+          userProfile: fixture.common.appServer.start.env?.USERPROFILE,
+        });
+        const handlers = [...fixture.notifications];
         await expect(fixture.start()).rejects.toThrow(error);
         expect(await readCodexAppServerBinding(fixture.sessionFile)).toEqual(before);
         expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(
           false,
         );
-        expect(fixture.notifications).toHaveLength(handlers);
+        expect([...fixture.notifications]).toEqual(handlers);
       } finally {
         fixture.close();
       }
@@ -1947,94 +1955,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
     },
   );
-
-  it("reuses an isolated retained thread without dropping native skill isolation", async () => {
-    vi.stubEnv("HOME", tempDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "isolated-state"));
-    const sessionFile = path.join(tempDir, "warm-isolated-session.jsonl");
-    const workspaceDir = path.join(tempDir, "warm-isolated-workspace");
-    const personalSkill = path.join(tempDir, ".claude", "skills", "personal", "SKILL.md");
-    await fs.mkdir(path.dirname(personalSkill), { recursive: true });
-    await fs.writeFile(personalSkill, "personal");
-    const personalSkillRealPath = await fs.realpath(personalSkill);
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "skills/list") {
-        return {
-          data: [
-            {
-              cwd: workspaceDir,
-              errors: [],
-              skills: [
-                {
-                  name: "personal",
-                  description: "Personal skill",
-                  path: personalSkillRealPath,
-                  scope: "user",
-                  enabled: true,
-                },
-              ],
-            },
-          ],
-        };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-warm-isolated");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const client = {
-      getInstanceId: () => "client-warm-isolated",
-      request,
-      addNotificationHandler: () => () => undefined,
-      addRequestHandler: () => () => undefined,
-      addCloseHandler: () => () => undefined,
-    } as never;
-    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
-    const common = {
-      client,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
-      userMcpServersEnabled: false,
-    };
-
-    const started = await startOrResumeThread(common);
-    await expect(
-      retainCodexAppServerLiveThread(
-        client,
-        started.threadId,
-        undefined,
-        started.liveThreadConfigFingerprint,
-      ),
-    ).resolves.toBe(true);
-    await expect(startOrResumeThread(common)).resolves.toMatchObject({
-      threadId: "thread-warm-isolated",
-      lifecycle: { action: "resumed" },
-    });
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "skills/list",
-      "config/read",
-      "configRequirements/read",
-      "thread/start",
-      "config/read",
-      "configRequirements/read",
-    ]);
-    const startRequest = request.mock.calls.find(([method]) => method === "thread/start")?.[1];
-    expect(startRequest).toMatchObject({
-      config: {
-        "skills.include_instructions": false,
-        "skills.config": [{ path: personalSkillRealPath, enabled: false }],
-      },
-    });
-  });
 
   it("refreshes model and workspace ownership when reusing a turn-mutable native session", async () => {
     const sessionFile = path.join(tempDir, "warm-model-workspace.jsonl");

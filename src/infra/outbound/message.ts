@@ -14,6 +14,7 @@ import {
 } from "../../channels/message/runtime.js";
 import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channels/message/types.js";
 import type { ChannelPlugin, ChannelPollResult } from "../../channels/plugins/types.public.js";
+import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
@@ -187,8 +188,12 @@ type MessagePollParams = {
   inboundEventKind?: InboundEventKind;
   /** @internal Runs immediately before recipient-visible poll platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Revalidate live caller authority at the direct poll adapter. */
+  assertDirectAdapterHandoff?: () => void;
   /** @internal Channel plugin already selected and bootstrapped by the caller. */
   preparedPlugin?: ChannelPlugin;
+  /** @internal The active Gateway is executing this provider-owned poll locally. */
+  gatewayOwnedDelivery?: boolean;
 };
 
 export type MessagePollResult = {
@@ -517,6 +522,13 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     const shouldThrowFailure =
       !params.bestEffort && params.gateway?.clientName !== GATEWAY_CLIENT_NAMES.CLI;
     if (shouldThrowFailure && (send.status === "failed" || send.status === "partial_failed")) {
+      if (send.status === "partial_failed") {
+        throw createChannelPartialDeliveryError(send.error, {
+          messageIds: send.results.map((result) => result.messageId),
+          receipt: send.receipt,
+          visibleReplySent: true,
+        });
+      }
       throw send.error;
     }
     const results = send.status === "sent" || send.status === "partial_failed" ? send.results : [];
@@ -526,7 +538,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     return {
       channel,
       to: params.to,
-      via: "direct",
+      via: deliveryMode === "gateway" ? "gateway" : "direct",
       mediaUrl: primaryMediaUrl,
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
       result: results.at(-1),
@@ -618,7 +630,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     isAnonymous: params.isAnonymous,
   });
 
-  if (deliveryMode !== "gateway") {
+  if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
     const resolvedTarget = resolveOutboundTarget({
       channel,
       plugin,
@@ -631,6 +643,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       throw resolvedTarget.error;
     }
 
+    params.assertDirectAdapterHandoff?.();
     const result = await outbound.sendPoll({
       cfg,
       to: resolvedTarget.to,
@@ -643,13 +656,14 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       sessionKey: params.sessionKey,
       inboundEventKind: params.inboundEventKind,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     });
 
     return buildMessagePollResult({
       channel,
       to: params.to,
       normalized,
-      via: "direct",
+      via: deliveryMode === "gateway" ? "gateway" : "direct",
       result: normalizeMessagePollDeliveryResult(result),
     });
   }
@@ -657,6 +671,8 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
   const result = await callMessageGateway<ChannelPollResult>({
     gateway: params.gateway,
     method: "poll",
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     params: {
       to: params.to,
       question: normalized.question,

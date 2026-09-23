@@ -11,8 +11,10 @@ complete until `main` carries the actual shipped release state.
    Audit `release/YYYY.M.PATCH` against it and
    forward-port real fixes that are absent from `main`. Do not blindly merge
    release-only compatibility, test, or validation adapters into newer `main`.
-2. Set `main` to the shipped stable version, not a speculative next train. Run
-   `pnpm release:prep` after the root version change, then
+2. Normally set `main` to the shipped stable version, not a speculative next
+   train. For late closeout, do not downgrade an already-started later stable
+   train; retain the validator's exact shipped-note and version checks. Run
+   `pnpm release:prep` after any root version change, then
    `pnpm deps:npm-lock:check`.
 3. Resolve the shipped section through `scripts/lib/release-changelog.mjs`
    so historical tags and current split artifacts use the same reader. Make
@@ -32,12 +34,12 @@ complete until `main` carries the actual shipped release state.
    section to `main` until the operator explicitly starts that release train.
 5. Run `pnpm release:generated:check`, `pnpm deps:npm-lock:check`, and
    `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, then verify `origin/main`
-   contains the shipped version and changelog before calling the stable release
-   done.
+   contains the exact shipped notes and the validator-accepted shipped-or-later
+   stable version before calling the stable release done.
 6. Keep repository variables `RELEASE_ROLLBACK_DRILL_ID` and
    `RELEASE_ROLLBACK_DRILL_DATE` current after each private rollback drill.
    `openclaw-stable-main-closeout.yml` starts from the `main` push carrying the
-   shipped version and changelog after stable publication, then binds immutable
+   accepted stable version and shipped changelog after stable publication, then binds immutable
    evidence to the published tag. App assets may still be pending; record
    `appPlatforms` states for macOS, Windows, and Android, with aggregate
    `apps: attached` only when every canonical platform asset contract is

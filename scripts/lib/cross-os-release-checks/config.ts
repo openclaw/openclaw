@@ -446,13 +446,30 @@ export function resolveRunnerMatrix(params: {
   const include = runners.flatMap((runner) =>
     suites
       .filter((suite) => suiteFilter.matches(runner.os_id, suite))
-      .map((suite) =>
-        Object.assign({}, runner, {
-          suite,
-          suite_label: formatSuiteLabel(suite),
-          lane: suite.includes(`upgrade`) || suite === `dev-update` ? `upgrade` : `fresh`,
-        }),
-      ),
+      .flatMap((suite) => {
+        // Windows packaged-fresh retains the validated version before the
+        // Node 24.19 libuv fs-event crash on Windows Server 2025 RUNNER~1 paths.
+        const node24Version =
+          runner.os_id === "windows" && suite === "packaged-fresh" ? "24.16.0" : "24.19.0";
+        const nodeVersions =
+          suite === "packaged-fresh" || suite === "packaged-upgrade"
+            ? [node24Version, "26.1.0"]
+            : [node24Version];
+        return nodeVersions.map((nodeVersion) =>
+          Object.assign({}, runner, {
+            artifact_name:
+              nodeVersion === node24Version
+                ? runner.artifact_name
+                : `${runner.artifact_name}-node${nodeVersion}`,
+            node_version: nodeVersion,
+            suite,
+            suite_label:
+              formatSuiteLabel(suite) +
+              (nodeVersion === node24Version ? "" : ` (Node ${nodeVersion})`),
+            lane: suite.includes(`upgrade`) || suite === `dev-update` ? `upgrade` : `fresh`,
+          }),
+        );
+      }),
   );
   if (include.length === 0) {
     throw new Error(

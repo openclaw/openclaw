@@ -65,21 +65,6 @@ struct ExecAllowlistEntryMatchKey: Hashable, Sendable {
     }
 }
 
-struct ExecApprovalsSnapshot: Codable, Sendable {
-    var path: String
-    var exists: Bool
-    var hash: String
-    var file: ExecApprovalsFile
-}
-
-enum ExecApprovalsConditionalSaveResult {
-    case saved(ExecApprovalsSnapshot)
-    case baseHashUnavailable
-    case baseHashRequired
-    case conflict
-    case unavailable
-}
-
 enum ExecApprovalsMutationError: Error, Equatable, Sendable {
     case invalidPattern(ExecAllowlistPatternValidationReason)
     case unavailable

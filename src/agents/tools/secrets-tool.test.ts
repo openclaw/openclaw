@@ -669,7 +669,9 @@ describe("secrets tool", () => {
       const gateway = questionManagerGateway(manager, (request) => {
         const record = manager.request({
           ...request,
-          onResolved: (event) => transitions.push(event.status),
+          onResolved: (event) => {
+            transitions.push(event.status);
+          },
         });
         if (answered) {
           manager.resolve(record.id, storedAnswer.answers, "operator:human");

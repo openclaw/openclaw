@@ -45,10 +45,7 @@ describe.runIf(process.platform === "win32")("OpenClawStdioClientTransport on Wi
       await closed;
 
       await expect(fs.readFile(capturePath, "utf8")).resolves.toBe(configuredTemp);
-      // The direct Windows adapter observes root exit, not descendant extinction.
-      await expect(transport.forceClose()).rejects.toThrow(
-        "stdio process cleanup cannot confirm descendant extinction",
-      );
+      await expect(transport.forceClose()).resolves.toBeUndefined();
     } finally {
       try {
         // Assert cleanup above on success; do not replace a primary startup/capture failure.

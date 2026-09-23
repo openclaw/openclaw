@@ -531,6 +531,8 @@ describe("resolveNodeProgramArguments", () => {
   });
 
   it("replaces persisted command restrictions with all commands while retaining node options", async () => {
+    const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    fsMocks.stat.mockImplementation(actualFs.stat);
     const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
     process.argv = ["node", entryPath];
     fsMocks.realpath.mockResolvedValue(entryPath);
@@ -608,3 +610,43 @@ describe("resolveNodeProgramArguments", () => {
     ]);
   });
 });
+
+it.each([
+  ...["/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew"].map((prefix) => ({
+    entry: `${prefix}/Cellar/openclaw-cli/2026.9.2/libexec/lib/node_modules/openclaw/dist/index.js`,
+    stable: `${prefix}/opt/openclaw-cli/libexec/lib/node_modules/openclaw/dist/index.js`,
+  })),
+  ...[
+    "/opt/homebrew/opt/openclaw-cli/libexec/lib/node_modules/openclaw/dist/index.js",
+    "/tmp/unrelated/Cellar/openclaw-cli/2026.9.2/libexec/lib/node_modules/openclaw/dist/index.js",
+    "/opt/homebrew/project/Cellar/openclaw-cli/2026.9.2/libexec/lib/node_modules/openclaw/dist/index.js",
+    "/opt/homebrew/Cellar/openclaw-cli/libexec/lib/node_modules/openclaw/dist/index.js",
+    "/usr/local/lib/node_modules/openclaw/dist/index.js",
+    "/opt/homebrew/lib/node_modules/openclaw/dist/index.js",
+    "/home/user/.local/share/pnpm/global/5/node_modules/openclaw/dist/index.js",
+    "/home/user/.bun/install/global/node_modules/openclaw/dist/index.js",
+    "/home/user/openclaw/dist/index.js",
+    "C:/Users/test/AppData/Roaming/npm/node_modules/openclaw/dist/index.js",
+  ].map((entry) => ({ entry, stable: entry })),
+])(
+  "keeps service entrypoints stable without rewriting other installs: $entry",
+  async ({ entry, stable }) => {
+    const entryPath = path.resolve(entry);
+    const expected = process.platform === "win32" ? entryPath : path.resolve(stable);
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+    for (const runtime of ["node", "bun"] as const) {
+      const runtimePath = runtime === "node" ? validatedNodePath : validatedBunPath;
+      const gateway = await resolveGatewayProgramArguments({ port: 18789, runtime, runtimePath });
+      const node = await resolveNodeProgramArguments({
+        host: "gateway.example",
+        port: 18789,
+        runtime,
+        runtimePath,
+      });
+      expect(gateway.programArguments[runtime === "node" ? 2 : 1]).toBe(expected);
+      expect(node.programArguments[1]).toBe(expected);
+    }
+  },
+);

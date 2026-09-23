@@ -43,6 +43,13 @@ lifecycle checks start when the single root/core build and pack finishes. The
 early `openclaw-npm-package-descriptor-<run-id>-<attempt>` artifact also unblocks
 candidate preparation while qualification continues. Final qualification joins
 every successful exact-source proof and seals the same tarball bytes.
+For legacy candidates that ship `npm-shrinkwrap.json`, preparation checks the
+packed root manifest against both the shrinkwrap's root declarations and installed
+package entries before emitting the package descriptor. Tarball qualification
+repeats that check. Missing required runtime dependencies fail validation even if
+npm would exit successfully, a prepared dependency masks the omission in a local
+consumer, or a repacked Docker image works. Repair the candidate's shrinkwrap and
+produce fresh artifact evidence; qualification never repairs frozen package bytes.
 The SDK consumer install retains its smaller dependency context. The final manifest records its immutable descriptor in
 `publicationArtifacts.npmPreflight`. Regular final releases include separate
 SDK compatibility reports for the current npm `beta` and `latest` predecessors,

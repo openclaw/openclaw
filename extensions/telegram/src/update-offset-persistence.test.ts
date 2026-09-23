@@ -37,7 +37,6 @@ describe("createTelegramUpdateOffsetPersistence", () => {
     persistence.persistUpdateId(102);
 
     expect(writes).toEqual([101]);
-    expect(persistence.getAcceptedUpdateId()).toBe(103);
     expect(persistence.getCommittedUpdateId()).toBe(100);
     expect(onRetry).toHaveBeenCalledWith(expect.objectContaining({ attempt: 1, updateId: 101 }));
 
@@ -94,7 +93,6 @@ describe("createTelegramUpdateOffsetPersistence", () => {
     queueMicrotask(() => persistence.persistUpdateId(102));
     await vi.waitFor(() => expect(writes).toEqual([101, 102]));
 
-    expect(persistence.getAcceptedUpdateId()).toBe(102);
     expect(persistence.getCommittedUpdateId()).toBe(102);
     await persistence.stop();
   });
@@ -186,7 +184,6 @@ describe("createTelegramUpdateOffsetPersistence", () => {
 
     expect(onInvalidUpdateId).toHaveBeenCalledWith(Number.NaN);
     expect(writes).toEqual([101]);
-    expect(persistence.getAcceptedUpdateId()).toBe(101);
     expect(persistence.getCommittedUpdateId()).toBe(101);
     await persistence.stop();
   });

@@ -26,24 +26,26 @@ const {
 });
 
 function installIrcRuntime() {
-  setIrcRuntime({
-    channel: {
-      pairing: {
-        readAllowFromStore: readAllowFromStoreMock,
-        upsertPairingRequest: upsertPairingRequestMock,
+  setIrcRuntime(
+    createPluginRuntimeMock({
+      channel: {
+        pairing: {
+          readAllowFromStore: readAllowFromStoreMock,
+          upsertPairingRequest: upsertPairingRequestMock,
+        },
+        commands: {
+          shouldHandleTextCommands: shouldHandleTextCommandsMock,
+        },
+        text: {
+          hasControlCommand: hasControlCommandMock,
+        },
+        mentions: {
+          buildMentionRegexes: buildMentionRegexesMock,
+          matchesMentionPatterns: matchesMentionPatternsMock,
+        },
       },
-      commands: {
-        shouldHandleTextCommands: shouldHandleTextCommandsMock,
-      },
-      text: {
-        hasControlCommand: hasControlCommandMock,
-      },
-      mentions: {
-        buildMentionRegexes: buildMentionRegexesMock,
-        matchesMentionPatterns: matchesMentionPatternsMock,
-      },
-    },
-  } as never);
+    }),
+  );
 }
 
 function createRuntimeEnv() {

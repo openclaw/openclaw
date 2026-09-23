@@ -11,6 +11,7 @@ import {
   signalMockManagedUpdateHandoffReady,
   writeConcurrentManagedHandoffParams,
 } from "./update-managed-service-handoff.test-support.js";
+import { pathExists } from "./update-managed-service-native.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const tempDirs = new Set<string>();
@@ -78,15 +79,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.resetModules();
 });
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 async function prepareConcurrentHandoffHelper(): Promise<{
   tmpDir: string;

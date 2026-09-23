@@ -208,3 +208,67 @@ openclaw-select-picker {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
+
+.picker-select__menu--grouped {
+  min-width: min(280px, calc(100vw - 24px));
+}
+
+.picker-select__group {
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.picker-select__group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.picker-select__group-label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.picker-select__group-toggle .model-picker__provider-icon {
+  width: 16px;
+  height: 16px;
+  flex-basis: 16px;
+}
+
+.picker-select__group-toggle .picker-select__chevron {
+  margin-inline-start: 0;
+}
+
+.picker-select__group-toggle[aria-expanded="true"] .picker-select__chevron {
+  transform: rotate(180deg);
+}
+
+.picker-select__group-toggle:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+
+.picker-select__group-options {
+  display: grid;
+  gap: 2px;
+}
+
+.picker-select__group-options .picker-select__option {
+  padding-inline-start: 32px;
+}

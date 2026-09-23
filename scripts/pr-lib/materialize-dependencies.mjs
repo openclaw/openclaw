@@ -72,9 +72,11 @@ const dependencies = [
       `Cannot resolve installed scripts/pr dependency '${dependency}' at ${installedPath}.`,
     );
     console.error(
-      "Restore frozen dependencies in a clean trusted-main checkout before retrying; no dependencies were installed.",
+      "Restore frozen dependencies in a clean trusted-main checkout or set OPENCLAW_PR_TOOLING_ROOT before retrying; no dependencies were installed.",
     );
-    return process.exit(1);
+    // Distinguish dependency drift from a destination write failure. Only the
+    // former may trigger a refresh of an explicitly selected tooling checkout.
+    return process.exit(78);
   }
 });
 mkdirSync(process.argv[3], { recursive: true });

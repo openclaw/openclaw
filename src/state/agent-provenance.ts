@@ -1,12 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
+import { hasErrnoCode } from "../infra/errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentProvenanceInDatabase } from "./agent-provenance.kernel.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import type { AgentCreatedVia, AgentProvenance } from "./agent-provenance.types.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "./openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
@@ -60,24 +61,48 @@ export function readAgentProvenance(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): AgentProvenance | undefined {
-  ensureAgentProvenanceSchema(options);
-  const database = openOpenClawStateDatabase(options);
-  return readAgentProvenanceInDatabase(database.db, agentId);
+  return withExistingOpenClawStateDatabaseCurrentReadOnly(({ db }) => {
+    try {
+      return readAgentProvenanceInDatabase(db, agentId);
+    } catch (error) {
+      // Legacy state may omit this lazy additive table; only its writer installs it.
+      if (
+        error instanceof Error &&
+        hasErrnoCode(error, "ERR_SQLITE_ERROR") &&
+        error.message === "no such table: agent_provenance"
+      ) {
+        return undefined;
+      }
+      throw error;
+    }
+  }, options);
 }
 
 type AgentProvenanceReadOptions = Pick<OpenClawStateDatabaseOptions, "env" | "path">;
+const DISPLAY_PROVENANCE_BATCH_SIZE = 256;
 
 /** Presentation reads may wait; incarnation checks retain the synchronous reader above. */
 export async function readAgentProvenanceForDisplay(
-  agentId: string,
+  agentIds: readonly string[],
   options: AgentProvenanceReadOptions = {},
-): Promise<AgentProvenance | undefined> {
+): Promise<AgentProvenance[]> {
+  if (agentIds.length === 0) {
+    return [];
+  }
   const context = captureOpenClawStateWorkerContext(options);
+  const requestedIds = agentIds.map(normalizeAgentId);
   const { executeOpenClawStateWorker } = await import("./openclaw-state-worker-store.js");
-  return executeOpenClawStateWorker(context, {
-    type: "agentProvenance.read",
-    input: { agentId },
-  });
+  const records: AgentProvenance[] = [];
+  // Canonical IDs are bounded; chunking keeps roster growth below broker input
+  // admission limits while preserving caller order and the first read error.
+  for (let offset = 0; offset < requestedIds.length; offset += DISPLAY_PROVENANCE_BATCH_SIZE) {
+    const batch = await executeOpenClawStateWorker(context, {
+      type: "agentProvenance.readBatch",
+      input: { agentIds: requestedIds.slice(offset, offset + DISPLAY_PROVENANCE_BATCH_SIZE) },
+    });
+    records.push(...batch);
+  }
+  return records;
 }
 
 export async function listAgentProvenance(

@@ -4,7 +4,9 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -31,6 +33,7 @@ import { writeJsonFile } from "./helpers/temp-repo.js";
 const tempDirs: string[] = [];
 const tsxImport = import.meta.resolve("tsx");
 const execFileAsync = promisify(execFile);
+const registryDependencyArtifacts = new Map<string, { tarball: Buffer; integrity: string }>();
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
@@ -191,20 +194,40 @@ function writePatchedRuntimeFixture(bundling = "default") {
   const packRegistryDependency = (name: string) => {
     const dependencyDir = join(packageDir, "deps", name);
     const manifest = JSON.parse(readFileSync(join(dependencyDir, "package.json"), "utf8"));
-    const pack = spawnSync(
-      "npm",
-      ["pack", "--json", "--ignore-scripts", "--pack-destination", repoDir],
-      {
-        cwd: dependencyDir,
-        encoding: "utf8",
-      },
+    const inputKey = JSON.stringify(
+      readdirSync(dependencyDir)
+        .toSorted()
+        .map((file) => {
+          const filePath = join(dependencyDir, file);
+          const fileStat = lstatSync(filePath);
+          if (!fileStat.isFile()) {
+            throw new Error(`Registry fixture input must be a regular file: ${file}`);
+          }
+          return [file, fileStat.mode, readFileSync(filePath).toString("base64")];
+        }),
     );
-    expect(pack.status, pack.stderr).toBe(0);
-    const tarball = readFileSync(join(repoDir, parseNpmPackResult(pack.stdout).filename));
+    let artifact = registryDependencyArtifacts.get(inputKey);
+    if (!artifact) {
+      const pack = spawnSync(
+        "npm",
+        ["pack", "--json", "--ignore-scripts", "--pack-destination", repoDir],
+        {
+          cwd: dependencyDir,
+          encoding: "utf8",
+        },
+      );
+      expect(pack.status, pack.stderr).toBe(0);
+      const tarball = readFileSync(join(repoDir, parseNpmPackResult(pack.stdout).filename));
+      artifact = {
+        tarball,
+        integrity: `sha512-${createHash("sha512").update(tarball).digest("base64")}`,
+      };
+      registryDependencyArtifacts.set(inputKey, artifact);
+    }
     return {
       manifest,
-      tarball,
-      integrity: `sha512-${createHash("sha512").update(tarball).digest("base64")}`,
+      tarball: Buffer.from(artifact.tarball),
+      integrity: artifact.integrity,
     };
   };
   const registryVersions = [packRegistryDependency("local-runtime-dep")];

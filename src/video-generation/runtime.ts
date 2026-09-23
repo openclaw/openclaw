@@ -19,7 +19,7 @@ import {
   buildCapabilityProviderIndex,
   normalizeCapabilityProviderId,
 } from "../plugins/provider-registry-shared.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
   buildVideoGenerationCapabilityFailure,
@@ -38,7 +38,7 @@ const SUPPORTED_DURATIONS_HINT = Symbol.for("openclaw.videoGeneration.supportedD
 type VideoGenerationRuntimeDeps = {
   getProvider?: typeof getVideoGenerationProvider;
   listProviders?: typeof listVideoGenerationProviders;
-  getProviderEnvVars?: typeof getProviderEnvVars;
+  getProviderEnvVars?: typeof getProviderEnvVarsCore;
   log?: Pick<typeof log, "debug" | "warn">;
 };
 

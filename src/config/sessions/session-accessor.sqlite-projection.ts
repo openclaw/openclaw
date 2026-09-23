@@ -80,6 +80,7 @@ import {
   toDatabaseOptions,
   withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
+import type { SessionEntryCreateWithTranscriptOptions } from "./session-accessor.types.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -176,10 +177,11 @@ export async function applySessionStoreProjection<T>(params: {
         });
         return {
           deletedEntries: deletedOwners,
-          commit: () =>
+          commit: (assertSourceCurrent) =>
             withSqliteSessionDatabase(toDatabaseOptions(resolved), () => {
               runOpenClawAgentWriteTransaction(
                 (transactionDb) => {
+                  assertSourceCurrent?.();
                   for (const sessionKey of changedKeys) {
                     const current = readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
                     if (!sqliteSessionEntriesEqual(current, before[sessionKey])) {
@@ -268,8 +270,12 @@ export async function applySessionEntryLifecycleMutation(params: {
   allowCanonicalRepair?: boolean;
   /** Doctor-only synchronous state transfer that commits with the destination entry. */
   afterUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
+  /** Fresh-row sidecar writes that must not retry unrelated pending archives. */
+  afterFreshUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
   /** Synchronous caller-authority guard checked immediately before lifecycle writes. */
   beforeCommitInTransaction?: () => void;
+  /** Retain source authority around the final writer, after projection and native preparation. */
+  withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
   /** Non-throwing notification after outer COMMIT, before lifecycle publication and owner cleanup. */
   onLifecycleCommitted?: () => void;
 }): Promise<SessionEntryLifecycleMutationResult> {
@@ -338,22 +344,25 @@ export async function applySessionEntryLifecycleMutation(params: {
               },
             }
           : {}),
-        commit: () =>
+        commit: (assertSourceCurrent?: () => void) =>
           withSqliteSessionDatabase(toDatabaseOptions(resolved), () =>
             commitProjectedLifecycleMutation(
               materializedRemovalPlans,
               removalArchiveMaterializationFailed,
+              assertSourceCurrent,
             ),
           ),
       };
     },
     "session.lifecycle.mutate",
+    params.withCommit,
   );
   const committed = preparedWrite.result;
 
   function commitProjectedLifecycleMutation(
     removalPlans: MaterializedSessionStateDeletePlan[],
     materializationFailed: boolean,
+    assertSourceCurrent?: () => void,
   ) {
     let beforeCount = 0;
     const removedSessionKeys: string[] = [];
@@ -361,6 +370,7 @@ export async function applySessionEntryLifecycleMutation(params: {
     const maintenancePlans: SessionEntryMaintenancePlan[] = [];
     const publish = runOpenClawAgentWriteTransaction((transactionDb) => {
       params.beforeCommitInTransaction?.();
+      assertSourceCurrent?.();
       if (params.onLifecycleCommitted) {
         deferOpenClawAgentPostCommitPublication(transactionDb, params.onLifecycleCommitted);
       }
@@ -462,6 +472,7 @@ export async function applySessionEntryLifecycleMutation(params: {
         }
       }
       params.afterUpsertsInTransaction?.(transactionDb);
+      params.afterFreshUpsertsInTransaction?.(transactionDb);
       const upsertedKeys = new Set(projected.upsertedEntries.map((upsert) => upsert.sessionKey));
       for (const removal of validatedRemovals) {
         if (upsertedKeys.has(removal.sessionKey)) {

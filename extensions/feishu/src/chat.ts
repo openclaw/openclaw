@@ -1,4 +1,3 @@
-// Feishu plugin module implements chat behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";

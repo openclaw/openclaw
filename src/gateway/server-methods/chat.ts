@@ -5,7 +5,6 @@ import {
   validateChatInjectParams,
   validateChatToolTitlesParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
@@ -21,8 +20,6 @@ import {
 } from "./chat-broadcast.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
-import { validateChatSelectedAgent } from "./chat-origin-routing.js";
-import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -53,7 +50,6 @@ export const chatHandlers: GatewayRequestHandlers = {
     // older clients stop asking, while current clients read the tool call title.
     respond(true, { titles: {}, disabled: true });
   },
-  "chat.send": handleDirectExternalChatSend,
   "chat.inject": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateChatInjectParams, "chat.inject", respond)) {
       return;
@@ -63,11 +59,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
     const agentIdOverride = normalizeOptionalText(p.agentId);
-    const requestedAgent = resolveRequestedSessionAgentId(
-      context.getRuntimeConfig(),
-      rawSessionKey,
-      agentIdOverride,
-    );
+    const cfg = context.getRuntimeConfig();
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, rawSessionKey, agentIdOverride);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
@@ -75,30 +68,16 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requestedAgentId = requestedAgent.agentId;
     const sessionLoadOptions = { agentId: requestedAgentId };
     const {
-      cfg,
+      agentId,
       storePath,
       entry,
       canonicalKey: sessionKey,
-    } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
-    const selectedAgent = validateChatSelectedAgent({
-      cfg,
-      requestedSessionKey: rawSessionKey,
-      explicitAgentId: agentIdOverride,
-    });
-    if (!selectedAgent.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
-      return;
-    }
+    } = loadSessionEntry(rawSessionKey, sessionLoadOptions, cfg);
     const sessionId = entry?.sessionId;
     if (!sessionId || !storePath) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
       return;
     }
-    const agentId = resolveSessionAgentId({
-      sessionKey,
-      config: cfg,
-      agentId: selectedAgent.agentId,
-    });
 
     let appended: Awaited<ReturnType<typeof appendAssistantTranscriptMessage>>;
     try {

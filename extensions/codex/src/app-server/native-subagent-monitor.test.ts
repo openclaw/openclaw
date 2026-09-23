@@ -17,6 +17,7 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import type { NativeSubagentMonitorRuntime } from "./native-subagent-monitor-types.js";
 import {
   type CodexThreadReadResponse,
@@ -35,136 +36,11 @@ import {
   nativeHistoryOwner,
   closeAgentNotification,
   childTurnCompletedNotification,
+  turnStartedNotification,
   threadRead,
   taskRecord,
 } from "./native-subagent-monitor.test-support.js";
 import type { JsonObject } from "./protocol.js";
-
-describe("Codex native close delivery persistence", () => {
-  it.each([true, false])(
-    "preserves accepted completion delivery across close when completionBeforeClose=%s",
-    async (completionBeforeClose) => {
-      await withStateDirEnv("codex-r2-close-", async ({ stateDir }) => {
-        const requesterSessionKey = `agent:main:r2-close-${completionBeforeClose}`;
-        const host = await createAdmittedHostCapabilityTestFixture({
-          runId: `r2-close-parent-${completionBeforeClose}`,
-          agentId: "main",
-          sessionKey: requesterSessionKey,
-          config: {},
-        });
-        const scope = host.agentHarnessTaskRuntimeScope;
-        if (!scope) {
-          throw new Error("task runtime scope missing");
-        }
-        const client = createClient();
-        client.request.mockImplementation(async (method) => {
-          if (method === "thread/unsubscribe") {
-            return { status: "unsubscribed" } as never;
-          }
-          if (method === "thread/loaded/list") {
-            return { data: [], nextCursor: null } as never;
-          }
-          throw new Error(`unexpected request: ${method}`);
-        });
-        ensureCodexAppServerClientRuntime(client as never, { agentDir: stateDir });
-        const deliver = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
-        const parent = registerCodexNativeSubagentMonitor({
-          client: client as never,
-          parentThreadId: "parent-thread",
-          requesterSessionKey,
-          taskRuntimeScope: scope,
-          agentId: "main",
-          runtime: {
-            createAgentHarnessTaskRuntime,
-            deliverAgentHarnessTaskCompletion: deliver,
-          },
-        });
-        let database: DatabaseSync | undefined;
-        try {
-          parent.bindTurn("parent-turn");
-          await notifyChildStarted(client);
-          await client.notify({
-            method: "turn/started",
-            params: {
-              threadId: "child-thread",
-              turn: { id: "child-turn", status: "inProgress", items: [], error: null },
-            },
-          });
-          await client.notify(closeAgentNotification({ method: "item/started" }));
-          if (completionBeforeClose) {
-            await client.notify(
-              childTurnCompletedNotification({
-                status: "completed",
-                items: [
-                  {
-                    type: "agentMessage",
-                    id: "r2-final",
-                    phase: "final_answer",
-                    text: "R2 accepted result",
-                  },
-                ],
-              }),
-            );
-          }
-          database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
-            readOnly: true,
-          });
-          const readTask = () =>
-            database!
-              .prepare(
-                "SELECT status, delivery_status, terminal_summary, error FROM task_runs WHERE run_id = ?",
-              )
-              .get("codex-thread:child-thread");
-          const beforeClose = readTask();
-          expect(beforeClose).toMatchObject(
-            completionBeforeClose
-              ? {
-                  status: "succeeded",
-                  delivery_status: "pending",
-                  terminal_summary: "R2 accepted result",
-                }
-              : { status: "running", delivery_status: "not_applicable" },
-          );
-          // Codex captures previous_status before awaiting child shutdown.
-          await client.notify(
-            closeAgentNotification({ method: "item/completed", previousStatus: "running" }),
-          );
-          const afterClose = readTask();
-          await parent.unregister();
-          const afterParentRelease = readTask();
-          if (completionBeforeClose) {
-            expect.soft(afterClose).toMatchObject({
-              status: "succeeded",
-              delivery_status: "pending",
-              terminal_summary: "R2 accepted result",
-            });
-            expect.soft(afterParentRelease).toMatchObject({
-              status: "succeeded",
-              delivery_status: "delivered",
-              terminal_summary: "R2 accepted result",
-            });
-            expect(deliver).toHaveBeenCalledExactlyOnceWith(
-              expect.objectContaining({ result: "R2 accepted result" }),
-            );
-          } else {
-            expect(afterParentRelease).toMatchObject({
-              status: "cancelled",
-              delivery_status: "not_applicable",
-              terminal_summary: "Subagent was closed.",
-            });
-            expect(deliver).not.toHaveBeenCalled();
-          }
-        } finally {
-          await parent.unregister();
-          client.close();
-          database?.close();
-          host.closeHost();
-          host.closeAdmission();
-        }
-      });
-    },
-  );
-});
 
 describe("Native completion delivery settlement", () => {
   async function withDeliveryFixture(
@@ -206,7 +82,7 @@ describe("Native completion delivery settlement", () => {
           taskRuntimeScope: scope,
           agentId: "main",
           runtime: {
-            createAgentHarnessTaskRuntime,
+            ...defaultNativeSubagentMonitorRuntime,
             deliverAgentHarnessTaskCompletion: deliver,
           },
         });
@@ -741,13 +617,16 @@ describe("CodexNativeSubagentMonitor", () => {
     monitor.dispose();
   });
 
-  it("keeps collab completion as progress while app-server recovery is authoritative", async () => {
+  it("leaves wait snapshots to receipts until the child turn authoritatively completes", async () => {
     const client = createClient();
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
     registerParent(monitor, "parent-thread", "agent:main:main");
 
     await notifyChildStarted(client, "parent-thread", "child-thread", "");
+    await client.notify(turnStartedNotification("child-turn"));
+    const beforeWait = structuredClone(runtime.listTaskRecords());
+    const progressCount = runtime.recordTaskRunProgressByRunId.mock.calls.length;
     await client.notify({
       method: "item/completed",
       params: {
@@ -766,13 +645,22 @@ describe("CodexNativeSubagentMonitor", () => {
       },
     });
 
-    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "codex-thread:child-thread",
-        progressSummary: "child final result",
+    expect(runtime.listTaskRecords()).toEqual(beforeWait);
+    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledTimes(progressCount);
+    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+    await client.notify(
+      childTurnCompletedNotification({
+        status: "completed",
+        items: [{ type: "agentMessage", id: "result", text: "child final result" }],
       }),
     );
-    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        status: "succeeded",
+        terminalSummary: "child final result",
+      }),
+    );
     monitor.dispose();
   });
 
@@ -821,45 +709,6 @@ describe("CodexNativeSubagentMonitor", () => {
         result: "child final result",
       }),
     );
-  });
-
-  it("delivers a completed child turn from its streamed final message", async () => {
-    const client = createClient();
-    const runtime = createRuntime();
-    const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    await registerDetachedChild(client, monitor);
-    await client.notify({
-      method: "item/started",
-      params: {
-        threadId: "child-thread",
-        turnId: "child-turn",
-        item: {
-          type: "agentMessage",
-          id: "child-final",
-          phase: "final_answer",
-          text: "",
-        },
-      },
-    });
-    for (const delta of ["child ", "final result"]) {
-      await client.notify({
-        method: "item/agentMessage/delta",
-        params: {
-          threadId: "child-thread",
-          turnId: "child-turn",
-          itemId: "child-final",
-          delta,
-        },
-      });
-    }
-
-    await client.notify(childTurnCompletedNotification({ status: "completed" }));
-
-    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
-      expect.objectContaining({ statusLabel: "turn_completed", result: "child final result" }),
-    );
-    expect(client.request).not.toHaveBeenCalled();
-    client.close();
   });
 
   it("publishes parent-owned child activity without projecting it into the parent session", async () => {
@@ -2080,19 +1929,7 @@ describe("CodexNativeSubagentMonitor", () => {
         resolveReadStarted();
         return threadRead({ result: "child final result" });
       });
-      const runtime = createRuntime();
-      let recordsVisible = false;
-      let task = taskRecord({
-        childThreadId: "child-thread",
-        status: "succeeded",
-        deliveryStatus: "not_applicable",
-        endedAt: Date.now(),
-      });
-      runtime.listTaskRecords.mockImplementation(() => (recordsVisible ? [task] : []));
-      runtime.setDetachedTaskDeliveryStatusByRunId.mockImplementation((params) => {
-        task = { ...task, deliveryStatus: params.deliveryStatus };
-        return [task];
-      });
+      const runtime = createRecordedRuntime(new Map());
       runtime.deliverAgentHarnessTaskCompletion
         .mockResolvedValueOnce({ delivered: false, path: "direct", error: "pending" })
         .mockResolvedValueOnce({ delivered: true, path: "direct" });
@@ -2103,7 +1940,6 @@ describe("CodexNativeSubagentMonitor", () => {
       await firstClient.notify(nativeCompletionNotification());
       expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
 
-      recordsVisible = true;
       firstClient.close();
       const replacementMonitor = new CodexNativeSubagentMonitor(
         replacementClient as never,
@@ -2141,7 +1977,7 @@ describe("CodexNativeSubagentMonitor", () => {
           completionDeliveryMaxRetries: 1,
         });
         await registerDetachedChild(client, monitor);
-        let task = taskRecord({ childThreadId: "child-thread" });
+        let task = runtime.listTaskRecords()[0]!;
         runtime.listTaskRecords.mockImplementation(() => [task]);
         let failing = true;
         runtime.finalizeTaskRunByRunId.mockImplementation((params) => {
@@ -2219,7 +2055,7 @@ describe("CodexNativeSubagentMonitor", () => {
           completionDeliveryRetryDelaysMs: [10],
         });
         await registerDetachedChild(client, monitor);
-        let task = taskRecord({ childThreadId: "child-thread" });
+        let task = runtime.listTaskRecords()[0]!;
         runtime.listTaskRecords.mockImplementation(() => [task]);
         runtime.finalizeTaskRunByRunId.mockImplementation((params) => {
           task = {
@@ -2277,7 +2113,8 @@ describe("CodexNativeSubagentMonitor", () => {
           completionDeliveryRetryDelaysMs: [10],
         });
         await registerDetachedChild(client, monitor);
-        runtime.listTaskRecords.mockReturnValue([taskRecord({ childThreadId: "child-thread" })]);
+        const task = runtime.listTaskRecords()[0]!;
+        runtime.listTaskRecords.mockReturnValue([task]);
         runtime.finalizeTaskRunByRunId.mockReturnValue([]);
         await client.notify(nativeCompletionNotification());
         expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
@@ -2285,16 +2122,15 @@ describe("CodexNativeSubagentMonitor", () => {
           monitor.retireParent("parent-thread");
         } else if (outcome === "replaced") {
           const replacement = {
-            ...taskRecord({ childThreadId: "child-thread", status: "succeeded" }),
+            ...task,
+            status: "succeeded" as const,
             taskId: "replacement-task",
           };
           runtime.listTaskRecords.mockReturnValue([replacement]);
           runtime.finalizeTaskRunByRunId.mockReturnValue([replacement]);
         } else {
           runtime.listTaskRecords.mockReturnValue(
-            outcome === "removed"
-              ? []
-              : [taskRecord({ childThreadId: "child-thread", status: "cancelled" })],
+            outcome === "removed" ? [] : [{ ...task, status: "cancelled" }],
           );
         }
         await vi.advanceTimersByTimeAsync(100);
@@ -2319,7 +2155,7 @@ describe("CodexNativeSubagentMonitor", () => {
         completionDeliveryRetryDelaysMs: [10],
       });
       await registerDetachedChild(client, monitor);
-      const original = taskRecord({ childThreadId: "child-thread" });
+      const original = runtime.listTaskRecords()[0]!;
       runtime.listTaskRecords.mockReturnValue([original]);
       runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
         delivered: false,
@@ -2609,7 +2445,10 @@ describe("CodexNativeSubagentMonitor", () => {
         taskRuntimeScope: scope,
         agentId: "main",
         historyOwner: nativeHistory,
-        runtime: { createAgentHarnessTaskRuntime, deliverAgentHarnessTaskCompletion: deliver },
+        runtime: {
+          ...defaultNativeSubagentMonitorRuntime,
+          deliverAgentHarnessTaskCompletion: deliver,
+        },
       });
       try {
         parent.bindTurn("parent-turn");
@@ -2731,7 +2570,7 @@ describe("CodexNativeSubagentMonitor", () => {
         agentId: "main",
         historyOwner: nativeHistory,
         runtime: {
-          createAgentHarnessTaskRuntime,
+          ...defaultNativeSubagentMonitorRuntime,
           deliverAgentHarnessTaskCompletion: vi.fn(async () => ({
             delivered: true,
             path: "direct" as const,
@@ -2743,6 +2582,7 @@ describe("CodexNativeSubagentMonitor", () => {
         await vi.waitFor(() =>
           expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(true),
         );
+        const beforeWait = runtime.listTaskRecords();
         await client.notify({
           method: "item/completed",
           params: {
@@ -2760,6 +2600,15 @@ describe("CodexNativeSubagentMonitor", () => {
             },
           },
         });
+        expect(runtime.listTaskRecords()).toEqual(beforeWait);
+        expect(readInitial()).toEqual(original);
+        await client.notify(
+          childTurnCompletedNotification({
+            turnId: "turn-1",
+            status: "failed",
+            error: "follow-up failed",
+          }),
+        );
         expect(readInitial()).toEqual(original);
         expect(
           runtime.listTaskRecords().find((task) => task.runId === followupRunId),

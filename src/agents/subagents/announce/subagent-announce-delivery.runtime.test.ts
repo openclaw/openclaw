@@ -17,11 +17,9 @@ import {
 } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { maybeSteerSubagentAnnounce } from "./subagent-announce-active-wake.js";
-import {
-  dispatchSubagentAnnounceAgent,
-  setSubagentAnnounceDeliveryDepsForTest,
-} from "./subagent-announce-delivery.runtime.js";
+import { dispatchSubagentAnnounceAgent } from "./subagent-announce-delivery.runtime.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
+import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 
 function createContext(handlers: GatewayRequestHandlers): GatewayRequestContext {
   const context = {

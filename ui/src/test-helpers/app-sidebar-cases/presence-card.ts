@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { focusSidebarPersonWithKeyboard } from "../app-sidebar-setup.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
@@ -78,7 +79,7 @@ describe("AppSidebar person activity card", () => {
       })),
     });
     await sidebar.updateComplete;
-    sidebar.querySelector<HTMLElement>(".sidebar-online__person")!.focus();
+    focusSidebarPersonWithKeyboard(sidebar.querySelector<HTMLElement>(".sidebar-online__person")!);
     // Focus loads its interaction owner before the card can render.
     await vi.dynamicImportSettled();
     await vi.waitFor(() =>

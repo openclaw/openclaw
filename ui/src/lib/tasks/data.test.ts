@@ -156,8 +156,18 @@ describe("tasks page data", () => {
   );
 
   it("advances equally recent queued snapshots to running regardless of page order", () => {
-    const queued = task({ id: "shared", status: "queued", updatedAt: 200 });
-    const running = task({ id: "shared", status: "running", updatedAt: 200 });
+    const queued = task({
+      id: "shared",
+      status: "queued",
+      updatedAt: 200,
+      execution: { state: "queued", lastActivityAt: 400 },
+    });
+    const running = task({
+      id: "shared",
+      status: "running",
+      updatedAt: 200,
+      execution: { state: "running", lastActivityAt: 300 },
+    });
 
     expect(mergeTaskLists([queued], [running])).toEqual([running]);
     expect(mergeTaskLists([running], [queued])).toEqual([running]);
@@ -285,12 +295,55 @@ describe("tasks page data", () => {
     });
   });
 
+  it.each([
+    ["running", 300, 400, 2],
+    ["waiting", 300, 400, 2],
+    ["running", "1970-01-01T00:00:00.300Z", "1970-01-01T00:00:00.400Z", 2],
+    ["waiting", 300, "1970-01-01T00:00:00.400Z", 2],
+    ["running", "1970-01-01T00:00:00.300Z", 400, 2],
+    // Equivalent timestamps still use tool progress to choose the current snapshot.
+    ["waiting", 400, "1970-01-01T00:00:00.400Z", 3],
+    ["running", "1970-01-01T00:00:00.400Z", 400, 3],
+  ] as const)(
+    "keeps the freshest %s execution across tied lifecycle snapshots (%s to %s)",
+    (state, staleActivityAt, freshActivityAt, freshToolUseCount) => {
+      const stale = task({
+        id: "shared",
+        status: "running",
+        updatedAt: 200,
+        toolUseCount: 2,
+        execution: {
+          state: state === "running" ? "waiting" : "running",
+          lastActivityAt: staleActivityAt,
+        },
+      });
+      const fresh = task({
+        ...stale,
+        toolUseCount: freshToolUseCount,
+        execution: {
+          state,
+          lastActivityAt: freshActivityAt,
+          ...(state === "waiting" ? { wait: { kind: "agent_messages" } } : {}),
+        },
+      });
+      const prompt = "Inspect the current execution";
+
+      expect(newestTaskSnapshot(stale, { ...fresh, prompt })).toEqual({ ...fresh, prompt });
+      expect(newestTaskSnapshot(fresh, { ...stale, prompt })).toEqual({ ...fresh, prompt });
+      expect(mergeTaskLists([fresh], [stale])).toEqual([fresh]);
+      expect(mergeTaskLists([stale], [fresh])).toEqual([fresh]);
+      expect(applyTaskEvent([fresh], { action: "upserted", task: stale }).tasks).toEqual([fresh]);
+      expect(applyTaskEvent([stale], { action: "upserted", task: fresh }).tasks).toEqual([fresh]);
+    },
+  );
+
   it("keeps current terminal output when an equally current detail is stale", () => {
     const completed = task({
       id: "shared",
       status: "completed",
       updatedAt: 200,
       terminalSummary: "Audit complete",
+      execution: { state: "finished", lastActivityAt: 300 },
     });
     const detail = task({
       id: "shared",
@@ -298,14 +351,25 @@ describe("tasks page data", () => {
       updatedAt: 200,
       terminalSummary: "Stale running progress",
       prompt: "Inspect the concurrent task owner",
+      execution: { state: "finished", lastActivityAt: 400 },
     });
 
     expect(newestTaskSnapshot(completed, detail)).toEqual(completed);
   });
 
   it("accepts a genuinely newer running snapshot from the active page", () => {
-    const oldRunning = task({ id: "shared", status: "running", updatedAt: 100 });
-    const newRunning = task({ id: "shared", status: "running", updatedAt: 200 });
+    const oldRunning = task({
+      id: "shared",
+      status: "running",
+      updatedAt: 100,
+      execution: { state: "running", lastActivityAt: 400 },
+    });
+    const newRunning = task({
+      id: "shared",
+      status: "running",
+      updatedAt: 200,
+      execution: { state: "waiting", lastActivityAt: 300 },
+    });
 
     expect(mergeTaskLists([oldRunning], [newRunning])).toEqual([newRunning]);
     expect(mergeTaskLists([newRunning], [oldRunning])).toEqual([newRunning]);
@@ -434,7 +498,12 @@ describe("tasks page data", () => {
     "does not replace an equally recent %s event with running work",
     (status) => {
       const terminal = task({ id: "task-1", status, updatedAt: 200 });
-      const running = task({ id: "task-1", status: "running", updatedAt: 200 });
+      const running = task({
+        id: "task-1",
+        status: "running",
+        updatedAt: 200,
+        execution: { state: "running", lastActivityAt: 300 },
+      });
 
       expect(applyTaskEvent([terminal], { action: "upserted", task: running })).toEqual({
         tasks: [terminal],
@@ -455,12 +524,14 @@ describe("tasks page data", () => {
         status,
         updatedAt: 200,
         terminalSummary: "Previous terminal details",
+        execution: { state: "finished", lastActivityAt: 400 },
       });
       const correction = task({
         id: "task-1",
         status,
         updatedAt: 200,
         terminalSummary: "Authoritative terminal details",
+        execution: { state: "finished", lastActivityAt: 300 },
       });
 
       expect(applyTaskEvent([current], { action: "upserted", task: correction })).toEqual({

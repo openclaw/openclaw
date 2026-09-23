@@ -237,6 +237,32 @@ Chat displays recognized request-limit facts, including the allowed and actual
 number of `cache_control` blocks, in both live failures and saved history. Raw
 proxy metadata stays in redacted diagnostics rather than the chat message.
 
+Saved failed replies also distinguish rate limits, authentication failures,
+provider HTTP errors, and network interruptions. Worker inference preserves
+bounded, redacted error details for classification, including when a large
+partial response cannot fit in the transcript. Unrecognized errors still use
+generic chat copy; inspect the Gateway logs and stored error for diagnosis.
+
+Responses output-identity conflicts record the event type, output position,
+expected and observed item types, and whether a tool call completed, without
+recording item IDs or response content. OpenClaw uses the existing bounded session
+retry policy when the failing response produced no visible text or completed tool
+calls and its request enabled only client-executed function tools. Continuation
+keeps earlier tool results, so those completed actions are not replayed. Conflicts
+after output or with provider-hosted tools remain terminal; inspect earlier
+results before continuing. Previously emitted text remains terminal even if a
+later snapshot clears it. Automatic recovery requires a successful completed
+response without a refusal; conflicts before that terminal cannot be retried
+because the final outcome is unknown. Failed or incomplete terminal responses,
+including content filtering, cannot be overridden by identity recovery. The
+identity checks stay enforced on every attempt.
+
+A worker message-size failure is separate from a model context-window limit.
+Retry with a smaller response or continue on the Gateway. If the worker cannot
+preserve the model's continuation data, stop or reclaim it before retrying on
+the Gateway. Earlier tool actions may already have completed, so check their
+results before repeating them.
+
 ### Targeted model transport diagnostics
 
 When debugging provider calls, use targeted environment flags instead of raising
@@ -274,9 +300,11 @@ enabled.
 
 `[model-fetch]` start and response metadata (provider, API, model, status,
 latency, and request fields such as method, URL, timeout, proxy, and policy)
-is always emitted at `info` level regardless of
-`OPENCLAW_DEBUG_MODEL_TRANSPORT`, so basic model transport hygiene is visible
-without debug flags.
+uses `debug` by default. Responses with a non-2xx status or at least one second
+of elapsed time remain at `info`, and transport failures remain warnings.
+Elapsed time includes local-service preparation and waiting for response headers,
+but excludes streaming the response body. The targeted debug flags above promote
+start and fast successful response metadata to `info` when troubleshooting.
 
 `[anthropic] replayed thinking dropped: N block(s)` is a warning when Anthropic
 reports dropping invalidated thinking from replay. It includes the mismatch
@@ -649,8 +677,13 @@ parent's `pid`, `threadId` and `isMainThread`, the actual Node `workerThreadId`,
 startup, validation, admission waits, work, and cleanup. It does not measure CPU
 time or isolate a validation phase. Short writer sections can therefore remain
 quiet while this whole-operation warning exposes slow preparation between them.
-The record inherits an existing parent trace when available; it contains no
-database path, session identifier, plan content, or raw error.
+The record inherits an existing parent trace when available. Failed retained
+reclamation operations also include `sessionIdHash` (when targeting one session),
+`error` (the redacted message and causes), and `errorFrame` (the first stack frame).
+These failures emit one warning even below one second, named
+`SQLite reclamation Worker failed`; slower failures use the existing slow-operation
+warning. Session identifiers use the same hash as other session SQLite diagnostics;
+the failure fields are redacted and bounded to 2,048 characters each.
 Cold-storage operations use the same warning with `reclamationKind` set to
 `cold-batch` (archive or externalize), `cold-maintain` (reclaim free pages), or
 `cold-restore` (restore a transcript). Their writer warnings carry the same Worker
@@ -659,17 +692,25 @@ identity and numbered admission fields.
 ### SQLite transaction timing
 
 The `sqlite/transaction` warnings `slow SQLite transaction hold`,
-`slow SQLite transaction lock wait`, and `SQLite transaction lock wait failed`
-include `pid`, Node's `threadId`, and `isMainThread` for the thread executing the
-transaction. Inspect the original `raw` record in `openclaw logs --json` to
+`slow SQLite transaction step`, and `SQLite transaction lock wait failed`
+include `database`, `operation`, `pid`, Node's `threadId`, and `isMainThread` for
+the thread executing the transaction. Explicit labels take precedence; otherwise
+diagnostics use the native database path and the current Worker operation.
+An in-memory database is `:memory:`, a retired handle is `unavailable`, and a
+caller without operation context is `unlabeled`. Hold warnings also include
+`mode` (`deferred` or `immediate`). Inspect the original `raw` record in `openclaw logs --json` to
 distinguish the main thread from Workers sharing the same process. `async: false`
 describes the synchronous transaction helper; it does not identify the thread.
 
-Hold time covers the synchronous callback and its result checks after `BEGIN`
-and before `COMMIT`, including any JavaScript consumer work inside that callback.
-It excludes database opening and the separately timed begin and commit steps.
-These elapsed durations do not measure SQL CPU time or establish a causal link
-to a nearby request.
+Hold time starts after `BEGIN` succeeds and includes the synchronous callback,
+result checks, and commit or rollback. It excludes database opening and the
+begin step. Host admission waits inside a transaction count toward its hold;
+overlapping deferred read holds do not establish that multiple writers held a lock.
+Successful begin and commit step timings include native execution, storage work,
+and scheduling delays; they do not establish lock contention. The separate
+`SQLite transaction lock wait failed` warning identifies caught SQLite lock
+errors. These elapsed durations do not measure SQL CPU time or establish a
+causal link to a nearby request.
 
 The operation `session.reclamation.commit-settlement` identifies the parent's
 synchronous join after it authorizes a reclamation Worker to commit. Its lock

@@ -227,25 +227,20 @@ type PreparedOpenClawToolPlanning = {
   metadataSnapshot?: AgentRuntimePreparedMetadataSnapshot;
 };
 
+type AgentRuntimeModelOverrides = {
+  workspaceDir?: string;
+  modelApi?: string;
+  model?: AgentRuntimeModel;
+};
+
 /** Tool normalization and diagnostics hooks for one runtime attempt. */
 type AgentRuntimeToolPlan = {
   preparedPlanning?: PreparedOpenClawToolPlanning;
   normalize<TSchemaType extends TSchema = TSchema, TResult = unknown>(
     tools: AgentTool<TSchemaType, TResult>[],
-    params?: {
-      workspaceDir?: string;
-      modelApi?: string;
-      model?: AgentRuntimeModel;
-    },
+    params?: AgentRuntimeModelOverrides,
   ): AgentTool<TSchemaType, TResult>[];
-  logDiagnostics(
-    tools: AgentTool[],
-    params?: {
-      workspaceDir?: string;
-      modelApi?: string;
-      model?: AgentRuntimeModel;
-    },
-  ): void;
+  logDiagnostics(tools: AgentTool[], params?: AgentRuntimeModelOverrides): void;
 };
 
 /** Delivery behavior hooks for one runtime attempt. */
@@ -263,11 +258,6 @@ export type AgentRuntimeDeliveryPlan = {
     originRoutable: boolean;
     dispatcherAvailable: boolean;
   }): AgentRuntimeFollowupFallbackRouteResult | undefined;
-};
-
-/** Outcome classification hooks for one runtime attempt. */
-export type AgentRuntimeOutcomePlan = {
-  classifyRunResult: AgentRuntimeOutcomeClassifier;
 };
 
 /** Extra transport parameter plan for one runtime attempt. */
@@ -292,23 +282,14 @@ export type AgentRuntimePlan = {
   tools: AgentRuntimeToolPlan;
   transcript: {
     policy: AgentRuntimeTranscriptPolicy;
-    resolvePolicy(params?: {
-      workspaceDir?: string;
-      modelApi?: string;
-      model?: AgentRuntimeModel;
-    }): AgentRuntimeTranscriptPolicy;
+    resolvePolicy(params?: AgentRuntimeModelOverrides): AgentRuntimeTranscriptPolicy;
   };
   delivery: AgentRuntimeDeliveryPlan;
-  outcome: AgentRuntimeOutcomePlan;
+  outcome: { classifyRunResult: AgentRuntimeOutcomeClassifier };
   transport: AgentRuntimeTransportPlan;
-  observability: {
+  observability: AgentRuntimeResolvedRef & {
     resolvedRef: string;
-    provider: string;
-    modelId: string;
-    modelApi?: string;
-    harnessId?: string;
     authProfileId?: string;
-    transport?: AgentRuntimeTransport;
   };
 };
 
@@ -323,12 +304,7 @@ export type BuildAgentRuntimeDeliveryPlanParams = {
 };
 
 /** Inputs needed to build the full prepared runtime plan. */
-export type BuildAgentRuntimePlanParams = {
-  config?: unknown;
-  workspaceDir?: string;
-  agentDir?: string;
-  provider: string;
-  modelId: string;
+export type BuildAgentRuntimePlanParams = BuildAgentRuntimeDeliveryPlanParams & {
   model?: AgentRuntimeModel;
   modelApi?: string | null;
   harnessId?: string;

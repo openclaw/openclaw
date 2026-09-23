@@ -19,6 +19,7 @@ import { ChatPaneSharingActions } from "./chat-pane-sharing-actions.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { clearTypingActorForSessionMessage } from "./chat-typing-presence.ts";
 import { canManageChatSessionSharing } from "./components/chat-session-sharing.ts";
+import { lockChatScroll } from "./scroll.ts";
 
 export abstract class ChatPaneSharing extends ChatPaneSharingActions {
   protected syncSelectedSessionSharing(session: GatewaySessionRow | undefined): void {
@@ -398,6 +399,10 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
       this.typingActors.delete(event.actor.id);
       this.requestUpdate();
       return;
+    }
+    if (!this.typingActors.has(event.actor.id) && state.chatHasAutoScrolled) {
+      // Retire queued and native follow before the new remote draft changes the transcript.
+      lockChatScroll(state, "remote-input");
     }
     const expiresAt = Date.now() + 2_500;
     this.typingActors.set(event.actor.id, {

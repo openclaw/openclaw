@@ -1,4 +1,3 @@
-// Discord plugin module implements agent components.plugin interactive behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logError } from "openclaw/plugin-sdk/logging-core";

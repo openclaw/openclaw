@@ -1,16 +1,26 @@
 /**
  * Requester completion calls, direct fallback, and source-delivery evidence.
  */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery-state.js";
+import {
+  getRestartRecoveryTerminalDeliveryEvidence,
+  hasRestartRecoverySourceClaim,
+  hasRestartRecoveryTerminalRun,
+} from "../../../config/sessions/restart-recovery-state.js";
+import type { RestartRecoveryTerminalDeliveryEvidence } from "../../../config/sessions/restart-recovery-types.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
+import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { sanitizeAgentRunTerminalReplyText } from "../../agent-run-terminal-reply.js";
 import {
+  getGatewayAgentResult,
   hasCommittedSourceReplyDeliveryEvidence,
   hasMessagingToolDeliveryEvidence,
   hasUnaccountedMessagingToolAggregateEvidence,
@@ -36,6 +46,7 @@ import { inferDeliveryTargetChatType } from "./subagent-announce-origin.js";
 export async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
   privateCompletion?: true;
+  settleWakeSourceSessionKeys?: readonly string[];
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   expectFinal?: boolean;
   signal?: AbortSignal;
@@ -67,6 +78,16 @@ export async function runAnnounceAgentCall(params: {
     const dispatch = dispatchSubagentAnnounceAgent(params.agentParams, {
       cancelOnDeadline: true,
       privateCompletion: params.privateCompletion,
+      settleWakeReplay: params.settleWakeSourceSessionKeys
+        ? {
+            sourceSessionKeys: params.settleWakeSourceSessionKeys,
+            assertCurrent: () => {
+              if (!params.isExecutionAllowed()) {
+                throw new SourceOwnerChangedError();
+              }
+            },
+          }
+        : undefined,
       expectFinal: params.expectFinal,
       forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
         params.agentParams.inputProvenance,
@@ -122,8 +143,47 @@ export function isGatewayAgentRunPending(response: unknown): boolean {
   return isNonTerminalAgentRunStatus(status);
 }
 
+/** A recovery successor owns its admitted input until its exact final can be reconciled. */
+export function resolveRequesterRecoveryDelivery(
+  entry: SessionEntry | undefined,
+  runId: string,
+):
+  | { kind: "result"; result: RestartRecoveryTerminalDeliveryEvidence }
+  | { kind: "delivery"; delivery: SubagentAnnounceDeliveryResult }
+  | undefined {
+  const result = getRestartRecoveryTerminalDeliveryEvidence(entry, runId);
+  if (result) {
+    return { kind: "result", result };
+  }
+  if (hasRestartRecoverySourceClaim(entry, runId)) {
+    return {
+      kind: "delivery",
+      delivery: {
+        delivered: false,
+        path: "direct",
+        reason: "requester_turn_pending",
+        disposition: "retryable",
+      },
+    };
+  }
+  if (hasRestartRecoveryTerminalRun(entry, runId)) {
+    return {
+      kind: "delivery",
+      delivery: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "recovered requester completed without durable final delivery evidence",
+        disposition: "permanent_failure",
+      },
+    };
+  }
+  return undefined;
+}
+
 export function resolvePrivateCompletionDeliveryResult(
   response: Record<string, unknown> | undefined,
+  origin?: DeliveryContext,
 ): SubagentAnnounceDeliveryResult {
   const outcome = buildAgentRunTerminalOutcomeFromWaitResult(response);
   if (outcome?.reason === "cancelled" && outcome.stopReason !== "restart") {
@@ -138,15 +198,44 @@ export function resolvePrivateCompletionDeliveryResult(
   }
   // Successful internal consumption may be silent or start the next child.
   // Queue acceptance alone is not consumption, and no external receipt is owed.
-  return response?.status === "ok" && response?.inputProcessingCompleted === true
-    ? { delivered: true, path: "direct" }
-    : {
-        delivered: false,
-        path: "direct",
-        reason: "completion_handoff_pending",
-        error: "private requester turn has not completed successfully",
-        disposition: "retryable",
-      };
+  const delivery: SubagentAnnounceDeliveryResult =
+    response?.status === "ok" && response?.inputProcessingCompleted === true
+      ? { delivered: true, path: "direct" }
+      : {
+          delivered: false,
+          path: "direct",
+          reason: "completion_handoff_pending",
+          error: "private requester turn has not completed successfully",
+          disposition: "retryable",
+        };
+  const result = getGatewayAgentResult(response);
+  if (
+    delivery.delivered &&
+    origin?.channel &&
+    origin.to &&
+    result &&
+    result.meta?.yielded !== true &&
+    result.meta?.continuationPending !== true &&
+    hasMessagingToolDeliveryToSource(result, origin, { requireFinalReply: true })
+  ) {
+    delivery.requesterVisibleFinalDelivered = true;
+  }
+  return delivery;
+}
+
+export function buildRequesterCompletionDeliveryResult(
+  finalCommitted: boolean,
+  text: unknown,
+): SubagentAnnounceDeliveryResult {
+  const finalAssistantVisibleText =
+    finalCommitted && typeof text === "string" ? truncateUtf16Safe(text.trim(), 12_000) : "";
+  return {
+    delivered: true,
+    path: "direct",
+    // A canceled partial payload or accepted handoff is not a visible final receipt.
+    ...(finalCommitted ? { requesterVisibleFinalDelivered: true } : {}),
+    ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
+  };
 }
 
 export function isDirectMessageDeliveryTarget(
@@ -208,7 +297,7 @@ export async function deliverCompletionDirect(params: {
   internalEvents?: readonly AgentInternalEvent[];
   contentKind: "completed_result" | "failed_notice";
   signal?: AbortSignal;
-  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   isSourceSessionEffectsAllowed?: () => boolean;
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
   const content = resolveTextCompletionDirectFallback(params.internalEvents, params.contentKind);
@@ -257,14 +346,14 @@ export async function deliverCompletionDirect(params: {
           throw new SourceOwnerChangedError();
         }
       },
-      onDeliveryResult: () => {
+      onDeliveryResult: async () => {
         if (committedDelivery) {
           return;
         }
         // Platform identity is committed before transcript mirroring, which
         // may wait behind the requester's still-active SQLite writer.
         committedDelivery = { delivered: true, path: "direct", deliveredAt: Date.now() };
-        params.onDeliveryResult?.(committedDelivery);
+        await params.onDeliveryResult?.(committedDelivery);
       },
       mirror: {
         sessionKey: params.requesterSessionKey,

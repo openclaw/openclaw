@@ -26,16 +26,8 @@ const RETAINED_STEP_NAMES = [
   "reconcile:abandoned",
   "reconcile:superseded",
   "reconcile:acknowledged",
+  "reconcile:settle",
 ];
-const JSON_FIELDS = [
-  "origin",
-  "target",
-  "before",
-  "after",
-  "steps",
-  "verification",
-  "repair",
-] as const;
 export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
   busyTimeoutMs?: number;
   redactPaths?: readonly string[];
@@ -78,7 +70,9 @@ function boundedJson(input: unknown, maxBytes = JSON_BYTES): string {
       } else {
         // Recovery details are the durable backup receipt, not optional diagnostics.
         const compacted = value.map((item) =>
-          isRecord(item) && item.step !== "task-delivery-recovery"
+          isRecord(item) &&
+          item.step !== "task-delivery-recovery" &&
+          !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
             ? { ...item, detail: undefined, failureFacts: undefined }
             : item,
         );
@@ -107,10 +101,26 @@ function boundedJson(input: unknown, maxBytes = JSON_BYTES): string {
 }
 
 function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
-  const { driver, previousDrivers, ...diagnostics } = origin;
-  const identities = JSON.stringify({ driver, previousDrivers });
-  const boundedDiagnostics = boundedJson(diagnostics, JSON_BYTES - Buffer.byteLength(identities));
-  return `{${[identities.slice(1, -1), boundedDiagnostics.slice(1, -1)].filter(Boolean).join(",")}}`;
+  const { driver, previousDrivers, updateRecoveryCapture, ...diagnostics } = origin;
+  // Operational receipts are not expendable diagnostics. Keep them exact inside
+  // the existing database byte budget; oversized sets fail before replacing a row.
+  const retained = JSON.stringify({
+    driver,
+    previousDrivers,
+    updateRecoveryCapture,
+  });
+  const remainingBytes = JSON_BYTES - Buffer.byteLength(retained);
+  if (remainingBytes < 0) {
+    throw new Error("Update run recovery receipts exceed the origin byte limit");
+  }
+  // Merging removes the diagnostic braces and needs a comma only when receipts exist.
+  const diagnosticBudget = remainingBytes + 2 - (retained === "{}" ? 0 : 1);
+  const minimumDiagnostics = JSON.stringify(mapJsonText(diagnostics, () => ""));
+  if (Buffer.byteLength(minimumDiagnostics) > diagnosticBudget) {
+    return retained;
+  }
+  const boundedDiagnostics = boundedJson(diagnostics, diagnosticBudget);
+  return `{${[retained.slice(1, -1), boundedDiagnostics.slice(1, -1)].filter(Boolean).join(",")}}`;
 }
 
 export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOptions): UpdateRuns {
@@ -148,8 +158,8 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
         ]
       : [];
   });
-  // Process identities are exact observations, never redacted diagnostic strings.
-  const { driver, previousDrivers, ...originDiagnostics } = input.origin;
+  // Process identities and recovery receipts are operational facts, not diagnostics.
+  const { driver, previousDrivers, updateRecoveryCapture, ...originDiagnostics } = input.origin;
   const record = UpdateRunRecordSchema.parse(
     mapJsonText(
       {
@@ -175,6 +185,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     ...record.origin,
     driver,
     previousDrivers,
+    updateRecoveryCapture,
   });
   return {
     run_id: record.runId,
@@ -195,23 +206,4 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     finished_at_ms: record.finishedAtMs,
     downtime_ms: record.downtimeMs,
   };
-}
-
-export function decodeRun(row: UpdateRuns): UpdateRunRecord {
-  const metadata = Object.fromEntries(
-    JSON_FIELDS.map((field) => [field, JSON.parse(row[`${field}_json`])]),
-  );
-  return UpdateRunRecordSchema.parse({
-    ...metadata,
-    runId: row.run_id,
-    createdAtMs: row.created_at_ms,
-    updatedAtMs: row.updated_at_ms,
-    trigger: row.trigger,
-    phase: row.phase,
-    status: row.status,
-    reason: row.reason,
-    confirmedAtMs: row.confirmed_at_ms,
-    finishedAtMs: row.finished_at_ms,
-    downtimeMs: row.downtime_ms,
-  });
 }

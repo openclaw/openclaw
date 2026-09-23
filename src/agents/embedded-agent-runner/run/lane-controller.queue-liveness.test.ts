@@ -267,7 +267,12 @@ describe("queued embedded run context liveness", () => {
     try {
       await placementEntered.promise;
       expect(onLaneWait).not.toHaveBeenCalledWith(expect.objectContaining({ waiting: false }));
-      expect(changed).not.toHaveBeenCalled();
+      expect(changed).toHaveBeenCalledExactlyOnceWith({
+        sessionKey: "agent:main:subagent:queued",
+        agentId: undefined,
+        scope: "runtime",
+      });
+      changed.mockClear();
       clock.mockReturnValue(admissionAt);
       expect(sweepStaleRunContexts()).toBe(0);
       expect(getAgentRunContext(params.runId)).toBeDefined();
@@ -280,10 +285,10 @@ describe("queued embedded run context liveness", () => {
         waiting: false,
       });
       expect(getAgentRunContext(params.runId)?.lastActiveAt).toBe(admissionAt);
-      expect(changed).toHaveBeenCalledExactlyOnceWith({
-        sessionKey: "agent:main:subagent:queued",
-        agentId: undefined,
-      });
+      expect(changed.mock.calls).toEqual([
+        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined, scope: "runtime" }],
+        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined, scope: "runtime" }],
+      ]);
       expect(localTurn).not.toHaveBeenCalled();
 
       clock.mockReturnValue(admissionAt + CONTEXT_TTL_MS + 1);

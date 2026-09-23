@@ -423,19 +423,25 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       const highlight = useTheme(theme);
       const host = document.createElement("div");
       document.body.append(host);
-      render(
-        renderComposerMenuOption({
-          id: "hover-command",
-          active: false,
-          select: () => {},
-          hover: () => {},
-          icon: "",
-          name: "/help",
-          description: "Show commands",
-        }),
-        host,
-      );
-      await hoverBackground(host.querySelector<HTMLElement>('[role="option"]')!, highlight);
+      const renderOption = (active: boolean) => {
+        render(
+          renderComposerMenuOption({
+            id: "hover-command",
+            active,
+            select: () => {},
+            hover: () => renderOption(true),
+            icon: "",
+            name: "/help",
+            description: "Show commands",
+          }),
+          host,
+        );
+      };
+      renderOption(false);
+      const option = host.querySelector<HTMLElement>('[role="option"]')!;
+      await hoverBackground(option, highlight);
+      expect(option.getAttribute("aria-selected")).toBe("true");
+      expect(getComputedStyle(option).cursor).toBe("pointer");
     },
   );
 

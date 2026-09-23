@@ -1,5 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  OpenKeyedStoreOptions,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -31,7 +34,7 @@ describe("Reef inbox cursor persistence", () => {
 
   function createRuntime(legacy = false) {
     const runtime = createPluginRuntimeMock();
-    runtime.state.openKeyedStore = <T>(storeOptions: OpenKeyedStoreOptions) => {
+    runtime.state.openKeyedStore = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
       const store = createPluginStateKeyedStoreForTests<T>("reef", {
         ...storeOptions,
         env: { OPENCLAW_STATE_DIR: stateDir },
@@ -74,7 +77,7 @@ describe("Reef inbox cursor persistence", () => {
       const competing = runtime.state.openKeyedStore(options);
       const open = runtime.state.openKeyedStore;
       let competed = false;
-      runtime.state.openKeyedStore = <T>(storeOptions: OpenKeyedStoreOptions) => {
+      runtime.state.openKeyedStore = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
         const store = open<T>(storeOptions);
         const compareAndApply = store.compareAndApply!;
         return {
@@ -112,7 +115,7 @@ describe("Reef inbox cursor persistence", () => {
     await competing.register("current", { ...binding, handle: "clawd", cursor: 3 });
     const open = runtime.state.openKeyedStore;
     let repaired = false;
-    runtime.state.openKeyedStore = <T>(storeOptions: OpenKeyedStoreOptions) => {
+    runtime.state.openKeyedStore = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
       const store = open<T>(storeOptions);
       const compareAndApply = store.compareAndApply!;
       return {
@@ -154,7 +157,7 @@ describe("Reef inbox cursor persistence", () => {
     const runtime = createRuntime();
     const open = runtime.state.openKeyedStore;
     const failure = new Error("comparison unavailable");
-    runtime.state.openKeyedStore = <T>(storeOptions: OpenKeyedStoreOptions) => ({
+    runtime.state.openKeyedStore = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => ({
       ...open<T>(storeOptions),
       compareAndApply: async () => {
         throw failure;

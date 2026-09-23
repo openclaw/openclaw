@@ -14,6 +14,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import {
+  appendTranscriptEvent,
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
   readSessionTranscriptWatermark,
@@ -21,8 +22,9 @@ import {
   upsertSessionEntryCore,
   type TranscriptEvent,
 } from "./session-accessor.js";
+import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import { rotateTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark.js";
+import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 
 function transcriptMessages(count: number): TranscriptEvent[] {
   return Array.from({ length: count }, (_, index) => ({
@@ -120,6 +122,91 @@ describe("SQLite transcript watermark queries", () => {
     });
     expect(readSessionTranscriptWatermark(scope("second"))).toEqual(second);
     expect(readSessionTranscriptWatermark(scope("first"))).toEqual(rewritten);
+  });
+
+  it("reads raw page watermarks once without recompiling tiny or empty reads", () => {
+    const targets = [scope("first"), scope("second")];
+    const pages = targets.map((target) => {
+      const page = readTranscriptRawDelta(target);
+      expect(page).toMatchObject({ kind: "page", hasMore: false });
+      if (page.kind !== "page") {
+        throw new Error("expected a populated raw page");
+      }
+      return page;
+    });
+    expect(pages.map((page) => page.events.length)).toEqual([1, 2]);
+    const database = openOpenClawAgentDatabase(scope("first"));
+    const isVersionQuery = (sql: string) =>
+      sql.includes('from "transcript_rewrite_watermarks"') ||
+      (sql.includes('from "transcript_events"') && !sql.includes("event_json"));
+    const queries = trackSqliteStatementExecutions(database.db, ["watermarks"], (sql) =>
+      isVersionQuery(sql) ? "watermarks" : null,
+    );
+    const compile = vi.spyOn(getNodeSqliteKysely(database.db).getExecutor(), "compileQuery");
+    try {
+      for (const [index, target] of targets.entries()) {
+        const page = pages[index]!;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          expect(readTranscriptRawDelta(target)).toEqual(page);
+          expect(readTranscriptRawDelta(target, { cursor: page.cursor })).toEqual({
+            kind: "page",
+            cursor: page.cursor,
+            events: [],
+            hasMore: false,
+            serializedBytes: 0,
+          });
+        }
+      }
+      expect(queries.counts.watermarks).toBe(12);
+      expect(
+        compile.mock.results.filter(
+          (result) => result.type === "return" && isVersionQuery(result.value.sql),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      compile.mockRestore();
+      queries.restore();
+    }
+  });
+
+  it("keeps a raw empty frontier distinct from a missing transcript after replacement", async () => {
+    const target = scope("first");
+    expect(readTranscriptRawDelta(scope("missing"))).toEqual({ kind: "missing" });
+    const populated = readTranscriptRawDelta(target);
+    if (populated.kind !== "page") {
+      throw new Error("expected a populated raw page");
+    }
+    await replaceTranscriptEvents(target, []);
+    expect(readTranscriptRawDelta(target, { cursor: populated.cursor })).toMatchObject({
+      kind: "reset",
+      reason: "generation_mismatch",
+    });
+    const empty = readTranscriptRawDelta(target);
+    expect(empty).toMatchObject({
+      kind: "page",
+      events: [],
+      hasMore: false,
+      serializedBytes: 0,
+    });
+    if (empty.kind !== "page") {
+      throw new Error("expected an empty raw page");
+    }
+    const cursor = JSON.parse(Buffer.from(empty.cursor, "base64url").toString("utf8")) as object;
+    expect(cursor).toMatchObject({ lastSeq: -1 });
+    const beyondEmpty = Buffer.from(JSON.stringify({ ...cursor, lastSeq: 0 })).toString(
+      "base64url",
+    );
+    expect(readTranscriptRawDelta(target, { cursor: beyondEmpty })).toMatchObject({
+      kind: "reset",
+      reason: "invalid_cursor",
+    });
+    const appended = { type: "custom", id: "after-empty" };
+    await appendTranscriptEvent(target, appended);
+    expect(readTranscriptRawDelta(target, { cursor: empty.cursor })).toMatchObject({
+      kind: "page",
+      events: [{ event: appended, seq: 0 }],
+      hasMore: false,
+    });
   });
 
   it.each([false, true])("keeps public reads committed through writer rollback=%s", (rollback) => {

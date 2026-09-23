@@ -12,7 +12,6 @@ import {
   normalizeInheritedToolDenylist,
 } from "../../inherited-tool-deny.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import {
   loadSessionEntry,
@@ -38,23 +37,17 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (patch.incognito === true) {
     entry.incognito = true;
   }
-  if (typeof patch.spawnedBy === "string" && patch.spawnedBy.trim()) {
-    entry.spawnedBy = patch.spawnedBy.trim();
-  }
-  if (
-    typeof patch.completionOwnerSessionKey === "string" &&
-    patch.completionOwnerSessionKey.trim()
-  ) {
-    entry.completionOwnerSessionKey = patch.completionOwnerSessionKey.trim();
-  }
-  if (typeof patch.parentSessionKey === "string" && patch.parentSessionKey.trim()) {
-    entry.parentSessionKey = patch.parentSessionKey.trim();
-  }
-  if (typeof patch.spawnedWorkspaceDir === "string" && patch.spawnedWorkspaceDir.trim()) {
-    entry.spawnedWorkspaceDir = patch.spawnedWorkspaceDir.trim();
-  }
-  if (typeof patch.spawnedCwd === "string" && patch.spawnedCwd.trim()) {
-    entry.spawnedCwd = patch.spawnedCwd.trim();
+  for (const key of [
+    "spawnedBy",
+    "completionOwnerSessionKey",
+    "parentSessionKey",
+    "spawnedWorkspaceDir",
+    "spawnedCwd",
+  ] as const) {
+    const value = normalizeOptionalString(patch[key]);
+    if (value) {
+      entry[key] = value;
+    }
   }
   const inheritedToolDeny = normalizeInheritedToolDenylist(patch.inheritedToolDeny);
   if (inheritedToolDeny.length > 0) {
@@ -106,10 +99,6 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
     }
   }
   return entry;
-}
-
-export function loadSubagentConfig() {
-  return getSubagentSpawnDeps().getRuntimeConfig();
 }
 
 export async function createInitialSubagentSession(params: {

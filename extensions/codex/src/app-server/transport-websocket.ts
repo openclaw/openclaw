@@ -160,8 +160,18 @@ export function createWebSocketTransport(
     if (options.transport === "websocket") {
       recordConnectionActivity();
     }
-    const text = websocketFrameToText(data);
-    stdout.write(text.endsWith("\n") ? text : `${text}\n`);
+    const frame = websocketFrameToBuffer(data);
+    const writable = stdout.write(frame);
+    const delimited = frame.at(-1) === 10 || stdout.write(Buffer.from("\n"));
+    if (!writable || !delimited) {
+      socket.pause();
+    }
+  });
+
+  stdout.on("drain", () => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.resume();
+    }
   });
 
   const stdin = new Writable({
@@ -248,15 +258,15 @@ function resolveCodexAppServerUnixSocketPath(
   );
 }
 
-function websocketFrameToText(data: RawData): string {
+function websocketFrameToBuffer(data: RawData): Buffer {
   if (typeof data === "string") {
-    return data;
+    return Buffer.from(data);
   }
   if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
+    return data;
   }
   if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
+    return Buffer.concat(data);
   }
-  return Buffer.from(data).toString("utf8");
+  return Buffer.from(data);
 }

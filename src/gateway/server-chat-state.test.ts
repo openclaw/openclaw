@@ -6,6 +6,61 @@ import {
 } from "./server-chat-state.js";
 
 describe("createChatRunState", () => {
+  it("replays complete prepared items and evicts raw and item siblings together", () => {
+    const state = createChatRunState();
+    let seq = 0;
+    const send = (stream: string, data: Record<string, unknown>) => {
+      state.recordProgressEvent("run", { runId: "run", stream, data, seq: ++seq, ts: seq });
+    };
+    send("item", {
+      itemId: "preamble",
+      kind: "preamble",
+      phase: "end",
+      status: "completed",
+      title: "Status",
+      progressText: "Ready",
+    });
+    send("item", {
+      itemId: "preamble",
+      kind: "preamble",
+      phase: "update",
+      status: "running",
+      title: "Status",
+      progressText: "Checking",
+    });
+    expect(state.runs.get("run")?.progressSnapshot?.events).toMatchObject([
+      { data: { phase: "end", progressText: "Ready", title: "Status", status: "completed" } },
+    ]);
+    send("item", { itemId: "preamble", kind: "preamble", phase: "start", progressText: "" });
+    expect(state.runs.get("run")?.progressSnapshot?.events).toEqual([]);
+    for (let index = 0; index < 30; index += 1) {
+      const toolCallId = `call-${index}`;
+      send("tool", { toolCallId, name: "read", phase: "start", args: { path: "README.md" } });
+      send("item", {
+        itemId: `tool:${toolCallId}`,
+        toolCallId,
+        name: "read",
+        kind: "tool",
+        phase: "end",
+        title: "Read file",
+        status: "completed",
+        extraTypedFact: "retained",
+      });
+    }
+    const events = state.runs.get("run")?.progressSnapshot?.events ?? [];
+    expect(events).toHaveLength(50);
+    expect(
+      events.filter((event) => event.stream === "item").map((event) => event.data.toolCallId),
+    ).toEqual(
+      events.filter((event) => event.stream === "tool").map((event) => event.data.toolCallId),
+    );
+    expect(events.at(-1)?.data).toMatchObject({
+      title: "Read file",
+      status: "completed",
+      extraTypedFact: "retained",
+    });
+  });
+
   it.each([false, true])(
     "stops returning finalized recipients at expiry (other state: %s)",
     (keepState) => {

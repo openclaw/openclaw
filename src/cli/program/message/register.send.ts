@@ -1,5 +1,6 @@
 // Message send command registration, including media and presentation/delivery options.
 import type { Command } from "commander";
+import { collectOption } from "../helpers.js";
 import type { MessageCliHelpers } from "./helpers.js";
 
 /** Register `message send` and route execution through shared message helpers. */
@@ -18,7 +19,8 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
         )
         .option(
           "--media <path-or-url>",
-          "Attach media (image/audio/video/document). Accepts local paths or URLs.",
+          "Attach media (image/audio/video/document). Accepts local paths or URLs. Repeat to attach multiple files.",
+          collectOption,
         )
         .option(
           "--presentation <json>",
@@ -40,5 +42,7 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
           false,
         ),
     )
-    .action((opts) => helpers.runMessageAction("send", opts));
+    .action(({ media, ...opts }) =>
+      helpers.runMessageAction("send", { ...opts, mediaUrls: media }),
+    );
 }

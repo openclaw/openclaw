@@ -176,11 +176,15 @@ function asControlFactory(
   }
   const forRequest = "forRequest" in control ? control.forRequest : () => control;
   return {
+    hasActiveWork: () => false,
+    disconnect: async () => {},
     forRequest,
     forNode: async () => ({
       control: forRequest("main"),
       sourceHomeId: "node-native",
       codexHome: resolveCodexAppServerUserHomeDir(),
+      transport: "stdio",
+      assertCurrent: () => {},
     }),
     homesForAgent: async () => [],
     forUpstream: async (agentId) => forRequest(agentId),

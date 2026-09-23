@@ -5,7 +5,9 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -833,9 +835,6 @@ describe("Gateway GitHub publication", () => {
         if (command === "git rev-parse HEAD^") {
           return commandResult(`${OLD_HEAD}\n`);
         }
-        if (command === `git reflog show --format=%H --end-of-options refs/heads/${BRANCH}`) {
-          return commandResult(`${NEW_HEAD}\n${OLD_HEAD}\n`);
-        }
         if (command === "git config --local --includes --bool --get extensions.worktreeConfig") {
           return commandResult("", 1);
         }
@@ -990,6 +989,9 @@ describe("Gateway GitHub publication", () => {
     });
     expect(publicationTranscriptMessages(events, requested.requestId)).toHaveLength(1);
 
+    // A process restart also retires the report writer's retained state admission.
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const restarted = createGitHubPublicationRuntime({

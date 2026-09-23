@@ -28,6 +28,8 @@ import {
   assertKitchenSinkUiDescriptors,
   assertKitchenSinkSearchInvokeResult,
   assertKitchenSinkTextInvokeResult,
+  assertKitchenSinkResourcePlugins,
+  assertKitchenSinkResourceShutdown,
   assertOperatorRpcDenied,
   assertResourceCeiling,
   assertTtsProviderCoverage,
@@ -45,6 +47,7 @@ import {
   listKitchenSinkAuthorizationRpcProbeNames,
   listKitchenSinkReadOnlyRpcProbeNames,
   makeEnv,
+  kitchenSinkResourceEnv,
   parseJsonOutput,
   parseGatewayCliRequestFailure,
   readPositiveInt,
@@ -70,13 +73,72 @@ import {
   resolveWindowsTaskkillPath,
 } from "../../scripts/lib/windows-taskkill.mjs";
 import { formatGatewayClientRequestErrorJson } from "../../src/gateway/call.js";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { waitForChildClose } from "../helpers/process-wait.js";
 import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
+
+it("resource proof requires clean joined Gateway exit, not forced termination", () => {
+  const clean = { exited: true, exitCode: 0, signal: null, signals: ["SIGTERM"] };
+  expect(() => assertKitchenSinkResourceShutdown(clean)).not.toThrow();
+  for (const failed of [
+    { ...clean, exited: false },
+    { ...clean, exitCode: 1 },
+    { ...clean, signals: ["SIGTERM", "SIGKILL"] },
+    { ...clean, exitCode: null, signal: "SIGKILL", signals: ["SIGTERM", "SIGKILL"] },
+  ]) {
+    expect(() => assertKitchenSinkResourceShutdown(failed)).toThrow("did not exit cleanly");
+  }
+});
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 const realDelay = delay;
 const realNow = Date.now;
+
+it("admits resource comparison explicitly without inheriting developer credentials", () => {
+  expect(validateCliArgs([])).toBeUndefined();
+  expect(validateCliArgs(["--resource-profile", "report.json"])).toBe(path.resolve("report.json"));
+  expect(() => validateCliArgs(["--resource-profile"])).toThrow("requires one report path");
+  expect(() => validateCliArgs(["--resource-profile", "a", "--resource-profile", "b"])).toThrow(
+    "requires one report path",
+  );
+  const env = kitchenSinkResourceEnv({
+    PATH: "/usr/bin",
+    OPENAI_API_KEY: "test-only",
+    NODE_OPTIONS: "--require=developer-hook",
+    HTTPS_PROXY: "http://example.invalid",
+  });
+  expect(env.PATH).toBe("/usr/bin");
+  expect(env.OPENAI_API_KEY).toBeUndefined();
+  expect(env.NODE_OPTIONS).toBeUndefined();
+  expect(env.HTTPS_PROXY).toBeUndefined();
+  expect(env.OPENCLAW_NO_RESPAWN).toBe("1");
+});
+
+it("rejects an active-plugin contaminated baseline and missing or failed conformance activation", () => {
+  const fixture = { id: "openclaw-kitchen-sink-fixture", runtime: { state: "active" } };
+  expect(assertKitchenSinkResourcePlugins({ plugins: [] }, false)).toEqual([]);
+  expect(assertKitchenSinkResourcePlugins({ plugins: [fixture] }, true)).toEqual([fixture.id]);
+  expect(() =>
+    assertKitchenSinkResourcePlugins(
+      { plugins: [fixture, { id: "memory-core", runtime: { state: "active" } }] },
+      true,
+    ),
+  ).toThrow("Unexpected active plugins");
+  expect(() => assertKitchenSinkResourcePlugins({ plugins: [fixture] }, false)).toThrow(
+    "Unexpected active plugins",
+  );
+  expect(() => assertKitchenSinkResourcePlugins({ plugins: [] }, true)).toThrow(
+    "Unexpected active plugins",
+  );
+  expect(() =>
+    assertKitchenSinkResourcePlugins(
+      { plugins: [{ ...fixture, runtime: { state: "service-failed" } }] },
+      true,
+    ),
+  ).toThrow("Unexpected active plugins");
+});
 
 type RunTaskkill = NonNullable<
   NonNullable<Parameters<typeof signalProcessGroup>[2]>["runTaskkill"]
@@ -169,6 +231,7 @@ async function sampleWindowsSnapshot(stdout: string, commandLineNeedles?: string
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -397,6 +460,31 @@ process.exit(17);
     await expect(cleanupKitchenSinkEnv(root)).resolves.toBe(true);
 
     expect(existsSync(root)).toBe(false);
+  });
+
+  it("preserves a disabled memory slot when enabling the resource fixture", async () => {
+    const { root, env } = makeEnv(kitchenSinkResourceEnv());
+    try {
+      writeFileSync(
+        env.OPENCLAW_CONFIG_PATH,
+        JSON.stringify({ plugins: { enabled: false, slots: { memory: "none" } } }),
+      );
+      configureKitchenSink(env, 18888);
+      const config = JSON.parse(readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
+      expect(config.plugins).toMatchObject({
+        enabled: true,
+        slots: { memory: "none" },
+        allow: ["openclaw-kitchen-sink-fixture"],
+        entries: {
+          "openclaw-kitchen-sink-fixture": {
+            enabled: true,
+            config: { personality: "conformance" },
+          },
+        },
+      });
+    } finally {
+      await cleanupKitchenSinkEnv(root);
+    }
   });
 
   it("uses the candidate config dialect only for an authorized frozen target", async () => {
@@ -1195,7 +1283,7 @@ setInterval(() => {}, 1000);
       runnerPath,
       `
 import { runCommand } from ${JSON.stringify(
-        new URL("../../scripts/e2e/kitchen-sink-rpc-walk.mts", import.meta.url).href,
+        resolveRuntimeWorkerUrl(toolingMtsEntrypoints.kitchenSinkRpcWalk).href,
       )};
 
 await runCommand(process.execPath, [${JSON.stringify(scriptPath)}], {
@@ -2303,16 +2391,37 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(fetchImpl.mock.calls[0]?.[1]?.signal.aborted).toBe(true);
   });
 
-  it("fails when the sampled RSS exceeds the configured ceiling", () => {
-    expect(() => assertResourceCeiling({ rssMiB: 2049 })).toThrow(
-      "gateway RSS exceeded 2048 MiB: 2049 MiB",
-    );
-  });
-
-  it("fails when aggregate RSS exceeds the configured ceiling", () => {
-    expect(() => assertResourceCeiling({ aggregateRssMiB: 2049, rssMiB: 1024 })).toThrow(
-      "gateway aggregate RSS exceeded 2048 MiB: 2049 MiB",
-    );
+  it.each([false, true])("enforces RSS locally and warns in Actions (%s)", (actions) => {
+    vi.stubEnv("GITHUB_ACTIONS", actions ? "true" : "");
+    vi.stubEnv("GITHUB_STEP_SUMMARY", "");
+    const report = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const [assertCeiling, sample, message] of [
+      [assertResourceCeiling, { rssMiB: 2049 }, "gateway RSS exceeded 2048 MiB: 2049 MiB"],
+      [
+        assertResourceCeiling,
+        { aggregateRssMiB: 2049, rssMiB: 1024 },
+        "gateway aggregate RSS exceeded 2048 MiB: 2049 MiB",
+      ],
+      [
+        assertCommandResourceCeiling,
+        { aggregateRssMiB: 8193, rssMiB: 1024 },
+        "command aggregate RSS exceeded 8192 MiB: 8193 MiB",
+      ],
+    ] as const) {
+      if (actions) {
+        expect(() => assertCeiling(sample)).not.toThrow();
+        expect(report).toHaveBeenCalledWith(expect.stringContaining(`::${message}`));
+      } else {
+        expect(() => assertCeiling(sample)).toThrow(message);
+      }
+    }
+    if (actions) {
+      expect(report).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "::warning file=scripts/e2e/kitchen-sink-rpc-walk.mts,line=1,col=0",
+        ),
+      );
+    }
   });
 
   it("summarizes peak RSS across repeated process samples", () => {
@@ -2331,23 +2440,15 @@ describe("kitchen-sink RPC process sampling", () => {
     });
   });
 
-  it("fails when process sampling does not capture RSS", () => {
+  it.each(["", "true"])("rejects missing and invalid RSS in Actions mode %s", (actions) => {
+    vi.stubEnv("GITHUB_ACTIONS", actions);
     expect(() => assertResourceCeiling(null)).toThrow("gateway RSS sample was not captured");
-  });
-
-  it("fails zero-valued process RSS samples", () => {
+    expect(() => assertCommandResourceCeiling(null)).toThrow("command RSS sample was not captured");
     expect(() => assertResourceCeiling({ rssMiB: 0 })).toThrow(
       "gateway RSS sample was invalid: 0 MiB",
     );
     expect(() => assertCommandResourceCeiling({ aggregateRssMiB: 0, rssMiB: 128 })).toThrow(
       "command aggregate RSS sample was invalid: 0 MiB",
-    );
-  });
-
-  it("fails missing command samples and command RSS spikes", () => {
-    expect(() => assertCommandResourceCeiling(null)).toThrow("command RSS sample was not captured");
-    expect(() => assertCommandResourceCeiling({ aggregateRssMiB: 8193, rssMiB: 1024 })).toThrow(
-      "command aggregate RSS exceeded 8192 MiB: 8193 MiB",
     );
   });
 });

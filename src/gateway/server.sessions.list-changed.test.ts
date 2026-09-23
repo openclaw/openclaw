@@ -9,9 +9,9 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
-import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { subscribePluginSessionsChanged } from "../plugins/services.test-support.js";
 import {
   normalizeSessionDeliveryState,
   projectSessionDeliveryFields,
@@ -401,7 +401,7 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   const session = findSession(payload, "agent:main:main");
   expectFields(session, {
     thinkingDefault: "medium",
-    thinkingOptions: ["off", "minimal", "low", "medium", "high"],
+    thinkingOptions: ["off", "minimal", "low", "medium", "high", "ultra"],
   });
 });
 
@@ -886,7 +886,7 @@ test("sessions.list does not block on slow model catalog discovery", async () =>
   }
 });
 
-test("sessions.changed mutation events include live usage metadata", async () => {
+test("sessions.changed includes live usage metadata without inventing an unpriced cost", async () => {
   const { storePath } = await createSessionStoreDir();
   await seedCompletedSessionTranscript({
     storePath,
@@ -895,9 +895,9 @@ test("sessions.changed mutation events include live usage metadata", async () =>
     entries: {
       main: sessionStoreEntry("sess-main", {
         providerOverride: "openai",
-        modelOverride: "gpt-5.3-codex-spark",
+        modelOverride: "test-unpriced-model",
         modelProvider: "openai",
-        model: "gpt-5.3-codex-spark",
+        model: "test-unpriced-model",
         agentHarnessId: "openclaw",
         contextTokens: 123_456,
         contextTokensSource: "runtime",
@@ -908,7 +908,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
     message: {
       role: "assistant",
       provider: "openai",
-      model: "gpt-5.3-codex-spark",
+      model: "test-unpriced-model",
       usage: {
         input: 5_107,
         output: 1_827,
@@ -929,9 +929,9 @@ test("sessions.changed mutation events include live usage metadata", async () =>
     totalTokens: 6_643,
     totalTokensFresh: true,
     contextTokens: 123_456,
-    estimatedCostUsd: 0,
+    estimatedCostUsd: undefined,
     modelProvider: "openai",
-    model: "gpt-5.3-codex-spark",
+    model: "test-unpriced-model",
   });
 });
 

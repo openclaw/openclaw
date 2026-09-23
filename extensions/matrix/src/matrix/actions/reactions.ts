@@ -1,4 +1,3 @@
-// Matrix plugin module implements reactions behavior.
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildMatrixReactionRelationsPath,

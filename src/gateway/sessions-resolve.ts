@@ -98,14 +98,13 @@ function sessionResolveCandidate(
   };
 }
 
-export async function resolveSessionKeyFromResolveParams(params: {
-  cfg: OpenClawConfig;
+export function resolveSessionKeyFromResolveParams(params: {
   client: GatewayClient | null;
   projection: SessionRowProjection;
   p: SessionsResolveParams;
-}): Promise<SessionsResolveResult> {
+}): SessionsResolveResult {
   const { client, p, projection } = params;
-  const { cfg } = projection.state;
+  const { cfg, policyConfig } = projection.state;
   const { sharing } = prepareProjectedSessionPresentation(projection, client);
   const { entryFilter } = sharing;
   const prepare = (
@@ -273,7 +272,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
       const { entry } = target;
       const spawnedBy = typeof p.spawnedBy === "string" && p.spawnedBy.trim().length > 0;
       if (
-        (hasOperatorBoundary(client, cfg) && entryFilter?.(target.key, entry) === false) ||
+        (hasOperatorBoundary(client, policyConfig) && entryFilter?.(target.key, entry) === false) ||
         (spawnedBy &&
           !filterAndSortSessionEntries({ ...prepare(requestedAgent.agentId) }).some(
             ([candidate]) => candidate === target.key,

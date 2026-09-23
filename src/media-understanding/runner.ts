@@ -59,6 +59,7 @@ import {
   formatDecisionSummary,
   runCliEntry,
   runProviderEntry,
+  type MediaRequestOverrides,
 } from "./runner.entries.js";
 import type {
   MediaAttachment,
@@ -449,7 +450,7 @@ async function activeModelSupportsNativeVision(params: {
 }
 
 async function* resolveAutoAudioEntries(
-  params: Parameters<typeof resolveAutoEntries>[0],
+  params: Parameters<typeof resolveAutoEntries>[0] & { providerRegistry: ProviderRegistry },
 ): AsyncGenerator<ResolvedMediaModelEntry> {
   const activeProvider = normalizeMediaExecutionProviderId(
     params.activeModel?.provider?.trim() ?? "",
@@ -480,26 +481,27 @@ async function resolveAutoEntries(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  providerRegistry: ProviderRegistry;
+  providerRegistry?: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
   nativeVisionActive: boolean;
   config?: MediaUnderstandingConfig;
 }): Promise<ResolvedMediaModelEntry[]> {
   if (params.capability === "image" && !params.nativeVisionActive) {
-    const imageModelEntries = resolveImageModelFromAgentDefaults({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    });
+    const imageModelEntries = resolveImageModelFromAgentDefaults(params);
     if (imageModelEntries.length > 0) {
       return imageModelEntries.map((entry) => ({ entry }));
     }
   }
-  const activeEntry = await resolveActiveModelEntry(params);
+  const prepared = {
+    ...params,
+    providerRegistry: params.providerRegistry ?? buildProviderRegistry(undefined, params.cfg),
+  };
+  const activeEntry = await resolveActiveModelEntry(prepared);
   if (activeEntry) {
     return [{ entry: activeEntry }];
   }
-  const keys = await resolveKeyEntry(params);
+  const keys = await resolveKeyEntry(prepared);
   if (keys) {
     return [{ entry: keys }];
   }
@@ -513,10 +515,8 @@ export async function resolveAutoImageModel(params: {
   workspaceDir?: string;
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
-  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const entries = await resolveAutoEntries({
     ...params,
-    providerRegistry,
     capability: "image",
     nativeVisionActive: false,
   });
@@ -632,6 +632,7 @@ async function runAttachmentEntries(params: {
   entries: Iterable<ResolvedMediaModelEntry> | AsyncIterable<ResolvedMediaModelEntry>;
   automaticAudio: boolean;
   config?: MediaUnderstandingConfig;
+  request?: MediaRequestOverrides;
 }): Promise<{
   output: MediaUnderstandingOutput | null;
   attempts: MediaUnderstandingModelDecision[];
@@ -647,29 +648,11 @@ async function runAttachmentEntries(params: {
     try {
       const attempt =
         entryType === "cli"
-          ? ok(
-              await runCliEntry({
-                capability,
-                entry,
-                cfg: params.cfg,
-                ctx: params.ctx,
-                attachment: params.attachment,
-                cache: params.cache,
-                config: params.config,
-              }),
-            )
+          ? ok(await runCliEntry({ ...params, entry }))
           : await runProviderEntry({
-              capability,
+              ...params,
               entry,
-              cfg: params.cfg,
-              ctx: params.ctx,
               attachmentIndex,
-              cache: params.cache,
-              agentId: params.agentId,
-              agentDir: params.agentDir,
-              workspaceDir: params.workspaceDir,
-              providerRegistry: params.providerRegistry,
-              config: params.config,
               secretOwnerId: candidate.secretOwnerId,
             });
       if (!attempt.ok) {
@@ -768,6 +751,7 @@ export async function runCapability(params: {
   providerRegistry: ProviderRegistry;
   config?: MediaUnderstandingConfig;
   activeModel?: ActiveMediaModel;
+  request?: MediaRequestOverrides;
 }): Promise<RunCapabilityResult> {
   const { capability, cfg, ctx } = params;
   const config: MediaUnderstandingConfig = params.config ?? cfg.tools?.media?.[capability] ?? {};
@@ -987,6 +971,7 @@ export async function runCapability(params: {
         : resolvedEntries,
       automaticAudio,
       config,
+      request: params.request,
     });
     if (output) {
       outputs.push(output);

@@ -148,7 +148,13 @@ export function createCatalogIoCounters() {
     });
   }
   syncBuiltinESMExports();
+  const snapshot = () => ({
+    ...counts,
+    pluginStateWorkerReadOperations: workerCounter.reads,
+    pluginStateWorkerOperations: workerCounter.operations,
+  });
   return {
+    snapshot,
     catalogPersisted: catalogPersistence.promise,
     nativeRequest(method: string) {
       if (!enabled) {
@@ -169,11 +175,7 @@ export function createCatalogIoCounters() {
     end() {
       enabled = false;
       workerCounter.enabled = false;
-      return {
-        ...counts,
-        pluginStateWorkerReadOperations: workerCounter.reads,
-        pluginStateWorkerOperations: workerCounter.operations,
-      };
+      return snapshot();
     },
     close() {
       workerCounter.catalogPersisted = undefined;

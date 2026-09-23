@@ -93,7 +93,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
 
   </Accordion>
   <Accordion title="Model catalog entries">
-    - `models.providers.*.models`: explicit provider model catalog entries.
+    - `models.providers.*.models`: explicit provider model catalog entries and metadata overrides. In merge mode, these rows do not restrict eligible provider discovery. Use `agents.defaults.modelPolicy.allow` (or a per-agent policy) to restrict selection, or `models.mode: "replace"` to use only configured inventory without discovery.
     - `models.providers.*.models.*.input`: model input modalities. Use `["text"]` for text-only models and `["text", "image"]` for native image/vision models. Image attachments are only injected into agent turns when the selected model is marked image-capable.
     - `models.providers.*.models.*.contextWindow`: native context-window metadata for that model.
     - `models.providers.*.models.*.contextTokens`: optional active-input cap for that model; use it when you want an effective budget distinct from the model's native `contextWindow`; `openclaw models list` shows both when they differ.
@@ -114,7 +114,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `supportsUsageInStreaming` | Emits usage metadata in streaming responses. |
     | `supportsInstructions` | Responses API only: accepts the system prompt via top-level `instructions` instead of embedded in `input`. Defaults to `true` only for native OpenAI and xAI's main route — the two routes with confirmed contract evidence. Every other route, bundled or custom, defaults to `false`; set explicitly once verified against that endpoint. |
     | `supportsTools` | Supports structured tool/function calling. Set `false` to disable tools. |
-    | `supportsStrictMode` | Accepts strict tool schemas. |
+    | `supportsStrictMode` | Accepts the `strict` tool field. On compatible Completions and Responses routes, `true` permits explicit `strict: false` so optional tool arguments remain optional. |
     | `requiresStringContent` | Requires plain-string Chat Completions message content. |
     | `strictMessageKeys` | Requires outgoing messages to contain only accepted keys. |
     | `visibleReasoningDetailTypes` | Names reasoning detail block types safe to show in transcripts. |

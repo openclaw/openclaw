@@ -1,3 +1,9 @@
+# shellcheck source=scripts/pr-lib/github.sh
+source "$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/github.sh" || return 1
+
+# shellcheck source=scripts/pr-lib/host-tools.sh
+source "${BASH_SOURCE[0]%/*}/host-tools.sh" || return 1
+
 # Load receipt helpers for the invocation before cleanup can delete this module's worktree.
 # shellcheck source=scripts/pr-lib/merge-outcome.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/merge-outcome.sh" || return 1
@@ -89,7 +95,7 @@ root_changelog_update_allowed_for_pr() {
   version="${BASH_REMATCH[1]}"
   printf '%s\n' "$record" | jq -e --arg title "chore(release): close out $version on main" \
     '.title == $title and .baseRefName == "main" and .isCrossRepository == false' >/dev/null || return 1
-  git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1 || return 1
+  pr_git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1 || return 1
   helper_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd) || return 1
   # Compare complete sections, not just added lines: a closeout must preserve
   # every byte outside its released version, including removed historical text.
@@ -99,7 +105,7 @@ import { pathToFileURL } from "node:url";
 const [version, base, root] = process.argv.slice(2);
 const { loadReleaseChangelog, checkChangelogLayout, changelogEntryPath, isReleaseChangelogPath } =
   await import(pathToFileURL(`${root}/scripts/lib/release-changelog.mjs`));
-const git = (...args) => execFileSync("git", args, { encoding: "utf8", maxBuffer: Infinity });
+const git = (...args) => execFileSync(process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git", args, { encoding: "utf8", maxBuffer: Infinity });
 const read = (ref) => git("show", `${ref}:CHANGELOG.md`);
 const changed = git("diff", "--name-only", "--no-renames", "-z", base, "HEAD", "--", "CHANGELOG.md", "CHANGELOG/").split("\0").filter(Boolean);
 const release = loadReleaseChangelog({ rootDir: process.cwd(), ref: "HEAD", version });
@@ -234,7 +240,7 @@ read_pr_view_json() {
 
   for attempt in $(seq 1 "$max_attempts"); do
     exit_code=0
-    if gh pr view "$pr" --json "$fields" >"$stdout_file" 2>"$stderr_file"; then
+    if pr_gh pr view "$pr" --json "$fields" >"$stdout_file" 2>"$stderr_file"; then
       if [ -s "$stdout_file" ] && jq -se 'length == 1 and (.[0] | type == "object")' "$stdout_file" >/dev/null 2>&1; then
         cat "$stdout_file"
         rm -rf "$temp_dir"
@@ -248,6 +254,11 @@ read_pr_view_json() {
     else
       exit_code=$?
       reason="gh pr view exited with status $exit_code"
+      if [ "$exit_code" -eq 65 ] || [ "$exit_code" -eq 75 ] || [ "$exit_code" -eq 77 ]; then
+        cat "$stderr_file" >&2
+        rm -rf "$temp_dir"
+        return 1
+      fi
     fi
     [ "$attempt" -eq "$max_attempts" ] || sleep "$attempt"
   done
@@ -256,6 +267,36 @@ read_pr_view_json() {
   [ ! -s "$stderr_file" ] || cat "$stderr_file" >&2
   rm -rf "$temp_dir"
   return 1
+}
+
+read_pr_observation() {
+  read_pr_view_json "$1" "number,url,title,state,isDraft,author,baseRefName,baseRefOid,baseRepository,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository"
+}
+
+use_pr_observation() {
+  local pr="$1" observation="$2" repository_url
+  repository_url=$(printf '%s\n' "$observation" | jq -er --argjson pr "$pr" '
+    .baseRepository as $repo |
+    select(.number == $pr and
+      ($repo.id | type == "string" and length > 0) and
+      ($repo.databaseId | type == "number" and . > 0 and floor == .) and
+      ($repo.nameWithOwner | type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
+      ($repo.url | type == "string" and test("^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") and endswith("/" + $repo.nameWithOwner)) and
+      .url == ($repo.url + "/pull/" + ($pr | tostring))) |
+    $repo.url') || {
+      echo "Invalid base repository identity for PR #$pr." >&2
+      return 1
+    }
+  PR_OBSERVATION="$observation"
+  PR_REPOSITORY_URL="$repository_url"
+  PR_REPOSITORY_SELECTOR="${GH_REPO:-}"
+  PR_REPOSITORY_HOST="${GH_HOST:-}"
+}
+
+pr_observe() {
+  local observation
+  observation=$(read_pr_observation "$1") || return 1
+  use_pr_observation "$1" "$observation"
 }
 
 pr_view_string_field() {
@@ -282,7 +323,8 @@ wait_for_pr_head_sha() {
   local attempt
   for attempt in $(seq 1 "$max_attempts"); do
     local observed_sha
-    observed_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+    pr_observe "$pr" || return 1
+    observed_sha=$(pr_view_string_field "$PR_OBSERVATION" headRefOid "$pr") || return 1
     if [ "$observed_sha" = "$expected_sha" ]; then
       return 0
     fi
@@ -317,7 +359,7 @@ resolve_contributor_coauthor_email() {
   fi
 
   local contrib_id
-  contrib_id=$(gh api "users/$contrib" --jq .id) || return 1
+  contrib_id=$(pr_gh api "users/$contrib" --jq .id) || return 1
   printf '%s+%s@users.noreply.github.com\n' "$contrib_id" "$contrib"
 }
 
@@ -329,7 +371,7 @@ common_repo_root() {
 
   local base_dir
   base_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  git -C "$base_dir" rev-parse --show-toplevel
+  pr_git -C "$base_dir" rev-parse --show-toplevel
 }
 
 worktree_path_for_branch() (
@@ -338,7 +380,7 @@ worktree_path_for_branch() (
   local ref="refs/heads/$branch"
   local field worktree="" match="" records=0 pipeline_status
   # Drain foreground Git before the supervisor checks for leftover children.
-  git worktree list --porcelain -z | {
+  pr_git worktree list --porcelain -z | {
     while IFS= read -r -d '' field; do
       case "$field" in
         worktree\ *) worktree="${field#worktree }"; records=$((records + 1)) ;;
@@ -360,7 +402,7 @@ worktree_registration_state() (
   local path="$1"
   local field found=0 records=0 open=false pipeline_status
   # Git must finish before a successful operation can release its lock.
-  git worktree list --porcelain -z | {
+  pr_git worktree list --porcelain -z | {
     while IFS= read -r -d '' field; do
       case "$field" in
         worktree\ *)
@@ -394,7 +436,7 @@ resolve_existing_dir_path() {
 pr_worktree_state() {
   local root common_dir
   root=$(common_repo_root) || return $?
-  common_dir=$(git -C "$root" rev-parse --path-format=absolute --git-common-dir) || return $?
+  common_dir=$(pr_git -C "$root" rev-parse --path-format=absolute --git-common-dir) || return $?
   # Git omits damaged admin entries from its listing. Bind the exact backlink
   # separately, and distinguish genuine absence from an unreadable path.
   node - "$root" "$common_dir" "$1" "${2:-}" "${3:-cleanup}" <<'EOF_NODE'
@@ -509,7 +551,7 @@ remove_worktree_if_present() {
     return 1
   fi
   if [ -d "$path" ]; then
-    dirty=$(git -C "$path" status --porcelain --untracked-files=all --ignore-submodules=none) || return $?
+    dirty=$(pr_git -C "$path" status --porcelain --untracked-files=all --ignore-submodules=none) || return $?
     if [ -n "$dirty" ] || [ -e "$admin/locked" ]; then
       echo "Preserving $path: worktree has local changes or is locked. Review its contents and ownership before cleanup." >&2
       return 1
@@ -518,7 +560,7 @@ remove_worktree_if_present() {
   [ "${2:-false}" != true ] || return 0
   # One native removal owns both the path and its exact admin entry. A partial
   # deletion still fails; neither repository-wide prune nor orphan trash is safe.
-  git worktree remove -- "$registered_path" || return $?
+  pr_git worktree remove -- "$registered_path" || return $?
   state=$(pr_worktree_state "$path" "$admin") || return $?
   registration=$(worktree_registration_state "$registered_path") || return $?
   if [ "$registration" != absent ] ||
@@ -536,7 +578,7 @@ delete_local_branch_if_safe() {
   local existing status
   # for-each-ref can warn about a broken ref with status zero. Such a warning
   # is not proof of absence, so retain diagnostics in the validated result.
-  existing=$(git for-each-ref --format="%(if:equals=$ref)%(refname)%(then)%(refname)%(end)" -- "$ref" 2>&1) || {
+  existing=$(pr_git for-each-ref --format="%(if:equals=$ref)%(refname)%(then)%(refname)%(end)" -- "$ref" 2>&1) || {
     status=$?; printf '%s\n' "$existing" >&2; return "$status"
   }
   [ -n "$existing" ] || return 0
@@ -555,7 +597,7 @@ delete_local_branch_if_safe() {
   # Git still rejects advanced tips and branches checked out in another worktree.
   if [ -n "$retained" ]; then
     # merge is multi-valued: appending must not redirect an existing upstream.
-    if git config --get-all "branch.$branch.merge" >/dev/null; then
+    if pr_git config --get-all "branch.$branch.merge" >/dev/null; then
       :
     else
       status=$?
@@ -563,8 +605,8 @@ delete_local_branch_if_safe() {
       config=(-c "branch.$branch.remote=." -c "branch.$branch.merge=$retained")
     fi
   fi
-  git ${config[@]+"${config[@]}"} branch -d -- "$branch" || return $?
-  existing=$(git for-each-ref --format="%(if:equals=$ref)%(refname)%(then)%(refname)%(end)" -- "$ref" 2>&1) || {
+  pr_git ${config[@]+"${config[@]}"} branch -d -- "$branch" || return $?
+  existing=$(pr_git for-each-ref --format="%(if:equals=$ref)%(refname)%(then)%(refname)%(end)" -- "$ref" 2>&1) || {
     status=$?; printf '%s\n' "$existing" >&2; return "$status"
   }
   [ -z "$existing" ] || { printf 'Branch cleanup incomplete: %s\n' "$existing" >&2; return 1; }

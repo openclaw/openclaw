@@ -88,6 +88,7 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      providerAuthContributions: [],
       modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
@@ -155,6 +156,10 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync: (params: unknown) => resolveOpenClawPackageRootSync(params),
+}));
+
+vi.mock("../infra/device-pairing-node-desktop-migration.js", () => ({
+  migrateLegacyDesktopStreamOptOuts: async () => 0,
 }));
 
 vi.mock("../infra/pairing-files.js", () => ({

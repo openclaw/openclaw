@@ -213,6 +213,7 @@ describe("heartbeat scratch task cron migration", () => {
     const statePath = resolveOpenClawStateSqlitePath(fixture.env);
     const older = openNodeSqliteDatabase(statePath);
     older.exec(`
+      DROP INDEX idx_worker_session_placements_environment;
       PRAGMA user_version = 7;
       UPDATE schema_meta SET schema_version = 7 WHERE meta_key = 'primary';
     `);

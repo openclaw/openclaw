@@ -16,16 +16,13 @@ import {
 import { hoisted } from "./task-executor.mocks.test-support.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "./task-flow-runtime-internal.js";
+import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
   resetTaskFlowRegistryForTests,
   setDetachedTaskLifecycleRuntime,
-  setTaskRegistryControlRuntimeForTests,
-  setTaskRegistryDeliveryRuntimeForTests,
 } from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -85,33 +82,20 @@ export async function withTaskExecutorStateDir(
     resetDetachedTaskLifecycleRuntimeForTests();
     resetSystemEventsForTest();
     resetAgentEventsForTest();
-    resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryControlRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
-    setTaskRegistryDeliveryRuntimeForTests({
-      sendMessage: hoisted.sendMessageMock,
-    });
-    setTaskRegistryControlRuntimeForTests({
-      cancelActiveCronTaskRun: () => false,
-      getAcpSessionManager: () => ({
-        cancelSession: hoisted.cancelSessionMock,
-      }),
-      killSubagentRunAdmin: async (params) => {
-        const result = await hoisted.killSubagentRunAdminMock(params);
-        params.onResult?.(result);
-        return result;
-      },
-    });
+    using deliveries = captureTaskDeliveryWork();
     try {
       await run(stateDir);
     } finally {
-      resetSystemEventsForTest();
-      resetAgentEventsForTest();
-      resetTaskRegistryDeliveryRuntimeForTests();
-      resetTaskRegistryControlRuntimeForTests();
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
+      try {
+        await deliveries.settle();
+      } finally {
+        resetSystemEventsForTest();
+        resetAgentEventsForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+      }
     }
   });
 }
@@ -199,8 +183,6 @@ export function resetTaskExecutorTestState() {
   ORIGINAL_ENV.restore();
   resetSystemEventsForTest();
   resetAgentEventsForTest();
-  resetTaskRegistryDeliveryRuntimeForTests();
-  resetTaskRegistryControlRuntimeForTests();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   hoisted.sendMessageMock.mockReset();

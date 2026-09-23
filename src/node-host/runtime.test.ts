@@ -8,111 +8,16 @@ import { NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import type { NodeHostClient } from "./client.js";
 import type { SkillBinsProvider } from "./invoke.js";
-import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
-import { prepareNodeHostRuntime } from "./runtime.js";
-
-const mocks = vi.hoisted(() => {
-  const closeMcp = vi.fn(async () => undefined);
-  return {
-    closeMcp,
-    closeWorkerSupervisor: vi.fn(async () => undefined),
-    initializeWorkerSupervisor: vi.fn(async () => undefined),
-    handleInvoke: vi.fn(async () => undefined),
-    progressStartHeartbeats: vi.fn(),
-    progressWrite: vi.fn(async (_chunk: string) => undefined),
-    startMcp: vi.fn(async (_servers: unknown, _deps?: { signal?: AbortSignal }) => ({
-      descriptors: [],
-      callMcpTool: vi.fn(),
-      close: closeMcp,
-    })),
-  };
-});
-
-vi.mock("../infra/path-env.js", () => ({
-  ensureOpenClawCliOnPath: vi.fn(),
-}));
-
-vi.mock("./invoke.js", () => ({
-  handleInvoke: mocks.handleInvoke,
-}));
-
-vi.mock("./mcp.js", () => ({
-  startNodeHostMcpManager: mocks.startMcp,
-}));
-
-vi.mock("./node-invoke-progress.js", () => ({
-  createNodeInvokeProgressWriter: vi.fn(() => ({
-    startHeartbeats: mocks.progressStartHeartbeats,
-    write: mocks.progressWrite,
-    stop: vi.fn(),
-    flush: vi.fn(async () => undefined),
-  })),
-}));
-
-vi.mock("./node-worker-supervisor.js", () => ({
-  createNodeWorkerSupervisor: vi.fn(() => ({
-    initialize: mocks.initializeWorkerSupervisor,
-    close: mocks.closeWorkerSupervisor,
-  })),
-}));
-
-vi.mock("./node-worker-workspace.js", () => ({
-  NodeWorkerWorkspaceRuntime: class {
-    readonly exec = vi.fn();
-  },
-}));
-
-vi.mock("./plugin-node-host.js", () => ({
-  ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
-  isRegisteredNodeHostCommandDuplex: vi.fn((command: string) => command === "test.duplex"),
-  listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
-    caps: ["terminal"],
-    commands: ["test.duplex"],
-    nodePluginTools: [],
-  })),
-}));
-
-vi.mock("./skills.js", () => ({
-  scanNodeHostedSkills: vi.fn(() => []),
-}));
-
-const frame = {
-  id: "invoke-1",
-  nodeId: "node-1",
-  command: "test.duplex",
-  paramsJSON: null,
-  timeoutMs: 0,
-  idempotencyKey: null,
-};
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  mocks.closeMcp.mockResolvedValue(undefined);
-  mocks.closeWorkerSupervisor.mockResolvedValue(undefined);
-  mocks.initializeWorkerSupervisor.mockResolvedValue(undefined);
-});
-
-function createNodeHostClient(request: () => Promise<unknown>): NodeHostClient {
-  return {
-    async request<T>() {
-      return (await request()) as T;
-    },
-  };
-}
-
-async function startRuntime(
-  client: NodeHostClient = createNodeHostClient(async () => ({ bins: [] })),
-) {
-  const prepared = await prepareNodeHostRuntime({
-    config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
-    env: { PATH: "/usr/bin" },
-    enableAgentRuns: true,
-    enableWorkerRuns: true,
-  });
-  return prepared.start({ client });
-}
+import {
+  createNodeHostClient,
+  frame,
+  holdInvoke,
+  listRegisteredNodeHostCapsAndCommands,
+  mocks,
+  prepareNodeHostRuntime,
+  startRuntime,
+} from "./runtime.test-support.js";
 
 type SkillBinsResponse = { bins: string[] };
 type SkillBinsFixture = {
@@ -258,36 +163,6 @@ describe("node-host skill-bin cache", () => {
     });
   });
 });
-
-function holdInvoke(onCommand?: (io: OpenClawPluginNodeHostCommandIo) => void) {
-  let io: OpenClawPluginNodeHostCommandIo | undefined;
-  let signal: AbortSignal | undefined;
-  let release: (() => void) | undefined;
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  mocks.handleInvoke.mockImplementationOnce(async (...args: unknown[]) => {
-    const runtime = args[4] as {
-      pluginCommandIo?: OpenClawPluginNodeHostCommandIo;
-      signal?: AbortSignal;
-    };
-    io = runtime.pluginCommandIo;
-    signal = runtime.signal;
-    if (io) {
-      onCommand?.(io);
-    }
-    await held;
-  });
-  return {
-    get io() {
-      return io;
-    },
-    get signal() {
-      return signal;
-    },
-    release: () => release?.(),
-  };
-}
 
 describe("node-host invocation cancellation", () => {
   it("does not admit a queued invocation after its connection is retired", async () => {
@@ -435,21 +310,63 @@ describe("node-host invocation cancellation", () => {
 });
 
 describe("node-host desktop manifest", () => {
-  it("advertises desktop.stream only when the node-local desktop is enabled", async () => {
-    const disabled = await prepareNodeHostRuntime({
-      config: {},
-      env: { PATH: "/usr/bin" },
-      platform: "linux",
-    });
-    expect(disabled.manifest.commands).not.toContain(NODE_DESKTOP_STREAM_COMMAND);
+  it.each(["darwin", "linux", "win32"] as const)(
+    "enables the same desktop stream for advertisement and invocation on %s by default",
+    async (platform) => {
+      const prepared = await prepareNodeHostRuntime({
+        config: {},
+        env: { PATH: "/usr/bin" },
+        platform,
+      });
+      expect(prepared.manifest.commands).toContain(NODE_DESKTOP_STREAM_COMMAND);
+      const runtime = prepared.start({ client: createNodeHostClient(async () => ({ bins: [] })) });
+      try {
+        await runtime.invoke({ ...frame, command: NODE_DESKTOP_STREAM_COMMAND });
+        expect(mocks.handleInvoke).toHaveBeenLastCalledWith(
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ desktopHostConfig: { enabled: true } }),
+        );
+      } finally {
+        await runtime.close();
+      }
+    },
+  );
 
-    const enabled = await prepareNodeHostRuntime({
-      config: { desktop: { host: { enabled: true } } },
-      env: { PATH: "/usr/bin" },
-      platform: "linux",
-    });
-    expect(enabled.manifest.commands).toContain(NODE_DESKTOP_STREAM_COMMAND);
-  });
+  it.each([
+    { configEnabled: false, nativeEnabled: undefined, ephemeral: false, enabled: false },
+    { configEnabled: true, nativeEnabled: undefined, ephemeral: false, enabled: true },
+    { configEnabled: true, nativeEnabled: false, ephemeral: false, enabled: false },
+    { configEnabled: false, nativeEnabled: true, ephemeral: false, enabled: true },
+    { configEnabled: true, nativeEnabled: true, ephemeral: true, enabled: false },
+  ])(
+    "preserves node desktop preference precedence and disposable worker isolation: $configEnabled/$nativeEnabled/$ephemeral",
+    async ({ configEnabled, nativeEnabled, ephemeral, enabled }) => {
+      const prepared = await prepareNodeHostRuntime({
+        config: { desktop: { host: { enabled: configEnabled, port: 5901 } } },
+        env: { PATH: "/usr/bin" },
+        desktopSharingEnabled: nativeEnabled,
+        platform: "darwin",
+        ephemeral,
+      });
+      expect(prepared.manifest.commands.includes(NODE_DESKTOP_STREAM_COMMAND)).toBe(enabled);
+      const runtime = prepared.start({ client: createNodeHostClient(async () => ({ bins: [] })) });
+      try {
+        await runtime.invoke({ ...frame, command: NODE_DESKTOP_STREAM_COMMAND });
+        expect(mocks.handleInvoke).toHaveBeenLastCalledWith(
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ desktopHostConfig: { enabled, port: 5901 } }),
+        );
+      } finally {
+        await runtime.close();
+      }
+    },
+  );
 
   it("emits desktop statuses without control-channel heartbeats", async () => {
     const runtime = await startRuntime();

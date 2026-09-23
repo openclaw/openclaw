@@ -51,9 +51,8 @@ export async function handleChatStartupRequest(
     );
     return;
   }
-  const resolution = await resolveSessionKeyFromResolveParams({
+  const resolution = resolveSessionKeyFromResolveParams({
     projection,
-    cfg: opts.context.getRuntimeConfig(),
     client: opts.client,
     p: { shortId, slugHint, agentId, allowMissing: true },
   });

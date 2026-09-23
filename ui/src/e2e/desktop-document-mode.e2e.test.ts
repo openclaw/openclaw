@@ -268,6 +268,7 @@ suite.define(() => {
         const sessionKey = "agent:main:cloud-desktop";
         const session = {
           key: sessionKey,
+          sessionId: "cloud-desktop-session",
           kind: "direct",
           label: "Cloud desktop session",
           updatedAt: 1,

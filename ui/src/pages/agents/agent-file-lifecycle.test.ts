@@ -152,6 +152,7 @@ describe("agent file lifecycle", () => {
     setPageGateway(page, client);
     page.agentsSelectedId = "main";
 
+    page.agentFileDrafts = { "AGENTS.md": "updated" };
     page.saveSelectedAgentFile("main", "AGENTS.md", "updated");
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());

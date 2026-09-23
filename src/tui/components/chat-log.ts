@@ -1,6 +1,7 @@
 // Chat log component lays out conversation messages for the TUI viewport.
 import type { Component } from "@earendil-works/pi-tui";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
+import type { AgentActivityItem as AgentItemEventData } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { tuiTheme as theme } from "../theme/theme.js";
 import { sanitizeRenderableText } from "../tui-formatters.js";
 import type { TuiImageSource } from "../tui-images.js";
@@ -36,7 +37,6 @@ type RepeatableSystemMessage = {
 type TrackedTool = {
   component: ToolExecutionComponent;
   runId?: string;
-  active: boolean;
 };
 
 type TrackedAssistantRun = {
@@ -157,7 +157,7 @@ export class ChatLog extends Container {
     const streaming = runId ? this.assistantRuns.get(runId)?.streaming : undefined;
     const completedTools = new Set<ToolExecutionComponent>();
     for (const tool of this.tools.values()) {
-      if (!tool.active) {
+      if (!tool.component.isActive) {
         completedTools.add(tool.component);
       }
     }
@@ -612,17 +612,31 @@ export class ChatLog extends Container {
     return this.btwMessage !== null;
   }
 
-  startTool(toolCallId: string, toolName: string, args: unknown, runId?: string) {
+  startTool(
+    toolCallId: string,
+    toolName: string,
+    args: unknown,
+    runId?: string,
+    activity?: AgentItemEventData | null,
+  ) {
     const existing = this.tools.get(toolCallId);
     if (existing) {
-      existing.component.setArgs(args);
+      if (args !== undefined) {
+        existing.component.setArgs(args);
+      }
+      if (activity !== undefined) {
+        existing.component.setActivity(activity);
+      }
       return existing.component;
     }
     const owningRunId = runId ?? this.resolveSingleStreamingRunId();
     this.freezeStreamingAssistants();
     const component = new ToolExecutionComponent(toolName, args, this.imageRenderer);
+    if (activity !== undefined) {
+      component.setActivity(activity);
+    }
     component.setExpanded(this.toolsExpanded);
-    this.tools.set(toolCallId, { component, runId: owningRunId, active: true });
+    this.tools.set(toolCallId, { component, runId: owningRunId });
     this.appendNonSystem(component);
     return component;
   }
@@ -637,11 +651,9 @@ export class ChatLog extends Container {
       return;
     }
     if (opts?.partial) {
-      existing.active = true;
       existing.component.setPartialResult(result as Record<string, unknown>);
       return;
     }
-    existing.active = false;
     existing.component.setResult(result as Record<string, unknown>, {
       isError: opts?.isError,
     });

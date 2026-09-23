@@ -148,6 +148,9 @@ export function writeFixturePlugin(params: {
   fs.writeFileSync(
     pluginFile,
     `const fs = require("node:fs");
+if (require("node:worker_threads").threadId !== ${threadId}) {
+  fs.appendFileSync(${JSON.stringify(path.join(params.root, "runtime-artifact-paths.txt"))}, __filename + "\\n");
+}
 module.exports = {
   id: ${JSON.stringify(PLUGIN_ID)},
   register(api) {
@@ -644,10 +647,9 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
     config,
     env,
   };
-  let current = true;
-  params.retireAfterTest(() => {
-    current = false;
-  });
+  const retirement = new AbortController();
+  const isCurrent = () => !retirement.signal.aborted;
+  params.retireAfterTest(() => retirement.abort());
   const build = (
     await startSerializedSnapshotBuildBatch(
       [
@@ -655,8 +657,9 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
           input,
           catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
           inventoryOwner,
-          isGenerationCurrent: () => current,
-          isBuildCurrent: () => current,
+          isGenerationCurrent: isCurrent,
+          retirementSignal: retirement.signal,
+          isBuildCurrent: isCurrent,
         },
       ],
       new Map(),

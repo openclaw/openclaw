@@ -34,7 +34,7 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createSessionCatalogGitHubLinker,
-  projectSessionCatalogSourceActor,
+  createSessionCatalogSourceActorProjector,
   readSessionTranscriptCatalogPage,
   readSessionTranscriptCatalogTitle,
 } from "./session-transcript-runtime.js";
@@ -386,24 +386,23 @@ describe("native transcript catalog SDK", () => {
       expect(nextPageLinker.resolveOwner("github:newly-verified")).toMatchObject({
         id: newlyVerified.id,
       });
+      const projectActor = createSessionCatalogSourceActorProjector({
+        ...source,
+        actors: [{ type: "human", source: "profile", id: github.id }],
+      });
+      expect(projectActor({ type: "human", source: "profile", id: github.id })).toMatchObject({
+        type: "human",
+        identity: sender.identity,
+        label: "Portable User",
+      });
       expect(
-        projectSessionCatalogSourceActor({
-          ...source,
-          actor: { type: "human", source: "profile", id: github.id },
-        }),
-      ).toMatchObject({ type: "human", identity: sender.identity, label: "Portable User" });
-      expect(
-        projectSessionCatalogSourceActor({
-          ...source,
-          actor: { type: "human", source: "channel", id: github.id },
-        })?.identity,
+        projectActor({ type: "human", source: "channel", id: github.id })?.identity,
       ).toBeUndefined();
-      expect(
-        projectSessionCatalogSourceActor({
-          ...source,
-          actor: { type: "agent", id: "main", label: "Main" },
-        }),
-      ).toEqual({ type: "agent", id: "main", label: "Main" });
+      expect(projectActor({ type: "agent", id: "main", label: "Main" })).toEqual({
+        type: "agent",
+        id: "main",
+        label: "Main",
+      });
     });
   });
 

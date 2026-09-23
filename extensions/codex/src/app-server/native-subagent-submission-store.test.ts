@@ -9,13 +9,13 @@ import {
   type CodexNativeSubagentHistoryOwner,
 } from "./native-subagent-history-owner.js";
 import type { CodexNativeSubagentSubmission } from "./native-subagent-submission.js";
+import { scopeCodexRunBindingStore } from "./session-binding-scope.js";
 import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js";
 import {
   bindingStoreKey,
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
   createCodexAppServerBindingStore,
-  scopeCodexRunBindingStore,
   type CodexAppServerBindingStore,
   type StoredCodexAppServerBinding,
 } from "./session-binding.js";

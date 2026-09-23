@@ -17,7 +17,12 @@ Swift and TypeScript state-database contracts declare different schema versions.
 [`openclaw doctor --fix`](/cli/doctor) owns file-to-SQLite migrations and records a
 receipt for each one in the shared `migration_runs` and `migration_sources` tables.
 
-This page is an index. The reference is documented on seven pages, one per
+Execution step receipts are separate from these persisted import receipts.
+A step blocked by an earlier refusal includes optional `originatingRefusal`
+fields `stepId`, `code`, and `message` naming the first failure. See
+[legacy state migration](/cli/doctor/state-migrations) for how to resolve it.
+
+This page is an index. The reference is documented on focused pages, one per
 reader job. Open the page that matches your task and stay there.
 
 | Page                                                                                           | Read it when                                                                                             |
@@ -26,6 +31,8 @@ reader job. Open the page that matches your task and stay there.
 | [Versioning contract](/reference/database-schemas/versioning)                                  | How schema versions are recorded, when a bump is required, and how updaters cross one.                   |
 | [Per-person and companion storage](/reference/database-schemas/personal-data)                  | Personal GitHub connections, personal model accounts, and Apple companion delivery journals.             |
 | [Storage changes and release preflight](/reference/database-schemas/storage-changes)           | Preparing for another backend, the material-change review checkpoint, and `openclaw database preflight`. |
+| [Database access in workers](/reference/database-schemas/worker-access)                        | Moving runtime reads and writes off the Gateway main thread while preserving their owners.               |
+| [Worker migration inventory](/reference/database-schemas/worker-access-inventory)              | Reproducing the synchronous-access inventory and choosing the next migration.                            |
 | [Agent schema history](/reference/database-schemas/agent-schema-history)                       | Per-agent database schema versions, their changes, and their first releases.                             |
 | [State schema history](/reference/database-schemas/state-schema-history)                       | Shared state database schema versions, their changes, and their first releases.                          |
 | [Integrity, troubleshooting, and recovery](/reference/database-schemas/integrity-and-recovery) | Integrity checks, common database errors, and the supported downgrade recovery path.                     |

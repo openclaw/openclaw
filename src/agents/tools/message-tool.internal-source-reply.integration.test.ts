@@ -136,35 +136,124 @@ describe("WebChat message tool internal source reply", () => {
     );
   });
 
-  it("stages buffer media before acknowledging the current-source send", async () => {
+  it.each([
+    { name: "ordinary caption", message: "Attached proof.", expectedText: "Attached proof." },
+    {
+      name: "HTML buffer",
+      message: "Attached proof.",
+      expectedText: "Attached proof.",
+      filename: "proof.html",
+      contentType: "text/html",
+      content: "<!doctype html><h1>Proof</h1>",
+    },
+    {
+      name: "internal runtime context",
+      message:
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      expectedText: "",
+    },
+    {
+      name: "inbound delivery metadata",
+      message:
+        "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+      expectedText: "",
+    },
+  ])(
+    "stages buffer media with $name before acknowledging the current-source send",
+    async ({
+      message,
+      expectedText,
+      filename = "proof.txt",
+      contentType = "text/plain",
+      content = "current-source attachment",
+    }) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "message-tool-source-buffer-" },
+        async (state) => {
+          await fs.mkdir(state.workspaceDir, { recursive: true });
+          const tool = createCurrentSourceMessageTool({ workspaceDir: state.workspaceDir });
+          const attachment = Buffer.from(content);
+
+          const toolResult = await tool.execute("message-buffer-call", {
+            action: "send",
+            message,
+            buffer: attachment.toString("base64"),
+            filename,
+            contentType,
+          });
+
+          const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
+          expect(sourceReply?.text ?? "").toBe(expectedText);
+          expect(sourceReply?.mediaUrls).toHaveLength(1);
+          expect(sourceReply?.attachments).toEqual([
+            expect.objectContaining({
+              name: filename,
+              mimeType: contentType,
+              trustedLocalMedia: true,
+            }),
+          ]);
+          const mediaPath = sourceReply?.mediaUrls?.[0];
+          expect(mediaPath).toBeTruthy();
+          await expect(fs.readFile(mediaPath as string)).resolves.toEqual(attachment);
+        },
+      );
+    },
+  );
+
+  it.each([
+    {
+      filename: "report.html",
+      content: "<!doctype html><h1>Report</h1>",
+      reason: "Rejected by the local attachment allowlist. Send a supported file type.",
+    },
+    {
+      filename: "missing.txt",
+      content: undefined,
+      reason: "File not found. Check the path and try again.",
+    },
+  ])("reports the staging reason for workspace $filename", async (fixture) => {
     await withOpenClawTestState(
-      { layout: "state-only", prefix: "message-tool-source-buffer-" },
+      { layout: "state-only", prefix: "message-tool-source-error-" },
       async (state) => {
         await fs.mkdir(state.workspaceDir, { recursive: true });
+        const media = path.join(state.workspaceDir, fixture.filename);
+        if (fixture.content !== undefined) {
+          await fs.writeFile(media, fixture.content);
+        }
         const tool = createCurrentSourceMessageTool({ workspaceDir: state.workspaceDir });
-        const attachment = Buffer.from("current-source attachment");
 
-        const toolResult = await tool.execute("message-buffer-call", {
-          action: "send",
-          message: "Attached proof.",
-          buffer: attachment.toString("base64"),
-          filename: "proof.txt",
-          contentType: "text/plain",
-        });
-
-        const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
-        expect(sourceReply).toMatchObject({ text: "Attached proof." });
-        expect(sourceReply?.mediaUrls).toHaveLength(1);
-        expect(sourceReply?.attachments).toEqual([
-          expect.objectContaining({
-            name: "proof.txt",
-            mimeType: "text/plain",
-            trustedLocalMedia: true,
+        await expect(
+          tool.execute("message-path-error", {
+            action: "send",
+            message: "Private draft that must not enter the error.",
+            attachments: [{ media, type: "file", name: fixture.filename }],
+            final: true,
           }),
-        ]);
-        const mediaPath = sourceReply?.mediaUrls?.[0];
-        expect(mediaPath).toBeTruthy();
-        await expect(fs.readFile(mediaPath as string)).resolves.toEqual(attachment);
+        ).rejects.toThrow(
+          new Error(
+            `Current-source media could not be staged.\n⚠️ ${fixture.filename}: ${fixture.reason}`,
+          ),
+        );
+      },
+    );
+  });
+
+  it.each(["proof.txt", "proof.md"])("stages the supported workspace file %s", async (filename) => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "message-tool-source-document-" },
+      async (state) => {
+        await fs.mkdir(state.workspaceDir, { recursive: true });
+        const media = path.join(state.workspaceDir, filename);
+        const content = "# Attachment proof\n";
+        await fs.writeFile(media, content);
+        const tool = createCurrentSourceMessageTool({ workspaceDir: state.workspaceDir });
+        const result = await tool.execute("message-document", {
+          action: "send",
+          attachments: [{ media, type: "file", name: filename }],
+        });
+        const reply = extractMessagingToolSourceReplyPayload(result);
+        expect(reply?.mediaUrls).toHaveLength(1);
+        await expect(fs.readFile(reply?.mediaUrls?.[0] as string, "utf8")).resolves.toBe(content);
       },
     );
   });
@@ -264,6 +353,7 @@ describe("WebChat message tool internal source reply", () => {
         const sessionId = "restart-proof-session";
         const imagePaths = ["first.png", "second.png"].map((name) => path.join(workspaceDir, name));
         const documentPath = path.join(workspaceDir, "report.json");
+        const documentName = "Quarterly report.json";
         await fs.mkdir(workspaceDir, { recursive: true });
         await Promise.all(
           imagePaths.map((imagePath) =>
@@ -305,6 +395,7 @@ describe("WebChat message tool internal source reply", () => {
           action: "send" as const,
           message: "Durable image reply",
           mediaUrls: [...imagePaths, documentPath],
+          attachments: [{ media: documentPath, name: documentName, mimeType: "application/json" }],
         };
         const updates: SessionTranscriptUpdate[] = [];
         const publishedDownloads: Array<Promise<unknown>> = [];
@@ -369,7 +460,7 @@ describe("WebChat message tool internal source reply", () => {
             expect.objectContaining({ name: "first.png", trustedLocalMedia: true }),
             expect.objectContaining({ name: "second.png", trustedLocalMedia: true }),
             expect.objectContaining({
-              name: "report.json",
+              name: documentName,
               mimeType: "application/json",
               trustedLocalMedia: true,
             }),
@@ -419,7 +510,7 @@ describe("WebChat message tool internal source reply", () => {
           attachment: {
             artifactId: expect.stringMatching(/^artifact_managed_media_/u),
             kind: "document",
-            label: "report.json",
+            label: documentName,
             mimeType: "application/json",
           },
         });
@@ -446,6 +537,9 @@ describe("WebChat message tool internal source reply", () => {
         expect(
           publishedMessage?.openclawDisplayContent?.filter((block) => block.type === "image"),
         ).toHaveLength(2);
+        expect(
+          publishedMessage?.openclawDisplayContent?.find((block) => block.type === "attachment"),
+        ).toEqual(document);
         await expect(Promise.all(publishedDownloads)).resolves.toEqual([
           expect.objectContaining({ type: "image" }),
           expect.objectContaining({ type: "image" }),
@@ -468,7 +562,7 @@ describe("WebChat message tool internal source reply", () => {
             artifactId: String(documentAttachment?.artifactId),
             stateDir,
           }),
-        ).resolves.toMatchObject({ type: "file", title: "report.json" });
+        ).resolves.toMatchObject({ type: "file", title: documentName });
       },
     );
   });

@@ -8,19 +8,14 @@ import { defaultRuntime, ExitError } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
-import type {
-  UpdateCommandOptions,
-  UpdateFinalizeOptions,
-  UpdateStatusOptions,
-  UpdateWizardOptions,
-} from "./update-cli/shared.js";
+import { getProgramContext } from "./program/program-context.js";
 import { UPDATE_OPTION_SPECS } from "./update-option-specs.js";
 export type {
   UpdateCommandOptions,
   UpdateFinalizeOptions,
   UpdateStatusOptions,
   UpdateWizardOptions,
-};
+} from "./update-cli/shared.js";
 
 function inheritedUpdateJson(command?: Command): boolean {
   return Boolean(inheritOptionFromParent<boolean>(command, "json"));
@@ -204,6 +199,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       try {
         const { updateCommand } = await import("./update-cli/update-command.js");
         await updateCommand({
+          runtimeRecoveryEnv: getProgramContext(program)?.runtimeRecoveryEnv,
           json: Boolean(opts.json),
           restart: Boolean(opts.restart),
           reapplyLocalOverrides: Boolean(opts.reapplyLocalOverrides),
@@ -289,6 +285,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       createUpdateLeafAction(async (opts, command) => {
         const { updateWizardCommand } = await import("./update-cli/wizard.js");
         await updateWizardCommand({
+          runtimeRecoveryEnv: getProgramContext(program)?.runtimeRecoveryEnv,
           timeout: inheritedUpdateTimeout(opts, command),
           acceptCapabilities:
             Boolean(opts.acceptCapabilities) ||

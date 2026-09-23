@@ -5,12 +5,36 @@ import { icons } from "../../../components/icons.ts";
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import type { EditorId } from "../../../lib/editor-links.ts";
+import { getSafeLocalStorage } from "../../../local-storage.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 import { detectLineSeparator } from "./file-line-separator.ts";
 
+registerCodeBlocksEnglish();
+registerFilePreviewEnglish();
+
 type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;
+
+const FILE_WRAP_PREFERENCE_KEY = "openclaw.control.fileView.wrap.v1";
+
+export function loadFileWrapPreference(): boolean {
+  try {
+    return getSafeLocalStorage()?.getItem(FILE_WRAP_PREFERENCE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function saveFileWrapPreference(wrap: boolean): void {
+  try {
+    getSafeLocalStorage()?.setItem(FILE_WRAP_PREFERENCE_KEY, String(wrap));
+  } catch {
+    // Preference persistence is best effort.
+  }
+}
 
 export function hasUniformLineEndings(content: string): boolean {
   const crlf = content.split("\r\n").length - 1;
@@ -186,7 +210,7 @@ export function renderSidebarFile(
                           }
                           <openclaw-tooltip .content=${t("chat.detailPanel.searchInFile")}>
                             <button
-                              class="btn btn--sm sidebar-file-view__action"
+                              class="btn btn--sm sidebar-file-view__action sidebar-file-view__search-toggle"
                               type="button"
                               aria-label=${t("chat.detailPanel.searchInFile")}
                               aria-pressed=${String(controls.searchOpen)}
@@ -233,7 +257,7 @@ export function renderSidebarFile(
       ${
         controls?.searchOpen
           ? html`
-              <div class="file-view__search">
+              <div class="file-view__search" @keydown=${controls.onSearchKeydown}>
                 <input
                   type="search"
                   aria-label=${t("chat.detailPanel.searchInFile")}
@@ -241,9 +265,8 @@ export function renderSidebarFile(
                   .value=${controls.query}
                   @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
                     controls.onSearchInput(event.currentTarget.value)}
-                  @keydown=${controls.onSearchKeydown}
                 />
-                <span class="file-view__search-counter"
+                <span class="file-view__search-counter" role="status"
                   >${matchNumber}/${controls.matches.length}</span
                 >
                 <button

@@ -69,7 +69,7 @@ describe("session activity semantics", () => {
       expect(links).toHaveLength(rows.length);
       for (const [index, session] of rows.entries()) {
         const link = links[index]!;
-        const pathname = `/control/${session.boardFace}/research/research-${session.boardFace}-12345678`;
+        const pathname = `/control/${session.boardFace}/research/research-${session.boardFace}-1234567890abcdef1234567890abcde${index}`;
         expect(link.getAttribute("href")).toBe(pathname);
         link.click();
         expect(input.context.navigate).toHaveBeenLastCalledWith(session.boardFace, {

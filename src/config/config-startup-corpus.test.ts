@@ -10,6 +10,10 @@ import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/le
 import { loadGatewayStartupConfigSnapshot } from "../gateway/server-startup-config-helpers.js";
 import { resolveBundledDirFromPackageRoot } from "../plugins/bundled-dir.js";
 import { resolveProviderChannelLoginChoice } from "../plugins/provider-login-options.js";
+import {
+  listConfigCorpusFixtureNames,
+  readConfigCorpusFixture,
+} from "./config-corpus.test-support.js";
 import { createConfigIO } from "./io.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -20,11 +24,7 @@ if (!bundledPluginsDir) {
   throw new Error("Missing bundled plugin fixtures for startup corpus");
 }
 
-const corpusDir = fileURLToPath(new URL("../../test/fixtures/config-corpus/", import.meta.url));
-const fixtureNames = fs
-  .readdirSync(corpusDir)
-  .filter((name) => name.endsWith(".json"))
-  .toSorted();
+const fixtureNames = listConfigCorpusFixtureNames();
 const expectations: Record<
   string,
   { providers: string[]; model?: string; sourceConfig?: OpenClawConfig }
@@ -206,12 +206,10 @@ describe("operator config startup corpus", () => {
       );
 
       // Relocate sanitized operator paths without removing their config contracts.
-      const raw: unknown = JSON.parse(
-        fs.readFileSync(path.join(corpusDir, name), "utf8"),
-        (_key, value: unknown) =>
-          typeof value === "string" && value.startsWith("/home/fixture/")
-            ? path.join(home, value.slice("/home/fixture/".length))
-            : value,
+      const raw: unknown = JSON.parse(readConfigCorpusFixture(name), (_key, value: unknown) =>
+        typeof value === "string" && value.startsWith("/home/fixture/")
+          ? path.join(home, value.slice("/home/fixture/".length))
+          : value,
       );
       fs.writeFileSync(configPath, JSON.stringify(raw));
       const env = { ...process.env };

@@ -98,6 +98,7 @@ describe("resolveUpdateInstallKind", () => {
       await initGit("--separate-git-dir", path.join(base, "git-dir"), root);
       await fs.symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
       await fs.mkdir(nested, { recursive: true });
+      await fs.writeFile(path.join(nested, "package.json"), '{"name":"openclaw"}');
       const runCommand = vi.spyOn(processExec, "runCommandWithTimeout");
 
       await expect(resolveUpdateInstallKind(root)).resolves.toBe("git");
@@ -112,6 +113,7 @@ describe("resolveUpdateInstallKind", () => {
     "does not treat a %s Git marker as a checkout",
     async (marker) => {
       await withTestDir({ prefix: "openclaw-update-install-marker-" }, async (root) => {
+        await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw"}');
         if (marker === "invalid-file") {
           await fs.writeFile(path.join(root, ".git"), "not a Git directory pointer\n");
         } else if (marker === "invalid-directory") {
@@ -136,9 +138,9 @@ describe("resolveUpdateInstallKind", () => {
     });
   });
 
-  it("keeps unavailable and undiscovered roots distinct", async () => {
+  it("leaves unavailable and undiscovered roots unclassified", async () => {
     await withTestDir({ prefix: "openclaw-update-install-missing-" }, async (base) => {
-      await expect(resolveUpdateInstallKind(path.join(base, "missing"))).resolves.toBe("package");
+      await expect(resolveUpdateInstallKind(path.join(base, "missing"))).resolves.toBe("unknown");
       await expect(resolveUpdateInstallKind(null)).resolves.toBe("unknown");
     });
   });

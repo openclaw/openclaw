@@ -297,35 +297,46 @@ describe("ssh subprocess env sanitization", () => {
     ).rejects.toThrow("ssh stream failed");
   });
 
-  it("does not spawn an upload after authority is revoked during local traversal", async () => {
-    let current = true;
-    const localDir = ownedDirs.make("openclaw-ssh-upload-admission-");
-    await fs.writeFile(path.join(localDir, "payload.txt"), "synthetic payload");
-    spawnMock.mockImplementation(() => {
-      throw new Error("unexpected native spawn");
-    });
-    try {
-      const uploading = uploadDirectoryToSshTarget({
-        session: {
-          command: "ssh",
-          configPath: "/tmp/openclaw-test-ssh-config",
-          host: "openclaw-sandbox",
-          assertCurrent: () => {
-            if (!current) {
-              throw new Error("runtime removed");
-            }
-          },
-        },
-        localDir,
-        remoteDir: "/remote/workspace",
+  it.each(["authority revocation", "cancellation"] as const)(
+    "does not spawn an upload after %s during local traversal",
+    async (reason) => {
+      let current = true;
+      const controller = new AbortController();
+      const localDir = ownedDirs.make("openclaw-ssh-upload-admission-");
+      await fs.writeFile(path.join(localDir, "payload.txt"), "synthetic payload");
+      spawnMock.mockImplementation(() => {
+        throw new Error("unexpected native spawn");
       });
-      current = false;
-      await expect(uploading).rejects.toThrow("runtime removed");
-      expect(spawnMock).not.toHaveBeenCalled();
-    } finally {
-      spawnMock.mockReset();
-    }
-  });
+      try {
+        const uploading = uploadDirectoryToSshTarget({
+          session: {
+            command: "ssh",
+            configPath: "/tmp/openclaw-test-ssh-config",
+            host: "openclaw-sandbox",
+            assertCurrent: () => {
+              if (!current) {
+                throw new Error("runtime removed");
+              }
+            },
+          },
+          localDir,
+          remoteDir: "/remote/workspace",
+          signal: controller.signal,
+        });
+        if (reason === "authority revocation") {
+          current = false;
+        } else {
+          controller.abort(new Error("upload cancelled"));
+        }
+        await expect(uploading).rejects.toThrow(
+          reason === "authority revocation" ? "runtime removed" : "upload cancelled",
+        );
+        expect(spawnMock).not.toHaveBeenCalled();
+      } finally {
+        spawnMock.mockReset();
+      }
+    },
+  );
 
   it("filters blocked secrets before spawning ssh uploads", async () => {
     mockSuccessfulSpawnCalls(2);

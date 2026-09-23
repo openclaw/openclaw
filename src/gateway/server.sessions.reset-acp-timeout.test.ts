@@ -9,14 +9,25 @@ import {
 } from "../acp/runtime/session-meta.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
+import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
+import {
+  acknowledgeSessionStateNotices,
+  recordSessionStateEvent,
+  registerSessionStateWatch,
+} from "../sessions/session-state-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { onGatewaySessionReset } from "./session-reset-notifications.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   acpManagerMocks,
   acpRuntimeMocks,
+  beforeResetHookMocks,
+  beforeResetHookState,
   directSessionReq,
+  sessionLifecycleHookMocks,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
+  threadBindingMocks,
   writeSingleLineSession,
 } from "./test/server-sessions.test-helpers.js";
 
@@ -90,6 +101,126 @@ async function seedAcpSession() {
   });
   return { prepareFreshSession, storePath };
 }
+
+test.each(["source", "source-and-acp", "acp", "committed-callback"])(
+  "settles committed reset actions after %s failure",
+  async (failure) => {
+    const { prepareFreshSession, storePath } = await seedAcpSession();
+    const sessionKey = "agent:main:main";
+    const childKey = "agent:main:subagent:watched";
+    const previous = loadSessionEntry({ storePath, sessionKey });
+    const sourceFails = failure === "source" || failure === "source-and-acp";
+    const postCommitFails = failure === "acp" || failure === "source-and-acp";
+    const committedCallbackFails = failure === "committed-callback";
+    const sourceFailure = new Error("project source cleanup failed");
+    const committedCallbackFailure = new Error("committed callback failed");
+    const postCommitFailure = new AcpRuntimeError(
+      "ACP_SESSION_INIT_FAILED",
+      "owner repair required",
+      {
+        detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
+      },
+    );
+    const events: string[] = [];
+    const notified = vi.fn();
+    const unsubscribeReset = onGatewaySessionReset(notified);
+    const rollback = vi.fn(async () => {});
+    const recordChildActivity = () =>
+      recordSessionStateEvent({
+        sessionKey: childKey,
+        agentId: "main",
+        kind: "human_direct_message",
+        actorType: "human",
+        summary: "human message via test",
+      });
+    expect(
+      registerSessionStateWatch({ watcherSessionKey: sessionKey, targetSessionKey: childKey }),
+    ).toBe(true);
+    recordChildActivity();
+    expect(drainSystemEvents(sessionKey)).toHaveLength(1);
+    acknowledgeSessionStateNotices(sessionKey, [childKey]);
+    prepareFreshSession.mockImplementation(async () => {
+      events.push("runtime-preparation");
+      if (postCommitFails) {
+        throw postCommitFailure;
+      }
+    });
+    beforeResetHookState.hasBeforeResetHook = true;
+    if (!postCommitFails) {
+      beforeResetHookMocks.runBeforeReset.mockImplementationOnce(async () => {
+        events.push("before-reset");
+      });
+    }
+    const { performGatewaySessionReset } = await import("./session-reset-service.js");
+
+    const reset = performGatewaySessionReset({
+      key: "main",
+      reason: "reset",
+      commandSource: "gateway:sessions.reset",
+      workerPlacementContext: {},
+      onCommitted: () => {
+        events.push("committed");
+        if (committedCallbackFails) {
+          throw committedCallbackFailure;
+        }
+      },
+      prepareLifecycle: async () => ({
+        ok: true,
+        value: {
+          rollback,
+          withCommit: async (run) => {
+            const result = await run(() => {});
+            events.push("source-closed");
+            if (sourceFails) {
+              throw sourceFailure;
+            }
+            return result;
+          },
+        },
+      }),
+    });
+    try {
+      if (sourceFails && postCommitFails) {
+        await expect(reset).rejects.toMatchObject({
+          errors: [sourceFailure, postCommitFailure],
+          cause: postCommitFailure,
+        });
+      } else {
+        await expect(reset).rejects.toBe(
+          sourceFails
+            ? sourceFailure
+            : committedCallbackFails
+              ? committedCallbackFailure
+              : postCommitFailure,
+        );
+      }
+    } finally {
+      unsubscribeReset();
+    }
+
+    expect(notified).toHaveBeenCalledExactlyOnceWith(sessionKey, "main");
+    recordChildActivity();
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledExactlyOnceWith({
+      targetSessionKey: sessionKey,
+      reason: "session-reset",
+    });
+    expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([
+      "committed",
+      ...(committedCallbackFails ? [] : ["source-closed"]),
+      "runtime-preparation",
+      ...(postCommitFails ? [] : ["before-reset"]),
+    ]);
+    expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(postCommitFails ? 0 : 1);
+    expect(rollback).not.toHaveBeenCalled();
+    const current = loadSessionEntry({ storePath, sessionKey });
+    expect(current?.lifecycleRevision).toEqual(expect.any(String));
+    expect(current?.lifecycleRevision).not.toBe(previous?.lifecycleRevision);
+    expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
+  },
+);
 
 test("sessions.reset force-discards ACP runtime ownership after cancel timeout", async () => {
   const { prepareFreshSession, storePath } = await seedAcpSession();

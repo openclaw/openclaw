@@ -10,7 +10,6 @@ import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import * as workerUrls from "./runtime-worker-url.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import {
-  inspectSqliteSchemaHeader,
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
 } from "./sqlite-snapshot-source.js";
@@ -19,9 +18,14 @@ const processMocks = vi.hoisted(() => ({
   execFile: vi.fn<typeof import("node:child_process").execFile>(),
 }));
 vi.mock("node:child_process", async (importOriginal) => {
+  const { promisify } = await import("node:util");
   const actual = await importOriginal<typeof import("node:child_process")>();
   processMocks.execFile.mockImplementation(actual.execFile);
-  Object.defineProperties(processMocks.execFile, Object.getOwnPropertyDescriptors(actual.execFile));
+  Object.defineProperty(
+    processMocks.execFile,
+    promisify.custom,
+    Object.getOwnPropertyDescriptor(actual.execFile, promisify.custom)!,
+  );
   return {
     ...actual,
     execFile: processMocks.execFile,
@@ -78,7 +82,7 @@ function isWorkerMode(args: readonly string[] | null | undefined, mode: string):
   return marker >= 0 && args?.[marker + 1] === mode;
 }
 
-function inspectionChild(mode: "session" | "async" | "schema-header") {
+function inspectionChild(mode: "session" | "async") {
   const mock = mode === "session" ? vi.mocked(spawn) : processMocks.execFile;
   const index = mock.mock.calls.findIndex(([, args]) => isWorkerMode(args, mode));
   return mock.mock.results[index]?.value;
@@ -114,11 +118,13 @@ describe("SQLite read-only worker cancellation", () => {
     vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(worker));
     let inspectionFinished = false;
     const schedule = globalThis.setTimeout;
-    const timers = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback, delay, ...args) =>
-        schedule(callback, inspectionFinished && delay === 300_000 ? 1 : delay, ...args),
-      );
+    const shutdownTimeouts: Array<number | undefined> = [];
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if (inspectionFinished) {
+        shutdownTimeouts.push(delay);
+      }
+      return schedule(callback, inspectionFinished && delay === 300_000 ? 1 : delay, ...args);
+    });
     await withSqliteReadOnlyWorkerScope(async () => {
       const prepared = await prepareSqliteReadOnlyLocation(path.join(fixture, "unused.sqlite"), {
         preserveSourceArtifacts: true,
@@ -126,7 +132,7 @@ describe("SQLite read-only worker cancellation", () => {
       expect(await prepared.cleanupAsync()).toBe(true);
       inspectionFinished = true;
     });
-    expect(timers.mock.calls.filter((call) => call[1] === 300_000)).toHaveLength(2);
+    expect(shutdownTimeouts).toEqual([300_000]);
     expect(inspectionChild("session")?.signalCode).toBe("SIGKILL");
     expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
   });
@@ -214,74 +220,66 @@ describe("SQLite read-only worker cancellation", () => {
     },
   );
 
-  it.each([prepareSqliteReadOnlyLocation, inspectSqliteSchemaHeader])(
-    "rejects stopped ownership before staging or spawning (%#)",
-    async (inspect) => {
-      const controller = new AbortController();
-      const reason = new Error("startup stopped");
-      controller.abort(reason);
-      await expect(
-        inspect(path.join(cacheRoot, "unused.sqlite"), {
-          signal: controller.signal,
-        }),
-      ).rejects.toBe(reason);
-      expect(processMocks.execFile).not.toHaveBeenCalled();
-      expect(fs.readdirSync(cacheRoot)).toEqual([]);
-    },
-  );
+  it("rejects stopped ownership before staging or spawning", async () => {
+    const controller = new AbortController();
+    const reason = new Error("startup stopped");
+    controller.abort(reason);
+    await expect(
+      prepareSqliteReadOnlyLocation(path.join(cacheRoot, "unused.sqlite"), {
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+    expect(processMocks.execFile).not.toHaveBeenCalled();
+    expect(fs.readdirSync(cacheRoot)).toEqual([]);
+  });
 
-  it.each([prepareSqliteReadOnlyLocation, inspectSqliteSchemaHeader])(
-    "joins a killed child before rejecting and removes its unpublished partial snapshot (%#)",
-    async (inspect) => {
-      const fixture = tempDirs.make("openclaw-readonly-held-worker-");
-      const worker = path.join(fixture, "worker.mjs");
-      fs.writeFileSync(
-        worker,
-        `import fs from 'node:fs'; import path from 'node:path';
+  it("joins a killed child before rejecting and removes its unpublished partial snapshot", async () => {
+    const fixture = tempDirs.make("openclaw-readonly-held-worker-");
+    const worker = path.join(fixture, "worker.mjs");
+    fs.writeFileSync(
+      worker,
+      `import fs from 'node:fs'; import path from 'node:path';
          ${reclaimFixture}
          fs.writeFileSync(path.join(process.argv[5], 'partial.sqlite'), 'private partial snapshot');
          process.on('SIGTERM', () => {});
          setTimeout(() => process.exit(2), 5000);`,
-      );
-      vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(worker));
-      const controller = new AbortController();
-      const reason = new Error("startup stopped");
-      const operation = inspect(path.join(fixture, "unused.sqlite"), {
-        signal: controller.signal,
+    );
+    vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(worker));
+    const controller = new AbortController();
+    const reason = new Error("startup stopped");
+    const operation = prepareSqliteReadOnlyLocation(path.join(fixture, "unused.sqlite"), {
+      signal: controller.signal,
+    });
+    let childClosed: Promise<void> | undefined;
+    try {
+      const workerIndex = () =>
+        processMocks.execFile.mock.calls.findIndex(([, args]) => isWorkerMode(args, "async"));
+      await vi.waitFor(() => expect(workerIndex()).toBeGreaterThanOrEqual(0));
+      const callIndex = workerIndex();
+      const child = processMocks.execFile.mock.results[callIndex]?.value;
+      expect(child).toBeDefined();
+      childClosed = new Promise<void>((resolve) => {
+        child.once("close", () => resolve());
       });
-      let childClosed: Promise<void> | undefined;
-      try {
-        const workerIndex = () =>
-          processMocks.execFile.mock.calls.findIndex(([, args]) =>
-            isWorkerMode(args, inspect === inspectSqliteSchemaHeader ? "schema-header" : "async"),
-          );
-        await vi.waitFor(() => expect(workerIndex()).toBeGreaterThanOrEqual(0));
-        const callIndex = workerIndex();
-        const child = processMocks.execFile.mock.results[callIndex]?.value;
-        expect(child).toBeDefined();
-        childClosed = new Promise<void>((resolve) => {
-          child.once("close", () => resolve());
-        });
-        const argv = processMocks.execFile.mock.calls[callIndex]?.[1];
-        if (!Array.isArray(argv)) {
-          throw new Error("worker arguments missing");
-        }
-        const stagingRoot = argv.at(-1)!;
-        await vi.waitFor(() =>
-          expect(fs.existsSync(path.join(stagingRoot, "partial.sqlite"))).toBe(true),
-        );
-        controller.abort(reason);
-        await expect(operation).rejects.toBe(reason);
-        await childClosed;
-        expect(child.signalCode).toBe("SIGKILL");
-        expect(fs.existsSync(stagingRoot)).toBe(false);
-        expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
-      } finally {
-        controller.abort(reason);
-        await Promise.allSettled([operation, childClosed]);
+      const argv = processMocks.execFile.mock.calls[callIndex]?.[1];
+      if (!Array.isArray(argv)) {
+        throw new Error("worker arguments missing");
       }
-    },
-  );
+      const stagingRoot = argv.at(-1)!;
+      await vi.waitFor(() =>
+        expect(fs.existsSync(path.join(stagingRoot, "partial.sqlite"))).toBe(true),
+      );
+      controller.abort(reason);
+      await expect(operation).rejects.toBe(reason);
+      await childClosed;
+      expect(child.signalCode).toBe("SIGKILL");
+      expect(fs.existsSync(stagingRoot)).toBe(false);
+      expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+    } finally {
+      controller.abort(reason);
+      await Promise.allSettled([operation, childClosed]);
+    }
+  });
 
   it("reports failed owned cleanup and keeps it retryable", async () => {
     const source = createDatabase();
@@ -308,7 +306,7 @@ describe("SQLite read-only worker cancellation", () => {
 });
 
 describe("read-only snapshot deadline", () => {
-  it.each(["sync", "async", "schema-header", "scoped"] as const)(
+  it.each(["sync", "async", "scoped"] as const)(
     "bounds the %s child and removes its unpublished copy",
     async (mode) => {
       const root = tempDirs.make("openclaw-snapshot-timeout-");
@@ -377,13 +375,11 @@ describe("read-only snapshot deadline", () => {
       const run = async () =>
         mode === "sync"
           ? prepareSqliteReadOnlyLocationSync(source)
-          : mode === "schema-header"
-            ? inspectSqliteSchemaHeader(source)
-            : mode === "scoped"
-              ? withSqliteReadOnlyWorkerScope(() =>
-                  prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true }),
-                )
-              : prepareSqliteReadOnlyLocation(source);
+          : mode === "scoped"
+            ? withSqliteReadOnlyWorkerScope(() =>
+                prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true }),
+              )
+            : prepareSqliteReadOnlyLocation(source);
       try {
         await expect(
           run().finally(() => {
@@ -401,7 +397,6 @@ describe("read-only snapshot deadline", () => {
         expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);
       } finally {
         await childClosed;
-        // execFile's copied prototype must not become its own parent during reset.
         processMocks.execFile.mockReset().mockImplementation(executeFile);
         vi.mocked(spawnSync).mockReset().mockImplementation(actual.spawnSync);
       }

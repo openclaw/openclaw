@@ -1,4 +1,3 @@
-// Feishu plugin module implements comment shared behavior.
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   isRecord,

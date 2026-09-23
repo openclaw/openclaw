@@ -17,12 +17,14 @@ import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
 import { DEFAULT_CHAT_ATTACHMENT_MAX_BYTES } from "./chat-attachment-policy.js";
+import { registerMediaCleanupDrain } from "./server-media-cleanup-lifecycle.js";
 import { formatForLog } from "./ws-log.js";
 
 export type ChatAttachment = {
   type?: string;
   mimeType?: string;
   fileName?: string;
+  origin?: MediaFact["origin"];
   content?: unknown;
   sizeBytes?: number;
   durationMs?: number;
@@ -44,6 +46,7 @@ export type OffloadedRef = {
   kind: MediaKind;
   mimeType: string;
   label: string;
+  origin?: MediaFact["origin"];
   sizeBytes: number;
   sourceIndex: number;
   durationMs?: number;
@@ -56,7 +59,10 @@ export async function discardPreparedInboundMedia(
   refs: readonly Pick<OffloadedRef, "id">[],
   log?: { warn: (message: string) => void },
 ): Promise<void> {
-  const results = await Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
+  const deletion = Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
+  // Request cleanup can detach after ACK or rejection; shutdown still owns its file removals.
+  registerMediaCleanupDrain(deletion.then(() => undefined));
+  const results = await deletion;
   for (const [index, result] of results.entries()) {
     if (result.status === "rejected" && log) {
       log.warn(
@@ -189,6 +195,7 @@ export async function persistInboundImagesForTranscript(params: {
       contentType: ref.mimeType,
       kind: ref.kind,
       fileName: ref.label,
+      ...(ref.origin ? { origin: ref.origin } : {}),
       sizeBytes: ref.sizeBytes,
       ...(ref.durationMs !== undefined ? { durationMs: ref.durationMs } : {}),
       ...(ref.width !== undefined ? { width: ref.width } : {}),
@@ -484,6 +491,7 @@ export async function parseMessageWithAttachments(
         label,
         sizeBytes,
         sourceIndex: idx,
+        ...(att.origin === "paste" || att.origin === "file" ? { origin: att.origin } : {}),
         ...(typeof att.durationMs === "number" &&
         Number.isFinite(att.durationMs) &&
         att.durationMs >= 0
@@ -522,6 +530,7 @@ export async function parseMessageWithAttachments(
       contentType: ref.mimeType,
       kind: ref.kind,
       fileName: ref.label,
+      ...(ref.origin ? { origin: ref.origin } : {}),
       sizeBytes: ref.sizeBytes,
       ...(ref.durationMs ? { durationMs: ref.durationMs } : {}),
       ...(ref.width ? { width: ref.width } : {}),

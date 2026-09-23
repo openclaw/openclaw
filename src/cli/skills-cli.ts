@@ -2,9 +2,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
+  GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import type { SkillsCuratorCompatibleStatusResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
@@ -15,6 +17,7 @@ import {
 } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
+import type { CallGatewayOptions } from "../gateway/call.js";
 import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
 import {
   CLAWHUB_SKILLS_SH_REF_PREFIX,
@@ -23,7 +26,6 @@ import {
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
@@ -41,7 +43,6 @@ import {
 import {
   getSkillCuratorStatus,
   SKILL_LIFECYCLE_CURATION_RETIRED_MESSAGE,
-  type SkillCuratorStatus,
 } from "../skills/workshop/curator.js";
 import {
   applySkillProposal,
@@ -72,7 +73,12 @@ import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
-import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
+import {
+  formatSkillCuratorStatus,
+  formatSkillInfo,
+  formatSkillsCheck,
+  formatSkillsList,
+} from "./skills-cli.format.js";
 import { registerSkillsLibraryCli } from "./skills-library-cli.js";
 import { isSkillsMachineOutput } from "./skills-output-mode.js";
 import { registerSkillsSearchCli } from "./skills-search-cli.js";
@@ -130,6 +136,7 @@ async function callSkillsGateway<T>(params: {
   params: Record<string, unknown>;
   timeoutMs?: number;
   requiredMethods?: string[];
+  caps?: CallGatewayOptions["caps"];
 }): Promise<T> {
   const { callGateway } = await import("../gateway/call.js");
   return await callGateway<T>({
@@ -200,11 +207,11 @@ async function loadSkillsStatusReport(
     ) {
       throw error;
     }
-    const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
-    return buildWorkspaceSkillStatus(resolved.workspaceDir, {
+    const { prepareWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
+    return prepareWorkspaceSkillStatus(resolved.workspaceDir, {
       config: resolved.config,
       agentId: resolved.agentId,
-    });
+    }).then(({ report }) => report);
   }
 }
 
@@ -356,48 +363,6 @@ function formatSkillProposalEvaluation(result: SkillProposalEvaluateResult): str
   return `${lines.join("\n")}\n`;
 }
 
-function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
-  const timestamp = (value: number | null) =>
-    value === null ? "never" : new Date(value).toISOString();
-  const lines = [
-    `Last attempt: ${timestamp(status.lastAttemptAtMs)}`,
-    `Last success: ${timestamp(status.lastSuccessAtMs)}`,
-    `Counts: ${status.counts.active} active, ${status.counts.stale} stale, ${status.counts.archived} archived`,
-  ];
-  if (status.lastError) {
-    lines.push(`Last error: ${status.lastError}`);
-  }
-  const relative = (value: number) => formatTimeAgo(Math.max(0, Date.now() - value));
-  for (const review of Object.values(status.collectionReview)) {
-    lines.push(
-      `Collection review: attempted ${relative(review.attemptedAtMs)}; ${review.error ? `failed: ${review.error}` : review.succeededAtMs ? `succeeded ${relative(review.succeededAtMs)}` : "running"}`,
-    );
-  }
-  for (const [workspace, review] of Object.entries(status.experienceReview)) {
-    lines.push(
-      `Experience review ${workspace.slice(0, 8)}: ${review.outcome}${review.error ? `: ${review.error}` : review.proposalId ? ` (${review.proposalId})` : ""}; attempted ${relative(review.attemptedAtMs)}`,
-    );
-  }
-  const keyCounts = new Map<string, number>();
-  for (const skill of status.skills) {
-    keyCounts.set(skill.skillKey, (keyCounts.get(skill.skillKey) ?? 0) + 1);
-  }
-  for (const skill of status.skills) {
-    const pinned = skill.pinned ? " pinned" : "";
-    const lastUsed =
-      skill.lastUsedAtMs === null ? "never" : new Date(skill.lastUsedAtMs).toISOString();
-    const label =
-      keyCounts.get(skill.skillKey) === 1
-        ? skill.skillKey
-        : `${skill.skillKey} (${skill.skillFile})`;
-    lines.push(`${label}  ${skill.state}${pinned}  last-used=${lastUsed}  uses=${skill.useCount}`);
-  }
-  for (const overlap of status.overlaps) {
-    lines.push(`Legacy overlap: ${overlap.left} ~ ${overlap.right}`);
-  }
-  return `${lines.join("\n")}\n`;
-}
-
 async function withOfflineGatewayLock<T>(
   config: ReturnType<typeof getRuntimeConfig>,
   gatewayError: unknown,
@@ -424,7 +389,7 @@ async function withOfflineGatewayLock<T>(
 async function callSkillCurator<T>(
   method: "status" | "pin" | "restore" | "unpin",
   params: { skill?: string },
-  loadLocal: () => T,
+  loadLocal: (config: ResolvedSkillsWorkspace["config"]) => T | Promise<T>,
 ): Promise<T> {
   const config = getRuntimeConfig();
   try {
@@ -432,6 +397,7 @@ async function callSkillCurator<T>(
       config,
       method: `skills.curator.${method}`,
       params,
+      ...(method === "status" ? { caps: [GATEWAY_CLIENT_CAPS.SKILL_CURATOR_LIVE_INVENTORY] } : {}),
     });
   } catch (error) {
     if (
@@ -444,8 +410,8 @@ async function callSkillCurator<T>(
       throw error;
     }
     return method === "status"
-      ? loadLocal()
-      : await withOfflineGatewayLock(config, error, loadLocal);
+      ? loadLocal(config)
+      : await withOfflineGatewayLock(config, error, () => loadLocal(config));
   }
 }
 
@@ -897,7 +863,11 @@ export function registerSkillsCli(program: Command) {
 
   const showCuratorStatus = async (opts: { json?: boolean }, command: Command) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
-      const status = await callSkillCurator("status", {}, getSkillCuratorStatus);
+      const status = await callSkillCurator<SkillsCuratorCompatibleStatusResult>(
+        "status",
+        {},
+        (config) => getSkillCuratorStatus({ config }),
+      );
       if (hasJsonOutput(opts) || inheritOptionFromParent<boolean>(command, "json")) {
         defaultRuntime.writeJson(status);
         return;

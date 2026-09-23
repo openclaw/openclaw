@@ -529,14 +529,18 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     action: "started" | "resumed" | "forked",
     binding?: NonNullable<typeof mutable.startupBinding>,
   ) => {
-    // A fresh thread can inherit summaries after all prior user messages were compacted away.
+    // A bounded history can retain an answer after its user turn falls outside the window.
+    // Fresh threads need that text (or summaries), but tool-only suffixes are not continuity.
     // Resumed bindings hand off only newer local conversation and durable notes.
     const hasContinuity = historyState.messages.some(
       (message) =>
         message.role === "user" ||
         isCodexDurableCustomMessage(message) ||
         (action === "started" &&
-          (message.role === "compactionSummary" || message.role === "branchSummary")),
+          (message.role === "compactionSummary" ||
+            message.role === "branchSummary" ||
+            (message.role === "assistant" &&
+              message.content.some((part) => part.type === "text" && part.text.trim())))),
     );
     if (activeContextEngine || (!hasContinuity && !params.pluginRuntimeRefreshMessages?.length)) {
       return false;
@@ -574,9 +578,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       binding,
       bindingStore,
       identity: bindingIdentity,
-      sessionFile: params.sessionFile,
       agentDir,
-      codexHome: appServer.start.env?.CODEX_HOME,
+      codexHome: appServer.start.codexHome ?? appServer.start.env?.CODEX_HOME,
       config: params.config,
       contextEngineActive: Boolean(activeContextEngine),
       expectedSessionRuntimeOwnership: params.expectedSessionRuntimeOwnership,

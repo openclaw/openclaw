@@ -17,8 +17,8 @@ import {
 } from "../infra/diagnostic-events.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -231,6 +231,7 @@ export function buildPreparedCliRunContext(
       skillsSnapshot: overrides.skillsSnapshot,
     },
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir,
     backendResolved: {
       id: provider,
@@ -425,15 +426,15 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
         throw new Error("Could not append CLI fixture transcript message");
       }
     },
-    cleanup() {
+    async cleanup() {
       admissions.splice(0).forEach((admission) => admission.close());
       for (const databasePath of databasePaths) {
-        closeOpenClawAgentDatabaseByPath(databasePath);
+        await closeOpenClawAgentDatabaseByPathAsync(databasePath);
       }
       databasePaths.clear();
       for (const dir of tempDirs) {
         closeAuthProfileReadPool({ kind: "root", rootPath: dir });
-        closeOpenClawStateDatabaseByPath(
+        await closeOpenClawStateDatabaseByPathAsync(
           resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }),
         );
         fs.rmSync(dir, { recursive: true, force: true });

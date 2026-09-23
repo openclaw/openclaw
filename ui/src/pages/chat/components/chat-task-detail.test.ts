@@ -28,7 +28,6 @@ function backgroundTasks(task: TaskSummary): BackgroundTasksProps {
     subagentActivity: deriveSubagentActivity({
       tasks: [],
       sessionKey: "agent:main:main",
-      terminalObservedAtByTask: new Map(),
       canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
     }),
     taskDetails: new Map([[task.id, { ...task, prompt: "Inspect the current task." }]]),

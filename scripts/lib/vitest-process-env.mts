@@ -165,11 +165,14 @@ for (const owner of embeddedAgentVitestProjectOwners) {
  * Resolves default Node flags for Vitest, including the local Maglev opt-in.
  */
 export function resolveVitestNodeArgs(env: NodeJS.ProcessEnv = process.env): string[] {
-  if (parsePermissiveBooleanToken(env.OPENCLAW_VITEST_ENABLE_MAGLEV) === true) {
-    return [];
-  }
-
-  return ["--no-maglev"];
+  // Node 24 can join a Sparkplug compiler at process.exit while that compiler
+  // waits for main-thread GC. Keep baseline compilation on the main thread.
+  return [
+    ...(parsePermissiveBooleanToken(env.OPENCLAW_VITEST_ENABLE_MAGLEV) === true
+      ? []
+      : ["--no-maglev"]),
+    "--no-concurrent-sparkplug",
+  ];
 }
 
 /**
@@ -190,19 +193,6 @@ export function resolveVitestNoOutputHeartbeatMs(
   return parsePositiveInt(env[VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]);
 }
 
-export function resolveVitestCompileCacheSafeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  if (!env.NODE_COMPILE_CACHE && !env.NODE_COMPILE_CACHE_PORTABLE) {
-    return env;
-  }
-  // Coverage can be enabled inside a dynamic Vitest config, which this wrapper
-  // cannot know before spawning. Keep the cache for orchestration/build tools,
-  // but never let a Vitest child deserialize bytecode into V8 coverage.
-  const spawnEnv: NodeJS.ProcessEnv = { ...env, NODE_DISABLE_COMPILE_CACHE: "1" };
-  delete spawnEnv.NODE_COMPILE_CACHE;
-  delete spawnEnv.NODE_COMPILE_CACHE_PORTABLE;
-  return spawnEnv;
-}
-
 /**
  * Adds default watchdog env for non-watch Vitest runs.
  */
@@ -210,19 +200,16 @@ export function resolveRunVitestSpawnEnv(
   env: NodeJS.ProcessEnv = process.env,
   argv: string[] = [],
 ): NodeJS.ProcessEnv {
-  const baseEnv = resolveVitestCompileCacheSafeEnv(env);
   const explicitMode = resolveExplicitVitestMode(argv);
   if (explicitMode === "watch") {
-    return baseEnv;
+    return env;
   }
-  if (explicitMode !== "run" && parsePermissiveBooleanToken(baseEnv.CI) !== true) {
-    return baseEnv;
+  if (explicitMode !== "run" && parsePermissiveBooleanToken(env.CI) !== true) {
+    return env;
   }
   const defaultTimeoutMs = resolveDefaultVitestNoOutputTimeoutMs(argv);
-  const hasTimeout = Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY);
-  const envTimeoutMs = hasTimeout
-    ? parsePositiveInt(baseEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY])
-    : null;
+  const hasTimeout = Object.hasOwn(env, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY);
+  const envTimeoutMs = hasTimeout ? parsePositiveInt(env[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]) : null;
   // Per-config entries in VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS are measured
   // silence floors for healthy lanes; a global env value (CI sets one for
   // every shard) may widen a mapped lane's window but must not shrink it
@@ -236,9 +223,9 @@ export function resolveRunVitestSpawnEnv(
       ? envTimeoutMs
       : Math.max(envTimeoutMs, configFloorMs)
     : defaultTimeoutMs;
-  const hasHeartbeat = Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
+  const hasHeartbeat = Object.hasOwn(env, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
   return {
-    ...baseEnv,
+    ...env,
     ...(timeoutMs !== null && timeoutMs !== envTimeoutMs
       ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(timeoutMs) }
       : {}),

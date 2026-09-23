@@ -275,7 +275,7 @@ describe("Codex finalization generation ownership", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-existing",
-          turn: { id: "turn-1", status: "interrupted" },
+          turn: { id: "turn-1", status: "interrupted", items: [] },
         },
       });
       await expect(outcome).resolves.toMatchObject({

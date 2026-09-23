@@ -11,7 +11,7 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { isLiveTestEnabled, logLiveProgress } from "../agents/live-test-helpers.js";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
 import type { CronJob } from "../cron/types.js";
-import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 
 const describeLive = isLiveTestEnabled() ? describe : describe.skip;
 
@@ -52,7 +52,9 @@ describeLive("cron scheduling through an isolated Gateway", () => {
     const instance = await createOpenClawTestInstance({
       name: "cron-scheduler",
       env: {
-        ...Object.fromEntries(listKnownProviderAuthEnvVarNames().map((name) => [name, undefined])),
+        ...Object.fromEntries(
+          listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined]),
+        ),
         OPENCLAW_SKIP_CRON: "0",
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
         OPENCLAW_AGENT_RUNTIME: undefined,

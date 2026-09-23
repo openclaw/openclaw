@@ -167,6 +167,7 @@ function runIdentityVerification(params: {
 function runAdvisoryStatus(overrides: Record<string, string> = {}) {
   const runId = "123456";
   const runAttempt = "1";
+  const effectiveRunAttempt = overrides.GITHUB_RUN_ATTEMPT ?? runAttempt;
   const targetSha = "a".repeat(40);
   const workdir = tempDirs.make("openclaw-telegram-advisory-status-");
   const githubOutput = join(workdir, "github-output");
@@ -183,6 +184,7 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
       BUILD_STATUS: "success",
       CANDIDATE_ARTIFACT_DIGEST: "d".repeat(64),
       CANDIDATE_ARTIFACT_ID: "123",
+      CANDIDATE_RUN_ATTEMPT: runAttempt,
       CANDIDATE_VERSION: "2026.7.1-beta.3",
       EVIDENCE_ARTIFACT_DIGEST: "e".repeat(64),
       EVIDENCE_ARTIFACT_ID: "456",
@@ -211,7 +213,7 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
     workdir,
     ".artifacts",
     "release-check-status",
-    `qa_live_telegram_release_checks-${runId}-${runAttempt}.env`,
+    `qa_live_telegram_release_checks-${runId}-${effectiveRunAttempt}.env`,
   );
   const evidenceFile = statusFile.replace(/\.env$/u, ".json");
   return {
@@ -247,6 +249,7 @@ function runCandidateProvenance(
     signature?: "invalid" | "maintainer" | "missing" | "web-flow";
     targetContextRef?: string;
     targetRef?: string;
+    unrelatedOpenPullRequests?: number;
   } = {},
 ) {
   const candidateSha = "a".repeat(40);
@@ -295,6 +298,11 @@ function runCandidateProvenance(
                     },
                   ]
                 : []),
+              ...Array.from({ length: params.unrelatedOpenPullRequests ?? 0 }, (_, index) => ({
+                state: "OPEN",
+                headRefOid: `${index + 1}`.repeat(40),
+                headRepository: { nameWithOwner: "openclaw/openclaw" },
+              })),
               ...(params.mergedPullRequests ?? []).map((pullRequest) => ({
                 state: "MERGED",
                 baseRefName: pullRequest.baseRefName ?? "release/2026.7.1",
@@ -438,6 +446,10 @@ describe("release Telegram QA workflow", () => {
     const runJob = job("run_telegram");
     expect(runJob.environment).toBe("qa-live-shared");
     expect(runJob["timeout-minutes"]).toBe(60);
+    const advisoryStatusStep = step("advisory_status", "Record advisory status");
+    expect(advisoryStatusStep.env?.CANDIDATE_RUN_ATTEMPT).toBe(
+      "${{ needs.build_candidate.outputs.run_attempt }}",
+    );
     expect(requireRun("advisory_status", "Record advisory status").trim()).toBe(
       "set -euo pipefail\nnode scripts/release-telegram-qa.mjs advisory-status",
     );
@@ -743,7 +755,7 @@ describe("release Telegram QA workflow", () => {
     }
   });
 
-  it("verifies an exact merged PR directly when commit associations are missing", () => {
+  it("verifies an exact merged PR directly when commit associations omit it", () => {
     for (const provenanceBlock of PROVENANCE_BLOCKS) {
       for (const signature of ["web-flow", "missing"] as const) {
         const result = runCandidateProvenance(provenanceBlock, {
@@ -752,10 +764,26 @@ describe("release Telegram QA workflow", () => {
           signature,
           messageHeadline: "fix(release): keep survivor sessions inside retention (#149710)",
           directPullRequest: {},
+          unrelatedOpenPullRequests: 2,
         });
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toContain("Telegram candidate trust reason: release-branch");
       }
+    }
+  });
+
+  it("uses one exact associated merge without consulting the PR hint", () => {
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      const result = runCandidateProvenance(provenanceBlock, {
+        candidateVersion: "2026.7.33",
+        directPullRequest: { state: "OPEN" },
+        mergedPullRequests: [{}],
+        messageHeadline: "fixture (#149710)",
+        signature: "web-flow",
+        targetContextRef: "extended-stable/2026.7.33",
+        unrelatedOpenPullRequests: 2,
+      });
+      expect(result.status, `${provenanceBlock.stepName}: ${result.stderr}`).toBe(0);
     }
   });
 
@@ -934,6 +962,23 @@ describe("release Telegram QA workflow", () => {
     expect(failure.outputs.status).toBe("failure");
     expect(failure.evidence.candidateArtifact).toMatchObject({ id: "123" });
     expect(failure.statusFile).toContain("build:failure");
+  });
+
+  it("records reused candidate and fresh evidence attempts independently", () => {
+    const runId = "123456";
+    const targetSha = "a".repeat(40);
+    const rerun = runAdvisoryStatus({
+      GITHUB_RUN_ATTEMPT: "2",
+      EVIDENCE_ARTIFACT_NAME: `release-qa-live-telegram-${runId}-2-${targetSha}`,
+    });
+
+    expect(rerun.result.status, rerun.result.stderr).toBe(0);
+    expect(rerun.evidence).toMatchObject({
+      runAttempt: 2,
+      candidateArtifact: { runAttempt: 1 },
+      evidenceArtifact: { runAttempt: 2 },
+    });
+    expect(rerun.statusFile).toContain("run_attempt=2");
   });
 
   it.runIf(process.platform === "linux")("retains only bounded, allowlisted diagnostics", () => {

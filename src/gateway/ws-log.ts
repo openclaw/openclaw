@@ -9,7 +9,7 @@ import { isVerbose } from "../globals.js";
 import { stringifyNonErrorCause } from "../infra/errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
 
 /**
@@ -190,7 +190,11 @@ function renderErrorChainForLog(error: Error): string {
 }
 
 function compactPreview(input: string, maxLen = 160): string {
-  const oneLine = input.replace(/\s+/g, " ").trim();
+  const prefixLength = maxLen * 2;
+  let oneLine = input.slice(0, prefixLength).replace(/\s+/g, " ").trim();
+  if (oneLine.length <= maxLen && input.length > prefixLength) {
+    oneLine = input.replace(/\s+/g, " ").trim();
+  }
   if (oneLine.length <= maxLen) {
     return oneLine;
   }
@@ -230,13 +234,13 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
     extra.aseq = seq;
   }
 
-  if (!data) {
+  if (!data || isIncognitoSessionKey(sessionKey)) {
     return extra;
   }
 
   if (stream === "assistant") {
     const text = readStringValue(data.text);
-    if (text?.trim()) {
+    if (text?.trimStart()) {
       extra.text = compactPreview(text);
     }
     const mediaCount = resolveSendableOutboundReplyParts({
@@ -277,7 +281,7 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
       extra.aborted = data.aborted;
     }
     const error = typeof data.error === "string" ? data.error : undefined;
-    if (error?.trim()) {
+    if (error?.trimStart()) {
       extra.error = compactPreview(error, 120);
     }
     return extra;

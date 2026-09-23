@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements multipass behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { access, mkdir, writeFile } from "node:fs/promises";

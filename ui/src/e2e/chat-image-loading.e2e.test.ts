@@ -37,7 +37,13 @@ suite.define(() => {
               index === 1
                 ? [
                     { type: "text", text: "Delayed image." },
-                    { type: "image", url: imageUrl, alt: "Intrinsic size proof" },
+                    {
+                      type: "image",
+                      url: imageUrl,
+                      alt: "Intrinsic size proof",
+                      width: 480,
+                      height: 240,
+                    },
                   ]
                 : `Image fixture message ${index}.`,
             timestamp: index + 1,
@@ -163,7 +169,7 @@ suite.define(() => {
             const before = await frame.boundingBox();
             expect(before?.width).toBe(400);
             expect(before?.height).toBeCloseTo(400 / 1.5, 1);
-            expect(await frame.textContent()).toBe("");
+            expect((await frame.textContent())?.trim()).toBe("");
             expect(await frame.locator("svg").count()).toBe(0);
             const motion = await skeleton.evaluate((element) => {
               const style = getComputedStyle(element, "::after");
@@ -171,13 +177,22 @@ suite.define(() => {
                 name: style.animationName,
                 duration: Number.parseFloat(style.animationDuration),
                 iterations: style.animationIterationCount,
+                running: element
+                  .getAnimations({ subtree: true })
+                  .some((animation) => animation.playState === "running"),
+                transform: style.transform,
+                width: element.clientWidth,
               };
             });
-            expect(motion.name).toBe("shimmer");
             if (reducedMotion === "reduce") {
+              expect(motion.name).toBe("none");
               expect(motion.duration).toBeLessThan(0.001);
               expect(motion.iterations).toBe("1");
+              expect(motion.running).toBe(false);
+              const highlightX = Number.parseFloat(motion.transform.split(",")[4] ?? "NaN");
+              expect(Math.abs(highlightX + motion.width)).toBeLessThanOrEqual(1);
             } else {
+              expect(motion.name).toBe("shimmer");
               expect(motion.duration).toBe(2.4);
               expect(motion.iterations).toBe("infinite");
             }

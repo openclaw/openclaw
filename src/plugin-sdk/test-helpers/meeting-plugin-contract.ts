@@ -4,6 +4,7 @@ import type { OpenClawPluginApi } from "../../plugins/plugin-api.types.js";
 import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { createTestPluginApi } from "../plugin-test-api.js";
 import { createMeetingBrowserFixture, createMeetingLogger } from "./meeting-browser.js";
+import type { useMeetingTestState } from "./meeting-state.js";
 
 type GatewayHandler = (options: {
   client?: { internal?: { pluginRuntimeOwnerId?: string } };
@@ -12,6 +13,7 @@ type GatewayHandler = (options: {
 }) => Promise<void>;
 
 type MeetingPluginFixtureOptions = {
+  testState: Pick<ReturnType<typeof useMeetingTestState>, "onCleanup">;
   plugin: { register(api: OpenClawPluginApi): void };
   id: string;
   name: string;
@@ -46,8 +48,11 @@ export function createMeetingPluginFixture(options: MeetingPluginFixtureOptions)
   const authorizationHarness = (browserOptions?: { browserError?: Error }) => {
     const methods = new Map<string, GatewayHandler>();
     const browser = createMeetingBrowserFixture({ ...options, ...browserOptions });
+    const logger = createMeetingLogger();
+    let invoked = false;
     options.plugin.register(
       createApi({
+        logger,
         pluginConfig: { defaultMode: "transcribe", chrome: { waitForInCallMs: 1 } },
         runtime: { gateway: browser.runtime.gateway } as OpenClawPluginApi["runtime"],
         registerGatewayMethod: (method, handler) => methods.set(method, handler as GatewayHandler),
@@ -58,6 +63,7 @@ export function createMeetingPluginFixture(options: MeetingPluginFixtureOptions)
       params: Record<string, unknown>,
       pluginRuntimeOwnerId?: string,
     ) => {
+      invoked = true;
       const handler = methods.get(method);
       if (!handler) {
         throw new Error(`missing handler ${method}`);
@@ -83,6 +89,28 @@ export function createMeetingPluginFixture(options: MeetingPluginFixtureOptions)
       }
       return response.payload as Record<string, unknown>;
     };
+    options.testState.onCleanup(
+      async () => {
+        if (!invoked) {
+          return;
+        }
+        const status = (await call(`${options.methodPrefix}.status`, {})) as {
+          sessions: Array<{ id: string }>;
+        };
+        const errors: unknown[] = [];
+        for (const session of status.sessions) {
+          try {
+            await call(`${options.methodPrefix}.leave`, { sessionId: session.id });
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        if (errors.length > 0) {
+          throw new AggregateError(errors, "Meeting plugin sessions did not finish cleanup");
+        }
+      },
+      { readWarnings: () => vi.mocked(logger.warn).mock.calls },
+    );
     return { call, invoke };
   };
   return { ...options, createApi, authorizationHarness };

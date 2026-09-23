@@ -1,18 +1,17 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { buildInlineProviderModels } from "./embedded-agent-runner/model.inline-provider.js";
-import { prepareModelChoice, preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
+import { prepareModelChoice } from "./model-runtime-choice.js";
+import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
 import {
   getPreparedModelRuntimeAuthStore,
   setPreparedModelRuntimeAuthStore,
 } from "./prepared-model-runtime-auth.js";
 import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configured-completion.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
-import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
@@ -21,6 +20,12 @@ const published = vi.hoisted((): { owner?: PreparedModelRuntimeSnapshot } => ({}
 vi.mock("./prepared-model-catalog.js", () => ({
   getPublishedPreparedModelCatalogOwnerSnapshot: () => published.owner,
   materializePreparedModelCatalogOwner: (owner: PreparedModelRuntimeSnapshot) => owner,
+  loadProviderScopedThinkingCatalog: async () => {
+    if (!published.owner) {
+      throw new Error("No published test model owner");
+    }
+    return published.owner.modelCatalog.entries;
+  },
   withPreparedModelCatalogOwner: async <T>(
     _params: unknown,
     read: (owner: PreparedModelRuntimeSnapshot) => T | Promise<T>,
@@ -33,20 +38,13 @@ vi.mock("./prepared-model-catalog.js", () => ({
 }));
 
 const cfg: OpenClawConfig = { plugins: { enabled: false } };
-const request = {
-  cfg,
-  agentId: "main",
-  provider: "fixture",
-  model: "model",
-  runtimeId: "openclaw",
-};
-
 function publish(
   isCurrent = () => true,
   config = cfg,
   facts: Partial<
     Pick<
       PreparedModelRuntimeSnapshot,
+      | "authModes"
       | "modelCatalog"
       | "configuredRuntimeModels"
       | "pluginRegistry"
@@ -56,36 +54,7 @@ function publish(
     >
   > = {},
 ) {
-  const entry = { provider: "fixture", id: "model", name: "Model" };
-  const owner: PreparedModelRuntimeSnapshot = {
-    config,
-    observationConfig: config,
-    catalogOwner: { agentId: "main", workspaceDir: facts.workspaceDir ?? "/tmp/runtime-choice" },
-    agentId: "main",
-    agentDir: "/tmp/runtime-choice/agent",
-    workspaceDir: "/tmp/runtime-choice",
-    activeProjectKeys: [],
-    authModes: {},
-    metadataSnapshot: createPluginMetadataSnapshotFixture(),
-    isCurrent,
-    allowGatewaySubagentBinding: false,
-    modelCatalog: { entries: [entry], routeVariants: [entry] },
-    configuredRuntimeModels: [],
-    inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}, {
-      providerMetadataOwners: facts.metadataSnapshot?.owners,
-    }),
-    createStores() {
-      const authStorage = AuthStorage.inMemory({});
-      return { authStorage, modelRegistry: ModelRegistry.inMemory(authStorage) };
-    },
-    ...facts,
-  };
-  setPreparedModelRuntimeAuthStore(owner, {
-    version: 1,
-    profiles: {
-      "fixture:account": { type: "api_key", provider: "fixture", key: "synthetic-credential" },
-    },
-  });
+  const owner = createModelRuntimeChoiceOwnerFixture(config, isCurrent, facts);
   published.owner = owner;
   return owner;
 }
@@ -919,87 +888,5 @@ describe("prepared model support admission", () => {
       kind: "unavailable",
       error: expect.stringContaining("changed during selection"),
     });
-  });
-});
-
-describe("published runtime choice", () => {
-  beforeEach(() => {
-    published.owner = undefined;
-  });
-
-  it("refuses an unpublished or unresolved model", async () => {
-    expect(await preparePublishedModelRuntimeChoice(request)).toMatchObject({
-      kind: "unavailable",
-    });
-    publish();
-    expect(
-      await preparePublishedModelRuntimeChoice({ ...request, model: "unobserved" }),
-    ).toMatchObject({ kind: "unavailable" });
-  });
-
-  it("validates an off-catalog model through its configured route", async () => {
-    const config: OpenClawConfig = {
-      ...cfg,
-      models: {
-        providers: {
-          fixture: {
-            api: "openai-completions",
-            baseUrl: "https://models.example.invalid/v1",
-            models: [],
-          },
-        },
-      },
-    };
-    let current = true;
-    publish(() => current, config);
-    const choice = await preparePublishedModelRuntimeChoice({
-      ...request,
-      cfg: config,
-      model: "off-catalog",
-    });
-    expect(choice.kind).toBe("ready");
-    if (choice.kind !== "ready") {
-      throw new Error("Expected the configured off-catalog route to be selectable");
-    }
-    expect(choice.validate()).toBeUndefined();
-    current = false;
-    expect(choice.validate()).toContain("not available");
-  });
-
-  it("does not grant an incompatible runtime to an off-catalog model", async () => {
-    const config: OpenClawConfig = {
-      ...cfg,
-      models: {
-        providers: {
-          fixture: {
-            api: "openai-completions",
-            baseUrl: "https://models.example.invalid/v1",
-            models: [],
-          },
-        },
-      },
-    };
-    publish(() => true, config);
-    expect(
-      await preparePublishedModelRuntimeChoice({
-        ...request,
-        cfg: config,
-        model: "off-catalog",
-        runtimeId: "codex",
-      }),
-    ).toMatchObject({ kind: "unavailable" });
-  });
-
-  it("rechecks the same generation at the session commit boundary", async () => {
-    let current = true;
-    publish(() => current);
-    const choice = await preparePublishedModelRuntimeChoice(request);
-    expect(choice.kind).toBe("ready");
-    if (choice.kind !== "ready") {
-      throw new Error("Expected a supported runtime");
-    }
-    expect(choice.validate()).toBeUndefined();
-    current = false;
-    expect(choice.validate()).toContain("not available");
   });
 });

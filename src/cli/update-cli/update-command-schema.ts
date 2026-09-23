@@ -1,12 +1,27 @@
+import path from "node:path";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import { resolveStateDir } from "../../config/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { tryReadJson } from "../../infra/json-files.js";
 import { checkGlobalPackageUpdatePermissions } from "../../infra/package-update-manager-preflight.js";
+import {
+  readUpdateStateSchemaVersions,
+  resolveUpdateStateContentVersion,
+  type UpdateStateSchemaVersion,
+} from "../../infra/update-candidate-state.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../../shared/update-outcome.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
-import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import {
+  parsePackageOpenClawSchemaVersions,
+  type OpenClawSchemaVersions,
+} from "../../state/openclaw-schema-versions.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { formatCliCommand } from "../command-format.js";
 import {
   checkTargetDatabaseSchemasForContexts,
   formatSchemaRefusalLines,
@@ -23,6 +38,7 @@ import {
   type UpdateDryRunFailure,
 } from "./update-command-dry-run.js";
 import type { RefuseUpdate } from "./update-command-result.js";
+import type { prepareUpdateCommand } from "./update-command-run.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import {
   resolvePackageRuntimePreflight,
@@ -33,11 +49,10 @@ import type { resolveUpdateCommandTarget } from "./update-command-target.js";
 /** Render prepared preview facts without initializing runtime state. */
 export async function previewUpdateCommand(params: {
   target: NonNullable<Awaited<ReturnType<typeof resolveUpdateCommandTarget>>>;
-  prepared: {
-    shouldRestart: boolean;
-    installKind: "git" | "package" | "unknown";
-    requestedChannel: UpdateChannel | null;
-  };
+  prepared: Pick<
+    Awaited<ReturnType<typeof prepareUpdateCommand>>,
+    "shouldRestart" | "installKind" | "requestedChannel" | "controlPlaneUpdateSentinelMeta"
+  >;
   opts: UpdateCommandOptions;
   runId: string;
   invocationCwd?: string;
@@ -54,8 +69,13 @@ export async function previewUpdateCommand(params: {
       invocationCwd: params.invocationCwd,
       packageTargetVersion: target.targetVersion ?? undefined,
       opts,
+      expectedForeground:
+        prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     }));
   if (preflight) {
+    if (target.inspectionWarning) {
+      preflight.preflightNotes.push(target.inspectionWarning);
+    }
     if (
       target.packageInstallTarget &&
       !target.packageAlreadyCurrent &&
@@ -71,7 +91,7 @@ export async function previewUpdateCommand(params: {
         preflight.preflightNotes.push(`Would refuse update: ${permissions.stderrTail}`);
       }
     }
-    printUpdateDryRun({
+    await printUpdateDryRun({
       ...target,
       ...preflight,
       runId: params.runId,
@@ -97,6 +117,7 @@ export async function preflightUpdateCommandSchemas(params: {
   invocationCwd?: string;
   legacyConfigPlan?: LegacyConfigUpdatePlan;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
+  managedServiceRoot?: string;
   channel: UpdateChannel;
   requestedChannel?: UpdateChannel | null;
   devTarget?: DevUpdateTarget;
@@ -106,6 +127,7 @@ export async function preflightUpdateCommandSchemas(params: {
   packageRuntimeTarget?: { version: string; nodeEngine: string | null };
   packageAlreadyCurrent?: boolean;
   managedServiceNodeRunner?: string;
+  expectedForeground?: true;
   opts: Pick<UpdateCommandOptions, "dryRun" | "json" | "run">;
   refuseUpdate: RefuseUpdate;
 }): Promise<
@@ -155,12 +177,24 @@ export async function preflightUpdateCommandSchemas(params: {
         timeoutMs: updateStepTimeoutMs,
         invocationCwd,
         managedServiceRootRedirect,
+        managedServiceRoot: params.managedServiceRoot,
         legacyConfigPlan: params.legacyConfigPlan,
+        expectedForeground:
+          params.expectedForeground || run?.completionOwner === "gateway-restart" || undefined,
       });
-      service = admission.service ?? admission.services.get(root);
+      service = admission.foreground
+        ? undefined
+        : (admission.service ?? admission.services.get(root));
       for (const inspectedService of admission.services.values()) {
         if (inspectedService.serviceUpdateVerdict?.kind === "unavailable") {
           preflightNotes.push(inspectedService.serviceUpdateVerdict.message);
+        } else if (
+          inspectedService.serviceUpdateVerdict?.kind === "owned" &&
+          inspectedService.serviceUpdateVerdict.requiresInstallRootRefresh
+        ) {
+          preflightNotes.push(
+            `Gateway service targets ${inspectedService.serviceUpdateVerdict.root}; ${shouldRestart ? "would reconcile it with" : `restart is disabled; run ${formatCliCommand("openclaw doctor --fix", inspectedService.serviceEnv)} to reconcile it with`} the active installation ${root}.`,
+          );
         }
       }
       const target =
@@ -173,10 +207,13 @@ export async function preflightUpdateCommandSchemas(params: {
             })
           : { schemaVersions: packageTargetSchemaVersions };
       if ("metadataUnreadable" in target && target.metadataUnreadable) {
-        throw new UpdatePreMutationError(
-          "target-metadata-preflight",
-          `Could not preview Git target schema support without changing the checkout: ${target.metadataUnreadable}`,
+        const failure = createUpdatePreflightFailure(
+          "target-git-metadata",
+          target.metadataUnreadable,
         );
+        throw new UpdatePreMutationError("target-metadata-preflight", failure.message, {
+          failureFacts: failure.failureFacts,
+        });
       }
       packageSchemaPreflight = await checkTargetDatabaseSchemasForContexts(
         target.schemaVersions,
@@ -239,6 +276,13 @@ export async function preflightUpdateCommandSchemas(params: {
         preflightNotes,
         refuseUpdate,
       );
+      if (error instanceof UpdatePreMutationError && error.reason === "target-metadata-preflight") {
+        preflightFailures.push({
+          reason: error.reason,
+          message: error.message,
+          failureFacts: error.failureFacts,
+        });
+      }
     }
   }
   if (!opts.dryRun && hasSchemaRefusal(packageSchemaPreflight)) {
@@ -249,4 +293,58 @@ export async function preflightUpdateCommandSchemas(params: {
     return undefined;
   }
   return { packageSchemaPreflight, preflightNotes, preflightFailures, service };
+}
+
+function assertForegroundUpdateSchemaSupport(
+  run: UpdateCommandOptions["run"],
+  candidate: OpenClawSchemaVersions | undefined,
+  schemas: UpdateStateSchemaVersion[] | undefined,
+  gatewayRestartCompletion: boolean,
+): void {
+  if (run?.completionOwner !== "gateway-restart" || gatewayRestartCompletion || !candidate) {
+    return;
+  }
+  const sharedPath = resolveOpenClawStateSqlitePath(run.env);
+  if (
+    schemas?.some((entry) => {
+      const version = resolveUpdateStateContentVersion(entry);
+      return (
+        version !== null && version !== candidate[entry.path === sharedPath ? "state" : "agent"]
+      );
+    })
+  ) {
+    throw new UpdatePreMutationError(
+      "target-native-unsupported",
+      "Target runtime cannot preserve the foreground Gateway's completion owner after state migration; refusing activation.",
+    );
+  }
+}
+
+export async function captureUpdateActivationSchemas(params: {
+  root: string;
+  env: NodeJS.ProcessEnv;
+  config: OpenClawConfig;
+  run: UpdateCommandOptions["run"];
+  candidateSchemaVersions: OpenClawSchemaVersions | undefined;
+  gatewayRestartCompletion: boolean;
+  timeoutMs: number;
+}) {
+  const previousSchemaVersions = parsePackageOpenClawSchemaVersions(
+    await tryReadJson<unknown>(path.join(params.root, "package.json")),
+  );
+  const schemaVersions = params.candidateSchemaVersions
+    ? await readUpdateStateSchemaVersions({
+        stateDir: resolveStateDir(params.env),
+        config: params.config,
+        env: params.env,
+        timeoutMs: params.timeoutMs,
+      })
+    : undefined;
+  assertForegroundUpdateSchemaSupport(
+    params.run,
+    params.candidateSchemaVersions,
+    schemaVersions,
+    params.gatewayRestartCompletion,
+  );
+  return { previousSchemaVersions, schemaVersions };
 }

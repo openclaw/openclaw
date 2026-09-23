@@ -2,7 +2,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
@@ -14,6 +13,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -241,7 +241,9 @@ catalogSuite.define(() => {
           await page.goto(url.toString());
           await waitForControlUiGatewayReady(page);
           const editor = page.locator("openclaw-agents-page");
-          const picker = editor.locator(".model-picker__select");
+          const picker = editor.locator(
+            'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
+          );
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/retiring"]').count())
             .toBe(1);

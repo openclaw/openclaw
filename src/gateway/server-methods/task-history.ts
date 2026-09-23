@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { Value } from "typebox/value";
 import {
   ErrorCodes,
   errorShape,
   validateTasksHistoryParams,
+  TasksHistoryResultSchema,
   type ErrorCode,
   type TasksHistoryResult,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -13,7 +15,7 @@ import { resolveTranscriptSessionKeyBySessionId } from "../../config/sessions/se
 import { cronTaskRecordToRunLogEntry } from "../../cron/task-run-detail.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import { getTaskById } from "../../tasks/runtime-internal.js";
+import { prepareTaskRegistryRead } from "../../tasks/runtime-internal.js";
 import { resolveTaskHistoryHarness, taskTranscriptSessionKey } from "../../tasks/task-history.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { canAccessTaskRequesterSession } from "../task-session-access.js";
@@ -66,7 +68,12 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
   }
   const fail = (message: string, code: ErrorCode = ErrorCodes.UNAVAILABLE) =>
     respond(false, undefined, errorShape(code, message));
-  const task = getTaskById(params.taskId);
+  const read = await prepareTaskRegistryRead();
+  if (!read) {
+    fail("Task activity did not stabilize. Refresh the task.");
+    return;
+  }
+  const task = read.getTaskById(params.taskId);
   const allowed = (value: TaskRecord | undefined): value is TaskRecord =>
     Boolean(
       value &&
@@ -107,7 +114,7 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
       }
     | undefined;
   const assertCurrent = () => {
-    const current = getTaskById(task.taskId);
+    const current = read.getTaskById(task.taskId);
     if (
       !active ||
       opts.signal?.aborted ||
@@ -128,6 +135,7 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
     assertCurrent();
     const result: TasksHistoryResult = {
       messages: page.messages,
+      ...(page.activity ? { activity: page.activity } : {}),
       ...(page.nextCursor
         ? {
             nextCursor: Buffer.from(JSON.stringify([binding, page.nextCursor])).toString(
@@ -195,12 +203,17 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
           if (!Array.isArray(page?.messages)) {
             throw new Error("Task transcript returned no messages");
           }
-          publish({
+          const result = {
             messages: page.messages,
+            ...(page.activity ? { activity: page.activity } : {}),
             ...(page.hasMore === true && typeof page.nextOffset === "number"
               ? { nextCursor: String(page.nextOffset) }
               : {}),
-          });
+          };
+          if (!Value.Check(TasksHistoryResultSchema, result)) {
+            throw new Error("Task transcript returned an invalid page");
+          }
+          publish(result);
         },
       });
     } else if (harness?.taskHistory) {

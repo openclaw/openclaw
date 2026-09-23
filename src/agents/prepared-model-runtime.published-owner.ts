@@ -23,7 +23,7 @@ export function retainPublishedModelRuntimeOwner(
     throw new Error("Published model runtime has no plugin generation");
   }
   return {
-    snapshot: capturePreparedModelRuntimeCatalog(snapshot, snapshot.readPublishedModels?.()),
+    snapshot: capturePreparedModelRuntimeCatalog(snapshot, snapshot),
     pluginGeneration,
     [Symbol.asyncDispose]: retainPreparedPluginGeneration(pluginGeneration),
   };

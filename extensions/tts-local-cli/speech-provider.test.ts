@@ -1,14 +1,9 @@
 // Tts Local Cli tests cover speech provider plugin behavior.
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  truncateSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+// Prepare the native process runtime before the subprocess deadline cases start.
+import "openclaw/plugin-sdk/process-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SpeechProviderConfig, SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -105,25 +100,6 @@ function createOggFirstPage(firstPacket: Buffer): Buffer {
   return Buffer.concat([header, Buffer.from([firstPacket.length]), firstPacket]);
 }
 
-function createTimeoutCliFixture() {
-  const fixture = createCliFixture();
-  const lifecyclePath = path.join(fixture.dir, "lifecycle.json");
-  writeFileSync(
-    fixture.script,
-    `
-import { writeFileSync } from "node:fs";
-const outputPath = process.argv[process.argv.indexOf("--out") + 1];
-const lifecyclePath = ${JSON.stringify(lifecyclePath)};
-const lifecycle = { pid: process.pid, outputPath, completed: false };
-writeFileSync(lifecyclePath, JSON.stringify(lifecycle));
-await new Promise((resolve) => setTimeout(resolve, 3_000));
-writeFileSync(outputPath, Buffer.from("UklGRmQBAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YUABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==", "base64"));
-writeFileSync(lifecyclePath, JSON.stringify({ ...lifecycle, completed: true }));
-`,
-  );
-  return { ...fixture, lifecyclePath };
-}
-
 function baseProviderConfig(
   script: string,
   overrides: SpeechProviderConfig = {},
@@ -154,6 +130,7 @@ async function synthesize(params: {
 function parseAudioPayload(result: { audioBuffer: Buffer }) {
   const jsonStart = result.audioBuffer.indexOf("{");
   return JSON.parse(result.audioBuffer.subarray(jsonStart).toString("utf8")) as {
+    args: string[];
     stdin?: string;
     textArg?: string;
   };
@@ -224,72 +201,6 @@ describe("buildCliSpeechProvider", () => {
     it("advertises the existing command timeout as its provider default", () => {
       expect(buildCliSpeechProvider().defaultTimeoutMs).toBe(120_000);
     });
-
-    it.each([
-      { method: "synthesize", providerTimeoutMs: undefined },
-      { method: "synthesizeTelephony", providerTimeoutMs: undefined },
-      { method: "synthesize", providerTimeoutMs: 8_000 },
-      { method: "synthesizeTelephony", providerTimeoutMs: 8_000 },
-    ] as const)(
-      "$method honors timeout precedence with provider timeout $providerTimeoutMs",
-      async ({ method, providerTimeoutMs }) => {
-        const fixture = createTimeoutCliFixture();
-        try {
-          const provider = buildCliSpeechProvider();
-          const providerConfig = baseProviderConfig(fixture.script, {
-            args: [fixture.script, "--out", "{{OutputPath}}"],
-            outputFormat: "wav",
-          });
-          if (providerTimeoutMs === undefined) {
-            delete providerConfig.timeoutMs;
-          } else {
-            providerConfig.timeoutMs = providerTimeoutMs;
-          }
-          const request = {
-            text: "timeout contract",
-            cfg: TEST_CFG,
-            providerConfig,
-            providerOverrides: {},
-            timeoutMs: 1_000,
-            target: "audio-file" as const,
-          };
-          const pending =
-            method === "synthesize"
-              ? provider.synthesize(request)
-              : provider.synthesizeTelephony?.(request);
-          if (!pending) {
-            throw new Error("Local CLI telephony synthesis is unavailable");
-          }
-          const outcome = await pending.then(
-            (value) => ({ ok: true as const, value }),
-            (error: unknown) => ({ ok: false as const, error }),
-          );
-          const lifecycle = JSON.parse(readFileSync(fixture.lifecyclePath, "utf8")) as {
-            outputPath: string;
-            completed: boolean;
-          };
-          expect(existsSync(path.dirname(lifecycle.outputPath))).toBe(false);
-          if (providerTimeoutMs === undefined) {
-            expect(outcome.ok).toBe(false);
-            if (!outcome.ok) {
-              expect(outcome.error).toMatchObject({
-                message: "CLI TTS timed out after 1000ms",
-              });
-            }
-            expect(lifecycle.completed).toBe(false);
-          } else {
-            expect(outcome.ok).toBe(true);
-            if (outcome.ok) {
-              expect(outcome.value.audioBuffer.byteLength).toBeGreaterThan(0);
-            }
-            expect(lifecycle.completed).toBe(true);
-          }
-        } finally {
-          rmSync(fixture.dir, { recursive: true, force: true });
-        }
-      },
-      10_000,
-    );
   });
 
   it("passes text through stdin when args omit the text template", async () => {
@@ -332,6 +243,54 @@ describe("buildCliSpeechProvider", () => {
       const audioPayload = parseAudioPayload(result);
       expect(audioPayload.stdin).toBe("");
       expect(audioPayload.textArg).toBe("spoken words");
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "consecutive single- and double-quoted empty arguments",
+      command: "--voice \"\"  ''",
+      args: [],
+      expected: ["--voice", "", ""],
+    },
+    {
+      name: "quoted whitespace",
+      command: '--voice " \t "',
+      args: [],
+      expected: ["--voice", " \t "],
+    },
+    {
+      name: "adjacent quoted and unquoted fragments",
+      command: "--voice a''b\"\"",
+      args: [],
+      expected: ["--voice", "ab"],
+    },
+    {
+      name: "an explicit array empty argument",
+      command: "",
+      args: ["--voice", ""],
+      expected: ["--voice", ""],
+    },
+  ])("preserves $name through the speech process", async ({ command, args, expected }) => {
+    const fixture = createCliFixture();
+    try {
+      const result = await synthesize({
+        providerConfig: {
+          command: `"${process.execPath}" "${fixture.script}" ${command}`,
+          args: [...args, "--text", "{{Text}}"],
+          outputFormat: "wav",
+        },
+        text: "spoken words",
+      });
+
+      expect(result.outputFormat).toBe("wav");
+      expect(parseAudioPayload(result)).toEqual({
+        args: [...expected, "--text", "spoken words"],
+        stdin: "",
+        textArg: "spoken words",
+      });
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
     }

@@ -3,10 +3,12 @@ import Module, { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { JitiOptions, JitiResolveOptions } from "jiti";
+import { isPathInside } from "../infra/path-guards.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { createJiti } from "./jiti-factory.js";
 import {
   isJavaScriptModulePath,
+  resolvePluginLoaderTryNative,
   isPluginSourceModulePath,
   supportsBunRuntimeOnResolveTargets,
 } from "./native-module-require.js";
@@ -33,11 +35,7 @@ import {
   type PluginSourceLoadMode,
 } from "./plugin-source-build.js";
 import { inspectPluginTypeScriptExecutionFacts } from "./plugin-source-references.js";
-import {
-  preparePluginLoaderAliases,
-  isPluginSdkAliasSpecifier,
-  resolvePluginLoaderTryNative,
-} from "./sdk-alias.js";
+import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 
 // Compiled recovery shares process code identity without closing over the
 // binder's predecessor instance or source-graph state.
@@ -130,25 +128,24 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     artifact,
     bindPluginInstanceModuleLoader,
   );
-  const nativeAliases = nativeHooks
-    ? undefined
-    : preparePluginLoaderAliases({
-        modulePath: params.source,
-        argv1: process.argv[1],
-        moduleUrl: import.meta.url,
-        pluginSdkResolution: params.pluginSdkResolution,
-        devSourceRoot: params.devSourceRoot,
-      });
-  if (nativeAliases?.packageRoot) {
-    artifact.linkHost(nativeAliases.packageRoot);
+  const aliases = preparePluginLoaderAliases({
+    modulePath: params.source,
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    pluginSdkResolution: params.pluginSdkResolution,
+    devSourceRoot: params.devSourceRoot,
+  });
+  if (aliases.packageRoot) {
+    artifact.linkHost(aliases.packageRoot);
   }
   installOpenClawPluginSdkNativeResolver({
     moduleUrl: import.meta.url,
     pluginModulePath: params.source,
     devSourceRoot: params.devSourceRoot,
     allowedParentRoots: [artifact.boundaryRoot],
+    pluginSdkResolution: params.pluginSdkResolution,
   });
-  if (nativeAliases) {
+  if (!nativeHooks) {
     const capturedSource = artifact.resolve(params.source);
     artifact.prepareModule(capturedSource);
     const bunSourceFacts =
@@ -185,7 +182,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       pluginSdkResolution: params.pluginSdkResolution,
       tryNative,
       aliasMap: {
-        ...nativeAliases.getAliasMap(),
+        ...aliases.getAliasMap(),
         ...artifact.sourceAliases,
       },
     });
@@ -194,7 +191,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       cache,
       artifact,
       loader,
-      nativeAliases.sdkRoots,
+      aliases.sdkRoots,
       !effectiveTryNative,
     );
     return;
@@ -215,7 +212,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   const tsconfigPaths = entryPaths.resolver.options.tsconfigPaths;
   const demandedModules = new Map<string, { url: string } | { error: unknown }>();
   let resolvingPaths = false;
-  params.instance.lifecycle.onDispose(() => {
+  params.instance.onModuleDispose(() => {
     for (const build of sourceBuilds.values()) {
       build.dispose();
     }
@@ -367,7 +364,9 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
                   if (
                     !(specifier.startsWith("file:") || path.isAbsolute(specifier)) ||
                     !native.url.startsWith("file:") ||
-                    artifact.moduleRoot(sourceForOutput(fileURLToPath(native.url)).source)
+                    artifact.moduleRoot(sourceForOutput(fileURLToPath(native.url)).source) ||
+                    // Resolved SDK URLs keep host identity just like their public specifiers.
+                    aliases.sdkRoots.some((root) => isPathInside(root, fileURLToPath(native.url)))
                   ) {
                     return native;
                   }
@@ -459,7 +458,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       return resolved;
     },
   });
-  params.instance.lifecycle.onDispose(() => hooks.deregister());
+  params.instance.onModuleDispose(() => hooks.deregister());
   const results = new Map<string, { value: unknown } | { error: unknown }>();
   bindModuleLoader(
     (source) =>

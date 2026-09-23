@@ -1,7 +1,10 @@
+import { Check } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
+import { ModelsListResultSchema } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { DecisionProviderCapabilities } from "../../plugins/manifest-types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {
@@ -11,6 +14,7 @@ import {
 } from "../../plugins/runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../server-model-catalog-auth.js";
+import type { GatewayModelCatalogContext } from "./models-list-context.js";
 import {
   buildModelsListResult,
   createGatewayAgentModelCatalogProjector,
@@ -44,6 +48,146 @@ function preparedMetadataSnapshot() {
 }
 
 describe("models.list plugin metadata handoff", () => {
+  it.each<{
+    name: string;
+    plugins: OpenClawConfig["plugins"];
+    expected: boolean;
+    provider?: string;
+    chat?: boolean;
+    expectedChat?: boolean;
+    error?: string;
+  }>([
+    { name: "available", plugins: {}, expected: true },
+    { name: "globally disabled", plugins: { enabled: false }, expected: false },
+    {
+      name: "plugin disabled",
+      plugins: { entries: { decisions: { enabled: false } } },
+      expected: false,
+    },
+    { name: "denied", plugins: { deny: ["decisions"] }, expected: false },
+    { name: "decision-only provider filter", plugins: {}, provider: "fixture", expected: true },
+    {
+      name: "disabled decision provider filter",
+      plugins: { entries: { decisions: { enabled: false } } },
+      provider: "fixture",
+      expected: false,
+    },
+    {
+      name: "unknown provider filter",
+      plugins: {},
+      provider: "missing",
+      expected: false,
+      error: "Unknown model catalog provider",
+    },
+    {
+      name: "normalized decision provider filter",
+      plugins: {},
+      provider: " Fixture ",
+      expected: true,
+    },
+    {
+      name: "decision provider filter with chat entries",
+      plugins: {},
+      provider: "fixture",
+      chat: true,
+      expected: true,
+    },
+    {
+      name: "chat provider filter with decision entries",
+      plugins: {},
+      provider: "custom",
+      chat: true,
+      expectedChat: true,
+      expected: false,
+    },
+    {
+      name: "mixed catalog without a filter",
+      plugins: {},
+      chat: true,
+      expectedChat: true,
+      expected: true,
+    },
+  ])(
+    "keeps decision discovery separate from chat routing: $name",
+    async ({ plugins, expected, provider, chat, expectedChat, error }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: {} },
+          ...(chat ? { defaults: { model: "custom/chat", models: { "custom/chat": {} } } } : {}),
+        },
+        plugins,
+      };
+      const snapshot: ModelCatalogSnapshot = {
+        entries: chat ? [catalogEntry("chat")] : [],
+        routeVariants: [],
+      };
+      const capabilities: DecisionProviderCapabilities = {
+        questionTypes: ["boolean", "choice", "score"],
+        maxQuestions: 32,
+        maxInputTokens: 512,
+        inputTokenScope: "state-plus-each-criterion",
+        confidence: "provider-specific",
+      };
+      const metadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "decisions",
+            contracts: { decisionProviders: ["fixture"] },
+            decisionModels: [
+              { provider: "fixture", id: "fast", name: "Fast decisions", capabilities },
+            ],
+          },
+          ...(chat ? [{ id: "custom", providers: ["custom"] }] : []),
+        ],
+      });
+      const projector = createGatewayAgentModelCatalogProjector({
+        cfg,
+        agentId: "main",
+        snapshot,
+        metadataSnapshot,
+        preparedAuthStore: { version: 1, profiles: {} },
+      });
+      const loadGatewayModelCatalogSnapshot = vi.fn(() => {
+        throw new Error("Unexpected runtime discovery");
+      });
+      const context = {
+        getRuntimeConfig: () => cfg,
+        loadGatewayModelCatalogSnapshot,
+        logGateway: { debug: vi.fn() },
+      } satisfies GatewayModelCatalogContext;
+      const request = buildModelsListResult({
+        source: { kind: "gateway", context },
+        agentId: "main",
+        params: { view: "configured", ...(provider ? { provider } : {}) },
+        preloadedCatalog: { agentId: "main", config: cfg, snapshot },
+        preloadedOnly: true,
+        catalogProjector: projector,
+      });
+      if (error) {
+        await expect(request).rejects.toThrow(error);
+        expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+        return;
+      }
+      const result = await request;
+      expect(result.models.map((entry) => entry.id)).toEqual(expectedChat ? ["chat"] : []);
+      expect(result.decisionModels ?? []).toEqual(
+        expected
+          ? [
+              {
+                provider: "fixture",
+                id: "fast",
+                name: "Fast decisions",
+                pluginId: "decisions",
+                capabilities,
+              },
+            ]
+          : [],
+      );
+      expect(Check(ModelsListResultSchema, result)).toBe(true);
+      expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+    },
+  );
+
   it("reuses one Gateway-owned metadata snapshot across startup projection and browse", async () => {
     await withOpenClawTestState(
       {

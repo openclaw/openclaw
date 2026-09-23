@@ -21,9 +21,19 @@ async function installNative(page: Page) {
     ];
     let selectedAgent = primaryAgent;
     let firstConnection = true;
+    let deferNextIdentity = false;
+    let releaseIdentity: ((fail: boolean) => void) | undefined;
     Object.assign(window, {
       nativeRequests: requests,
       emitNativeEvent: emit,
+      deferNativeIdentity: () => {
+        deferNextIdentity = true;
+      },
+      hasDeferredNativeIdentity: () => Boolean(releaseIdentity),
+      releaseNativeIdentity: (fail = false) => {
+        releaseIdentity?.(fail);
+        releaseIdentity = undefined;
+      },
       __TAURI__: {
         event: {
           listen: async (name: string, callback: (event: { payload: unknown }) => void) => {
@@ -63,6 +73,19 @@ async function installNative(page: Page) {
               case "quickchat_agents":
                 return agents;
               case "quickchat_identity":
+                if (deferNextIdentity) {
+                  deferNextIdentity = false;
+                  const snapshot = selectedAgent;
+                  return new Promise<typeof selectedAgent>((resolve, reject) => {
+                    releaseIdentity = (fail) => {
+                      if (fail) {
+                        reject(new Error("Identity refresh unavailable"));
+                      } else {
+                        resolve(snapshot);
+                      }
+                    };
+                  });
+                }
                 return selectedAgent;
               case "quickchat_select_agent": {
                 const requestedAgent = agents.find((agent) => agent.id === params?.agentId);
@@ -106,6 +129,10 @@ async function installNative(page: Page) {
     });
   });
   return {
+    deferIdentity: () => page.evaluate(() => Reflect.get(window, "deferNativeIdentity")()),
+    identityPending: () => page.evaluate(() => Reflect.get(window, "hasDeferredNativeIdentity")()),
+    releaseIdentity: (fail = false) =>
+      page.evaluate((shouldFail) => Reflect.get(window, "releaseNativeIdentity")(shouldFail), fail),
     requests: (command: string) =>
       page.evaluate(
         (name) =>
@@ -170,14 +197,16 @@ async function expectControlsFit(page: Page) {
     true,
   );
   expect(
-    await page.locator("button:visible, input:visible, select:visible").evaluateAll((controls) =>
-      controls
-        .filter((control) => {
-          const bounds = control.getBoundingClientRect();
-          return bounds.left < 0 || bounds.right > window.innerWidth;
-        })
-        .map((control) => control.getAttribute("aria-label") ?? control.id),
-    ),
+    await page
+      .locator("button:visible, input:visible, textarea:visible, select:visible")
+      .evaluateAll((controls) =>
+        controls
+          .filter((control) => {
+            const bounds = control.getBoundingClientRect();
+            return bounds.left < 0 || bounds.right > window.innerWidth;
+          })
+          .map((control) => control.getAttribute("aria-label") ?? control.id),
+      ),
   ).toEqual([]);
 }
 
@@ -359,12 +388,15 @@ suite.define(() => {
     "preserves Quick Chat drafts, agent choice, and replies across %s appearance changes",
     async (colorScheme) => {
       await suite.withPage(
-        { colorScheme, reducedMotion: "reduce", viewport: { width: 400, height: 360 } },
+        { colorScheme, reducedMotion: "reduce", viewport: { width: 400, height: 560 } },
         async ({ page }) => {
           const native = await installNative(page);
           await page.goto(`${suite.server.baseUrl}companion/quickchat.html`);
           const message = page.getByRole("textbox", { name: "Quick Chat message", exact: true });
           await expect.poll(() => message.getAttribute("placeholder")).toBe("Message Assistant");
+          await native.deferIdentity();
+          await native.emit("quickchat:shown", {});
+          await expect.poll(() => native.identityPending()).toBe(true);
           await message.fill("Please summarize the project notes.");
           await page.getByRole("button", { name: "Choose agent", exact: true }).click();
           for (const scheme of schemes) {
@@ -416,14 +448,51 @@ suite.define(() => {
             deltaText: "The project is ready.",
           });
           await page.getByText("The project is ready.", { exact: true }).waitFor();
+          await native.releaseIdentity();
+          expect(await message.getAttribute("placeholder")).toBe(
+            "Message Writing assistant for long project names",
+          );
+          expect(await page.getByText("The project is ready.", { exact: true }).isVisible()).toBe(
+            true,
+          );
+          await expect.poll(() => message.getAttribute("readonly")).toBeNull();
+          await message.fill("A follow-up draft");
+          await message.press("Shift+Enter");
+          await page.keyboard.type("with another line");
+          expect(
+            await page.getByRole("button", { name: "Choose agent", exact: true }).isDisabled(),
+          ).toBe(true);
           for (const scheme of schemes) {
             await expectAppearance(page, scheme, ".composer", "#reply-text");
             expect(await page.getByText("The project is ready.", { exact: true }).isVisible()).toBe(
               true,
             );
-            expect(await message.getAttribute("readonly")).not.toBeNull();
+            expect(await message.getAttribute("readonly")).toBeNull();
+            expect(
+              await page.getByRole("button", { name: "Send message", exact: true }).isDisabled(),
+            ).toBe(true);
           }
+          await page.getByRole("button", { name: "Collapse reply", exact: true }).click();
+          await expect.poll(() => page.locator("#reply").isVisible()).toBe(false);
+          await native.emit("quickchat:chat-event", {
+            ...reply,
+            state: "delta",
+            deltaText: " The next step is review.",
+          });
+          expect(await message.inputValue()).toBe("A follow-up draft\nwith another line");
+          await page.getByRole("button", { name: "Expand reply", exact: true }).click();
+          await page
+            .getByText("The project is ready. The next step is review.", { exact: true })
+            .waitFor();
+          expect(await message.inputValue()).toBe("A follow-up draft\nwith another line");
+          expect(await page.locator("#composer textarea").count()).toBe(1);
+          expect(await native.requests("quickchat_send")).toHaveLength(1);
           await native.emit("quickchat:chat-event", { ...reply, state: "final" });
+          await expect
+            .poll(() =>
+              page.getByRole("button", { name: "Choose agent", exact: true }).isDisabled(),
+            )
+            .toBe(false);
           await expect.poll(() => message.getAttribute("readonly")).toBeNull();
           await message.fill("A follow-up draft");
           await native.emit("quickchat:gateway-state", {
@@ -437,6 +506,56 @@ suite.define(() => {
           ).toBe(true);
           expect(await message.inputValue()).toBe("A follow-up draft");
           await expectControlsFit(page);
+        },
+      );
+    },
+  );
+  it.each(schemes)(
+    "retains the active Quick Chat reply when an identity refresh fails in %s mode",
+    async (colorScheme) => {
+      await suite.withPage(
+        { colorScheme, reducedMotion: "reduce", viewport: { width: 640, height: 520 } },
+        async ({ page }) => {
+          const native = await installNative(page);
+          await page.goto(`${suite.server.baseUrl}companion/quickchat.html`);
+          const message = page.getByRole("textbox", { name: "Quick Chat message", exact: true });
+          await expect.poll(() => message.getAttribute("placeholder")).toBe("Message Assistant");
+          await native.deferIdentity();
+          await native.emit("quickchat:shown", {});
+          await expect.poll(() => native.identityPending()).toBe(true);
+          await message.fill("Summarize the project.");
+          await page.getByRole("button", { name: "Send message", exact: true }).click();
+          const reply = {
+            gatewayGeneration: 1,
+            runId: "reply-1",
+            sessionKey: "agent:main:quickchat",
+            agentId: "main",
+          };
+          await native.emit("quickchat:chat-event", {
+            ...reply,
+            state: "delta",
+            deltaText: "Ready.",
+          });
+          await page.getByText("Ready.", { exact: true }).waitFor();
+          await expect.poll(() => message.getAttribute("readonly")).toBeNull();
+          await message.fill("Keep this draft.");
+          await native.releaseIdentity(true);
+          await native.emit("quickchat:chat-event", {
+            ...reply,
+            state: "delta",
+            deltaText: " Still connected.",
+          });
+          await page.getByText("Ready. Still connected.", { exact: true }).waitFor();
+          expect(await message.inputValue()).toBe("Keep this draft.");
+          expect(
+            await page.getByRole("button", { name: "Send message", exact: true }).isDisabled(),
+          ).toBe(true);
+          await native.emit("quickchat:chat-event", { ...reply, state: "final" });
+          await expect
+            .poll(() =>
+              page.getByRole("button", { name: "Send message", exact: true }).isDisabled(),
+            )
+            .toBe(false);
         },
       );
     },

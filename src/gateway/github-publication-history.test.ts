@@ -57,7 +57,10 @@ async function historyFixture() {
       }
       if (argv.includes("push")) {
         try {
-          const output = await workspace.git("push", "--porcelain", "--", remote, argv.at(-1)!);
+          const remoteIndex = argv.indexOf("--") + 1;
+          const output = await workspace.git(
+            ...argv.slice(1).map((arg, index) => (index + 1 === remoteIndex ? remote : arg)),
+          );
           if (pr) {
             pr.headSha = await remoteHead();
           }
@@ -144,6 +147,72 @@ describe("GitHub publication branch history", () => {
     expect(await f.git("show", "-s", "--format=%B", "HEAD")).toContain(trailer);
     const head = await f.remoteHead();
     expect(await f.publish("same-credit")).toMatchObject({ status: "published", headCommit: head });
+  });
+
+  it.each([
+    { publication: "initial", reflog: "recreated" },
+    { publication: "initial", reflog: "expired" },
+    { publication: "refresh", reflog: "recreated" },
+    { publication: "refresh", reflog: "expired" },
+  ])(
+    "publishes $publication work after its branch reflog is $reflog",
+    async ({ publication, reflog }) => {
+      const f = await historyFixture();
+      if (publication === "refresh") {
+        expect(await f.publish("initial")).toMatchObject({ status: "published", url });
+      }
+      const previousRemote = await f.remoteHead();
+      await fs.writeFile(path.join(f.cwd, "artifact.txt"), "committed topic edit\n");
+      await f.git("add", "artifact.txt");
+      await f.git("commit", "-m", "topic edit");
+      const sourceHead = await f.git("rev-parse", "HEAD");
+      const sourceTree = await f.git("rev-parse", "HEAD^{tree}");
+      if (reflog === "recreated") {
+        await f.git("branch", "-m", "saved-topic");
+        await f.git("switch", "-c", BRANCH, sourceHead);
+      } else {
+        await f.git("reflog", "expire", "--expire=now", `refs/heads/${BRANCH}`);
+      }
+      f.calls.length = 0;
+
+      expect(await f.publish("after-reflog-change")).toMatchObject({ status: "published", url });
+
+      expect(await f.git("rev-parse", "HEAD^")).toBe(sourceHead);
+      expect(await f.git("rev-parse", "HEAD^{tree}")).toBe(sourceTree);
+      expect(await f.remoteHead()).toBe(await f.git("rev-parse", "HEAD"));
+      if (previousRemote) {
+        await f.git("merge-base", "--is-ancestor", previousRemote, "HEAD");
+      }
+      expect(f.calls.filter((args) => args.includes("POST"))).toHaveLength(
+        publication === "initial" ? 1 : 0,
+      );
+    },
+  );
+
+  it("rejects unrelated initial history without changing the workspace or remote", async () => {
+    const f = await historyFixture();
+    const tree = await f.git("rev-parse", "HEAD^{tree}");
+    const unrelated = await f.git("commit-tree", tree, "-m", "unrelated root");
+    await f.git("update-ref", `refs/heads/${BRANCH}`, unrelated);
+    const before = await f.state();
+    f.calls.length = 0;
+
+    expect(await f.publish("unrelated-base")).toMatchObject({
+      status: "failed",
+      code: "workspace_changed",
+      nextAction: expect.stringContaining("no shared Git history"),
+    });
+
+    expect(await f.state()).toEqual(before);
+    expect(
+      f.calls.some(
+        (args) =>
+          args.includes("commit-tree") ||
+          args.includes("update-ref") ||
+          args.includes("push") ||
+          args.includes("POST"),
+      ),
+    ).toBe(false);
   });
 
   it.each(["rebased", "remote-ahead", "unrelated"] as const)(

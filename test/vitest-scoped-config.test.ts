@@ -86,6 +86,7 @@ import { createToolingIsolatedVitestConfig } from "./vitest/vitest.tooling-isola
 import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "./vitest/vitest.tui.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
+import { isUnitFastTestFile } from "./vitest/vitest.unit-fast-paths.mjs";
 import { bundledPluginDependentUnitTestFiles } from "./vitest/vitest.unit-paths.mjs";
 import { createUtilsVitestConfig } from "./vitest/vitest.utils.config.ts";
 import { createWizardVitestConfig } from "./vitest/vitest.wizard.config.ts";
@@ -133,19 +134,19 @@ function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable
   return config.test as NonNullable<T["test"]>;
 }
 
-function expectThreadedNonIsolatedRunner(config: {
+function expectDefaultNonIsolatedRunner(config: {
   test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
 }) {
   const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe("threads");
+  expect(testConfig.pool).toBe(process.platform === "win32" ? "forks" : "threads");
   expect(testConfig.isolate).toBe(false);
   expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
 }
-function expectThreadedIsolatedRunner(config: {
+function expectDefaultIsolatedRunner(config: {
   test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
 }) {
   const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe("threads");
+  expect(testConfig.pool).toBe(process.platform === "win32" ? "forks" : "threads");
   expect(testConfig.isolate).toBe(true);
   expect(testConfig.runner).toBeUndefined();
 }
@@ -159,11 +160,12 @@ function expectForkedNonIsolatedRunner(
   expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
 }
 
-function expectForkedIsolatedRunner(config: {
-  test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
-}) {
+function expectForkedIsolatedRunner(
+  config: { test?: { pool?: unknown; isolate?: unknown; runner?: unknown } },
+  pool: "forks" | typeof diagnosticForksPool = "forks",
+) {
   const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe("forks");
+  expect(testConfig.pool).toBe(pool);
   expect(testConfig.isolate).toBe(true);
   expect(testConfig.runner).toBeUndefined();
 }
@@ -573,7 +575,6 @@ describe("scoped vitest configs", () => {
   const defaultPluginSdkConfig = createPluginSdkVitestConfig({});
   const defaultSecretsConfig = createSecretsVitestConfig({});
   const defaultRuntimeConfig = createRuntimeConfigVitestConfig({});
-  const defaultCronConfig = createCronVitestConfig({});
   const defaultDaemonConfig = createDaemonVitestConfig({});
   const defaultMediaConfig = createMediaVitestConfig({});
   const defaultMediaUnderstandingConfig = createMediaUnderstandingVitestConfig({});
@@ -607,6 +608,7 @@ describe("scoped vitest configs", () => {
       defaultExtensionImessageConfig,
       defaultExtensionLineConfig,
       defaultExtensionProviderOpenAiConfig,
+      defaultExtensionProvidersConfig,
       defaultExtensionSignalConfig,
       defaultAutoReplyConfig,
       defaultAutoReplyCoreConfig,
@@ -615,19 +617,18 @@ describe("scoped vitest configs", () => {
       defaultToolingDockerConfig,
       defaultToolingConfig,
     ]) {
-      expectThreadedNonIsolatedRunner(config);
+      expectDefaultNonIsolatedRunner(config);
     }
 
     for (const config of [defaultGatewayConfig, defaultAgentsConfig]) {
-      expectThreadedNonIsolatedRunner(config);
+      expectDefaultNonIsolatedRunner(config);
     }
 
     expectForkedNonIsolatedRunner(defaultCommandsConfig);
 
-    expectThreadedNonIsolatedRunner(defaultUiConfig);
-    expectThreadedIsolatedRunner(defaultExtensionMemoryConfig);
-    expectThreadedIsolatedRunner(defaultExtensionProvidersConfig);
-    expectForkedIsolatedRunner(defaultInfraConfig);
+    expectDefaultNonIsolatedRunner(defaultUiConfig);
+    expectDefaultIsolatedRunner(defaultExtensionMemoryConfig);
+    expectForkedIsolatedRunner(defaultInfraConfig, diagnosticForksPool);
     expectForkedIsolatedRunner(defaultCliProcessConfig);
   });
 
@@ -674,12 +675,24 @@ describe("scoped vitest configs", () => {
     expect(coreTestConfig.exclude).toContain("reply*.test.ts");
     expect(requireTestConfig(defaultAutoReplyTopLevelConfig).include).toEqual(["reply*.test.ts"]);
     expect(requireTestConfig(defaultAutoReplyReplyConfig).include).toEqual(["reply/**/*.test.ts"]);
-  });
-
-  it("keeps the broad agents lane on shared file parallelism", () => {
-    expect(requireTestConfig(defaultAgentsConfig).fileParallelism).toBe(
+    expect(requireTestConfig(defaultAutoReplyReplyConfig).fileParallelism).toBe(
       sharedVitestConfig.test.fileParallelism,
     );
+  });
+
+  it.each([1, 2, 8])("keeps agents lanes on the shared %i-worker schedule", (maxWorkers) => {
+    const original = sharedVitestConfig.test;
+    try {
+      sharedVitestConfig.test = { ...original, maxWorkers, fileParallelism: maxWorkers > 1 };
+      for (const createConfig of [createAgentsVitestConfig, createAgentsCoreVitestConfig]) {
+        expect(requireTestConfig(createConfig({}))).toMatchObject({
+          maxWorkers,
+          fileParallelism: maxWorkers > 1,
+        });
+      }
+    } finally {
+      sharedVitestConfig.test = original;
+    }
   });
 
   it("isolates agent suites with conflicting shared-module mocks", () => {
@@ -692,6 +705,13 @@ describe("scoped vitest configs", () => {
     );
     expect(sharedConfig.exclude).toEqual(expect.arrayContaining(scopedIsolatedFiles));
     expect(isolatedConfig.include).toEqual(scopedIsolatedFiles);
+    for (const file of agentVitestProjectOwners.coreIsolated.include) {
+      expect(isUnitFastTestFile(file), file).toBe(false);
+      expect(
+        matchingExcludePatterns(isolatedConfig.exclude ?? [], file.replace("src/agents/", "")),
+        file,
+      ).toEqual([]);
+    }
     expect(isolatedConfig.isolate).toBe(true);
     expect(isolatedConfig.runner).toBeUndefined();
     expect(productionBoundaryConfig.include).toEqual(
@@ -723,8 +743,8 @@ describe("scoped vitest configs", () => {
     expect(testConfig.exclude).not.toContain("chat/slash-command-executor.node.test.ts");
   });
 
-  it("defaults channel tests to threads with the non-isolated runner", () => {
-    expectThreadedNonIsolatedRunner(defaultChannelsConfig);
+  it("defaults channel tests to the platform pool with the non-isolated runner", () => {
+    expectDefaultNonIsolatedRunner(defaultChannelsConfig);
   });
 
   it("keeps the core channel lane limited to non-extension roots", () => {
@@ -759,14 +779,18 @@ describe("scoped vitest configs", () => {
     }
   });
 
-  it("serializes and isolates Telegram extension files with conflicting mocks", () => {
-    expectThreadedIsolatedRunner(defaultExtensionTelegramConfig);
-    expect(requireTestConfig(defaultExtensionTelegramConfig).fileParallelism).toBe(false);
+  it("isolates Telegram extension mocks while inheriting file scheduling", () => {
+    expectDefaultIsolatedRunner(defaultExtensionTelegramConfig);
+    expect(requireTestConfig(defaultExtensionTelegramConfig).fileParallelism).toBe(
+      sharedVitestConfig.test.fileParallelism,
+    );
   });
 
-  it("serializes Slack extension files that share process globals", () => {
+  it("keeps Slack file-local fixtures on reusable forks with inherited scheduling", () => {
     expectForkedNonIsolatedRunner(defaultExtensionSlackConfig, diagnosticForksPool);
-    expect(requireTestConfig(defaultExtensionSlackConfig).fileParallelism).toBe(false);
+    expect(requireTestConfig(defaultExtensionSlackConfig).fileParallelism).toBe(
+      sharedVitestConfig.test.fileParallelism,
+    );
   });
 
   it("normalizes split extension channel include patterns relative to the scoped dir", () => {
@@ -1019,6 +1043,8 @@ describe("scoped vitest configs", () => {
     expect(testConfig.include).toEqual([
       "src/gateway/**/*.test.ts",
       "test/plugins/codex-model-catalog.gateway.test.ts",
+      "test/plugins/crabbox-allocation-authority.gateway.test.ts",
+      "test/plugins/team-reports-http.gateway.test.ts",
     ]);
     expect(testConfig.exclude).toContain("src/gateway/gateway.test.ts");
     expect(testConfig.exclude).toContain(
@@ -1087,8 +1113,8 @@ describe("scoped vitest configs", () => {
         ).toBe(true);
         expect(projects.map((project) => project.name)).toEqual(names);
         expect(projects.map((project) => project.pool)).toEqual([
-          "threads",
-          root.startsWith("extensions/") ? diagnosticForksPool.name : "forks",
+          process.platform === "win32" ? "forks" : "threads",
+          diagnosticForksPool.name,
         ]);
         expect(projects[0]?.setupFiles).toEqual(owner.test?.setupFiles);
         expect(projects[0]?.maxWorkers).toBe(owner.test?.maxWorkers);
@@ -1148,14 +1174,24 @@ describe("scoped vitest configs", () => {
     expect(testConfig.include).toEqual(["config/**/*.test.ts"]);
   });
 
-  it("normalizes cron include patterns relative to the scoped dir", () => {
-    const testConfig = requireTestConfig(defaultCronConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
-    expect(testConfig.include).toEqual(["cron/**/*.test.ts"]);
-    expectForkedNonIsolatedRunner(defaultCronConfig);
-    expect(testConfig.maxWorkers).toBe(1);
-    expect(testConfig.fileParallelism).toBe(false);
-    expect(testConfig.sequence).toMatchObject({ groupOrder: 1 });
+  it.each([1, 2, 8])("keeps cron scoped while honoring %i shared workers", (maxWorkers) => {
+    const original = sharedVitestConfig.test;
+    try {
+      sharedVitestConfig.test = {
+        ...original,
+        maxWorkers,
+        fileParallelism: maxWorkers > 1,
+      };
+      const config = createCronVitestConfig({});
+      const testConfig = requireTestConfig(config);
+      expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+      expect(testConfig.include).toEqual(["cron/**/*.test.ts"]);
+      expectForkedNonIsolatedRunner(config);
+      expect(testConfig.maxWorkers).toBe(maxWorkers);
+      expect(testConfig.fileParallelism).toBe(maxWorkers > 1);
+    } finally {
+      sharedVitestConfig.test = original;
+    }
   });
 
   it("normalizes daemon include patterns relative to the scoped dir", () => {
@@ -1229,6 +1265,8 @@ describe("scoped vitest configs", () => {
     expect(testConfig.include).toEqual(["test/**/*.test.ts", "src/scripts/**/*.test.ts"]);
     expect(testConfig.exclude).toEqual(expect.arrayContaining(toolingDockerTestFiles));
     expect(testConfig.exclude).toEqual(expect.arrayContaining(toolingIsolatedTestFiles));
+    expect(testConfig.fileParallelism).toBe(sharedVitestConfig.test.fileParallelism);
+    expect(testConfig.maxWorkers).toBe(sharedVitestConfig.test.maxWorkers);
     expect(testConfig.include).not.toContain("src/config/doc-baseline.integration.test.ts");
   });
 

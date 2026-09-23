@@ -49,6 +49,7 @@ type SidebarSessionListHost = SessionListHost & {
   readonly sidebarAgentsMode: "chip" | "roster";
   readonly sessionInvolvingMeFilterActive: boolean;
   loadMoreSidebarSessions(): Promise<void>;
+  projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
 };
 
 type SessionCatalogRenderSnapshot = {
@@ -247,6 +248,11 @@ export function renderSessionSection(params: {
               disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
               onStartDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
               onFinishDrag: () => host.finishSidebarSectionDrag(),
+              reorder: {
+                label,
+                onMove: (target, position) =>
+                  host.sessionOrganizer.reorderSidebarSection(section.id, target, position),
+              },
               onContextMenu: group
                 ? (event: MouseEvent) => {
                     event.preventDefault();
@@ -296,7 +302,7 @@ export function renderSessionSection(params: {
                 }
                 ${
                   personOwner &&
-                  host.sessionOwnershipVisible &&
+                  host.sessionOwnershipVisibility.filters &&
                   host.sessionOwnerOptions.some((owner) => owner.id === personOwner.id)
                     ? html`<button
                         type="button"
@@ -512,6 +518,8 @@ function renderSessionCatalog(params: {
       onSectionDrop: (event, sectionId) => host.sectionDrop(event, sectionId),
       onStartSectionDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
       onFinishSectionDrag: () => host.finishSidebarSectionDrag(),
+      onReorderSection: (source, target, position) =>
+        host.sessionOrganizer.reorderSidebarSection(source, target, position),
       viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition?.catalogId ?? null,
       ownerFilterActive: host.sessionOwnerFilterActive,
       onOpenViewMenu: (catalogId, trigger, position) => {
@@ -598,7 +606,7 @@ function renderSessionListBody(params: {
           section.id === "ungrouped" &&
           section.totalRowCount === 0 &&
           !params.nativeSessionsHaveMore &&
-          !host.sessionOwnershipVisible &&
+          !host.sessionOwnershipVisibility.filters &&
           host.sessionsStatusFilter === "active" &&
           host.sessionOrganizer.draggingSessionKey === null
         ) {
@@ -626,6 +634,7 @@ function renderSessionListToolbar(host: SidebarSessionListHost) {
         agentId: host.expandedAgentId(),
         className: "sidebar-session-toolbar__button sidebar-new-session",
         label: t("agentChip.newConversation"),
+        showShortcut: true,
         disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
         onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
       })}
@@ -668,7 +677,11 @@ export function renderSessionList(params: {
 }
 
 export function renderSessionListFrame(host: SidebarSessionListHost, body: unknown) {
-  const hiddenMainSessionKey = host.mainSessionRow()?.key;
+  const home = host.sidebarAgentsMode === "roster" ? null : host.mainSessionRow();
+  const loadKeys = home
+    ? host.projectHomeSession(home, host.expandedAgentId()).childLoadParentKeys
+    : [];
+  const homeLoadKeys = loadKeys?.length ? loadKeys : home ? [home.key] : [];
   return html`
     <section
       class="sidebar-sessions ${
@@ -679,7 +692,7 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: unkno
       @drop=${(event: DragEvent) => host.handleSessionListDrop(event)}
     >
       ${host.sidebarAgentsMode === "roster" ? nothing : renderSessionListToolbar(host)}
-      ${hiddenMainSessionKey ? renderChildSessionLoadError(host, hiddenMainSessionKey) : nothing}
+      ${homeLoadKeys.map((key) => renderChildSessionLoadError(host, key))}
       ${
         host.sessionData.sessionMutationError
           ? html`

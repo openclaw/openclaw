@@ -37,6 +37,12 @@ import type {
   SessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
+  sessionReferenceAtomPath,
+  sessionReferenceAtoms,
+  sessionReferenceProjection,
+  usableSessionReferenceProjection,
+} from "./session-accessor.sqlite-reference-projection.js";
+import {
   addRetainedWindowSessionReferences,
   collectSessionStateIdsForEntry,
 } from "./session-accessor.sqlite-references.js";
@@ -103,6 +109,9 @@ export function readReferencedSessionIds(
   candidateSessionIds?: readonly string[],
   diskBudget?: { preserveRecentMs?: number | null },
 ): Set<string> {
+  if (candidateSessionIds?.length === 0) {
+    return new Set();
+  }
   const db = getSessionKysely(database.db);
   // Only push down keys unchanged by Node/SQLite text conversion; retain exact membership below.
   const excludedKeys = [...excludedSessionKeys].filter(
@@ -110,42 +119,92 @@ export function readReferencedSessionIds(
   );
   let query = db
     .selectFrom("session_nodes")
-    .select([sessionEntryMetadataJson, "current_session_id", "session_key"])
+    .select(["current_session_id", "session_key"])
     .$if(excludedKeys.length > 0, (builder) =>
       builder.where("session_key", "not in", sqliteStringSet(excludedKeys)),
     );
-  const candidate = candidateSessionIds?.length === 1 ? candidateSessionIds[0] : undefined;
-  // Singleton reclamation probes need no unrelated metadata. Keep parsing every optional
-  // reference row; presence checks preserve escaped/duplicate keys and malformed values.
-  // Replacement characters can come from raw invalid SQLite bytes that instr cannot match.
+  // Narrow all target IDs together. Optional/malformed references stay eligible
+  // for the projection or raw fallback, including escaped and duplicate keys.
   if (
-    candidate !== undefined &&
-    toUSVString(candidate) === candidate &&
-    !/[\0\uFFFD-\uFFFF]/u.test(candidate)
+    candidateSessionIds?.length &&
+    candidateSessionIds.every(
+      (candidate) => toUSVString(candidate) === candidate && !/[\0\uFFFD-\uFFFF]/u.test(candidate),
+    )
   ) {
-    query =
-      query.where(/* kysely-allow-raw: narrow hydration without replacing the reference parser or its raw-text fallbacks. */ sql<boolean>`CASE
-        WHEN instr(current_session_id, ${candidate}) > 0 THEN 1
-        WHEN NOT json_valid(entry_json) THEN 1
-        WHEN length(CAST(entry_json AS BLOB)) != length(CAST(printf('%s', entry_json) AS BLOB)) THEN 1
-        ELSE json_type(entry_json, '$.previousSessionId') IS NOT NULL
-          OR json_type(entry_json, '$.usageFamilySessionIds') IS NOT NULL
-          OR json_type(entry_json, '$.compactionCheckpoints') IS NOT NULL
-      END`);
+    query = query.where((eb) =>
+      eb.or([
+        candidateSessionIds.length <= 16
+          ? eb.or(
+              candidateSessionIds.map(
+                (candidate) =>
+                  /* kysely-allow-raw: substring narrowing retains trimmed current IDs. */ sql<boolean>`instr(current_session_id, ${candidate}) > 0`,
+              ),
+            )
+          : /* kysely-allow-raw: large candidate sets avoid expression/parameter limits. */ sql<boolean>`EXISTS (
+              SELECT 1 FROM ${sqliteStringSet(candidateSessionIds)} AS candidates
+              WHERE instr(current_session_id, candidates.value) > 0
+            )`,
+        /* kysely-allow-raw: malformed TEXT and optional fields retain their original reference semantics. */ sql<boolean>`CASE
+          WHEN NOT json_valid(entry_json) THEN 1
+          WHEN length(CAST(entry_json AS BLOB)) != length(CAST(printf('%s', entry_json) AS BLOB)) THEN 1
+          ELSE json_type(entry_json, '$.previousSessionId') IS NOT NULL
+            OR json_type(entry_json, '$.usageFamilySessionIds') IS NOT NULL
+            OR json_type(entry_json, '$.compactionCheckpoints') IS NOT NULL
+        END`,
+      ]),
+    );
   }
-  const rows = iterateSqliteQuerySync(database.db, query);
+  const referenceQuery = db
+    .with(
+      (cte) => cte("projected_nodes").materialized(),
+      () => query.select(sessionReferenceProjection),
+    )
+    .with(
+      (cte) => cte("reference_nodes").materialized(),
+      (builder) =>
+        builder.selectFrom("projected_nodes").selectAll().select(usableSessionReferenceProjection),
+    )
+    .selectFrom("reference_nodes")
+    .leftJoin(sessionReferenceAtoms, (join) => join.on(sessionReferenceAtomPath))
+    .select(["current_session_id", "session_key", "reference.atom", "reference.fullkey"])
+    .select(
+      /* kysely-allow-raw: only exceptional rows cross into JS as entry JSON. */ sql<
+        string | null
+      >`CASE WHEN "references" IS NULL THEN (SELECT ${sessionEntryMetadataJson.expression} FROM session_nodes WHERE session_nodes.session_key = reference_nodes.session_key) END`.as(
+        "entry_json",
+      ),
+    );
+  const rows = iterateSqliteQuerySync(database.db, referenceQuery);
   const sessionIds = new Set<string>();
+  const candidates = candidateSessionIds ? new Set(candidateSessionIds) : undefined;
+  const addReference = (sessionId: string) => {
+    if (!candidates || candidates.has(sessionId)) {
+      sessionIds.add(sessionId);
+    }
+  };
   for (const row of rows) {
     if (excludedSessionKeys.has(row.session_key)) {
       continue;
     }
-    sessionIds.add(row.current_session_id);
-    const entry = parseSessionEntryRow(row);
-    if (!entry) {
-      continue;
-    }
-    for (const sessionId of collectSessionStateIdsForEntry(entry)) {
-      sessionIds.add(sessionId);
+    addReference(row.current_session_id);
+    if (row.entry_json !== null) {
+      const entry = parseSessionEntryRow({ ...row, entry_json: row.entry_json });
+      if (entry) {
+        for (const sessionId of collectSessionStateIdsForEntry(entry)) {
+          addReference(sessionId);
+        }
+      }
+    } else if (
+      row.atom !== null &&
+      row.fullkey !== null &&
+      /^\$\.(sessionId|previousSessionId|usageFamilySessionIds\[\d+\]|compactionCheckpoints\[\d+\]\.(sessionId|(?:preCompaction|postCompaction)\.sessionId))$/u.test(
+        row.fullkey,
+      )
+    ) {
+      const sessionId = row.atom.trim();
+      if (sessionId) {
+        addReference(sessionId);
+      }
     }
   }
   addRetainedWindowSessionReferences(
@@ -165,18 +224,12 @@ export function readReferencedSessionIds(
 export function readReferencedSessionIdsAfterTargetMutation(
   database: OpenClawAgentDatabase,
   target: { canonicalKey: string; storeKeys: string[] },
-  nextEntry?: SessionEntry,
+  candidateSessionIds: readonly string[],
 ): Set<string> {
   const removedKeys = new Set(
     uniqueStrings([target.canonicalKey, ...target.storeKeys].map((key) => key.trim())),
   );
-  const sessionIds = readReferencedSessionIds(database, removedKeys);
-  if (nextEntry) {
-    for (const sessionId of collectSessionStateIdsForEntry(nextEntry)) {
-      sessionIds.add(sessionId);
-    }
-  }
-  return sessionIds;
+  return readReferencedSessionIds(database, removedKeys, candidateSessionIds);
 }
 
 export function planSessionStateDeleteIfUnreferenced(params: {
@@ -261,9 +314,10 @@ export function planSessionStateAfterEntryRemoval(params: {
   reason: "deleted" | "reset";
   referencedSessionIds?: ReadonlySet<string>;
 }): SessionStateDeletePlan[] {
+  const candidates = collectSessionStateIdsForEntry(params.entry);
   const referencedSessionIds =
-    params.referencedSessionIds ?? readReferencedSessionIds(params.database);
-  return collectSessionStateIdsForEntry(params.entry).flatMap((sessionId) => {
+    params.referencedSessionIds ?? readReferencedSessionIds(params.database, undefined, candidates);
+  return candidates.flatMap((sessionId) => {
     const plan = planSessionStateDeleteIfUnreferenced({
       archiveTranscript: params.archiveTranscript,
       archiveDirectory: params.archiveDirectory,

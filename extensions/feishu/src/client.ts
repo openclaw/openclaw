@@ -1,4 +1,3 @@
-// Feishu plugin module implements client behavior.
 import type { Agent } from "node:https";
 import { createRequire } from "node:module";
 import * as Lark from "@larksuiteoapi/node-sdk";

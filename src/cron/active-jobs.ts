@@ -33,14 +33,19 @@ export function bindCronJobAdmittedRun(
 }
 
 /** Captures one occurrence before admission without granting another prompt its authority. */
-export function captureCronJobMessageActionAuthority(params: {
-  jobId: string;
-  operationalRunInstance: OperationalRunInstanceRef;
-}): (() => void) | undefined {
+function captureCronJobMessageAuthority(
+  params: {
+    jobId: string;
+    operationalRunInstance: OperationalRunInstanceRef;
+  },
+  sourceSensitive: boolean,
+): (() => void) | undefined {
   const { jobId } = params;
   const marker = getCurrentCronActiveJobMarker(jobId);
-  const isSourceCurrent = marker?.isMessageActionAuthorityCurrent;
-  if (!marker || !isSourceCurrent) {
+  const isAuthorityCurrent = sourceSensitive
+    ? marker?.isMessageSourceAuthorityCurrent
+    : marker?.isMessageActionAuthorityCurrent;
+  if (!marker || !isAuthorityCurrent) {
     return undefined;
   }
   const { instanceId, runId } = params.operationalRunInstance;
@@ -49,6 +54,7 @@ export function captureCronJobMessageActionAuthority(params: {
   const isMarkerCurrent = () =>
     getCurrentCronActiveJobMarker(jobId) === marker &&
     !marker.messageActionAuthorityRevoked &&
+    (!sourceSensitive || !marker.messageSourceAuthorityRevoked) &&
     !marker.jobRemoved &&
     marker.cancellation?.kind !== "requested";
   const inactive = () => new Error("cron message action authority is no longer active");
@@ -65,8 +71,12 @@ export function captureCronJobMessageActionAuthority(params: {
     }
     owner ??= admitted;
     owner.assertActive();
-    if (!isSourceCurrent()) {
-      marker.messageActionAuthorityRevoked = true;
+    if (!isAuthorityCurrent()) {
+      if (sourceSensitive) {
+        marker.messageSourceAuthorityRevoked = true;
+      } else {
+        marker.messageActionAuthorityRevoked = true;
+      }
       throw inactive();
     }
     owner.assertActive();
@@ -74,6 +84,20 @@ export function captureCronJobMessageActionAuthority(params: {
       throw inactive();
     }
   };
+}
+
+export function captureCronJobMessageActionAuthority(params: {
+  jobId: string;
+  operationalRunInstance: OperationalRunInstanceRef;
+}): (() => void) | undefined {
+  return captureCronJobMessageAuthority(params, false);
+}
+
+export function captureCronJobMessageSourceAuthority(params: {
+  jobId: string;
+  operationalRunInstance: OperationalRunInstanceRef;
+}): (() => void) | undefined {
+  return captureCronJobMessageAuthority(params, true);
 }
 
 /** Captures host-owned admission; neither a copied token nor a same-id run can redeem it. */
@@ -120,7 +144,9 @@ export type CronActiveJobMarker = {
   scheduleMutated?: true;
   triggerMutated?: true;
   isMessageActionAuthorityCurrent?: () => boolean;
+  isMessageSourceAuthorityCurrent?: () => boolean;
   messageActionAuthorityRevoked?: true;
+  messageSourceAuthorityRevoked?: true;
   jobRemoved?: true;
   selfRemovalAccepted?: true;
   preserveAcrossGenerationAdvance?: boolean;
@@ -204,6 +230,7 @@ export function markCronJobActive(
     declarationKey?: string;
     preserveAcrossGenerationAdvance?: boolean;
     isMessageActionAuthorityCurrent?: () => boolean;
+    isMessageSourceAuthorityCurrent?: () => boolean;
   },
 ): CronActiveJobMarker | undefined {
   if (!jobId) {
@@ -218,6 +245,9 @@ export function markCronJobActive(
     ...(opts?.declarationKey ? { declarationKey: opts.declarationKey } : {}),
     ...(opts?.isMessageActionAuthorityCurrent
       ? { isMessageActionAuthorityCurrent: opts.isMessageActionAuthorityCurrent }
+      : {}),
+    ...(opts?.isMessageSourceAuthorityCurrent
+      ? { isMessageSourceAuthorityCurrent: opts.isMessageSourceAuthorityCurrent }
       : {}),
     generation: state.generation,
     token,
@@ -273,6 +303,14 @@ export function noteActiveCronJobMessageActionAuthorityMutation(jobId: string): 
   const marker = getCurrentCronActiveJobMarker(jobId);
   if (marker) {
     marker.messageActionAuthorityRevoked = true;
+  }
+}
+
+/** Revokes source-scoped reads and writes after their authenticated executable source changes. */
+export function noteActiveCronJobMessageSourceAuthorityMutation(jobId: string): void {
+  const marker = getCurrentCronActiveJobMarker(jobId);
+  if (marker) {
+    marker.messageSourceAuthorityRevoked = true;
   }
 }
 

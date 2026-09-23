@@ -1,4 +1,5 @@
 import type { WorkspaceHashMetrics } from "./workspace-hash-memo.js";
+import type { WorkspaceNode } from "./workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
@@ -64,6 +65,17 @@ export type WorkspaceManifestValueInputs = {
     root?: string;
     hashes?: WorkspaceComputationHashes;
   };
+  "workspace.manifest.nodes": {
+    root: string;
+    paths: string[];
+    hashes?: WorkspaceComputationHashes;
+  };
+  "workspace.manifest.tree-input": {
+    inputPath: string;
+    ref: string;
+    entries: readonly WorkerWorkspaceManifestEntry[];
+    source: { root: string; tree?: never } | { root: string; tree: string };
+  };
   "workspace.manifest.serialize": { manifest: WorkerWorkspaceManifest };
   "workspace.manifest.overlay": {
     source: WorkerWorkspaceManifest;
@@ -81,6 +93,14 @@ export type WorkspaceManifestValueInputs = {
 type WorkspaceManifestValueInput = { payload: Uint8Array<ArrayBuffer> };
 
 export type WorkspaceManifestComputationOperations = {
+  "workspace.manifest.tree-input": {
+    input: WorkspaceManifestValueInput;
+    output: null;
+  };
+  "workspace.manifest.nodes": {
+    input: WorkspaceManifestValueInput;
+    output: WorkspaceComputationHashResult<Array<[string, WorkspaceNode]>>;
+  };
   "workspace.manifest.capture": {
     input: WorkspaceManifestValueInput;
     output: WorkspaceComputationHashResult<WorkspaceManifestCapture>;
@@ -131,6 +151,7 @@ export type WorkspaceManifestComputationOperations = {
   };
   "workspace.manifest.stage-input": {
     input: {
+      inputPath: string;
       stagingRoot: string;
       stagedResultRef: string;
       baseManifestRef: string;
@@ -138,7 +159,7 @@ export type WorkspaceManifestComputationOperations = {
       baseManifestRaw: Uint8Array<ArrayBuffer>;
       currentManifestRaw: Uint8Array<ArrayBuffer>;
     };
-    output: Uint8Array;
+    output: null;
   };
 };
 

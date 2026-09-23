@@ -157,6 +157,7 @@ export async function handleAcpStatusAction(
   return await withAcpCommandErrorBoundary({
     run: async () =>
       await getAcpSessionManager().getSessionStatus({
+        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
       }),
@@ -233,6 +234,7 @@ export async function handleAcpSetModeAction(
     parseValue: validateRuntimeModeInput,
     update: async (target, value) =>
       await getAcpSessionManager().setSessionRuntimeMode({
+        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
         runtimeMode: value,
@@ -264,6 +266,7 @@ export async function handleAcpSetAction(
       if (lowerKey === "cwd") {
         const cwd = validateRuntimeCwdInput(value);
         const options = await getAcpSessionManager().updateSessionRuntimeOptions({
+          assertActive: params.command.assertOwnerCurrent,
           cfg: params.cfg,
           ...target,
           patch: { cwd },
@@ -274,6 +277,7 @@ export async function handleAcpSetAction(
       }
       const validated = validateRuntimeConfigOptionInput(key, value);
       const options = await getAcpSessionManager().setSessionConfigOption({
+        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
         key: validated.key,
@@ -299,6 +303,7 @@ export async function handleAcpCwdAction(
     parseValue: validateRuntimeCwdInput,
     update: async (target, value) =>
       await getAcpSessionManager().updateSessionRuntimeOptions({
+        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
         patch: { cwd: value },
@@ -316,6 +321,7 @@ export async function handleAcpPermissionsAction(
     parseValue: validateRuntimePermissionProfileInput,
     update: async (target, value) =>
       await getAcpSessionManager().setSessionConfigOption({
+        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
         key: "approval_policy",
@@ -335,6 +341,7 @@ export async function handleAcpTimeoutAction(
     formatValue: (value) => `${value}s`,
     update: async (target, value) =>
       await getAcpSessionManager().setSessionConfigOption({
+        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
         key: "timeout",
@@ -353,6 +360,7 @@ export async function handleAcpModelAction(
     parseValue: validateRuntimeModelInput,
     update: async (target, value) =>
       await getAcpSessionManager().setSessionConfigOption({
+        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
         key: "model",
@@ -377,6 +385,7 @@ export async function handleAcpResetOptionsAction(
   return await withAcpCommandErrorBoundary({
     run: async () =>
       await getAcpSessionManager().resetSessionRuntimeOptions({
+        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
       }),

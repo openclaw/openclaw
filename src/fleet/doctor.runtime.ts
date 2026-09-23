@@ -113,8 +113,8 @@ export async function runFleetDoctor(params: {
   getgid?: () => number | undefined;
 }): Promise<FleetDoctorCellReport[]> {
   const records = params.tenant
-    ? [requireCell(params.env, params.tenant)]
-    : listFleetCells(params.env);
+    ? [await requireCell(params.env, params.tenant)]
+    : await listFleetCells(params.env);
   const stateDir = resolveStateDir(params.env);
   return await Promise.all(
     records.map(async (record) => {

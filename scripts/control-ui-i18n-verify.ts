@@ -6,7 +6,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import * as ts from "typescript";
 import {
   loadControlUiTranslationMemory,
-  materializeControlUiLocaleCatalog,
+  materializePreparedControlUiLocaleCatalog,
+  prepareControlUiCatalogSource,
+  type PreparedControlUiCatalogSource,
 } from "./lib/control-ui-i18n-catalog-values.ts";
 import {
   loadControlUiSourceCatalog,
@@ -197,24 +199,30 @@ async function buildCatalogFallbackBaseline(
   const sourceMap = loadControlUiSourceCatalog();
   const sourceFlat = flattenControlUiCatalog(sourceMap, "en");
   const localeFlats = new Map<string, Map<string, string>>();
-  for (const entry of CONTROL_UI_LOCALE_ENTRIES) {
-    const memoryPath = path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
-    if (!existsSync(memoryPath)) {
-      throw new Error(`${toRepoPath(memoryPath)} does not contain ${entry.locale} translations`);
+  {
+    let prepared: PreparedControlUiCatalogSource | undefined;
+    for (const [index, entry] of CONTROL_UI_LOCALE_ENTRIES.entries()) {
+      const memoryPath = path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
+      if (!existsSync(memoryPath)) {
+        throw new Error(`${toRepoPath(memoryPath)} does not contain ${entry.locale} translations`);
+      }
+      const memory = loadControlUiTranslationMemory(memoryPath);
+      prepared ??= prepareControlUiCatalogSource(sourceFlat);
+      // Match the source + translation-memory materialization served by the runtime Vite module.
+      const localeMap = materializePreparedControlUiLocaleCatalog(prepared, memory);
+      if (index === CONTROL_UI_LOCALE_ENTRIES.length - 1) {
+        // Analysis retains locale flats, but no longer needs the prepared hashes.
+        prepared = undefined;
+      }
+      const localeFlat = flattenControlUiCatalog(localeMap, entry.locale);
+      const invalid = AUTOMATIONS_FEATURE_KEYS.slice(1, 3).filter((key) =>
+        /\bcron\b/i.test(localeFlat.get(key) ?? ""),
+      );
+      if (invalid.length > 0) {
+        throw new Error(`${entry.locale}: ${invalid.join(", ")}`);
+      }
+      localeFlats.set(entry.locale, localeFlat);
     }
-    // Match the source + translation-memory materialization served by the runtime Vite module.
-    const localeMap = materializeControlUiLocaleCatalog(
-      sourceFlat,
-      loadControlUiTranslationMemory(memoryPath),
-    );
-    const localeFlat = flattenControlUiCatalog(localeMap, entry.locale);
-    const invalid = AUTOMATIONS_FEATURE_KEYS.slice(1, 3).filter((key) =>
-      /\bcron\b/i.test(localeFlat.get(key) ?? ""),
-    );
-    if (invalid.length > 0) {
-      throw new Error(`${entry.locale}: ${invalid.join(", ")}`);
-    }
-    localeFlats.set(entry.locale, localeFlat);
   }
 
   const analysis = analyzeControlUiCatalogs(sourceFlat, localeFlats);

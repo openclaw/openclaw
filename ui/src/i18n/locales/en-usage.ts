@@ -4,7 +4,24 @@ import { en } from "./en.ts";
 // Analysis copy loads with Usage; shared labels and Settings search stay eager.
 const enUsage = {
   usage: {
+    presets: {
+      today: "Today",
+      last7d: "7d",
+      last30d: "30d",
+      last90d: "90d",
+      last1y: "1y",
+      all: "All",
+    },
+    scope: {
+      instance: "Current instance",
+      instanceHint: "Show only the active session id for each logical session.",
+      family: "Historical lineage",
+      familyHint: "Roll up known rotated transcript-backed session ids.",
+      familyIncluded: "Historical lineage includes {count} session instances.",
+    },
     filters: {
+      rangeTitle: "Reporting range",
+      rangeHint: "Choose the dates to include in every chart and total.",
       title: "Filters",
       to: "to",
       startDate: "Start date",
@@ -42,20 +59,36 @@ const enUsage = {
       inRange: "{total} sessions in range",
       tip: "Tip: use filters or click bars to refine days.",
     },
+    export: {
+      label: "Export",
+      changed: "Session context changed while preparing the export. Refresh usage and try again.",
+      sessionsCsv: "Sessions CSV",
+      dailyCsv: "Daily CSV",
+      json: "JSON",
+    },
     cacheStatus: {
       warning: "Usage data may be incomplete. Checking for updated totals automatically.",
       paused:
         "Usage data may be incomplete. Automatic checks paused; select Refresh to check again.",
     },
+    creators: {
+      title: "Started by",
+      description:
+        "Usage grouped by who started each session. This is session attribution, not per-turn billing.",
+      all: "All identities",
+      select: "Filter by session creator",
+      selected: "Selected identity",
+      identity: "Identity",
+      unattributed: "Unattributed",
+      system: "System",
+      empty: "No usage for these dates and filters.",
+      more: "Show {count} more identities",
+    },
     empty: {
-      title: "Start with a date range",
-      subtitle:
-        "Load usage data to compare costs, inspect sessions, and drill into timelines without leaving the dashboard.",
-      hint: "Select a date range and click Refresh to load usage.",
+      title: "No usage in this date range",
+      subtitle: "Try a wider date range or another identity to explore more history.",
+      hint: "Choose a wider date range or another identity.",
       noData: "No data",
-      featureOverview: "Overview cards",
-      featureSessions: "Session ranking",
-      featureTimeline: "Timeline drilldown",
     },
     daily: {
       title: "Daily Usage",

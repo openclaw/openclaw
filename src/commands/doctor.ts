@@ -2,6 +2,7 @@
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
@@ -44,7 +45,11 @@ async function resolveExplicitSessionSqliteMaintenancePaths(
 }
 
 /** Runs doctor or the post-upgrade probe submode using the provided runtime. */
-export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOptions): Promise<void> {
+export async function doctorCommand(
+  runtime?: RuntimeEnv,
+  options?: DoctorOptions,
+  databasePreflight?: DoctorDatabasePreflight,
+): Promise<void> {
   const outputRuntime = runtime ?? defaultRuntime;
   if (options?.stateSqlite) {
     const { runDoctorStateSqliteCompact } = await import("./doctor-state-sqlite-compact.js");
@@ -66,6 +71,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
   }
   if (options?.sessionSqlite) {
     const sessionSqliteMode = options.sessionSqlite;
+    const { countBlockingSessionSqliteIssues } = await import("./doctor-session-sqlite-types.js");
     const { isDestructiveDoctorSessionSqliteMode, withDoctorSqliteMaintenanceLock } =
       await import("./doctor-sqlite-maintenance-lock.js");
     const { runDoctorSessionSqlite, reconcileDoctorSessionSqlitePublication } =
@@ -143,11 +149,16 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
         }
       }
     }
-    exitCliAfterOutput(outputRuntime, report.totals.issues > 0 ? 1 : 0);
+    const hasBlockingIssues = report.targets.some(
+      (target) => countBlockingSessionSqliteIssues(target) > 0,
+    );
+    exitCliAfterOutput(outputRuntime, hasBlockingIssues ? 1 : 0);
   }
   if (options?.postUpgrade) {
     const { runPostUpgradeProbes } = await import("./doctor-post-upgrade.js");
-    const report = await runPostUpgradeProbes({});
+    const { readSourceConfigBestEffort } = await import("../config/io.runtime.js");
+    const config = await readSourceConfigBestEffort();
+    const report = await runPostUpgradeProbes({ updateChannel: config.update?.channel });
     if (options.json) {
       writeRuntimeJson(outputRuntime, report);
     } else {
@@ -162,7 +173,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
     exitCliAfterOutput(outputRuntime, hasError ? 1 : 0);
   }
   const doctorHealth = await import("../flows/doctor-health.js");
-  await doctorHealth.runDoctorHealthFlow(runtime, options);
+  await doctorHealth.runDoctorHealthFlow(runtime, options, undefined, databasePreflight);
 }
 
 async function maybeCreateSessionSqliteGithubIssue(
@@ -174,12 +185,25 @@ async function maybeCreateSessionSqliteGithubIssue(
   const supportIssue = report.supportIssue;
   if (!supportIssue) {
     if (shouldLog) {
-      runtime.log("session-sqlite recover: no support issue payload was generated");
+      runtime.log(
+        report.totals.issues === 0 &&
+          report.totals.importedEntries === 0 &&
+          report.totals.archivedTranscriptFiles === 0 &&
+          report.totals.archivedUnreferencedJsonlFiles === 0 &&
+          report.targets.every(
+            (target) =>
+              !target.restore?.restoredFiles.length && !target.corruptRecovery?.movedFiles.length,
+          )
+          ? "session-sqlite recover: nothing to recover; no report filed"
+          : "session-sqlite recover: no support issue payload was generated",
+      );
     }
     return;
   }
+  const { resolveDoctorRepairMode } = await import("./doctor-repair-mode.js");
+  const canPrompt = options.json !== true && resolveDoctorRepairMode(options).canPrompt;
   let approved = options.yes === true;
-  if (!approved && options.nonInteractive !== true && options.json !== true) {
+  if (canPrompt) {
     const { promptYesNo } = await import("../cli/prompt.js");
     approved = await promptYesNo(
       "Create a GitHub issue in openclaw/openclaw with the sanitized recovery report?",
@@ -187,9 +211,12 @@ async function maybeCreateSessionSqliteGithubIssue(
     );
   }
   if (!approved) {
-    supportIssue.github = { status: "skipped" };
+    const message = canPrompt
+      ? "GitHub issue creation skipped: confirmation was declined."
+      : "GitHub issue creation skipped: noninteractive recovery requires --yes.";
+    supportIssue.github = { message, status: "skipped" };
     if (shouldLog) {
-      runtime.log("session-sqlite recover: GitHub issue creation skipped");
+      runtime.log(`session-sqlite recover: ${message}`);
     }
     return;
   }

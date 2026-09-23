@@ -225,6 +225,9 @@ describe("resolveCommandsSystemPromptBundle", () => {
         allowGatewaySubagentBinding: false,
         modelCatalog: { entries: [], routeVariants: [] },
         configuredRuntimeModels: [],
+        findConfiguredRuntimeModel: () => {
+          throw new Error("Prompt inspection must not select runtime models");
+        },
         configuredModelAliases: [{ alias: "Current", provider: "fixture", model: "current" }],
         inlineProviderModels: [],
         createStores: vi.fn(() => {

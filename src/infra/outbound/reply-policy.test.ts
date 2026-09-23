@@ -1,7 +1,33 @@
 // Covers reply-to fanout and delivery policy consumption for explicit,
 // implicit, single-use, and disabled reply modes.
 import { describe, expect, it } from "vitest";
-import { createReplyToFanout, normalizeOutboundReplyFacts } from "./reply-policy.js";
+import { createReplyToModeFilterForChannel } from "../../auto-reply/reply/reply-threading.js";
+import {
+  createReplyToDeliveryPolicy,
+  createReplyToFanout,
+  normalizeOutboundReplyFacts,
+} from "./reply-policy.js";
+
+describe("createReplyToDeliveryPolicy", () => {
+  it.each(["first", "batched"] as const)(
+    "does not restore an ambient target after %s consumption",
+    (mode) => {
+      const filter = createReplyToModeFilterForChannel(mode, "telegram");
+      filter({ text: "First answer", replyToId: "source-message" });
+      const later = filter({ text: "Later answer", replyToId: "source-message" });
+      const policy = createReplyToDeliveryPolicy({
+        replyToId: "ambient-target",
+        replyToMode: "all",
+      });
+
+      expect(policy.resolveCurrentReplyTo(later)).toEqual({});
+      expect(policy.resolveCurrentReplyTo({ text: "Unfiltered answer" })).toEqual({
+        replyToId: "ambient-target",
+        source: "implicit",
+      });
+    },
+  );
+});
 
 describe("normalizeOutboundReplyFacts", () => {
   it("canonicalizes legacy modes without suppressing explicit replies", () => {

@@ -20,10 +20,15 @@ type ResolvedGatewayCredential = {
   secretRefConfigured: boolean;
 };
 
+type GatewayCredentialDiagnostic = {
+  message: string;
+  code?: "SECRET_REF_REDACTED_VALUE";
+};
+
 async function resolveGatewayCredential(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  diagnostics: string[];
+  diagnostics: GatewayCredentialDiagnostic[];
   path: GatewayCredentialPath;
   value: unknown;
 }): Promise<ResolvedGatewayCredential> {
@@ -35,16 +40,27 @@ async function resolveGatewayCredential(params: {
     unresolvedReasonStyle: "detailed",
   });
   if (resolved.unresolvedRefReason) {
-    params.diagnostics.push(resolved.unresolvedRefReason);
+    params.diagnostics.push({
+      message: resolved.unresolvedRefReason,
+      code: resolved.unresolvedRefCode,
+    });
   }
   return resolved;
 }
 
 function withDiagnostics<T extends object>(
-  diagnostics: string[],
+  diagnostics: GatewayCredentialDiagnostic[],
   result: T,
-): T & { diagnostics?: string[] } {
-  return diagnostics.length > 0 ? { ...result, diagnostics } : result;
+): T & { diagnostics?: string[]; warningCode?: "SECRET_REF_REDACTED_VALUE" } {
+  return diagnostics.length > 0
+    ? {
+        ...result,
+        diagnostics: diagnostics.map(({ message }) => message),
+        ...(diagnostics.some(({ code }) => code === "SECRET_REF_REDACTED_VALUE")
+          ? { warningCode: "SECRET_REF_REDACTED_VALUE" as const }
+          : {}),
+      }
+    : result;
 }
 
 /** Resolves best-effort credentials for non-mutating local/remote gateway probes. */
@@ -56,10 +72,11 @@ export async function resolveGatewayProbeSurfaceAuth(params: {
   token?: string;
   password?: string;
   diagnostics?: string[];
+  warningCode?: "SECRET_REF_REDACTED_VALUE";
   source?: "config" | "env";
 }> {
   const env = params.env ?? process.env;
-  const diagnostics: string[] = [];
+  const diagnostics: GatewayCredentialDiagnostic[] = [];
   const authMode = params.config.gateway?.auth?.mode;
 
   if (params.surface === "remote") {
@@ -175,7 +192,7 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
   failureReason?: string;
 }> {
   const env = params.env ?? process.env;
-  const diagnostics: string[] = [];
+  const diagnostics: GatewayCredentialDiagnostic[] = [];
   const explicitToken = trimToUndefined(params.explicitAuth?.token);
   const explicitPassword = trimToUndefined(params.explicitAuth?.password);
   const credentialPlan = createGatewayCredentialPlan({ config: params.config, env });

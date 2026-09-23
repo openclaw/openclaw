@@ -3,9 +3,13 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 
 const gc = globalThis.gc;
@@ -13,9 +17,24 @@ assert.ok(gc, "The retention child requires --expose-gc");
 await withStateDirEnv("session-row-retention-", async ({ stateDir }) => {
   const retired: WeakRef<SessionEntry>[] = [];
   const control = new WeakRef<SessionEntry>({ sessionId: "uncached", updatedAt: 1 });
-  const cfg = {};
+  // Keep row-retention proof independent of cold provider discovery.
+  const model = "retention-fixture/model";
+  const cfg: OpenClawConfig = {
+    agents: {
+      entries: { main: {} },
+      defaults: {
+        model,
+        models: { [model]: { agentRuntime: { id: "openclaw" } } },
+      },
+    },
+  };
+  const pluginRegistry = createEmptyPluginRegistry();
+  const metadataSnapshot = createPluginMetadataSnapshotFixture();
+  const modelCatalog = new Map([
+    ["main", createPreparedGatewayModelCatalog({ entries: [], pluginRegistry, metadataSnapshot })],
+  ]);
   setRuntimeConfigSnapshot(cfg);
-  setActivePluginRegistry(createEmptyPluginRegistry());
+  setActivePluginRegistry(pluginRegistry);
   const parentKey = "agent:main:parent";
   const childKey = "agent:main:child";
 
@@ -28,13 +47,18 @@ await withStateDirEnv("session-row-retention-", async ({ stateDir }) => {
       parentSessionKey: parentKey,
     };
     retired.push(new WeakRef(parent), new WeakRef(child));
-    return listSessionFixture({
-      cfg,
-      storePath: path.join(stateDir, "retired.sqlite"),
-      store: { [parentKey]: parent, [childKey]: child },
-      modelCatalog: [],
-      opts: { limit: 1 },
-    });
+    return withPluginMetadataSnapshotScope(
+      metadataSnapshot,
+      () =>
+        listSessionFixture({
+          cfg,
+          storePath: path.join(stateDir, "retired.sqlite"),
+          store: { [parentKey]: parent, [childKey]: child },
+          modelCatalog,
+          opts: { limit: 1 },
+        }),
+      { config: cfg, trustConfigIdentity: true },
+    );
   }
 
   // A caller may keep the projected response after releasing its input snapshot.

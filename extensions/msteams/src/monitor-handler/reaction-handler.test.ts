@@ -1,4 +1,5 @@
 // Msteams tests cover reaction handler plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   enqueueSystemEvent,
@@ -15,6 +16,7 @@ function buildMockRuntime(overrides?: Partial<PluginRuntime>): PluginRuntime {
   return {
     logging: { shouldLogVerbose: () => false },
     channel: {
+      inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress },
       routing: {
         resolveAgentRoute: vi.fn(() => ({
           sessionKey: "test-session",
@@ -414,6 +416,37 @@ describe("createMSTeamsReactionHandler", () => {
             "msteams:reaction:19:trusted-channel@thread.tacv2:target-message:allowed-aad:like:added",
         }),
       ]);
+
+      resetSystemEventsForTest();
+      const threadId = "1700000000000";
+      const threadedReaction = reactionFrom(
+        { ...allowedConversation, id: `${allowedConversation.id};messageid=${threadId}` },
+        "trustedTeam",
+      );
+      await invokeReactionEvent(handler, threadedReaction, "added");
+      await invokeReactionEvent(
+        handler,
+        {
+          ...threadedReaction,
+          reactionsAdded: undefined,
+          reactionsRemoved: [{ type: "like" }],
+        },
+        "removed",
+      );
+
+      expect(peekSystemEventEntries(`${allowedRoute.sessionKey}:thread:${threadId}`)).toEqual([
+        expect.objectContaining({
+          text: expect.stringContaining("target-message"),
+          contextKey:
+            "msteams:reaction:19:trusted-channel@thread.tacv2:target-message:allowed-aad:like:added",
+        }),
+        expect.objectContaining({
+          text: expect.stringContaining("target-message"),
+          contextKey:
+            "msteams:reaction:19:trusted-channel@thread.tacv2:target-message:allowed-aad:like:removed",
+        }),
+      ]);
+      expect(peekSystemEventEntries(allowedRoute.sessionKey)).toEqual([]);
 
       resetSystemEventsForTest();
       const forbiddenDirectRoute = resolveAgentRoute({

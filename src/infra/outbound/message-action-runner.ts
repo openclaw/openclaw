@@ -8,7 +8,11 @@ import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/ag
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  appendReplyMediaFailures,
+  getReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
@@ -49,7 +53,6 @@ import {
 import { prepareMessageRoute, resolveMessageTarget } from "./message-action-routing.js";
 import { withSendNormalization } from "./message-action-send-payload.js";
 import { buildMessagePayload, executeMessageSend } from "./message-action-send.js";
-import type { MessageSendResult } from "./message.js";
 import {
   enforceMessageActionAllowlist,
   resolveEffectiveMessageToolsConfig,
@@ -104,7 +107,7 @@ async function handleBroadcastAction(
     throw new Error("Broadcast requires at least one target in --targets.");
   }
   const channelHint = readToolStringParam(params, "channel");
-  const explicitAccountId = validateExplicitMessageAccountSelection({
+  const explicitAccountId = await validateExplicitMessageAccountSelection({
     cfg: input.cfg,
     accountId: readToolStringParam(params, "accountId"),
     checkResolvedAccount: false,
@@ -140,16 +143,10 @@ async function handleBroadcastAction(
   if (targetChannels.length === 0) {
     throw new Error("Broadcast requires at least one configured channel.");
   }
-  const results: Array<{
-    channel: ChannelId;
-    to: string;
-    ok: boolean;
-    error?: string;
-    attempted?: false;
-    sentBeforeError?: true;
-    payload?: unknown;
-    result?: MessageSendResult;
-  }> = [];
+  const results: Extract<MessageActionResult, { kind: "broadcast" }>["payload"]["results"] = [];
+  const parentIdempotencyKey = input.messageActionAuthorization?.scheduled
+    ? normalizeOptionalString(params.idempotencyKey)
+    : undefined;
   const hasAcceptedResult = () =>
     !input.dryRun && results.some((result) => result.ok || result.sentBeforeError);
   const errorSentBefore = (error: unknown): boolean =>
@@ -199,7 +196,7 @@ async function handleBroadcastAction(
         continue;
       }
       try {
-        const targetAccountId = validateExplicitMessageAccountSelection({
+        const targetAccountId = await validateExplicitMessageAccountSelection({
           cfg: input.cfg,
           channel: targetChannel,
           accountId: explicitAccountId,
@@ -228,6 +225,9 @@ async function handleBroadcastAction(
             ...params,
             channel: targetChannel,
             target: resolved.to,
+            ...(parentIdempotencyKey
+              ? { idempotencyKey: `${parentIdempotencyKey}:${receiptDiscriminator}` }
+              : {}),
           },
         });
         const outcome = resolveMessageActionOutcome(sendResult, "Broadcast");
@@ -411,8 +411,14 @@ async function handleInternalSourceReplySendAction(
     if (
       resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls.length !== requestedMediaCount
     ) {
+      const failureMessage = appendReplyMediaFailures(
+        undefined,
+        getReplyPayloadMetadata(sourceReplyPayload)?.assistantMediaFailures ?? [],
+      );
       throw new Error(
-        "Current-source media could not be staged. Use an accessible URL, a file inside the agent workspace, or the buffer field.",
+        failureMessage
+          ? `Current-source media could not be staged.\n${failureMessage}`
+          : "Current-source media could not be staged. Use an accessible URL, a file inside the agent workspace, or the buffer field.",
       );
     }
   }
@@ -486,21 +492,7 @@ function buildInternalSourceReplyToolResult(payload: {
   mediaUrl?: string;
   mediaUrls?: string[];
   dryRun: boolean;
-}): AgentToolResult<{
-  status: string;
-  deliveryStatus: string;
-  channel: ChannelId;
-  target: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  idempotencyKey?: string;
-  sourceReplyTranscriptOwner?: true;
-  sourceReplySink?: "internal-ui";
-  sourceReply: ReplyPayload;
-  message?: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  dryRun: boolean;
-}> {
+}): AgentToolResult<typeof payload> {
   const action = payload.dryRun ? "Prepared" : "Sent";
   const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
   const cards = readClawHubRecommendations(payload.sourceReply.channelData);

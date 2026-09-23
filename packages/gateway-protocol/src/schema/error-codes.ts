@@ -28,6 +28,7 @@ export {
   type SetupAdmissionBusyErrorDetails,
   type GitHubPublicationSelectionRejectedErrorDetails,
   type SessionWorkspaceRecoveryRequiredErrorDetails,
+  type TaskWorktreeSourceRequiredErrorDetails,
   readGitHubPublicationSelectionRejectedError,
   readCronJobNotFoundError,
   isMcpAppViewExpiredError,
@@ -109,6 +110,12 @@ export const SessionWorkspaceRecoveryRequiredErrorDetailsSchema = closedObject({
 });
 
 /** Structured details emitted by method-level failures. */
+export const TaskWorktreeSourceRequiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.TASK_WORKTREE_SOURCE_REQUIRED),
+  cwd: NonEmptyString,
+});
+
+/** Structured details emitted by method-level failures. */
 export const GatewayErrorDetailsSchema = Type.Union([
   CronJobNotFoundErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
@@ -122,6 +129,7 @@ export const GatewayErrorDetailsSchema = Type.Union([
   SetupAdmissionBusyErrorDetailsSchema,
   GitHubPublicationSelectionRejectedErrorDetailsSchema,
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
+  TaskWorktreeSourceRequiredErrorDetailsSchema,
 ]);
 
 /** Builds the canonical gateway error payload while preserving optional retry metadata. */

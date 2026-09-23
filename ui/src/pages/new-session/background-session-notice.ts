@@ -147,8 +147,12 @@ export function prepareBackgroundSessionCompletion(params: {
 }): (key: string, runId?: string) => boolean {
   return (key, runId) => {
     const normalizedRunId = runId?.trim();
-    if (!params.enabled || !normalizedRunId) {
+    if (!params.enabled) {
       return false;
+    }
+    // Creation disposition is independent of whether the Gateway returned a watchable run.
+    if (!normalizedRunId) {
+      return true;
     }
     void notifyWhenBackgroundSessionEnds({
       agentId: params.agentId,

@@ -71,7 +71,7 @@ function createTerminalReleaseHarness() {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          turn: { id: "turn-1", status: "interrupted" },
+          turn: { id: "turn-1", status: "interrupted", items: [] },
         },
       });
     }
@@ -188,7 +188,7 @@ describe("Codex terminal dynamic-tool release", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-peer",
-          turn: { id: "peer-turn", status: "completed" },
+          turn: { id: "peer-turn", status: "completed", items: [] },
         },
       });
       await yieldImmediate();
@@ -197,7 +197,7 @@ describe("Codex terminal dynamic-tool release", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          turn: { id: "turn-1", status: "interrupted" },
+          turn: { id: "turn-1", status: "interrupted", items: [] },
         },
       });
       await expect(nativeCleanup).resolves.toBe(true);

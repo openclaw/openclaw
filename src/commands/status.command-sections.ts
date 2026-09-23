@@ -128,6 +128,7 @@ export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "
 export function buildStatusLastHeartbeatValue(params: {
   deep?: boolean;
   gatewayReachable: boolean;
+  gatewayStartupPhase?: string;
   lastHeartbeat: HeartbeatEventPayload | null;
   warn: (value: string) => string;
   muted: (value: string) => string;
@@ -136,6 +137,11 @@ export function buildStatusLastHeartbeatValue(params: {
   if (!params.deep) {
     // Fast status omits the row entirely instead of implying heartbeat is missing.
     return null;
+  }
+  if (params.gatewayStartupPhase) {
+    return params.muted(
+      `not checked (gateway still starting; phase ${params.gatewayStartupPhase})`,
+    );
   }
   if (!params.gatewayReachable) {
     return params.warn("unavailable");
@@ -425,6 +431,7 @@ export function buildStatusFooterLines(params: {
   formatCliCommand: (value: string) => string;
   nodeOnlyGateway: unknown;
   gatewayReachable: boolean;
+  gatewayStartupPhase?: string;
 }) {
   return [
     "FAQ: https://docs.openclaw.ai/faq",
@@ -435,9 +442,11 @@ export function buildStatusFooterLines(params: {
     `  Need to debug live? ${params.formatCliCommand("openclaw logs --follow")}`,
     params.nodeOnlyGateway
       ? `  Need node service?  ${params.formatCliCommand("openclaw node status")}`
-      : params.gatewayReachable
-        ? `  Need to test channels? ${params.formatCliCommand("openclaw status --deep")}`
-        : `  Fix reachability first: ${params.formatCliCommand("openclaw gateway probe")}`,
+      : params.gatewayStartupPhase
+        ? `  Retry after startup: ${params.formatCliCommand("openclaw status --deep")}`
+        : params.gatewayReachable
+          ? `  Need to test channels? ${params.formatCliCommand("openclaw status --deep")}`
+          : `  Fix reachability first: ${params.formatCliCommand("openclaw gateway probe")}`,
   ];
 }
 

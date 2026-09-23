@@ -188,6 +188,35 @@ describe("gateway ws log helpers", () => {
     expect(formatForLog(input)).toBe(`${"a".repeat(239)}...`);
   });
 
+  test.each(["assistant", "tool", "lifecycle", "other"])(
+    "keeps Incognito %s content out of verbose event logs while retaining routing metadata",
+    (stream) => {
+      setVerbose(true);
+      setGatewayWsLogStyle("full");
+      setLoggerOverride({ level: "silent", consoleLevel: "info" });
+      const output = vi.fn();
+      loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+      const marker = "synthetic-private-content";
+      const summary = summarizeAgentEventForWsLog({
+        runId: "private-run",
+        sessionKey: "agent:main:dashboard:incognito-synthetic",
+        stream,
+        seq: 2,
+        data: { text: marker, meta: marker, error: marker, reason: marker },
+      });
+      logWs("out", "event", { event: "agent", ...summary });
+      expect(output).toHaveBeenCalled();
+      expect(JSON.stringify(output.mock.calls)).not.toContain(marker);
+      expect(summary).toEqual({
+        run: "private-run",
+        agent: "main",
+        session: "dashboard:incognito-synthetic",
+        stream,
+        aseq: 2,
+      });
+    },
+  );
+
   test("summarizeAgentEventForWsLog compacts assistant payloads", () => {
     const summary = summarizeAgentEventForWsLog({
       runId: "12345678-1234-1234-1234-123456789abc",
@@ -210,13 +239,30 @@ describe("gateway ws log helpers", () => {
     expect(summary.text).not.toContain("\n");
   });
 
-  test("summarizeAgentEventForWsLog keeps compact previews UTF-16 safe", () => {
-    const summary = summarizeAgentEventForWsLog({
-      stream: "assistant",
-      data: { text: `${"a".repeat(158)}😀tail` },
-    });
-
-    expect(summary.text).toBe(`${"a".repeat(158)}…`);
+  test.each([
+    { name: "Unicode whitespace", text: "\u00a0hello\u2028world\ufeff", expected: "hello world" },
+    { name: "blank text", text: "\u00a0\n ".repeat(200), expected: undefined },
+    { name: "long leading whitespace", text: `${" ".repeat(512)}hello`, expected: "hello" },
+    {
+      name: "long interior whitespace",
+      text: `hello${" ".repeat(512)}world`,
+      expected: "hello world",
+    },
+    {
+      name: "trailing whitespace at the limit",
+      text: `${"a".repeat(160)}${" ".repeat(512)}`,
+      expected: "a".repeat(160),
+    },
+    {
+      name: "emoji at the limit",
+      text: `${"a".repeat(158)}😀tail`,
+      expected: `${"a".repeat(158)}…`,
+    },
+    { name: "long text", text: "a".repeat(8192), expected: `${"a".repeat(159)}…` },
+  ])("summarizeAgentEventForWsLog preserves $name", ({ text, expected }) => {
+    const summary = summarizeAgentEventForWsLog({ stream: "assistant", data: { text } });
+    expect(summary.text).toBe(expected);
+    expect(Object.hasOwn(summary, "text")).toBe(expected !== undefined);
   });
 
   test("summarizeAgentEventForWsLog includes tool metadata", () => {

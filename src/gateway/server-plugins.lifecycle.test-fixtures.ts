@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import type { PluginRegistrationMode } from "../plugins/types.js";
 
 const probeSubscriptions: Array<() => void> = [];
 
@@ -46,6 +47,7 @@ export type InstanceBindingProbeCoordinator = {
   identify: (value: object) => number;
   nextRegistryId: number;
   runtimes: PluginRuntime[];
+  registrationModes: PluginRegistrationMode[];
   serviceStarts: number;
   serviceStops: number;
   gatewayStops: number[];
@@ -114,6 +116,7 @@ export function installInstanceBindingProbeCoordinator(options?: {
     },
     nextRegistryId: 1,
     runtimes: [],
+    registrationModes: [],
     serviceStarts: 0,
     serviceStops: 0,
     gatewayStops: [],
@@ -169,6 +172,7 @@ export async function writeInstanceBindingProbePlugin(
     const reportReloadSettlement = Boolean(coordinator.reportReloadSettlement || coordinator.channelProof || coordinator.channel);
     const registryId = coordinator.nextRegistryId++;
     coordinator.runtimes.push(api.runtime);
+    coordinator.registrationModes.push(api.registrationMode);
     api.on("gateway_stop", () => { coordinator.gatewayStops.push(registryId); });
     if (coordinator.channel) {
       api.registerChannel({ plugin: coordinator.channel });

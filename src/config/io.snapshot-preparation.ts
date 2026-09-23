@@ -9,7 +9,10 @@ import type {
 } from "./io.snapshot-preparation.types.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, RuntimeConfig } from "./types.js";
-import { validateConfigObjectWithPluginsAsync } from "./validation.js";
+import {
+  validateConfigObjectWithPluginsAsync,
+  validateConfigObjectWithStrictFactsAsync,
+} from "./validation.js";
 import type { PreparedConfigValidationPluginMetadata } from "./validation.types.js";
 
 /** Preserve the ordinary reader's lazy defaults, including an unused manifest loader. */
@@ -49,10 +52,22 @@ export async function prepareHostConfigSnapshot(
     }
     return materializeConfigSnapshotDefaults(context, request.config, metadata);
   }
+  return prepareConfigSnapshotValidation(request);
+}
+
+/** Both explicit CLI validation and an admitted host read prepare database facts before validation. */
+export async function prepareConfigSnapshotValidation(
+  request: ValidationRequest,
+): Promise<PreparedValidation> {
+  const { context, metadata } = request;
   const pending = await context.resolveDeferredPluginMigrationsAsync();
+  const validate =
+    request.prepareValidation === "strict"
+      ? validateConfigObjectWithStrictFactsAsync
+      : validateConfigObjectWithPluginsAsync;
   return {
     deferredPluginMigrations: pending,
-    validated: await validateConfigObjectWithPluginsAsync(request.raw, {
+    validated: await validate(request.raw, {
       ...context.pathResolution,
       pluginValidation: context.options.pluginValidation,
       loadPluginMetadataSnapshotAsync: metadata.loadAsync,

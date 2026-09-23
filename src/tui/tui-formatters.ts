@@ -110,7 +110,7 @@ function isolateRtlLine(line: string): string {
 }
 
 export function isolateRtlRenderedLine(line: string): string {
-  if (!RTL_SCRIPT_RE.test(stripAnsi(line))) {
+  if (!RTL_SCRIPT_RE.test(line) || !RTL_SCRIPT_RE.test(stripAnsi(line))) {
     return line;
   }
   const padding = line.match(/^(\s*)(.*\S)(\s*)$/u);

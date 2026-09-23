@@ -172,7 +172,7 @@ const mockScheduleGatewayRestart = vi.hoisted(() =>
   vi.fn(() => ({
     ok: true,
     pid: process.pid,
-    signal: "SIGUSR1" as const,
+    signal: "SIGUSR2" as const,
     delayMs: 0,
     mode: "emit" as const,
     coalesced: false,
@@ -190,7 +190,7 @@ vi.mock("../cli/plugins-install-command.js", () => ({
 }));
 vi.mock("../infra/restart.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/restart.js")>()),
-  scheduleGatewaySigusr1Restart: mockScheduleGatewayRestart,
+  scheduleGatewayRestart: mockScheduleGatewayRestart,
 }));
 vi.mock("./probes.js", () => ({
   probeLocalCommand: vi.fn(async (command: string) => ({
@@ -519,7 +519,7 @@ describe("system agent operations", () => {
     ).rejects.toThrow("Run openclaw doctor --fix before creating main.");
 
     expect(createAgent).toHaveBeenCalledWith({
-      name: "main",
+      entry: { id: "main" },
       workspace: "/tmp/main",
       provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
     });

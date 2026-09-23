@@ -99,6 +99,11 @@ export type GatewayTailscaleConfig = Omit<
   preserveFunnel?: boolean;
 };
 
+/** Operator-provisioned private HTTPS wildcard portal ingress. */
+export type GatewayPortalIngressConfig = NonNullable<
+  NonNullable<GatewayConfigInput["portals"]>["ingress"]
+>;
+
 export type GatewayRemoteConfig = NonNullable<GatewayConfigInput["remote"]>;
 
 /**
@@ -169,7 +174,7 @@ export type GatewayNodesConfig = NonNullable<GatewayConfigInput["nodes"]> & {
 
 export type GatewayToolsConfig = NonNullable<GatewayConfigInput["tools"]>;
 
-/** Closed session, sandbox, agent, and operator-scope policy for one named team role. */
+/** Closed session, sandbox, agent, model, and operator-scope policy for one named team role. */
 export type GatewayOperatorRoleDefinition = NonNullable<
   GatewayConfigInput["roles"]
 >["definitions"][string];

@@ -21,6 +21,22 @@ import { MessageActionDeniedError } from "./message-action-denial.js";
 import { runMessageAction } from "./message-action-runner.js";
 import type { OutboundGatewayRequest } from "./message-gateway-options.js";
 
+function registerNativeBroadcastPlugin(actions: NonNullable<ChannelPlugin["actions"]>) {
+  const plugin: ChannelPlugin = {
+    ...createChannelTestPluginBase({ id: "broadcast-test" }),
+    messaging: { targetResolver: { looksLikeId: () => true } },
+    outbound: {
+      deliveryMode: "direct",
+      sendText: async () => {
+        throw new Error("native action bypassed");
+      },
+    },
+    actions,
+  };
+  setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]));
+  return plugin;
+}
+
 describe("broadcast send outcomes through native actions", () => {
   let tempHome: TempHomeEnv;
   beforeAll(async () => {
@@ -61,6 +77,18 @@ describe("broadcast send outcomes through native actions", () => {
       ok: false,
       sentBeforeError: true,
     },
+    {
+      name: "canonical partial status",
+      payload: {
+        ok: false,
+        deliveryStatus: "partial_failed",
+        sentBeforeError: true,
+        error: "second canonical part failed",
+        result: { messageId: "sent-part" },
+      },
+      ok: false,
+      sentBeforeError: true,
+    },
     { name: "native success", payload: { ok: true, messageId: "sent-native" }, ok: true },
     { name: "legacy empty success", payload: {}, ok: true },
     {
@@ -70,25 +98,14 @@ describe("broadcast send outcomes through native actions", () => {
     },
   ])("preserves $name alongside a successful target", async ({ payload, ok, sentBeforeError }) => {
     const delivered: string[] = [];
-    const plugin: ChannelPlugin = {
-      ...createChannelTestPluginBase({ id: "broadcast-test" }),
-      messaging: { targetResolver: { looksLikeId: () => true } },
-      outbound: {
-        deliveryMode: "direct",
-        sendText: async () => {
-          throw new Error("native action bypassed");
-        },
+    const plugin = registerNativeBroadcastPlugin({
+      describeMessageTool: () => ({ actions: ["send"] }),
+      supportsAction: ({ action }) => action === "send",
+      handleAction: async ({ params }) => {
+        delivered.push(String(params.to));
+        return jsonResult(params.to === "first" ? payload : { ok: true, messageId: "sent-2" });
       },
-      actions: {
-        describeMessageTool: () => ({ actions: ["send"] }),
-        supportsAction: ({ action }) => action === "send",
-        handleAction: async ({ params }) => {
-          delivered.push(String(params.to));
-          return jsonResult(params.to === "first" ? payload : { ok: true, messageId: "sent-2" });
-        },
-      },
-    };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]));
+    });
 
     const result = await runMessageAction({
       cfg: {},
@@ -178,51 +195,40 @@ describe("broadcast send outcomes through native actions", () => {
     const handled: string[] = [];
     const dispatched: string[] = [];
     const denied: string[] = [];
-    const plugin: ChannelPlugin = {
-      ...createChannelTestPluginBase({ id: "broadcast-test" }),
-      messaging: { targetResolver: { looksLikeId: () => true } },
-      outbound: {
-        deliveryMode: "direct",
-        sendText: async () => {
-          throw new Error("native action bypassed");
-        },
-      },
-      actions: {
-        describeMessageTool: () => ({ actions: ["send"] }),
-        supportsAction: ({ action }) => action === "send",
-        handleAction: async ({ params, assertDirectAdapterHandoff, onPlatformSendDispatch }) => {
-          const target = String(params.to);
-          handled.push(target);
-          const dispatch = async () => {
-            await onPlatformSendDispatch?.();
-            dispatched.push(target);
-          };
-          if (target === "first") {
-            await dispatch();
-            return jsonResult({ ok: true, messageId: "sent-first" });
-          }
-          if (scenario.dispatchBeforeWait) {
-            await dispatch();
-          }
-          enteredSecond();
-          await secondStarted;
-          if (scenario.failureKind === "provider") {
-            throw new Error(scenario.expectedError);
-          }
-          if (scenario.failureKind === "policy") {
-            throw new MessageActionDeniedError(
-              scenario.expectedError,
-              "target_policy_denied",
-              "target:policy",
-            );
-          }
-          assertDirectAdapterHandoff?.();
+    const plugin = registerNativeBroadcastPlugin({
+      describeMessageTool: () => ({ actions: ["send"] }),
+      supportsAction: ({ action }) => action === "send",
+      handleAction: async ({ params, assertDirectAdapterHandoff, onPlatformSendDispatch }) => {
+        const target = String(params.to);
+        handled.push(target);
+        const dispatch = async () => {
+          await onPlatformSendDispatch?.();
+          dispatched.push(target);
+        };
+        if (target === "first") {
           await dispatch();
-          return jsonResult({ ok: true, messageId: `sent-${target}` });
-        },
+          return jsonResult({ ok: true, messageId: "sent-first" });
+        }
+        if (scenario.dispatchBeforeWait) {
+          await dispatch();
+        }
+        enteredSecond();
+        await secondStarted;
+        if (scenario.failureKind === "provider") {
+          throw new Error(scenario.expectedError);
+        }
+        if (scenario.failureKind === "policy") {
+          throw new MessageActionDeniedError(
+            scenario.expectedError,
+            "target_policy_denied",
+            "target:policy",
+          );
+        }
+        assertDirectAdapterHandoff?.();
+        await dispatch();
+        return jsonResult({ ok: true, messageId: `sent-${target}` });
       },
-    };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]));
+    });
 
     const pending = runMessageAction({
       cfg: {},
@@ -279,30 +285,19 @@ describe("broadcast send outcomes through native actions", () => {
   it("marks a native target unattempted when its final host handoff rejects", async () => {
     let actionCurrent = true;
     const handled: string[] = [];
-    const plugin: ChannelPlugin = {
-      ...createChannelTestPluginBase({ id: "broadcast-test" }),
-      messaging: { targetResolver: { looksLikeId: () => true } },
-      outbound: {
-        deliveryMode: "direct",
-        sendText: async () => {
-          throw new Error("native action bypassed");
-        },
+    const plugin = registerNativeBroadcastPlugin({
+      describeMessageTool: () => ({ actions: ["send"] }),
+      supportsAction: ({ action }) => {
+        if (handled.length === 1) {
+          actionCurrent = false;
+        }
+        return action === "send";
       },
-      actions: {
-        describeMessageTool: () => ({ actions: ["send"] }),
-        supportsAction: ({ action }) => {
-          if (handled.length === 1) {
-            actionCurrent = false;
-          }
-          return action === "send";
-        },
-        handleAction: async ({ params }) => {
-          handled.push(String(params.to));
-          return jsonResult({ ok: true, messageId: `sent-${String(params.to)}` });
-        },
+      handleAction: async ({ params }) => {
+        handled.push(String(params.to));
+        return jsonResult({ ok: true, messageId: `sent-${String(params.to)}` });
       },
-    };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]));
+    });
 
     const result = await runMessageAction({
       cfg: {},
@@ -624,27 +619,16 @@ describe("broadcast send outcomes through native actions", () => {
       enterFailure = resolve;
     });
     const handled: string[] = [];
-    const plugin: ChannelPlugin = {
-      ...createChannelTestPluginBase({ id: "broadcast-test" }),
-      messaging: { targetResolver: { looksLikeId: () => true } },
-      outbound: {
-        deliveryMode: "direct",
-        sendText: async () => {
-          throw new Error("native action bypassed");
-        },
+    const plugin = registerNativeBroadcastPlugin({
+      describeMessageTool: () => ({ actions: ["send"] }),
+      supportsAction: ({ action }) => action === "send",
+      handleAction: async ({ params }) => {
+        handled.push(String(params.to));
+        enterFailure();
+        await failureWait;
+        return jsonResult({ ok: false, error: "provider rejected message" });
       },
-      actions: {
-        describeMessageTool: () => ({ actions: ["send"] }),
-        supportsAction: ({ action }) => action === "send",
-        handleAction: async ({ params }) => {
-          handled.push(String(params.to));
-          enterFailure();
-          await failureWait;
-          return jsonResult({ ok: false, error: "provider rejected message" });
-        },
-      },
-    };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]));
+    });
 
     const pending = runMessageAction({
       cfg: {},
@@ -673,32 +657,21 @@ describe("broadcast send outcomes through native actions", () => {
     const secondEntered = new Promise<void>((resolve) => {
       enterSecond = resolve;
     });
-    const plugin: ChannelPlugin = {
-      ...createChannelTestPluginBase({ id: "broadcast-test" }),
-      messaging: { targetResolver: { looksLikeId: () => true } },
-      outbound: {
-        deliveryMode: "direct",
-        sendText: async () => {
-          throw new Error("native action bypassed");
-        },
-      },
-      actions: {
-        describeMessageTool: () => ({ actions: ["send"] }),
-        supportsAction: ({ action }) => action === "send",
-        handleAction: async ({ params, onPlatformSendDispatch }) => {
-          const target = String(params.to);
-          if (target === "second") {
-            await onPlatformSendDispatch?.();
-            enterSecond();
-            await secondWait;
-            return jsonResult({ ok: true, messageId: `sent-${target}` });
-          }
+    const plugin = registerNativeBroadcastPlugin({
+      describeMessageTool: () => ({ actions: ["send"] }),
+      supportsAction: ({ action }) => action === "send",
+      handleAction: async ({ params, onPlatformSendDispatch }) => {
+        const target = String(params.to);
+        if (target === "second") {
           await onPlatformSendDispatch?.();
+          enterSecond();
+          await secondWait;
           return jsonResult({ ok: true, messageId: `sent-${target}` });
-        },
+        }
+        await onPlatformSendDispatch?.();
+        return jsonResult({ ok: true, messageId: `sent-${target}` });
       },
-    };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]));
+    });
     const runId = "broadcast-cancel-tool";
     const sessionKey = "agent:main:broadcast-cancel-tool";
     const sessionId = "broadcast-cancel-tool-session";
@@ -757,33 +730,20 @@ describe("broadcast send outcomes through native actions", () => {
         entered = resolve;
       });
       const dispatched: string[] = [];
-      const plugin: ChannelPlugin = {
-        ...createChannelTestPluginBase({ id: "broadcast-test" }),
-        messaging: { targetResolver: { looksLikeId: () => true } },
-        outbound: {
-          deliveryMode: "direct",
-          sendText: async () => {
-            throw new Error("native action bypassed");
-          },
+      const plugin = registerNativeBroadcastPlugin({
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async ({ assertDirectAdapterHandoff, onPlatformSendDispatch }) => {
+          if (dispatchBeforeWait) {
+            await onPlatformSendDispatch?.();
+            dispatched.push("only");
+          }
+          entered();
+          await pendingDispatch;
+          assertDirectAdapterHandoff?.();
+          return jsonResult({ ok: true });
         },
-        actions: {
-          describeMessageTool: () => ({ actions: ["send"] }),
-          supportsAction: ({ action }) => action === "send",
-          handleAction: async ({ assertDirectAdapterHandoff, onPlatformSendDispatch }) => {
-            if (dispatchBeforeWait) {
-              await onPlatformSendDispatch?.();
-              dispatched.push("only");
-            }
-            entered();
-            await pendingDispatch;
-            assertDirectAdapterHandoff?.();
-            return jsonResult({ ok: true });
-          },
-        },
-      };
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]),
-      );
+      });
 
       const pending = runMessageAction({
         cfg: {},
@@ -803,4 +763,38 @@ describe("broadcast send outcomes through native actions", () => {
       expect(dispatched).toEqual(dispatchBeforeWait ? ["only"] : []);
     },
   );
+
+  it("derives stable idempotency keys for each target on one provider", async () => {
+    const attempts: string[][] = [[], []];
+    let invocation = 0;
+    const plugin = registerNativeBroadcastPlugin({
+      describeMessageTool: () => ({ actions: ["send"] }),
+      supportsAction: ({ action }) => action === "send",
+      handleAction: async ({ params }) => {
+        attempts[invocation]?.push(String(params.idempotencyKey));
+        return jsonResult({ ok: true, messageId: params.to });
+      },
+    });
+
+    const send = async () =>
+      await runMessageAction({
+        cfg: {},
+        action: "broadcast",
+        params: {
+          channel: plugin.id,
+          targets: ["first", "second"],
+          message: "hello",
+          idempotencyKey: "broadcast-root",
+        },
+        messageActionAuthorization: {
+          scheduled: { policy: { version: 1, mode: "trusted" }, assertCurrent: () => {} },
+        },
+      });
+    await send();
+    invocation = 1;
+    await send();
+
+    expect(new Set(attempts[0]).size).toBe(2);
+    expect(attempts[1]).toEqual(attempts[0]);
+  });
 });

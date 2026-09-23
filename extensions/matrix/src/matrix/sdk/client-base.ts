@@ -13,7 +13,7 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { SqliteBackedMatrixSyncStore } from "../client/file-sync-store.js";
+import type { SqliteBackedMatrixSyncStore } from "../client/file-sync-store.js";
 import { createMatrixJsSdkClientLogger } from "../client/logging.js";
 import type { MatrixSnapshotStateRuntime } from "../crypto-state-store.js";
 import { awaitMatrixStartupWithAbort, throwIfMatrixStartupAborted } from "../startup-abort.js";
@@ -165,7 +165,7 @@ export abstract class MatrixClientBase {
       encryption?: boolean;
       initialSyncLimit?: number;
       syncFilter?: IFilterDefinition;
-      storageRootDir?: string;
+      syncStore?: SqliteBackedMatrixSyncStore;
       recoveryKeyPath?: string;
       idbSnapshotPath?: string;
       cryptoDatabasePrefix?: string;
@@ -193,9 +193,7 @@ export abstract class MatrixClientBase {
     this.encryptionEnabled = opts.encryption === true;
     const { password: loginPassword } = opts;
     this.password = loginPassword;
-    this.syncStore = opts.storageRootDir
-      ? new SqliteBackedMatrixSyncStore(opts.storageRootDir)
-      : undefined;
+    this.syncStore = opts.syncStore;
     this.idbSnapshotPath = opts.idbSnapshotPath;
     this.cryptoDatabasePrefix = opts.cryptoDatabasePrefix;
     this.stateRuntime = opts.stateRuntime;

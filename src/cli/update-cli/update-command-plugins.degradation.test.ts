@@ -80,9 +80,16 @@ describe("post-core plugin payload degradation", () => {
               status: "warning",
               assessment: { kind: "no-payload-repair" },
               changed: false,
+              warnings: [
+                expect.objectContaining({
+                  pluginId,
+                  reason: "plugin-operator-managed",
+                  source: linkedPath,
+                }),
+              ],
               sync: {
                 switchedToBundled: [],
-                warnings: [expect.stringContaining(`"${pluginId}" at ${linkedPath}`)],
+                warnings: [],
                 errors: [],
               },
             });
@@ -173,11 +180,14 @@ describe("post-core plugin payload degradation", () => {
             : undefined;
         const spy = vi
           .spyOn(convergence, "runPostCorePluginConvergence")
-          .mockImplementationOnce(async () => {
+          .mockImplementationOnce(async ({ cfg }) => {
             if (failure === "authority") {
               throw refusal;
             }
             return {
+              config: cfg,
+              configChanges: [],
+              installedPluginIdRecovery: new Map(),
               changes: [],
               warnings:
                 failure === "unclassified"

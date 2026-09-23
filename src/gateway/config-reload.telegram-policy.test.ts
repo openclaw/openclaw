@@ -80,12 +80,27 @@ describe("Telegram live policy reload", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
-  it.each([true, false])("refreshes account creation/removal (add: %s)", (add) => {
-    const empty = { channels: { telegram: { accounts: {} } } };
-    const configured = {
-      channels: { telegram: { accounts: { support: { dmPolicy: "disabled" as const } } } },
-    };
-    const plan = planTelegramChange(add ? empty : configured, add ? configured : empty);
-    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
-  });
+  it.each([
+    { add: true, decisionAgent: false },
+    { add: false, decisionAgent: false },
+    { add: true, decisionAgent: true },
+    { add: false, decisionAgent: true },
+  ])(
+    "refreshes account creation/removal (add: $add, decision agent: $decisionAgent)",
+    ({ add, decisionAgent }) => {
+      const empty: OpenClawConfig = {
+        channels: { telegram: { accounts: {} } },
+        ...(decisionAgent ? { agents: { entries: {} } } : {}),
+      };
+      const configured: OpenClawConfig = {
+        channels: { telegram: { accounts: { support: { dmPolicy: "disabled" } } } },
+        ...(decisionAgent
+          ? { agents: { entries: { worker: { decisionModel: "fixture/fast" } } } }
+          : {}),
+      };
+      const plan = planTelegramChange(add ? empty : configured, add ? configured : empty);
+      expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+      expect(plan.reloadPlugins).toBe(decisionAgent);
+    },
+  );
 });

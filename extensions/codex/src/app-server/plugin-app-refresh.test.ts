@@ -34,8 +34,16 @@ describe("explicit Codex plugin app refresh", () => {
       ["app/installed", { forceRefresh: true }],
       ["app/read", { appIds: [connectedApp.id], includeTools: true }],
     ]);
-    expect(appCache.read({ key: "selected-runtime", request }).snapshot?.apps).toEqual([
-      expect.objectContaining({ id: connectedApp.id, isAccessible: true }),
+    const snapshot = appCache.read({ key: "selected-runtime", request }).snapshot;
+    expect(snapshot?.apps).toEqual([
+      expect.objectContaining({
+        id: connectedApp.id,
+        name: connectedApp.name,
+        toolSummaries: null,
+      }),
+    ]);
+    expect(snapshot?.installedApps).toEqual([
+      { id: connectedApp.id, runtimeName: connectedApp.name, enabled: true, callable: true },
     ]);
     expect(appCache.read({ key: "other-runtime", request, suppressRefresh: true }).state).toBe(
       "missing",

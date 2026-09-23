@@ -406,6 +406,8 @@ export function visitPluginSourceReferences(
       }),
       {
         ecmaVersion: "latest",
+        // Jiti can retain import.meta in its mixed ESM/CommonJS inspection output.
+        allowImportExportEverywhere: true,
         allowAwaitOutsideFunction: true,
         allowReturnOutsideFunction: true,
       },

@@ -77,6 +77,9 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = []) {
     },
     failure: undefined,
     cleanupFailures: admissionFailures,
+    committed: undefined,
+    settlement: undefined,
+    waitForSettlement: effects.forbidden,
     service: effects.forbidden,
     finish() {
       effects.events.push("finish-admission");

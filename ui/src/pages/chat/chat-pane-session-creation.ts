@@ -87,7 +87,9 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       };
     }
     return params.modelSetupRequired
-      ? createChatModelSetupBanner(() => this.context.navigate("model-setup"))
+      ? createChatModelSetupBanner(() =>
+          this.context.navigate("model-providers", { search: "?connect=1" }),
+        )
       : undefined;
   }
 
@@ -223,7 +225,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         method: preservesBoard ? "sessions.reset" : "sessions.create",
         ...(preservesBoard
           ? { requiredScope: "operator.admin" as const }
-          : { params: createRequestParams }),
+          : { params: createRequestParams, sessionScope: true }),
       });
     const publishCreateAccessError = (reason: string) => {
       state.lastError = reason;

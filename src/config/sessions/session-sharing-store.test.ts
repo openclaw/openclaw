@@ -14,12 +14,8 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
-import {
-  addSessionMember,
-  isSessionMember,
-  listSessionMembers,
-  removeSessionMember,
-} from "./session-sharing-store.js";
+import { isSessionMember, listSessionMembers } from "./session-sharing-store.js";
+import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
@@ -31,8 +27,8 @@ describe("session sharing store", () => {
       await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
       const changes: SessionRowChange[] = [];
       const members: string[][] = [];
-      const stop = sessionChanges.subscribe((change) => {
-        changes.push(change);
+      const stopFacts = sessionChanges.subscribeFacts((change) => changes.push(change));
+      const stop = sessionChanges.subscribe(() => {
         members.push(listSessionMembers(scope).map((member) => member.identityId));
       });
       try {
@@ -48,6 +44,12 @@ describe("session sharing store", () => {
             agentId: scope.agentId,
             sessionKey: scope.sessionKey,
             storePath: resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env }),
+            facts: {
+              kind: "member",
+              sessionId: "session-main",
+              identityId: "guest",
+              present: true,
+            },
           }),
         ]);
         expect(members).toEqual([["guest"]]);
@@ -66,8 +68,26 @@ describe("session sharing store", () => {
         expect(changes).toEqual([]);
         removeSessionMember(scope, "guest");
         expect(members).toEqual([[]]);
+        changes.length = 0;
+        members.length = 0;
+        runOpenClawAgentWriteTransaction(
+          () => {
+            addSessionMember(scope, { identityId: "transient", addedBy: "owner" });
+            removeSessionMember(scope, "transient");
+            expect(changes).toEqual([]);
+          },
+          { agentId: scope.agentId, env },
+        );
+        expect(members).toEqual([[], []]);
+        expect(
+          changes.map((change) => ("sessionKey" in change ? change.facts : undefined)),
+        ).toEqual([
+          { kind: "member", sessionId: "session-main", identityId: "transient", present: true },
+          { kind: "member", sessionId: "session-main", identityId: "transient", present: false },
+        ]);
       } finally {
         stop();
+        stopFacts();
       }
     });
   });
@@ -135,7 +155,16 @@ describe("session sharing store", () => {
       const database = openOpenClawAgentDatabase({ agentId: "main", env });
       database.db.exec("DROP TABLE session_members;");
 
-      expect(() => listSessionMembers(scope)).toThrow(/no such table: session_members/);
+      expect(() => listSessionMembers(scope)).toThrow(
+        expect.objectContaining({
+          name: "SessionMetadataUnavailableError",
+          reason: "table-missing",
+          missingTables: ["session_members"],
+          cause: expect.objectContaining({
+            message: expect.stringMatching(/no such table: session_members/),
+          }),
+        }),
+      );
       expect(
         database.db
           .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'session_members'")

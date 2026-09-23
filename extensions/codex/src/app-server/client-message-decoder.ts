@@ -22,6 +22,10 @@ export class CodexAppServerMessageDecoder {
     this.pending = undefined;
   }
 
+  get hasPending(): boolean {
+    return this.pending !== undefined;
+  }
+
   parse(line: string): unknown {
     const rawLine = line.endsWith("\r") ? line.slice(0, -1) : line;
     if (this.pending) {

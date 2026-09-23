@@ -525,7 +525,9 @@ suite.define(() => {
           .poll(() => page.evaluate(() => navigator.clipboard.readText()))
           .toBe(errorText);
         expect(await details.getAttribute("open")).not.toBeNull();
-        expect(await alert.getByRole("button").count()).toBe(1);
+        expect(await alert.getByRole("button", { name: /^(Copy error|Copied!)$/u }).count()).toBe(
+          1,
+        );
         await summary.press("Space");
         await alert.locator("pre").waitFor({ state: "hidden" });
         if (label === "mobile") {
@@ -905,6 +907,56 @@ suite.define(() => {
       expect(await stream.textContent()).toContain("const answer = 42;");
       expect(await toolBubble.count()).toBe(1);
       expect(await transcript.getByText("I will inspect the file.").count()).toBe(1);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("preserves normalized content across cumulative browser updates", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.locator(".agent-chat__composer-combobox textarea").fill("prove prefix reuse");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(sendRequest.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+      const chunks = ["## reuse-proof\r\n", "second-line\u2028", "third-line\r", "\nfourth-line"];
+      let cumulative = "";
+      for (const chunk of chunks) {
+        cumulative += chunk;
+        await gateway.emitGatewayEvent("chat", {
+          deltaText: chunk,
+          message: {
+            content: [{ text: cumulative, type: "text" }],
+            role: "assistant",
+            timestamp: Date.now(),
+          },
+          runId,
+          sessionKey: "main",
+          state: "delta",
+        });
+        const expectedTail = chunk
+          .replace(/\r\n?|[\u2028\u2029]/g, "\n")
+          .trim()
+          .replace(/^## /, "");
+        await expect
+          .poll(() => page.locator(".chat-bubble.streaming").textContent())
+          .toContain(expectedTail);
+      }
+
+      const stream = page.locator(".chat-bubble.streaming");
+      await expect.poll(() => stream.textContent()).toContain("fourth-line");
+      await expect.poll(() => stream.locator("h2").textContent()).toBe("reuse-proof");
+      console.info(
+        "stream-normalization-browser-proof",
+        JSON.stringify({ cumulativeLength: cumulative.length, updates: chunks.length }),
+      );
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -226,7 +226,7 @@ function collectGatewayProcessResourceCounts(): ReadonlyArray<readonly [string, 
   const metrics: Array<readonly [string, number]> = [
     ["processSigintListenersCount", process.listenerCount("SIGINT")],
     ["processSigtermListenersCount", process.listenerCount("SIGTERM")],
-    ["processSigusr1ListenersCount", process.listenerCount("SIGUSR1")],
+    ["processRestartListenersCount", process.listenerCount("SIGUSR2")],
   ];
   if (activeHandles) {
     metrics.push(["activeHandlesCount", activeHandles.length]);

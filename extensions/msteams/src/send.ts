@@ -1,4 +1,3 @@
-// Msteams plugin module implements send behavior.
 import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
@@ -188,7 +187,7 @@ type SendMSTeamsPollParams = {
   options: string[];
   /** Max selections (defaults to 1) */
   maxSelections?: number;
-};
+} & MSTeamsSendHandoff;
 
 type SendMSTeamsPollResult = {
   pollId: string;
@@ -520,6 +519,7 @@ async function sendProactiveActivity(params: ProactiveActivityParams): Promise<s
 export async function sendPollMSTeams(
   params: SendMSTeamsPollParams,
 ): Promise<SendMSTeamsPollResult> {
+  assertMSTeamsSendHandoff(params);
   const { cfg, to, question, options, maxSelections } = params;
   const ctx = await resolveMSTeamsSendContext({
     cfg,
@@ -554,6 +554,8 @@ export async function sendPollMSTeams(
     ctx,
     activity,
     errorPrefix: "msteams poll send",
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
   });
 
   log.info("sent poll", { conversationId, pollId: pollCard.pollId, messageId });

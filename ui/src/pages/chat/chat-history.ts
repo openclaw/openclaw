@@ -148,13 +148,6 @@ export async function loadChatHistory(
     inFlight.refresh = refresh;
     return refresh.promise;
   }
-  if (
-    opts.deferBranches !== true &&
-    (!areUiSessionKeysEquivalent(state.chatBranchesSessionKey, sessionKey) ||
-      state.chatBranchesConnectionEpoch !== connectionEpoch)
-  ) {
-    void loadChatBranches(state);
-  }
   const promise = hydrateChatHistory(
     state,
     client,
@@ -170,6 +163,15 @@ export async function loadChatHistory(
     const current = requests.historyLoad;
     if (current.phase === "in-flight" && current.promise === promise) {
       if (result) {
+        // Appends can invalidate branch tips while this coalesced history read is pending.
+        // Check freshness on settlement so that invalidation is not lost to its early return.
+        if (
+          opts.deferBranches !== true &&
+          (!areUiSessionKeysEquivalent(state.chatBranchesSessionKey, sessionKey) ||
+            state.chatBranchesConnectionEpoch !== connectionEpoch)
+        ) {
+          void loadChatBranches(state);
+        }
         setChatHistoryLoad(state, {
           phase: "committed",
           sessions,

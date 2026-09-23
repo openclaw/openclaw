@@ -33,8 +33,8 @@ const oauthProvider: ModelProviderConfig = {
 
 it.each(["api-key", "oauth"] as const)("uses the curated default for fresh %s setup", (method) => {
   const config = method === "oauth" ? applyXaiOAuthConfig({}, oauthProvider) : applyXaiConfig({});
-  expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe("xai/grok-4.6");
-  expect(config.agents?.defaults?.models?.["xai/grok-4.6"]?.alias).toBe("Grok");
+  expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe("xai/grok-4.7");
+  expect(config.agents?.defaults?.models?.["xai/grok-4.7"]?.alias).toBe("Grok");
 });
 
 it("keeps a caller's price and input edits out of the curated catalog", () => {
@@ -117,14 +117,14 @@ it.each([
     }
     expect(result.provider.baseUrl).toBe(expectedUrl);
     expect(result.provider.auth).toBe(expectedAuth);
-    expect(result.provider.models[0]?.id).toBe("grok-4.6");
+    expect(result.provider.models[0]?.id).toBe("grok-4.7");
     expect(result.provider.models.some((model) => model.id === "auto")).toBe(false);
   },
 );
 
 it.each([
   { name: "an existing selection", primary: "xai/grok-4.5", expected: "xai/grok-4.5" },
-  { name: "a fresh selection", primary: undefined, expected: "xai/grok-4.6" },
+  { name: "a fresh selection", primary: undefined, expected: "xai/grok-4.7" },
 ])("applies registered API-key setup with $name", async ({ primary, expected }) => {
   const provider = await registerSingleProviderPlugin(plugin);
   const method = provider.auth.find((entry) => entry.id === "api-key");

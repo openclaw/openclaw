@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { ChatAccountSelection } from "../../../../../packages/gateway-protocol/src/index.ts";
+import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import type {
   ModelAuthStatusResult,
   ModelCatalogEntry,
@@ -230,6 +231,10 @@ function resolveCatalogTriggerStatus(
 
 export function renderChatModelControls(props: ChatModelControlsProps) {
   const catalog = prepareChatModelCatalog(props.modelCatalog);
+  const policy = props.modelCatalogState?.modelSelectionPolicy;
+  const retired = props.modelCatalogState?.retired === true;
+  const uninitialized = props.modelCatalogState?.initialized === false;
+  const catalogOwnsChoices = retired || uninitialized || policy?.restricted === true;
   const providerAuth = new Map<string, ChatModelProviderAuth>();
   const headingKey = (id: string) =>
     normalizeChatModelProviderGroupId(
@@ -252,7 +257,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     }
   }
   const {
-    currentOverride,
+    currentOverride: rawCurrentOverride,
     defaultModel,
     defaultLabel,
     modelOverrideSource,
@@ -264,7 +269,14 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     modelOverrides: props.modelOverrides ?? {},
     sessionKey: props.sessionKey,
     sessionsResult: props.sessionsResult,
+    modelSelectionPolicy: policy,
+    catalogRetired: retired,
+    catalogInitialized: props.modelCatalogState?.initialized,
   });
+  const currentOverride =
+    !catalogOwnsChoices || (!retired && catalog.entry(rawCurrentOverride))
+      ? rawCurrentOverride
+      : "";
   const thinking = resolveChatThinkingSelectState({
     catalog: props.modelCatalog,
     defaults: props.thinkingDefaults,
@@ -312,7 +324,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         : props.modelObservedRunId === activeRunId));
   // The row can still describe the previous turn while a send is being admitted.
   // Only the current run's complete provider/model pair identifies its execution.
-  const activeModelValue = hasPendingModelSelection
+  const observedActiveModelValue = hasPendingModelSelection
     ? ""
     : executionPending
       ? currentRunMatches &&
@@ -325,6 +337,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
           activeSession?.activeModelProvider,
           props.modelCatalog,
         );
+  const activeModelValue =
+    !catalogOwnsChoices || (!retired && catalog.entry(observedActiveModelValue))
+      ? observedActiveModelValue
+      : "";
   const modelPending = executionPending && !activeModelValue;
   // A pending execution does not erase the saved choice or reuse the previous
   // turn's fallback. Keep the choice visible until this run identifies its model.
@@ -344,11 +360,13 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     const isDefault =
       option.value.trim().toLowerCase() === normalizedDefaultModel ||
       (catalogEntry !== undefined && catalogEntry === defaultCatalogEntry);
-    // Runtime meta labels only operator-pinned runtimes (models/provider config);
-    // implicit/default resolution stays unlabeled so ordinary rows stay clean.
+    // Anthropic route labels need the resolved runtime even when it was not explicitly pinned.
     const agentRuntime = catalogEntry?.agentRuntime;
     const agentRuntimeId =
-      agentRuntime && (agentRuntime.source === "model" || agentRuntime.source === "provider")
+      agentRuntime &&
+      (agentRuntime.source === "model" ||
+        agentRuntime.source === "provider" ||
+        resolveModelRuntimeRoute(catalogEntry?.provider ?? "", agentRuntime.id))
         ? agentRuntime.id.trim()
         : undefined;
     const pickerOption: ChatModelPickerOption = {
@@ -371,6 +389,14 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     if (agentRuntimeId) {
       pickerOption.agentRuntimeId = agentRuntimeId;
     }
+    if (
+      isDefault &&
+      isSessionRuntimePinned(props.selectedSession?.agentRuntime) &&
+      resolveModelRuntimeRoute(pickerOption.provider)
+    ) {
+      // Default clears the runtime pin; session-scoped metadata describes the route being left.
+      pickerOption.agentRuntimeId = undefined;
+    }
     if (catalogEntry?.contextWindow) {
       pickerOption.contextWindow = catalogEntry.contextWindow;
     }
@@ -383,6 +409,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     }
     const options = [pickerOption];
     for (const choice of runtimeSelectionLocked ? [] : (catalogEntry?.runtimeChoices ?? [])) {
+      if (choice.manualSelectionAllowed === false) {
+        continue;
+      }
       options.push({
         value: option.value,
         commitValue: option.value,
@@ -408,7 +437,13 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   // That pin must stay clearable even when the configured default is absent from
   // this catalog. Without it the row has no job (an agent-scoped catalog may
   // legitimately omit the Gateway default), so nothing is synthesized.
-  if (defaultModel && sessionModelPinned && !modelOptions.some((option) => option.isDefault)) {
+  if (
+    defaultModel &&
+    (sessionModelPinned || policy?.restricted) &&
+    !retired &&
+    !uninitialized &&
+    !modelOptions.some((option) => option.isDefault)
+  ) {
     modelOptions.unshift({
       commitValue: "",
       isDefault: true,
@@ -420,6 +455,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const currentCatalogEntry = catalog.entry(currentOverride);
   if (
     currentOverride &&
+    (!catalogOwnsChoices || currentCatalogEntry) &&
     currentCatalogEntry?.manualSelectionAllowed !== false &&
     modelOptions.length > 0 &&
     !modelOptions.some((option) => option.value === currentOverride)
@@ -508,11 +544,15 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   // The session owns the selected model; its account-scoped catalog only owns
   // picker availability. Refreshing that catalog must not hide a known selection.
   const selectionKnown = Boolean(currentOverride || (modelOverrideSource === null && defaultModel));
-  const catalogTriggerStatus = resolveCatalogTriggerStatus(
-    managedCatalog,
-    modelOptions.length,
-    selectionKnown,
-  );
+  const catalogTriggerStatus = retired
+    ? resolveCatalogTriggerStatus(managedCatalog, 0, false)
+    : policy?.restricted && !currentOverride && !defaultModel
+      ? t(
+          modelOptions.length
+            ? "chat.modelControls.selectionRequired"
+            : "chat.modelControls.noPermittedModels",
+        )
+      : resolveCatalogTriggerStatus(managedCatalog, modelOptions.length, selectionKnown);
   const hasResolvableModel =
     managedCatalog.status === "ready" &&
     activeModelOption?.disabled !== true &&
@@ -571,9 +611,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         modelCatalogState: managedCatalog,
         open: props.modelPickerOpen,
         modelSelectionLocked: props.modelSelectionLocked === true,
-        selectionScopeDescription: resolveModelSelectionScopeDescription(
-          props.modelSelectionTarget,
-        ),
+        selectionScopeDescription: policy?.restricted
+          ? t("chat.modelControls.restrictedModelsHelp")
+          : resolveModelSelectionScopeDescription(props.modelSelectionTarget),
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,
@@ -595,7 +635,8 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
           !props.modelSelectionLocked &&
           catalogLoadingWithoutSnapshot &&
           !selectionKnown,
-        onModelSetup: props.onModelSetup,
+        onModelSetup:
+          policy?.restricted || retired || uninitialized ? undefined : props.onModelSetup,
         onOpen: props.onModelPickerOpen,
         onOpenChange: props.onModelPickerOpenChange,
         onModelSelect: async (next, targetSessionKey, agentRuntime) =>

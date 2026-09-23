@@ -13,7 +13,6 @@ import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { validatePluginSchemaValue } from "../plugins/schema-validator.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
@@ -41,6 +40,10 @@ import {
   createPluginRegistryConfigValidator,
   collectSecretRefProviderSourceIssues,
 } from "./validation-plugin-registry.js";
+import {
+  validatePreparedPluginSchemaValue,
+  type PreparedPluginSchemaValidations,
+} from "./validation-prepared.js";
 import type { ValidateConfigWithPluginsResult } from "./validation.types.js";
 
 export type ValidateConfigWithPluginsParams = {
@@ -77,6 +80,7 @@ export function validatePreparedConfigWithPlugins(
     applyDefaults: boolean;
     installedPluginRecordIds?: ReadonlySet<string>;
     onManifestRegistryResolved?: (registry: PluginManifestRegistry) => void;
+    schemaValidations?: PreparedPluginSchemaValidations;
   },
 ): ValidateConfigWithPluginsResult {
   const rememberRegistry = (registry: PluginManifestRegistry): RegistryInfo => {
@@ -517,14 +521,17 @@ export function validatePreparedConfigWithPlugins(
       // (channel-config-metadata.ts merges every plugin origin, not just bundled), so it
       // is untrusted manifest input and must use the isolation path instead of the
       // throwing validator reserved for repo-owned schemas.
-      const result = validatePluginSchemaValue({
-        origin: channelSchema.origin,
-        schema: channelSchema.schema,
-        cacheKey: `channel:${trimmed}`,
-        value: config.channels[trimmed],
-        applyDefaults: true, // Always apply defaults for plugin schema validation;
-        // writeConfigFile persists persistCandidate, not validated.config (#61841)
-      });
+      const result = validatePreparedPluginSchemaValue(
+        {
+          origin: channelSchema.origin,
+          schema: channelSchema.schema,
+          cacheKey: `channel:${trimmed}`,
+          value: config.channels[trimmed],
+          applyDefaults: true, // Always apply defaults for plugin schema validation;
+          // writeConfigFile persists persistCandidate, not validated.config (#61841)
+        },
+        opts.schemaValidations,
+      );
       if (!result.ok) {
         for (const error of result.errors) {
           issues.push({
@@ -599,6 +606,7 @@ export function validatePreparedConfigWithPlugins(
       config,
       env: opts.env,
       applyDefaults: opts.applyDefaults,
+      schemaValidations: opts.schemaValidations,
       registry,
       knownIds: ensureKnownIds(),
       normalizedPlugins: ensureNormalizedPlugins(),

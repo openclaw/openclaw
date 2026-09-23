@@ -24,6 +24,25 @@ local runs, Windows, explicit plugin stripes, and explicit serial selections kee
 eight-directory chunks. Explicit split-core and parallel execution selections
 remain unchanged.
 
+Oxlint's type-aware backend discovers `src/tsconfig.json` and `ui/tsconfig.json`
+separately. Both inherit the root compiler options, include shared ambient
+declarations, and follow imported dependencies. Every existing lint target and
+rule still runs, including source CommonJS test preloads. The CLI `--tsconfig`
+option controls import resolution; it does not replace these discovery projects.
+
+Current CI core-test rows combine their paired stripes into one queue of fresh
+compiler processes, with the same two-child limit. Each independent graph runs
+in incremental project mode: solution-build mode can miss an added root whose
+timestamp predates restored build information. Frozen targets keep their
+original stripe invocations. Per-graph elapsed times appear in the job log.
+
+The test-type jobs restore their own `.artifacts/tsgo-cache` state across runs.
+Cache keys separate compiler/dependency/configuration versions and CI rows;
+the compiler still validates every selected graph after a hit. Pull requests
+only restore state, while the existing trusted cache writer policy controls
+publication after successful checks. Cache-off and frozen-target runs retain
+their original behavior. Lint programs do not share these compiler caches.
+
 Oxlint keeps `eslint/no-redeclare` enabled for JavaScript. For `.ts`, `.tsx`,
 `.mts`, and `.cts`, `tsgo` owns declaration validity, including intentional
 type/value pairs with the same public name. `eslint/no-var` remains enabled
@@ -103,56 +122,50 @@ using that route.
 
 ## Surface ratchets
 
-Line caps are cumulative gates: independently green changes can exceed a cap
-when merged together. All six `max-lines` scopes in `.oxlintrc.json` warn in
-ordinary lint, including hosted stripes on main and PRs, local `pnpm check`,
-`pnpm check:changed`, and landing lint gates. These warnings do not fail lint.
-Read the individual `eslint(max-lines)` diagnostics and oxlint's final
-error/warning totals in each stripe's job log; the total includes other warning
-rules too.
+Size, length, count, and measured performance limits are errors locally and
+warnings in GitHub Actions. `scripts/lib/check-limits.mts` owns this decision
+using GitHub's `GITHUB_ACTIONS=true` signal. `CI=1` alone does not soften checks:
+local test runners and delegated local checks also set it. Each CI violation
+emits a file-associated GitHub warning at column zero and a job-summary entry.
+Docker proof wrappers carry the signal and relay their summaries to the runner.
 
-PR CI separately blocks new violations and growth in files already over their
-cap. The existing
-`checks-fast-baseline-ratchets` job runs `pnpm check:line-cap-ratchet` against
-the prepared PR merge tree and its base. Renames compare against the old path;
-unchanged or shrinking over-cap files pass. Oxlint counts both versions with
-the caps, exclusions, and skip-blank/skip-comments options from `.oxlintrc.json`.
-Measurement copies ignore lint-disable directives so grandfathered suppressed
-files cannot hide growth; the source files and suppression inventory stay intact.
+Oxlint keeps configured line caps and exclusions: 700 counted lines for ordinary
+TypeScript, 800 for JavaScript modules, and 1,000 for tests, with the existing
+explicit overrides. Local lint reports errors. CI uses a temporary configuration
+that changes only enabled size-rule severity to warning. SwiftLint likewise
+reports native length, nesting, complexity, and count limits as CI warnings;
+semantic lint errors remain blocking.
 
-`pnpm check:changed` also runs the growth ratchet. Run it directly with
-`pnpm check:line-cap-ratchet --base <commit>` to select a comparison base.
-The baseline is the source at that Git base, not a checked-in count file.
-Extracting code lowers the allowance once the cleanup becomes part of future
-bases; there is no count baseline to regenerate or prune. Main-push CI does
-not run this PR growth check.
+`pnpm check`, `pnpm check:changed`, and `pnpm check:line-cap-ratchet --base <commit>`
+reject new over-cap files and growth above inherited over-cap debt locally. The
+PR `checks-fast-baseline-ratchets` job reports this growth as warnings. Renames
+compare against the old path; unchanged or shrinking over-cap files pass the
+ratchet. Measurement uses oxlint's actual caps and comment/blank-line exclusions
+and neutralizes suppression directives only in temporary measurement copies.
+Main-push CI does not run the PR growth comparison; ordinary lint still reports
+all unsuppressed over-cap files.
 
-The separate `pnpm check:max-lines-ratchet` suppression inventory remains
-strict in CI and local gates. After removing a grandfathered suppression,
-remove its stale entry from `config/max-lines-baseline.txt` in the same change,
-or run `pnpm check:max-lines-ratchet --prune`. That inventory must exactly match
-remaining suppressions and may only shrink (verified renames are supported).
-Do not add an entry to grandfather new debt.
+The max-lines suppression inventory and environment-variable count budget use
+the same severity policy. After removing a suppression, remove its stale entry
+from `config/max-lines-baseline.txt`, or run
+`pnpm check:max-lines-ratchet --prune`. Keep the inventory shrinking; warning
+status does not authorize new suppressions or higher caps. The environment
+budget counts distinct `OPENCLAW_*` names in production `src/`, `packages/`, and
+`extensions/` source, excluding tests and QA Lab. Update
+`config/env-var-count-budget.txt` when cleanup reduces that count.
 
-When a file exceeds its cap, extract a coherent sibling module. Never trim
-test coverage, disable the rule, or raise a cap to make the check pass. The
-plugin-sdk declaration budget and lint-suppression inventory are candidates
-for the same PR-growth/main-warning policy in follow-up work; their current
-gates are unchanged. Automatically filing repair issues is also a follow-up.
+The policy also covers numeric bundle, declaration, package, startup memory,
+CPU, timing, and test-root budgets. Measurements and thresholds are unchanged.
+When a file or artifact exceeds a cap, extract a coherent module or investigate
+the added cost. Do not trim coverage, disable rules, or raise thresholds just
+to silence a warning.
 
-Two shrink-only budgets guard the configuration surface. Both fail CI on growth
-until the budget file is consciously updated in the same PR, and both demand a
-ratchet-down when cleanup lowers the real count.
-
-- `config/env-var-count-budget.txt` caps the number of distinct `OPENCLAW_*`
-  names in production source under `src/`, `packages/`, and `extensions/`
-  (tests and QA Lab excluded). Checked by `node --import tsx scripts/check-env-var-count.mts`.
-  Removing env vars: lower the number in the same PR. Adding one is a
-  config-surface decision — justify it in the PR body.
-- `docs/.generated/config-baseline.counts.json` caps the per-kind
-  (core/channel/plugin) `openclaw.json` schema entry counts. Checked by
-  `pnpm config:docs:check`; regenerate with `pnpm config:docs:gen` after any
-  schema change.
+Correctness checks stay blocking, including types, semantic lint, blanket lint
+disables, assertion safety, missing or malformed evidence, failed commands,
+forbidden eager imports, and exactly-once ownership. Public SDK inventories and
+generated configuration-schema baselines remain contract guards. Runner matrix
+caps protect shared runner-registration capacity and remain blocking. Explicit
+benchmark qualification verdicts retain their requested acceptance criteria.
 
 ## Local check gates and changed routing
 

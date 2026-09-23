@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./in-process-gateway.js", () => ({
+  hasGatewayToolRoutingContext: () => false,
+  getInProcessGatewayToolContext: () => undefined,
   callAgentToolGatewayRequest: (opts: unknown) => mocks.gatewayCall(opts),
 }));
 

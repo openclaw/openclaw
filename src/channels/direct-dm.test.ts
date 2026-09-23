@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { dispatchInboundDirectDm } from "./direct-dm.js";
 import { buildChannelInboundEventContext } from "./inbound-event/context.js";
-import { resolveStableChannelMessageIngress } from "./message-access/runtime.js";
+import { resolveStableChannelIngressPolicy } from "./message-access/runtime.js";
 
 const mocks = vi.hoisted(() => ({
   dispatchRoutedChannelTurn: vi.fn(async () => undefined),
@@ -37,7 +37,7 @@ vi.mock("./turn/lifecycle.js", () => ({
 
 describe("dispatchInboundDirectDm", () => {
   it("forwards the canonical model-selection reply pipeline", async () => {
-    const channelIngress = await resolveStableChannelMessageIngress({
+    const channelIngress = await resolveStableChannelIngressPolicy({
       channelId: "nostr",
       accountId: "account-1",
       subject: { stableId: "peer-1" },
@@ -114,9 +114,9 @@ describe("dispatchInboundDirectDm", () => {
   it("resolves exact ingress provenance once after the final route is known", async () => {
     const resolveChannelIngress = vi.fn(
       async (
-        contextBinding: Parameters<typeof resolveStableChannelMessageIngress>[0]["contextBinding"],
+        contextBinding: Parameters<typeof resolveStableChannelIngressPolicy>[0]["contextBinding"],
       ) =>
-        await resolveStableChannelMessageIngress({
+        await resolveStableChannelIngressPolicy({
           channelId: "nostr",
           accountId: "account-1",
           subject: { stableId: "peer-1" },

@@ -1,5 +1,8 @@
 // MCP HTTP tests cover gateway-scoped tool listing and invocation over the
 // JSON-RPC surface, including hook filtering and context propagation.
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useMcpCollectorRegistry } from "./mcp-http.collector-registry.test-support.js";
 import { EventEmitter } from "node:events";
 import { request, ServerResponse } from "node:http";
 import { connect } from "node:net";
@@ -36,7 +39,6 @@ import {
   peekSystemEventEntries,
 } from "../infra/system-events.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
-import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
 import type { resolveGatewayScopedTools } from "./tool-resolution.js";
@@ -171,13 +173,7 @@ vi.mock("./tool-resolution.js", () => ({
     resolveGatewayScopedToolsMock(...args),
 }));
 
-import {
-  addSubagentRunForTests,
-  getSubagentRunByRunId,
-  resetSubagentRegistryForTests,
-  testing as registryTesting,
-} from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { consumeSwarmStructuredOutput } from "../agents/tools/structured-output-tool.js";
+import { getSubagentRunByRunId } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import {
   activateMcpLoopbackClientGrantCapture,
   deactivateMcpLoopbackClientGrantCapture,
@@ -447,8 +443,8 @@ async function sendStalledBody(params: {
   });
 }
 
-async function startLoopbackServerForTest(port = 0) {
-  await ensureMcpLoopbackServer(port);
+async function startLoopbackServerForTest() {
+  await ensureMcpLoopbackServer(0);
   const runtime = getActiveMcpLoopbackRuntime();
   if (!runtime) {
     throw new Error("expected active MCP loopback runtime");
@@ -1277,11 +1273,7 @@ describe("mcp loopback server", () => {
   });
 
   it("passes session, account, message channel, and inbound event headers into shared tool resolution", async () => {
-    const port = await getFreePortBlockWithPermissionFallback({
-      offsets: [0],
-      fallbackBase: 53_000,
-    });
-    const { runtime, port: serverPort } = await startLoopbackServerForTest(port);
+    const { runtime, port: serverPort } = await startLoopbackServerForTest();
 
     const response = await sendRaw({
       port: serverPort,
@@ -1352,11 +1344,7 @@ describe("mcp loopback server", () => {
 
   it("binds an attach grant's session owner and ignores ALL spoofed context headers", async () => {
     const grant = mintAttachGrant({ sessionKey: "global", agentId: "ops" });
-    const port = await getFreePortBlockWithPermissionFallback({
-      offsets: [0],
-      fallbackBase: 53_000,
-    });
-    const { port: serverPort } = await startLoopbackServerForTest(port);
+    const { port: serverPort } = await startLoopbackServerForTest();
 
     const response = await sendRaw({
       port: serverPort,
@@ -4103,27 +4091,19 @@ describe("collector result tool across the loopback MCP boundary", () => {
     additionalProperties: false,
   };
 
+  useMcpCollectorRegistry({
+    runId: collectorRunId,
+    childSessionKey: collectorSessionKey,
+    outputSchema: collectorSchema,
+  });
+
   beforeEach(async () => {
-    resetSubagentRegistryForTests({ persist: false });
-    registryTesting.setDepsForTest({ persistSubagentRunsToDiskOrThrow: vi.fn() });
-    addSubagentRunForTests({
-      runId: collectorRunId,
-      childSessionKey: collectorSessionKey,
-      collect: true,
-      outputSchema: collectorSchema,
-    });
     const { resolveGatewayScopedTools: resolveActual } =
       await vi.importActual<typeof import("./tool-resolution.js")>("./tool-resolution.js");
     resolveGatewayScopedToolsMock.mockImplementation(
       (...args) =>
         resolveActual(...(args as Parameters<typeof resolveActual>)) as MockGatewayScopedTools,
     );
-  });
-
-  afterEach(() => {
-    consumeSwarmStructuredOutput(collectorRunId);
-    resetSubagentRegistryForTests({ persist: false });
-    registryTesting.setDepsForTest();
   });
 
   async function mintCollectorGrant(runtimeOwnerToken: string) {

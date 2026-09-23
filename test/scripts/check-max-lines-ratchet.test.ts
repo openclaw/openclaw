@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectCurrentSuppressionState,
   collectLintDisableDirectives,
@@ -13,6 +13,7 @@ import {
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = createTempDirTracker();
+beforeEach(() => vi.stubEnv("GITHUB_ACTIONS", ""));
 const nestedGitEnvKeys = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_COMMON_DIR",
@@ -61,6 +62,7 @@ function commitFixture(root: string, message = "base"): void {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   tempDirs.cleanup();
 });
 
@@ -71,7 +73,8 @@ describe("check-max-lines-ratchet", () => {
     {
       mode: "count growth",
       status: 1,
-      stderr: "OPENCLAW_* count 4 exceeds budget 3; update config/env-var-count-budget.txt\n",
+      stderr:
+        "Environment variable count budget\n  config/env-var-count-budget.txt: OPENCLAW_* count 4 exceeds budget 3; update config/env-var-count-budget.txt\nOPENCLAW_* count 4 exceeds budget 3; update config/env-var-count-budget.txt\n",
     },
     {
       mode: "max-lines failure first",
@@ -82,7 +85,8 @@ describe("check-max-lines-ratchet", () => {
     {
       mode: "budget growth before env-only reads",
       status: 1,
-      stderr: "OPENCLAW_* budget grew from 3 to 4\n",
+      stderr:
+        "Environment variable count budget\n  config/env-var-count-budget.txt: OPENCLAW_* budget grew from 3 to 4\nOPENCLAW_* budget grew from 3 to 4\n",
     },
   ])("runs both ratchets through the CLI: $mode", ({ mode, status, stderr }) => {
     const root = tempDirs.make("openclaw-combined-ratchets-", os.tmpdir());
@@ -196,7 +200,7 @@ describe("check-max-lines-ratchet", () => {
     expect(isGovernedSourcePath("src/schema.generated.ts")).toBe(false);
   });
 
-  it("rejects baseline growth even when the new suppression is listed", () => {
+  it.each([false, true])("reports baseline growth even when listed (CI=%s)", (advisory) => {
     const root = tempDirs.make("openclaw-max-lines-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
@@ -213,24 +217,35 @@ describe("check-max-lines-ratchet", () => {
       "/* oxlint-disable max-lines -- TODO: split. */\n",
     );
     git(root, ["add", "."]);
-    vi.spyOn(console, "error").mockImplementation(() => {});
-
-    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("GITHUB_ACTIONS", advisory ? "true" : "");
+    vi.stubEnv("GITHUB_STEP_SUMMARY", path.join(root, "summary.md"));
+    expect(main(root, ["--base", "HEAD"])).toBe(advisory ? 0 : 1);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("The max-lines baseline may only shrink"),
+    );
+    if (advisory) {
+      expect(fs.readFileSync(path.join(root, "summary.md"), "utf8")).toContain("src/b.ts");
+    }
   });
 
-  it("rejects replacing an explicit max-lines suppression with an all-rule disable", () => {
-    const root = tempDirs.make("openclaw-max-lines-all-rule-", os.tmpdir());
-    fs.mkdirSync(path.join(root, "config"), { recursive: true });
-    fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
-    fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable max-lines */\n");
-    commitFixture(root);
+  it.each([false, true])(
+    "rejects replacing a max-lines suppression with an all-rule disable (CI=%s)",
+    (advisory) => {
+      const root = tempDirs.make("openclaw-max-lines-all-rule-", os.tmpdir());
+      fs.mkdirSync(path.join(root, "config"), { recursive: true });
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
+      fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable max-lines */\n");
+      commitFixture(root);
 
-    fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable */\n");
-    vi.spyOn(console, "error").mockImplementation(() => {});
+      fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable */\n");
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.stubEnv("GITHUB_ACTIONS", advisory ? "true" : "");
 
-    expect(main(root, ["--base", "HEAD"])).toBe(1);
-  });
+      expect(main(root, ["--base", "HEAD"])).toBe(1);
+    },
+  );
 
   it("rejects a new all-rule disable without baseline growth", () => {
     const root = tempDirs.make("openclaw-max-lines-all-rule-new-", os.tmpdir());

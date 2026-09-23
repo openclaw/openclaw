@@ -354,9 +354,9 @@ export async function evaluateViaPlaywright(
     }
     void forceDisconnectPlaywrightForTarget({
       cdpUrl: opts.cdpUrl,
+      page,
       targetId: opts.targetId,
       ssrfPolicy: opts.ssrfPolicy,
-      reason: "evaluate aborted",
     }).catch(() => {});
   });
   if (signal?.aborted) {

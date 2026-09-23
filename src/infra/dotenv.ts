@@ -1,7 +1,7 @@
 // Loads dotenv files while blocking unsafe workspace env keys.
 import path from "node:path";
 import {
-  listKnownProviderAuthEnvVarNames,
+  listKnownProviderAuthEnvVarNamesCore,
   listKnownProviderAuthEnvVarNamesAsync,
 } from "../secrets/provider-env-vars.js";
 import {
@@ -293,7 +293,7 @@ export function loadWorkspaceDotEnvFile(
   let providerAuthBlockedKeys: ReadonlySet<string> | undefined;
   const getProviderAuthBlockedKeys = () => {
     providerAuthBlockedKeys ??= buildProviderAuthWorkspaceDotEnvBlocklist(
-      listKnownProviderAuthEnvVarNames({ env, includeUntrustedWorkspacePlugins: false }),
+      listKnownProviderAuthEnvVarNamesCore({ env, includeUntrustedWorkspacePlugins: false }),
     );
     return providerAuthBlockedKeys;
   };
@@ -355,14 +355,15 @@ export async function loadDotEnvAsync(opts: {
 
 export { loadGlobalRuntimeDotEnvFiles };
 
-export function loadDotEnv(opts?: { quiet?: boolean }) {
+export function loadDotEnv(opts?: { quiet?: boolean; env?: NodeJS.ProcessEnv }) {
   const quiet = opts?.quiet ?? true;
+  const env = opts?.env ?? process.env;
   const cwd = tryProcessCwd();
   if (cwd) {
-    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet });
+    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet, env });
   }
 
   // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
   // without overriding any env vars already present.
-  loadGlobalRuntimeDotEnvFiles({ quiet });
+  loadGlobalRuntimeDotEnvFiles({ quiet, env });
 }

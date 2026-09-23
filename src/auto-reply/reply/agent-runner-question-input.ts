@@ -1,6 +1,7 @@
 import {
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
+  QuestionDispatchUnsupportedError,
 } from "../../agents/harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../../agents/harness/gateway-question.js";
 import { readQuestionRejection } from "../../agents/tools/gateway-question-lifecycle.js";
@@ -59,6 +60,7 @@ export async function runReplyQuestionInput(
     ctx: params.sessionCtx,
     sessionEntry: params.sessionEntry,
     senderIsOwner: followupRun.run.senderIsOwner === true,
+    operatorAuthority: followupRun.operatorAuthority,
     toolsAllow: followupRun.toolsAllow,
     disableTools: followupRun.disableTools === true,
   });
@@ -67,6 +69,7 @@ export async function runReplyQuestionInput(
   const assertSourceCurrent = () => {
     sourceAbort?.throwIfAborted();
     queuedAbort?.throwIfAborted();
+    followupRun.operatorAuthority?.assertCurrent();
   };
   const state = resolveReplyOperationRunState(opts);
   let outcome: { status: "answered" } | { status: "indeterminate"; errorMessage: string };
@@ -88,6 +91,10 @@ export async function runReplyQuestionInput(
     }
     outcome = { status: "answered" };
   } catch (error) {
+    if (error instanceof QuestionDispatchUnsupportedError) {
+      assertSourceCurrent();
+      return { handled: false };
+    }
     if (error instanceof QuestionDispatchRefusedError) {
       if (state) {
         state.admission = { status: "skipped", reason: "question-response-refused" };

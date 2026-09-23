@@ -208,23 +208,38 @@ export function createGoogleMeetRuntimeAccessor(params: {
   api: OpenClawPluginApi;
   config: GoogleMeetConfig;
 }): () => Promise<GoogleMeetRuntime> {
+  let transcriptsEnabled = params.api.config.transcripts?.enabled !== false;
+  let runtime: GoogleMeetRuntime | undefined;
   let runtimePromise: Promise<GoogleMeetRuntime> | undefined;
+  params.api.registerService({
+    id: "google-meet-transcripts",
+    reload: { configPrefixes: ["transcripts.enabled"] },
+    start: ({ config }) => {
+      transcriptsEnabled = config.transcripts?.enabled !== false;
+      return runtime?.reconcileTranscriptPolicy(transcriptsEnabled);
+    },
+    stop: () => {
+      transcriptsEnabled = false;
+      return runtime?.reconcileTranscriptPolicy(false);
+    },
+  });
   return async () => {
     if (!params.config.enabled) {
       throw new Error("Google Meet plugin disabled in plugin config");
     }
-    const runtime =
-      runtimePromise ??
-      (runtimePromise = loadGoogleMeetRuntimeModule().then(
-        ({ GoogleMeetRuntime: Runtime }) =>
-          new Runtime({
-            config: params.config,
-            fullConfig: params.api.config,
-            runtime: params.api.runtime,
-            logger: params.api.logger,
-          }),
-      ));
-    return await runtime;
+    runtimePromise ??= loadGoogleMeetRuntimeModule().then(
+      async ({ GoogleMeetRuntime: Runtime }) => {
+        runtime = new Runtime({
+          config: params.config,
+          fullConfig: params.api.config,
+          runtime: params.api.runtime,
+          logger: params.api.logger,
+        });
+        await runtime.reconcileTranscriptPolicy(transcriptsEnabled);
+        return runtime;
+      },
+    );
+    return await runtimePromise;
   };
 }
 

@@ -95,7 +95,6 @@ type TsdownInvocationParams = NonNullable<Parameters<typeof resolveTsdownBuildIn
 function resolveTestNodeOptions(params: TsdownInvocationParams) {
   return resolveTsdownBuildInvocation({
     nodeExecPath: "/usr/bin/node",
-    npmExecPath: "/tmp/pnpm.cjs",
     env: {},
     ...params,
   }).options.env.NODE_OPTIONS;
@@ -146,12 +145,11 @@ describe("resolveTsdownBuildInvocation", () => {
       args: ["--format", "esm"],
       platform: "linux",
       nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
       env: {},
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(result.args).toContain("tsdown");
+    expect(result.args[0]).toBe("node_modules/tsdown/dist/run.mjs");
     expect(result.args).toEqual(expect.arrayContaining(["--config-loader", "unrun", "--no-clean"]));
     expect(result.args.slice(-2)).toEqual(["--format", "esm"]);
   });
@@ -161,7 +159,6 @@ describe("resolveTsdownBuildInvocation", () => {
       args: ["--format", "esm"],
       platform: "linux",
       nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
       env: {},
       ...NO_MEMORY_LIMIT,
     });
@@ -192,7 +189,6 @@ describe("resolveTsdownBuildInvocation", () => {
       args,
       platform: "linux",
       nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
       env,
       ...NO_MEMORY_LIMIT,
     });
@@ -207,7 +203,6 @@ describe("resolveTsdownBuildInvocation", () => {
       args: ["--dts"],
       platform: "linux",
       nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
       env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
       ...NO_MEMORY_LIMIT,
     });
@@ -244,7 +239,6 @@ describe("resolveTsdownBuildInvocation", () => {
       ],
       platform: "linux",
       nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
       env: {},
       ...NO_MEMORY_LIMIT,
     });
@@ -340,7 +334,6 @@ describe("resolveTsdownBuildInvocation", () => {
       args,
       platform: "linux",
       nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
       env: {},
       ...NO_MEMORY_LIMIT,
     });
@@ -361,7 +354,6 @@ describe("resolveTsdownBuildInvocation", () => {
       args,
       platform: "linux",
       nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
       env: {},
       ...NO_MEMORY_LIMIT,
     });
@@ -434,7 +426,6 @@ describe("resolveTsdownBuildInvocation", () => {
     const result = resolveTsdownBuildPlan({
       platform: "linux",
       nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
       env: {},
       cgroupMemoryLimitPaths: ["/test/memory.max"],
       fs: {
@@ -465,7 +456,6 @@ describe("resolveTsdownBuildInvocation", () => {
       args,
       platform: "linux",
       nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
       env: {},
       cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
     });
@@ -662,7 +652,6 @@ describe("resolveTsdownBuildInvocation", () => {
       args,
       platform: "linux",
       nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
       env,
       cgroupMemoryLimitBytes: 2 * 1024 * 1024 * 1024,
     });
@@ -682,15 +671,10 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.heapShortfall?.fatal).toBe(true);
   });
 
-  it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {
-    const rootDir = createTempDir("openclaw-pnpm-runner-");
-    const npmExecPath = path.join(rootDir, "pnpm.cjs");
-    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
-
+  it("keeps the selected Windows runtime and literal compiler arguments", () => {
     const result = resolveTsdownBuildInvocation({
       platform: "win32",
       nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath,
       env: {},
       ...NO_MEMORY_LIMIT,
     });
@@ -698,9 +682,7 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result).toEqual({
       command: "C:\\Program Files\\nodejs\\node.exe",
       args: [
-        npmExecPath,
-        "exec",
-        "tsdown",
+        "node_modules/tsdown/dist/run.mjs",
         "--config-loader",
         "unrun",
         "--logLevel",
@@ -721,7 +703,6 @@ describe("resolveTsdownBuildInvocation", () => {
       title: "keeps inherited Windows tsdown heap settings at the Windows build cap",
       platform: "win32",
       execPath: "C:\\Program Files\\nodejs\\node.exe",
-      pnpmPath: "C:\\repo\\pnpm.cjs",
       nodeOptions: "--trace-warnings --max-old-space-size=8192",
       expectedNodeOptions: "--trace-warnings --max-old-space-size=8192",
     },
@@ -729,7 +710,6 @@ describe("resolveTsdownBuildInvocation", () => {
       title: "clamps explicit Windows tsdown heap settings to the Windows build cap",
       platform: "win32",
       execPath: "C:\\Program Files\\nodejs\\node.exe",
-      pnpmPath: "C:\\repo\\pnpm.cjs",
       nodeOptions: "--trace-warnings --max-old-space-size=12288",
       expectedNodeOptions: "--trace-warnings --max-old-space-size=8192",
     },
@@ -737,7 +717,6 @@ describe("resolveTsdownBuildInvocation", () => {
       title: "preserves explicit tsdown heap settings",
       platform: "linux",
       execPath: "/usr/bin/node",
-      pnpmPath: "/tmp/pnpm.cjs",
       nodeOptions: "--trace-warnings --max-old-space-size=12288",
       expectedNodeOptions: "--trace-warnings --max-old-space-size=12288",
     },
@@ -745,7 +724,6 @@ describe("resolveTsdownBuildInvocation", () => {
       title: "raises inherited lower tsdown heap settings to the build default",
       platform: "linux",
       execPath: "/usr/bin/node",
-      pnpmPath: "/tmp/pnpm.cjs",
       nodeOptions: "--trace-warnings --max-old-space-size=4096",
       expectedNodeOptions: "--trace-warnings --max-old-space-size=12288",
     },
@@ -753,15 +731,13 @@ describe("resolveTsdownBuildInvocation", () => {
       title: "raises split inherited lower tsdown heap settings to the build default",
       platform: "linux",
       execPath: "/usr/bin/node",
-      pnpmPath: "/tmp/pnpm.cjs",
       nodeOptions: "--trace-warnings --max-old-space-size 4096",
       expectedNodeOptions: "--trace-warnings --max-old-space-size=12288",
     },
-  ])("$title", ({ platform, execPath, pnpmPath, nodeOptions, expectedNodeOptions }) => {
+  ])("$title", ({ platform, execPath, nodeOptions, expectedNodeOptions }) => {
     const result = resolveTsdownBuildInvocation({
       platform,
       nodeExecPath: execPath,
-      npmExecPath: pnpmPath,
       env: { NODE_OPTIONS: nodeOptions },
       ...NO_MEMORY_LIMIT,
     });
@@ -921,10 +897,37 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it.each([
-    ["missing output directory", ["--out-dir", "--watch"]],
-    ["empty assigned output directory", ["--out-dir="]],
-    ["repeated output directories", ["--out-dir", "first", "-d=second"]],
-  ])("rejects %s before cleanup", (_label, args) => {
+    [
+      "missing output directory",
+      ["--out-dir", "--watch"],
+      "tsdown build requires one concrete --out-dir/-d value",
+    ],
+    [
+      "empty assigned output directory",
+      ["--out-dir="],
+      "tsdown build requires one concrete --out-dir/-d value",
+    ],
+    [
+      "missing short output directory",
+      ["-d"],
+      "tsdown build requires one concrete --out-dir/-d value",
+    ],
+    [
+      "empty assigned short output directory",
+      ["-d="],
+      "tsdown build requires one concrete --out-dir/-d value",
+    ],
+    [
+      "repeated output directories",
+      ["--out-dir", "first", "-d=second"],
+      "tsdown build accepts only one --out-dir/-d value",
+    ],
+    [
+      "malformed output directory after repeated values",
+      ["--out-dir", "first", "-d=second", "--out-dir"],
+      "tsdown build requires one concrete --out-dir/-d value",
+    ],
+  ])("rejects %s before cleanup", (_label, args, message) => {
     const cleanup = vi.fn();
 
     expect(() =>
@@ -936,7 +939,7 @@ describe("resolveTsdownBuildInvocation", () => {
         },
         { cleanup },
       ),
-    ).toThrow(/tsdown build .* --out-dir\/-d value/u);
+    ).toThrow(new Error(message));
     expect(cleanup).not.toHaveBeenCalled();
   });
 
@@ -1700,7 +1703,6 @@ describe("resolveTsdownBuildInvocation", () => {
     const result = resolveTsdownBuildInvocation({
       platform: "win32",
       nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:\\repo\\pnpm.cjs",
       env: {
         NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288",
         OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "4096",
@@ -1716,7 +1718,6 @@ describe("resolveTsdownBuildInvocation", () => {
       expect(() =>
         resolveTsdownBuildInvocation({
           nodeExecPath: "/usr/bin/node",
-          npmExecPath: "/tmp/pnpm.cjs",
           env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: value },
           ...NO_MEMORY_LIMIT,
         }),
@@ -1739,11 +1740,11 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(nodeOptions).toBe("--max-old-space-size=6400");
   });
 
-  it("can run tsdown without invoking pnpm", () => {
+  it("preserves the selected compiler runtime despite inherited package-manager state", () => {
     const result = resolveTsdownBuildInvocation({
       platform: "linux",
       nodeExecPath: "/usr/bin/node",
-      env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      env: { npm_execpath: "/unrelated/pnpm.cjs" },
       ...NO_MEMORY_LIMIT,
     });
 
@@ -1763,7 +1764,7 @@ describe("resolveTsdownBuildInvocation", () => {
         windowsVerbatimArguments: undefined,
         env: {
           NODE_OPTIONS: "--max-old-space-size=12288",
-          OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+          npm_execpath: "/unrelated/pnpm.cjs",
         },
       },
     });

@@ -19,14 +19,9 @@ async function git(root: string, ...args: string[]): Promise<string> {
   return result.stdout.trim();
 }
 
-it.each([
-  { current: true, inspection: false },
-  { current: true, inspection: true },
-  { current: false, inspection: false },
-  { current: false, inspection: true },
-])(
-  "checks snapshot space after the Git no-op decision (current=$current, inspection=$inspection)",
-  async ({ current, inspection }) => {
+it.each([true, false])(
+  "checks snapshot space after the Git no-op decision (current=%s)",
+  async (current) => {
     await withTestDir({ prefix: "git-update-snapshot-" }, async (base) => {
       const root = path.join(base, "checkout");
       const stateDir = path.join(base, "state");
@@ -89,21 +84,26 @@ it.each([
           root,
           switchToGit: false,
           installKind: "git",
-          timeoutMs: 5000,
+          timeoutMs: undefined,
           startedAt: Date.now(),
           progress: {},
           channel: "dev",
-          tag: "latest",
           devTarget: { mode: "detached", ref: target },
           beforeGitMutation,
           validateCandidate,
-          inspectGitTarget: inspection ? async () => {} : undefined,
+          inspectGitTarget: async () => {},
           getManagedServiceEnv: () => undefined,
           getSnapshotSource,
           jsonMode: true,
-          allowGatewayServiceRepair: false,
-          allowGatewayActivation: false,
         });
+        const headCommandOptions = vi
+          .mocked(processRunner.runCommandWithTimeout)
+          .mock.calls.find(([argv]) => argv.join(" ") === `git -C ${root} rev-parse HEAD`)?.[1];
+        expect(
+          typeof headCommandOptions === "number"
+            ? headCommandOptions
+            : headCommandOptions?.timeoutMs,
+        ).toBe(20 * 60_000);
         expect(result).toMatchObject(
           current
             ? { status: "skipped", reason: "already-current" }

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import "../plugins/plugin-source-capture-context.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";

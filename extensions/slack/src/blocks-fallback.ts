@@ -1,4 +1,3 @@
-// Slack plugin module implements blocks fallback behavior.
 import {
   asOptionalRecord,
   normalizeOptionalString,

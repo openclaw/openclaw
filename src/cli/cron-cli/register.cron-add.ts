@@ -102,6 +102,15 @@ export function registerCronAddCommand(cron: Command) {
           cmd: Command,
         ) => {
           try {
+            for (const [flag, cwd] of [
+              ["--command-cwd", opts.commandCwd],
+              ["--on-exit-cwd", opts.onExitCwd],
+              ["--stream-cwd", opts.streamCwd],
+            ] as const) {
+              if (typeof cwd === "string" && !normalizeOptionalString(cwd)) {
+                throw new CronCliError(`${flag} must not be blank`);
+              }
+            }
             const hasScheduleFlag =
               typeof opts.at === "string" ||
               typeof opts.cron === "string" ||
@@ -141,7 +150,7 @@ export function registerCronAddCommand(cron: Command) {
               const systemEvent = normalizeOptionalString(opts.systemEvent) ?? "";
               const optionMessage = normalizeOptionalString(opts.message);
               const positionalMessage = normalizeOptionalString(messageArg);
-              const commandShell = normalizeOptionalString(opts.command);
+              const commandShell = readNonBlankString(opts.command);
               const commandArgv = parseCronCommandArgv(opts.commandArgv);
               // File arguments identify exact local paths; trimming can select another file.
               const scriptPath = readNonBlankString(opts.script);

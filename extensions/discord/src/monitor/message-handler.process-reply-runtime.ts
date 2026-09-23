@@ -73,7 +73,7 @@ export function createDiscordBeforePayloadDelivery(params: {
       return null;
     }
     if (info.kind === "final" && !params.isFallbackOnlyToolWarningFinal(payload)) {
-      params.draftPreview.markFinalReplyStarted();
+      params.draftPreview.freezeProgress();
     }
     return payload;
   };
@@ -88,6 +88,8 @@ export function createDiscordMessageReplyRuntime(params: {
   dispatchStartedAt: number;
   feedbackRest: RequestClient;
   deliveryRest: RequestClient;
+  onFinalReplyStart?: () => void;
+  onFinalReplyDelivered?: () => void;
 }) {
   const { ctx, processContext } = params;
   const {
@@ -200,14 +202,14 @@ export function createDiscordMessageReplyRuntime(params: {
     cfg,
     discordConfig,
     accountId,
+    abortSignal: ctx.abortSignal,
     sourceRepliesAreToolOnly: params.sourceRepliesAreToolOnly,
     textLimit,
     deliveryRest: params.deliveryRest,
     deliverChannelId,
     replyReference,
-    tableMode,
-    maxLinesPerMessage,
-    chunkMode,
+    onFinalReplyStart: params.onFinalReplyStart,
+    onFinalReplyDelivered: params.onFinalReplyDelivered,
     log: logVerbose,
   });
   const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
@@ -221,7 +223,6 @@ export function createDiscordMessageReplyRuntime(params: {
     beginQueuedDeliveryCorrelation: beginDeliveryCorrelation,
     endDeliveryCorrelation,
     resolveCurrentTurnTranscriptFinalText,
-    deliverChannelId,
     draftPreview,
     resolvedBlockStreamingEnabled,
   };

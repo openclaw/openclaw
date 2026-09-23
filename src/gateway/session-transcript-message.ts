@@ -56,6 +56,7 @@ export function projectSessionMessagePayload(params: {
         ...params.projectionState,
         subagentCoordination: params.subagentCoordination,
         includeCommentaryFallbacks: true,
+        activity: false,
       })
     : undefined;
   if (
@@ -82,6 +83,7 @@ export function projectSessionMessagePayload(params: {
         ? projectChatDisplayMessagesWithState([rawMessage], {
             assistantErrorPending: params.projectionState.assistantErrorPending,
             turnBoundaryPending: params.projectionState.turnBoundaryPending,
+            activity: false,
             subagentCoordination: params.subagentCoordination,
           })
         : {

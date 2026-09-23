@@ -4,6 +4,7 @@ import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/recor
 export type SandboxHostCsp = {
   connectDomains?: string[];
   resourceDomains?: string[];
+  mediaDomains?: string[];
   frameDomains?: string[];
   baseUriDomains?: string[];
   blockDescendantFrames?: boolean;
@@ -77,7 +78,7 @@ const RESOLVE_LEADING_DOCTYPE_END_SOURCE = `(html) => {
 
 function normalizeDomains(
   value: unknown,
-  options?: { allowWebSocket?: boolean },
+  options?: { allowWebSocket?: boolean; allowMediaSchemes?: boolean },
 ): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -100,6 +101,9 @@ function normalizeDomains(
         if (code <= 31 || code === 127) {
           return false;
         }
+      }
+      if (options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")) {
+        return true;
       }
       let parsed: URL;
       try {
@@ -124,7 +128,11 @@ function normalizeDomains(
         /^(?:\*\.)?[A-Za-z0-9.-]+$/u.test(parsed.hostname)
       );
     })
-    .map((entry) => new URL(entry).origin);
+    .map((entry) =>
+      options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")
+        ? entry
+        : new URL(entry).origin,
+    );
   return entries.length > 0 ? entries : undefined;
 }
 
@@ -136,6 +144,7 @@ export function normalizeSandboxHostCsp(value: unknown): SandboxHostCsp | undefi
   const csp: SandboxHostCsp = {
     connectDomains: normalizeDomains(record.connectDomains, { allowWebSocket: true }),
     resourceDomains: normalizeDomains(record.resourceDomains),
+    mediaDomains: normalizeDomains(record.mediaDomains, { allowMediaSchemes: true }),
     frameDomains: normalizeDomains(record.frameDomains),
     baseUriDomains: normalizeDomains(record.baseUriDomains),
     blockDescendantFrames: record.blockDescendantFrames === true ? true : undefined,
@@ -340,6 +349,7 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
 /** HTTP response policy for the isolated proxy and its inner about:blank content. */
 function buildSandboxHostContentSecurityPolicy(csp?: SandboxHostCsp): string {
   const resources = csp?.resourceDomains ?? [];
+  const media = csp?.mediaDomains ?? resources;
   const connections = csp?.connectDomains ?? [];
   const frames = csp?.frameDomains ?? [];
   const bases = csp?.baseUriDomains ?? [];
@@ -349,7 +359,7 @@ function buildSandboxHostContentSecurityPolicy(csp?: SandboxHostCsp): string {
     `script-src 'self' 'unsafe-inline' ${resources.join(" ")}`.trim(),
     `style-src 'self' 'unsafe-inline' ${resources.join(" ")}`.trim(),
     `img-src 'self' data: ${resources.join(" ")}`.trim(),
-    `media-src 'self' data: ${resources.join(" ")}`.trim(),
+    `media-src 'self' data: ${media.join(" ")}`.trim(),
     `connect-src ${sources(connections)}`,
     "webrtc 'block'",
     // This policy belongs to the trusted outer document, so frame-src also

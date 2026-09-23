@@ -1,6 +1,7 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
 import { describe, expect, it, vi } from "vitest";
+import type { CodexThreadListParams } from "./app-server/protocol.js";
 import {
   commandRpcMocks,
   pinnedConnectionMocks,
@@ -126,6 +127,7 @@ describe("Codex supervision actions", () => {
       "thread/list",
       "thread/read",
       "thread/list",
+      "thread/list",
       "thread/archive",
     ]);
     for (const [request] of pinnedConnectionMocks.request.mock.calls) {
@@ -173,6 +175,7 @@ describe("Codex supervision actions", () => {
       "thread/read",
       "thread/list",
       "thread/read",
+      "thread/list",
       "thread/list",
       "thread/archive",
     ]);
@@ -247,65 +250,72 @@ describe("Codex supervision actions", () => {
     expect(control.archiveThread).not.toHaveBeenCalled();
   });
 
-  it("rejects archive when a paginated spawned descendant has an OpenClaw owner", async () => {
-    const bindingStore = createCodexTestBindingStore();
-    await bindingStore.mutate(
-      { kind: "conversation", bindingId: "descendant-chat" },
-      {
-        kind: "set",
-        binding: { threadId: "owned-descendant", cwd: "/workspace/project" },
-      },
-    );
-    const control = createEligibleControl({
-      listDescendantPage: vi.fn(async (params) =>
-        params.cursor === "descendants-2"
-          ? { data: [idleThread({ id: "owned-descendant" })] }
-          : {
-              data: [idleThread({ id: "unowned-descendant" })],
-              nextCursor: "descendants-2",
-            },
-      ),
-    });
+  it.each([false, true])(
+    "rejects archive when a paginated spawned descendant has an OpenClaw owner (archived=%s)",
+    async (archived) => {
+      const bindingStore = createCodexTestBindingStore();
+      await bindingStore.mutate(
+        { kind: "conversation", bindingId: "descendant-chat" },
+        {
+          kind: "set",
+          binding: { threadId: "owned-descendant", cwd: "/workspace/project" },
+        },
+      );
+      const control = createEligibleControl({
+        listDescendantPage: vi.fn(async (params) =>
+          params.archived !== archived
+            ? { data: [] }
+            : params.cursor === "descendants-2"
+              ? { data: [idleThread({ id: "owned-descendant" })] }
+              : {
+                  data: [idleThread({ id: "unowned-descendant" })],
+                  nextCursor: "descendants-2",
+                },
+        ),
+      });
 
-    await expect(archiveTestSession({ bindingStore, control })).rejects.toThrow(
-      "spawned descendant is owned by an OpenClaw session",
-    );
-    expect(control.listDescendantPage).toHaveBeenNthCalledWith(1, {
-      ancestorThreadId: "thread-1",
-      archived: false,
-      limit: 100,
-      sortKey: "created_at",
-      sortDirection: "desc",
-      useStateDbOnly: true,
-    });
-    expect(control.listDescendantPage).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ cursor: "descendants-2" }),
-    );
-    expect(control.archiveThread).not.toHaveBeenCalled();
-  });
+      await expect(archiveTestSession({ bindingStore, control })).rejects.toThrow(
+        "spawned descendant is owned by an OpenClaw session",
+      );
+      expect(control.listDescendantPage).toHaveBeenCalledWith({
+        ancestorThreadId: "thread-1",
+        archived,
+        limit: 100,
+        sortKey: "created_at",
+        sortDirection: "desc",
+        useStateDbOnly: true,
+      });
+      expect(control.listDescendantPage).toHaveBeenCalledWith(
+        expect.objectContaining({ archived, cursor: "descendants-2" }),
+      );
+      expect(control.archiveThread).not.toHaveBeenCalled();
+    },
+  );
 
-  it("rejects archive when a spawned descendant is active", async () => {
-    const control = createEligibleControl({
-      listDescendantPage: vi.fn(async () => ({
-        data: [{ id: "active-descendant", projectId: null }],
-      })),
-      readThread: vi.fn(async (threadId: string) =>
-        idleThread({
-          id: threadId,
-          status: threadId === "active-descendant" ? { type: "active" } : { type: "idle" },
-        }),
-      ),
-    });
+  it.each([false, true])(
+    "rejects archive when a spawned descendant is active (archived=%s)",
+    async (archived) => {
+      const control = createEligibleControl({
+        listDescendantPage: vi.fn(async (params) => ({
+          data: params.archived === archived ? [{ id: "active-descendant", projectId: null }] : [],
+        })),
+        readThread: vi.fn(async (threadId: string) =>
+          idleThread({
+            id: threadId,
+            status: threadId === "active-descendant" ? { type: "active" } : { type: "idle" },
+          }),
+        ),
+      });
 
-    await expect(archiveTestSession({ control })).rejects.toThrow(
-      "Codex session is active in this App Server",
-    );
-    expect(control.readThread).toHaveBeenCalledWith("active-descendant", false);
-    expect(control.archiveThread).not.toHaveBeenCalled();
-  });
+      await expect(archiveTestSession({ control })).rejects.toThrow(
+        "Codex session is active in this App Server",
+      );
+      expect(control.readThread).toHaveBeenCalledWith("active-descendant", false);
+      expect(control.archiveThread).not.toHaveBeenCalled();
+    },
+  );
 
-  it("fences ownership mutations while validating and archiving the native subtree", async () => {
+  it("fences ownership mutations through both descendant collections and their pages", async () => {
     const bindingStore = createCodexTestBindingStore();
     const lateIdentity = { kind: "conversation" as const, bindingId: "late-descendant-owner" };
     let validationReached!: () => void;
@@ -316,10 +326,15 @@ describe("Codex supervision actions", () => {
     const validationReleased = new Promise<void>((resolve) => {
       releaseValidation = resolve;
     });
-    const listDescendantPage = vi.fn(async () => {
-      validationReached();
-      await validationReleased;
-      return { data: [{ id: "idle-descendant", projectId: null }] };
+    const listDescendantPage = vi.fn(async ({ archived, cursor }: CodexThreadListParams) => {
+      if (archived) {
+        validationReached();
+        await validationReleased;
+      }
+      return {
+        data: [{ id: `idle-descendant-${archived}-${cursor ?? "first"}`, projectId: null }],
+        ...(cursor ? {} : { nextCursor: "next" }),
+      };
     });
     const control = createEligibleControl({ listDescendantPage });
 
@@ -334,7 +349,10 @@ describe("Codex supervision actions", () => {
     releaseValidation();
     await expect(archiving).resolves.toEqual({ archived: true });
     expect(bindingStore.read(lateIdentity)).toBeUndefined();
-    expect(control.readThread).toHaveBeenCalledWith("idle-descendant", false);
+    expect(control.readThread).toHaveBeenCalledWith("idle-descendant-false-first", false);
+    expect(control.readThread).toHaveBeenCalledWith("idle-descendant-false-next", false);
+    expect(control.readThread).toHaveBeenCalledWith("idle-descendant-true-first", false);
+    expect(control.readThread).toHaveBeenCalledWith("idle-descendant-true-next", false);
     expect(control.archiveThread).toHaveBeenCalledWith("thread-1");
   });
 
@@ -370,11 +388,14 @@ describe("Codex supervision actions", () => {
     },
   );
 
-  it("fails closed when descendant enumeration reaches its page cap", async () => {
+  it("shares the descendant page cap across both archive collections", async () => {
     let page = 0;
     const control = createEligibleControl({
-      listDescendantPage: vi.fn(async () => {
+      listDescendantPage: vi.fn(async ({ archived }) => {
         page += 1;
+        if (!archived) {
+          return { data: [] };
+        }
         return {
           data: [idleThread({ id: `descendant-${page}` })],
           nextCursor: `descendants-${page}`,
@@ -405,6 +426,8 @@ describe("Codex supervision actions", () => {
     const { api, getProvider, registerSessionCatalog } = createGatewayApi(runtime);
     const control = createEligibleControl();
     const processFallbackControl = {
+      hasActiveWork: () => false,
+      disconnect: async () => {},
       forRequest: () => control,
       forNode: async () => {
         throw new Error("Node source is outside this local archive fixture");

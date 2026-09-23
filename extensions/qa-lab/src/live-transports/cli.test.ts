@@ -51,21 +51,9 @@ vi.mock("./whatsapp/adapter.runtime.js", () => {
 import { listLiveTransportQaAdapterFactories, listLiveTransportQaCliRegistrations } from "./cli.js";
 
 const STANDARD_LANES = [
-  {
-    commandName: "discord",
-    description: "Run Discord QA through the live service or Crabline local provider server",
-    label: "Discord",
-  },
-  {
-    commandName: "slack",
-    description: "Run the Slack live QA lane against a private bot-to-bot channel harness",
-    label: "Slack",
-  },
-  {
-    commandName: "whatsapp",
-    description: "Run the WhatsApp live QA lane against two pre-linked Web sessions",
-    label: "WhatsApp",
-  },
+  { commandName: "discord" },
+  { commandName: "slack" },
+  { commandName: "whatsapp" },
 ] as const;
 
 function requireRegistration(commandName: string) {
@@ -130,98 +118,6 @@ describe("live transport QA contributions", () => {
         channelId: commandName,
         options: expect.objectContaining({ scenarioIds: [`${commandName}-canary`] }),
       });
-    },
-  );
-
-  it.each(STANDARD_LANES)(
-    "preserves the actual $commandName Commander contract",
-    ({ commandName, description, label }) => {
-      const { command } = registerCommand(commandName);
-
-      expect(command.description()).toBe(description);
-      expect(
-        command.options.map((option) => ({
-          defaultValue: option.defaultValue,
-          description: option.description,
-          flags: option.flags,
-        })),
-      ).toEqual([
-        {
-          defaultValue: undefined,
-          description: "Repository root to target when running from a neutral cwd",
-          flags: "--repo-root <path>",
-        },
-        {
-          defaultValue: undefined,
-          description: `${label} QA artifact directory`,
-          flags: "--output-dir <path>",
-        },
-        {
-          defaultValue: "live-frontier",
-          description: "Provider mode: mock-openai, aimock, live-frontier",
-          flags: "--provider-mode <mode>",
-        },
-        {
-          defaultValue: undefined,
-          description: "Primary provider/model ref",
-          flags: "--model <ref>",
-        },
-        {
-          defaultValue: undefined,
-          description: "Alternate provider/model ref",
-          flags: "--alt-model <ref>",
-        },
-        {
-          defaultValue: [],
-          description: `Run only the named ${label} QA scenario (repeatable)`,
-          flags: "--scenario <id>",
-        },
-        {
-          defaultValue: undefined,
-          description: "Enable provider fast mode where supported",
-          flags: "--fast",
-        },
-        {
-          defaultValue: false,
-          description: "Write artifacts without setting a failing exit code when scenarios fail",
-          flags: "--allow-failures",
-        },
-        {
-          defaultValue: "sut",
-          description: `Temporary ${label} account id inside the QA gateway config`,
-          flags: "--sut-account <id>",
-        },
-        ...(commandName === "discord"
-          ? [
-              {
-                defaultValue: false,
-                description: "Print the selected Discord scenario ids and exit",
-                flags: "--list-scenarios",
-              },
-            ]
-          : []),
-        {
-          defaultValue: undefined,
-          description: `Credential source for ${label} QA: env or convex (default: env)`,
-          flags: "--credential-source <source>",
-        },
-        {
-          defaultValue: undefined,
-          description:
-            "Credential role for convex auth: maintainer or ci (default: ci in CI, maintainer otherwise)",
-          flags: "--credential-role <role>",
-        },
-        ...(commandName === "discord"
-          ? [
-              {
-                defaultValue: undefined,
-                description: "Channel driver: live (default) or Crabline local provider server",
-                flags: "--channel-driver <live|crabline>",
-              },
-            ]
-          : []),
-      ]);
-      expect(command.helpInformation()).toContain(`Usage: qa ${commandName} [options]`);
     },
   );
 

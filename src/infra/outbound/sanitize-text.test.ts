@@ -1,7 +1,14 @@
 // Verifies plain-text sanitization strips runtime scaffolding, tool-call blocks,
 // prompt-data wrappers, and conservative HTML markup.
 import { describe, expect, it } from "vitest";
-import { escapeInternalRuntimeContextDelimiters } from "../../agents/internal-runtime-context.js";
+import {
+  escapeInternalRuntimeContextDelimiters,
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+} from "../../agents/internal-runtime-context.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
 import { stripInternalRuntimeScaffoldingFromPayload } from "./deliver-payload.js";
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 import { sanitizeForPlainText } from "./sanitize-text.js";
@@ -309,8 +316,8 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText(input)).toBe("Hello\n*world* this is _nice_");
   });
 
-  it("collapses excessive newlines", () => {
-    expect(sanitizeForPlainText("a<br><br><br><br>b")).toBe("a\n\nb");
+  it.each(["a<br><br><br><br>b", "a\n\n\nb"])("collapses excessive newlines in %s", (input) => {
+    expect(sanitizeForPlainText(input)).toBe("a\n\nb");
   });
 });
 
@@ -381,11 +388,15 @@ describe("stripInternalRuntimeScaffolding", () => {
     if (nullPrototype) {
       Object.setPrototypeOf(channelData, null);
     }
-    const payload = { text: "hello", channelData };
+    const metadata = { precedingInputAnswer: true } as const;
+    const payload = setReplyPayloadMetadata({ text: "hello", channelData }, metadata);
 
     const result = stripInternalRuntimeScaffoldingFromPayload(payload);
 
     expect(reads).toBe(1);
+    expect(getReplyPayloadMetadata(result)).toEqual(metadata);
+    expect(getReplyPayloadMetadata(payload)).toEqual(metadata);
+    expect(getReplyPayloadMetadata(result.channelData!)).toBeUndefined();
     expect(result.channelData?.label).toBe("visible");
     expect(result.channelData?.sibling).toBe(sibling);
     expect(result.channelData?.items).toBe(items);
@@ -425,6 +436,14 @@ describe("stripInternalRuntimeScaffolding", () => {
     expect(stripInternalRuntimeScaffolding("<note>keep this</note>")).toBe(
       "<note>keep this</note>",
     );
+  });
+
+  it("removes runtime context prefaces without angle markers", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        ["OpenClaw runtime event.", OPENCLAW_RUNTIME_CONTEXT_NOTICE, "Visible reply"].join("\n"),
+      ),
+    ).toBe("Visible reply");
   });
 
   it("removes internal runtime context blocks", () => {

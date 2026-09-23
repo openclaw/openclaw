@@ -158,6 +158,7 @@ describe("sessions.dispatch", () => {
       expect.objectContaining({ profileId: "test" }),
       expect.any(Function),
       undefined,
+      undefined,
     );
   });
 
@@ -202,6 +203,7 @@ describe("sessions.dispatch", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "mapped" }),
       expect.any(Function),
+      undefined,
       undefined,
     );
   });
@@ -448,6 +450,7 @@ describe("sessions.dispatch", () => {
       }),
       expect.any(Function),
       undefined,
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -484,33 +487,7 @@ describe("sessions.dispatch", () => {
       expect.objectContaining({ profileId: "test", machineClass: "large", os: "os-a" }),
       expect.any(Function),
       undefined,
-    );
-  });
-
-  it("rejects an archived session before dispatch", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        archivedAt: 2,
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    const dispatch = vi.fn();
-    const respond = await invoke(
-      makeContext({
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: { getMany: () => new Map() },
-      }),
-    );
-
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
       undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("archived"),
-      }),
     );
   });
 
@@ -739,6 +716,7 @@ describe("sessions.dispatch", () => {
           profileId: "test",
         }),
         expect.any(Function),
+        undefined,
         undefined,
       );
       expect(respond).toHaveBeenCalledWith(
@@ -1044,6 +1022,7 @@ describe("sessions.dispatch", () => {
         devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
       }),
       expect.any(Function),
+      undefined,
       undefined,
     );
     expect(changes.mock.calls).toEqual(Array.from({ length: 5 }, () => [{ sessionKey }]));

@@ -85,6 +85,40 @@ describe("ChatHistoryCursorResultSchema", () => {
         inputConsumptions: [{ runId: "consumed-run", consumedByEventId: "event-1" }],
       }),
     ).toBe(true);
+    for (const status of [undefined, "running", "completed", "failed", "blocked"]) {
+      const activity = [
+        { messageId: "quiet", items: [] },
+        {
+          messageId: "work",
+          items: [
+            {
+              itemId: "tool:work",
+              kind: "tool",
+              phase: "end",
+              title: "Read",
+              ...(status ? { status } : {}),
+            },
+          ],
+        },
+      ];
+      const response = { ...delta, activity };
+      const serialized = JSON.stringify(response);
+      const decoded = JSON.parse(serialized);
+      expect(Value.Check(ChatHistoryCursorResultSchema, decoded)).toBe(true);
+      expect(decoded).toEqual(response);
+    }
+    for (const activity of [
+      [{ items: [] }],
+      [
+        {
+          messageId: "work",
+          items: [{ itemId: "work", kind: "tool", phase: "end", title: "Read", status: "unknown" }],
+        },
+      ],
+      [{ messageId: "work", items: [], raw: "private" }],
+    ]) {
+      expect(Value.Check(ChatHistoryCursorResultSchema, { ...delta, activity })).toBe(false);
+    }
     expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset" })).toBe(true);
     expect(Value.Check(ChatHistoryCursorResultSchema, { ...delta, extra: true })).toBe(false);
     expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset", messages: [] })).toBe(false);

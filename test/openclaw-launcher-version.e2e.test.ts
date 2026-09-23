@@ -27,6 +27,10 @@ async function makeLauncherVersionFixture(
     path.join(fixtureRoot, "openclaw.mjs"),
   );
   await fs.copyFile(
+    path.resolve(process.cwd(), "node-host-launcher.mjs"),
+    path.join(fixtureRoot, "node-host-launcher.mjs"),
+  );
+  await fs.copyFile(
     path.resolve(process.cwd(), "node-version.mjs"),
     path.join(fixtureRoot, "node-version.mjs"),
   );
@@ -41,6 +45,18 @@ async function makeLauncherVersionFixture(
   await fs.copyFile(
     path.resolve(process.cwd(), "node-runtime-recovery.mjs"),
     path.join(fixtureRoot, "node-runtime-recovery.mjs"),
+  );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "cli-root-options.mjs"),
+    path.join(fixtureRoot, "cli-root-options.mjs"),
+  );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "gateway-run-argv.mjs"),
+    path.join(fixtureRoot, "gateway-run-argv.mjs"),
+  );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "gateway-shutdown-budget.mjs"),
+    path.join(fixtureRoot, "gateway-shutdown-budget.mjs"),
   );
   await fs.mkdir(path.join(fixtureRoot, "dist"), { recursive: true });
   await fs.writeFile(

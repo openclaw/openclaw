@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { normalizeAgentDirRegistryPath } from "../agents/agent-dir-registry.js";
 import {
@@ -10,18 +9,17 @@ import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
+import { parseAgentDeletionDatabasePaths } from "./agent-deletion-journal.read.js";
 import { deleteAgentProvenanceForAgent, ensureAgentProvenanceSchema } from "./agent-provenance.js";
 import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "./openclaw-state-db-readonly.js";
 import { ensureAgentDeletionJournalSchema } from "./openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
-import {
-  resolveOpenClawRegisteredAgentDatabasePath,
-  resolveOpenClawStateSqlitePath,
-} from "./openclaw-state-db.paths.js";
+import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
 
 type AgentDeletionDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -132,10 +130,12 @@ export function prepareAgentDeletionPathFence(
       canonicalPaths: [row.agent_dir, row.workspace_dir, row.sessions_dir].map((entryPath) =>
         normalizeAgentDirRegistryPath(entryPath, env),
       ),
-      databasePaths: parseDatabasePaths(row.database_paths_json).map((databasePath) => ({
-        path: databasePath,
-        canonicalPath: normalizeAgentDirRegistryPath(databasePath, env),
-      })),
+      databasePaths: parseAgentDeletionDatabasePaths(row.database_paths_json).map(
+        (databasePath) => ({
+          path: databasePath,
+          canonicalPath: normalizeAgentDirRegistryPath(databasePath, env),
+        }),
+      ),
       cleanupPaths: parseCleanupPaths(row.cleanup_paths_json).map((cleanupPath) =>
         Object.assign({}, cleanupPath, {
           fencePath: normalizeAgentDirRegistryPath(cleanupPath.canonicalPath, env),
@@ -278,23 +278,12 @@ function fromRow(row: {
     agentDir: row.agent_dir,
     workspaceDir: row.workspace_dir,
     sessionsDir: row.sessions_dir,
-    databasePaths: parseDatabasePaths(row.database_paths_json),
+    databasePaths: parseAgentDeletionDatabasePaths(row.database_paths_json),
     cleanupPaths: parseCleanupPaths(row.cleanup_paths_json),
     createdAt: row.created_at,
     cleanupCompleted: row.cleanup_completed === 1,
     deleteFiles: row.delete_files === 1,
   };
-}
-
-function parseDatabasePaths(value: string): string[] {
-  const parsed: unknown = JSON.parse(value);
-  if (
-    !Array.isArray(parsed) ||
-    !parsed.every((entry): entry is string => typeof entry === "string")
-  ) {
-    throw new Error("Invalid agent deletion database path journal.");
-  }
-  return parsed;
 }
 
 function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
@@ -331,10 +320,9 @@ function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
 
 /** Read the journal through an already validated shared-state connection. */
 export function readAgentDeletionJournalInDatabase(
-  database: OpenClawStateDatabase,
+  database: Pick<OpenClawStateDatabase, "db">,
   agentId: string,
 ): AgentDeletionJournalEntry | undefined {
-  ensureAgentDeletionJournalSchema(database.db);
   const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -350,13 +338,8 @@ export function readAgentDeletionJournal(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): AgentDeletionJournalEntry | undefined {
-  const databasePath = path.resolve(
-    options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
-  );
-  if (!existsSync(databasePath)) {
-    return undefined;
-  }
-  return runOpenClawStateWriteTransaction(
+  // Worker commit guards must read current authority without joining the worker's writer lock.
+  return withExistingOpenClawStateDatabaseCurrentReadOnly(
     (database) => readAgentDeletionJournalInDatabase(database, agentId),
     options,
   );

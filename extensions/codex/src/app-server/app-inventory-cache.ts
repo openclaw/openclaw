@@ -50,7 +50,7 @@ type CodexAppInventoryCacheDiagnostic = {
 /** Immutable app inventory snapshot returned from cache reads and refreshes. */
 export type CodexAppInventorySnapshot = {
   key: string;
-  apps: v2.AppInfo[];
+  apps: CodexAppServerRequestResult<"app/read">["apps"];
   installedApps: readonly v2.InstalledApp[];
   /** Absent for complete inventory; present for plugin-targeted snapshots. */
   targetAppIds?: readonly string[];
@@ -478,7 +478,7 @@ async function readInstalledApps(
     forceRefresh: boolean;
     targetAppIds?: readonly string[];
   },
-): Promise<{ apps: v2.AppInfo[]; installedApps: v2.InstalledApp[] }> {
+): Promise<Pick<CodexAppInventorySnapshot, "apps" | "installedApps">> {
   const installed = await request("app/installed", { forceRefresh: options.forceRefresh });
   const targetIds = new Set((options.targetAppIds ?? []).filter(Boolean).map(codexAppIdentityKey));
   const apps =
@@ -506,32 +506,9 @@ async function readInstalledApps(
   );
 
   return {
-    apps: apps.flatMap((installedApp): v2.AppInfo[] => {
+    apps: apps.flatMap((installedApp) => {
       const metadata = metadataById.get(installedApp.id);
-      if (!metadata) {
-        return [];
-      }
-
-      return [
-        {
-          id: installedApp.id,
-          name: metadata.name,
-          description: metadata.description ?? null,
-          logoUrl: metadata.iconUrl ?? null,
-          logoUrlDark: metadata.iconUrlDark ?? null,
-          distributionChannel: metadata.distributionChannel ?? null,
-          branding: null,
-          appMetadata: null,
-          labels: null,
-          installUrl: metadata.installUrl ?? null,
-          // app/read proves account authorization, while runtime callability
-          // remains separately visible in installedApps for thread admission.
-          isAccessible: true,
-          isEnabled: installedApp.enabled,
-          pluginDisplayNames: metadata.pluginDisplayNames,
-          ...(metadata.toolSummaries ? { toolSummaries: metadata.toolSummaries } : {}),
-        },
-      ];
+      return metadata ? [metadata] : [];
     }),
     installedApps: apps,
   };

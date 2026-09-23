@@ -20,7 +20,19 @@ if (errors.length) {
   );
 }
 
-function resolveSourceModule(importer: string, specifier: string): string | undefined {
+function resolveSourceModule(importer: string, rawSpecifier: string): string | undefined {
+  // Vite query suffixes select asset handling without changing the source file.
+  const specifier = rawSpecifier.split("?", 1)[0]!;
+  // Browser stylesheets are assets, but misspelled paths still fail this guard.
+  if (
+    specifier.startsWith(".") &&
+    specifier.endsWith(".css") &&
+    fs
+      .statSync(path.resolve(path.dirname(importer), specifier), { throwIfNoEntry: false })
+      ?.isFile()
+  ) {
+    return undefined;
+  }
   // This guard owns repository source, including workspace package and SDK aliases.
   // Node builtins and installed external packages are terminal dependencies.
   const mapped = Object.keys(options.paths ?? {}).some((pattern) => {
@@ -52,7 +64,13 @@ function resolveSourceModule(importer: string, specifier: string): string | unde
   return resolved.endsWith(".json") || resolved.endsWith(".d.ts") ? undefined : resolved;
 }
 
-function staticDependencies(file: string): string[] {
+const staticDependencyCache = new Map<string, readonly string[]>();
+
+function staticDependencies(file: string): readonly string[] {
+  const cached = staticDependencyCache.get(file);
+  if (cached) {
+    return cached;
+  }
   const source = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest);
   const dependencies: string[] = [];
   const visit = (node: ts.Node): void => {
@@ -101,12 +119,21 @@ function staticDependencies(file: string): string[] {
     }
   };
   visit(source);
+  staticDependencyCache.set(file, dependencies);
   return dependencies;
 }
 
-export function findSourceImportBackedges(entry: string, forbidden: readonly string[]): string[] {
-  const pending = [{ file: path.join(repoRoot, entry), parents: [] as string[] }];
+export function findSourceImportBackedges(
+  entry: string | readonly string[],
+  forbidden: readonly string[],
+): string[] {
+  const entries = typeof entry === "string" ? [entry] : entry;
+  const pending = entries.map((file) => ({
+    file: path.join(repoRoot, file),
+    parents: [] as string[],
+  }));
   const visited = new Set<string>();
+  const forbiddenFiles = new Set(forbidden);
   const violations: string[] = [];
   for (const { file, parents } of pending) {
     if (visited.has(file)) {
@@ -114,7 +141,7 @@ export function findSourceImportBackedges(entry: string, forbidden: readonly str
     }
     visited.add(file);
     const chain = [...parents, file];
-    if (forbidden.includes(path.relative(repoRoot, file).split(path.sep).join("/"))) {
+    if (forbiddenFiles.has(path.relative(repoRoot, file).split(path.sep).join("/"))) {
       violations.push(chain.map((part) => path.relative(repoRoot, part)).join(" -> "));
       continue;
     }

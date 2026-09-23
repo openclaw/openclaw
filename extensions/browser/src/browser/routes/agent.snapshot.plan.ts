@@ -78,7 +78,13 @@ export function resolveSnapshotPlan(params: {
   const depthRaw = parseStrictNonNegativeInteger(params.query.depth);
   const refsModeRaw = toStringOrEmpty(params.query.refs).trim();
   const refsMode: "aria" | "role" | undefined =
-    refsModeRaw === "aria" ? "aria" : refsModeRaw === "role" ? "role" : undefined;
+    refsModeRaw === "aria"
+      ? "aria"
+      : refsModeRaw === "role"
+        ? "role"
+        : params.profile.engine === "lightpanda"
+          ? "aria"
+          : undefined;
   const interactive = interactiveRaw ?? (mode === "efficient" ? true : undefined);
   const compact = compactRaw ?? (mode === "efficient" ? true : undefined);
   const depth =

@@ -1,9 +1,16 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
+import { formatErrorMessage } from "../infra/errors.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   assertOpenClawStateDatabaseOwner,
   resolveDatabasePath,
 } from "../state/openclaw-state-db-maintenance.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  isArtifactPreservingStateRead,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import {
   registerOpenClawStateDatabaseLifecycleListener,
   type OpenClawStateDatabaseOptions,
@@ -34,9 +41,22 @@ type ClawInstallSchemaVersionSnapshot =
     }
   | { kind: "uninitialized" };
 
+type ClawInstallSchemaVersionReadOptions = OpenClawStateDatabaseOptions & {
+  artifactPreservingReadOnly?: boolean;
+};
+
 // Refresh on every runtime config snapshot because another process may mutate Claw provenance.
 const snapshotsByPath = new Map<string, ClawInstallSchemaVersionSnapshot>();
 const snapshotListeners = new Set<() => void>();
+const handedOffFacts = resolveGlobalSingleton(
+  Symbol.for("openclaw.clawInstallSchemaVersionFacts"),
+  () =>
+    new AsyncLocalStorage<{
+      path: string;
+      snapshot: ClawInstallSchemaVersionSnapshot;
+      active: boolean;
+    }>(),
+);
 
 function notifySnapshotListeners(): void {
   for (const listener of snapshotListeners) {
@@ -131,25 +151,97 @@ function resolveSnapshotPath(options: OpenClawStateDatabaseOptions): string {
   return options.database?.path ?? resolveDatabasePath(options);
 }
 
+/** Discovery workers consume the host's prepared facts, including failed or missing preparation. */
+export function captureClawInstallSchemaVersionFacts(options: OpenClawStateDatabaseOptions = {}) {
+  const path = resolveSnapshotPath(options);
+  const snapshot = readCachedClawInstallSchemaVersions(options);
+  if (snapshot.kind === "ready") {
+    return {
+      path,
+      snapshot: {
+        kind: snapshot.kind,
+        schemaVersions: [...snapshot.schemaVersions].map(
+          ([agentId, read]) =>
+            [
+              agentId,
+              read.kind === "error" ? { ...read, error: formatErrorMessage(read.error) } : read,
+            ] as const,
+        ),
+      },
+    };
+  }
+  return {
+    path,
+    snapshot:
+      snapshot.kind === "state-error"
+        ? {
+            ...snapshot,
+            error: formatErrorMessage(snapshot.error),
+            knownAgentIds: [...snapshot.knownAgentIds],
+          }
+        : snapshot,
+  };
+}
+
+/** Includes late plugin imports, whose config preparers run immediately on registration. */
+export function withClawInstallSchemaVersionFacts<T>(
+  facts: ReturnType<typeof captureClawInstallSchemaVersionFacts>,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const snapshot: ClawInstallSchemaVersionSnapshot =
+    facts.snapshot.kind === "ready"
+      ? { ...facts.snapshot, schemaVersions: new Map(facts.snapshot.schemaVersions) }
+      : facts.snapshot.kind === "state-error"
+        ? { ...facts.snapshot, knownAgentIds: new Set(facts.snapshot.knownAgentIds) }
+        : facts.snapshot;
+  const scope = { path: facts.path, snapshot, active: true };
+  return handedOffFacts.run(scope, async () => {
+    try {
+      return await operation();
+    } finally {
+      scope.active = false;
+    }
+  });
+}
+
+function readHandedOffFacts(options: OpenClawStateDatabaseOptions) {
+  const scope = handedOffFacts.getStore();
+  if (!scope) {
+    return undefined;
+  }
+  if (!scope.active || scope.path !== resolveSnapshotPath(options)) {
+    throw new Error("Claw provenance facts are outside their captured state scope.");
+  }
+  return scope.snapshot;
+}
+
 export function readCachedClawInstallSchemaVersions(
   options: OpenClawStateDatabaseOptions = {},
 ): ClawInstallSchemaVersionSnapshot {
-  return snapshotsByPath.get(resolveSnapshotPath(options)) ?? { kind: "uninitialized" };
+  return (
+    readHandedOffFacts(options) ??
+    snapshotsByPath.get(resolveSnapshotPath(options)) ?? { kind: "uninitialized" }
+  );
 }
 
 export function initializeCachedClawInstallSchemaVersions(
-  options: OpenClawStateDatabaseOptions = {},
+  options: ClawInstallSchemaVersionReadOptions = {},
 ): void {
+  if (readHandedOffFacts(options)) {
+    notifySnapshotListeners();
+    return;
+  }
   const path = resolveSnapshotPath(options);
   const previous = snapshotsByPath.get(path);
   try {
-    const snapshot = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-      ({ db, path: pathname }) => {
-        assertOpenClawStateDatabaseOwner(db, { pathname });
-        return readSchemaVersions(db);
-      },
-      options,
-    );
+    const read =
+      options.artifactPreservingReadOnly === false
+        ? withExistingOpenClawStateDatabaseReadOnly
+        : withExistingOpenClawStateDatabaseArtifactPreservingReadOnly;
+    const snapshot = read(({ db, path: pathname }) => {
+      assertOpenClawStateDatabaseOwner(db, { pathname });
+      return readSchemaVersions(db);
+    }, options);
     snapshotsByPath.set(path, resolveSchemaVersionSnapshot(snapshot, previous));
   } catch (error) {
     snapshotsByPath.set(path, {
@@ -181,7 +273,7 @@ function resolveSchemaVersionSnapshot(
 }
 
 export async function prepareClawInstallSchemaVersions(
-  options: OpenClawStateDatabaseOptions = {},
+  options: ClawInstallSchemaVersionReadOptions = {},
 ): Promise<{ path: string; publish: () => void }> {
   const path = resolveSnapshotPath(options);
   const previous = snapshotsByPath.get(path);
@@ -195,7 +287,10 @@ export async function prepareClawInstallSchemaVersions(
       (scope) =>
         scope.execute({
           type: "claws.install-schema-versions",
-          input: undefined,
+          input: {
+            artifactPreservingReadOnly:
+              options.artifactPreservingReadOnly !== false || isArtifactPreservingStateRead(),
+          },
         }),
       { existingOnly: true },
     );

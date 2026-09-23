@@ -7,6 +7,7 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
+import { t } from "../../i18n/index.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -51,8 +52,13 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
     "openclaw-terminal-panel",
     () => import("../../components/terminal/terminal-panel-registration.ts"),
   ],
+  "link-reader": [
+    "openclaw-link-reader-panel",
+    () => import("../../components/link-reader-panel.ts"),
+  ],
   browser: ["openclaw-browser-panel", () => import("../../components/browser/browser-panel.ts")],
   desktop: ["openclaw-desktop-panel", () => import("../../components/desktop/desktop-panel.ts")],
+  portal: ["openclaw-portals-page", () => import("../portals/portals-page.ts")],
   companion: ["openclaw-chat-session-rail", () => import("./components/chat-session-rail.ts")],
   discussion: [
     "openclaw-session-discussion",
@@ -150,6 +156,7 @@ export function sidebarRegionCallbacks(params: {
 }
 
 export function renderSidebarRegion(params: {
+  presentationId: string;
   fetchFavicon?: LinkFaviconFetcher;
   availableWidth: number;
   callbacks: SidebarRegionCallbacks;
@@ -163,6 +170,7 @@ export function renderSidebarRegion(params: {
   primary: TemplateResult;
   requestUpdate: () => void;
 }): TemplateResult {
+  const panelIdPrefix = `chat-panel-${encodeURIComponent(params.presentationId)}`;
   const panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
   const panelOpen = params.layout.open === true;
   const hasPanels = params.layout.columns.length > 0;
@@ -205,6 +213,7 @@ export function renderSidebarRegion(params: {
           ? (regionLoading ?? null)
           : null
         : html`<openclaw-chat-sidebar-region
+            .panelIdPrefix=${panelIdPrefix}
             .layout=${params.layout}
             .fetchFavicon=${params.fetchFavicon}
             .panelDefinitions=${panelDefinitions}
@@ -217,7 +226,10 @@ export function renderSidebarRegion(params: {
           ></openclaw-chat-sidebar-region>`
     }
     <div
+      id=${`${panelIdPrefix}-conversation`}
       class="sidebar-region__primary"
+      role="region"
+      aria-label=${t("chat.sidePanel.conversation")}
       data-region=${chatMain ? "main" : "side"}
       ?hidden=${!isSidebarSlotVisible(params.layout, "conversation")}
     >
@@ -255,11 +267,16 @@ export function createSidebarFullMessageLoader(
     if (!state.client || !state.connected) {
       return null;
     }
-    return state.client.request("chat.message.get", {
-      sessionKey: request.sessionKey,
-      ...(request.agentId ? { agentId: request.agentId } : {}),
-      messageId: request.messageId,
-      maxChars: DETAIL_FULL_MESSAGE_MAX_CHARS,
-    });
+    const client = state.client;
+    const result = await client.request<Awaited<ReturnType<SidebarFullMessageLoader>>>(
+      "chat.message.get",
+      {
+        sessionKey: request.sessionKey,
+        ...(request.agentId ? { agentId: request.agentId } : {}),
+        messageId: request.messageId,
+        maxChars: request.maxChars ?? DETAIL_FULL_MESSAGE_MAX_CHARS,
+      },
+    );
+    return state.connected && state.client === client ? result : null;
   };
 }

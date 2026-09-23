@@ -74,9 +74,7 @@ async function handleSessionsList(params: Record<string, unknown>) {
 
 async function handleSessionsResolve(params: Record<string, unknown>) {
   const rt = await getRuntime();
-  const cfg = rt.getRuntimeConfig();
-  const resolved = await rt.resolveSessionKeyFromResolveParams({
-    cfg,
+  const resolved = rt.resolveSessionKeyFromResolveParams({
     projection: await borrowSessionRowProjection(),
     client: null,
     p: params as SessionsResolveParams,
@@ -142,7 +140,7 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
     requestedAgentId ??
     agentIds.values().next().value ??
     rt.resolveSessionAgentId({ sessionKey: "main", config: cfg });
-  const result = rt.searchSessionTranscripts({
+  const result = await rt.searchSessionTranscripts({
     agentId,
     storePath: rt.resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     query,

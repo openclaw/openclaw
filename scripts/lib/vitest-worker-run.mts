@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runManagedCommand } from "./managed-child-process.mts";
+import { createVitestResourceOwner } from "./vitest-resource-ownership.mts";
 import {
   requestVitestWorkerArtifacts,
   verifyVitestWorkerArtifacts,
@@ -11,13 +12,30 @@ import {
   type VitestWorkerDescriptor,
   type VitestWorkerManifest,
 } from "./vitest-worker-artifacts.mts";
+import { useVitestWorkerCache } from "./vitest-worker-cache-policy.mts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
-function createVitestWorkerDirectory() {
+function createVitestWorkerDirectory(env: NodeJS.ProcessEnv) {
   const parent = path.join(root, ".artifacts", "vitest-workers");
   fs.mkdirSync(parent, { recursive: true });
-  const directory = fs.mkdtempSync(path.join(parent, "run-"));
+  let directory: string;
+  if (!useVitestWorkerCache(env)) {
+    directory = fs.mkdtempSync(path.join(parent, "run-"));
+  } else {
+    // A retained or live generation keeps its slot. Only joined disposal releases it.
+    for (let slot = 0; ; slot++) {
+      directory = path.join(parent, `run-cache-${slot}`);
+      try {
+        fs.mkdirSync(directory, { mode: 0o700 });
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          throw error;
+        }
+      }
+    }
+  }
   fs.writeFileSync(path.join(directory, "package.json"), '{"type":"module"}\n');
   return directory;
 }
@@ -27,13 +45,18 @@ export function createVitestWorkerRun(
   env: NodeJS.ProcessEnv = process.env,
   parent?: VitestWorkerDescriptor,
 ) {
-  const directory = parent?.directory ?? createVitestWorkerDirectory();
+  const directory = parent?.directory ?? createVitestWorkerDirectory(env);
   let preparation: Promise<VitestWorkerManifest> | undefined;
+  let retainArtifacts:
+    | typeof import("./vitest-worker-cache.mts").retainVitestWorkerArtifacts
+    | undefined;
   let disposal: Promise<void> | undefined;
   const borrowers: Promise<unknown>[] = [];
   let channelError: Error | undefined;
   const compilerAbort = new AbortController();
   let compilerJoined = true;
+  let resources: ReturnType<typeof createVitestResourceOwner> | undefined;
+  let resourcesReleased = true;
   const onParentDisconnect = () => {
     channelError ??= new Error("Compiled subprocess owner disconnected before group completion");
     console.error(channelError);
@@ -60,6 +83,10 @@ export function createVitestWorkerRun(
         return JSON.parse(
           await fs.promises.readFile(path.join(directory, "manifest.json"), "utf8"),
         ) as VitestWorkerManifest;
+      }
+      if (useVitestWorkerCache(env)) {
+        // Load cleanup before the runner's loader service can stop during shutdown.
+        retainArtifacts = (await import("./vitest-worker-cache.mts")).retainVitestWorkerArtifacts;
       }
       compilerJoined = false;
       const code = await runManagedCommand({
@@ -100,11 +127,15 @@ export function createVitestWorkerRun(
       console.error(
         `[vitest-workers] prepared ${manifest.identity.slice(0, 12)} in ${Math.round(manifest.durationMs)}ms (${Object.keys(manifest.inputs).length} inputs, ${Object.keys(manifest.outputs).length} outputs)`,
       );
+      // The compiler requires a fresh directory; publish fixture ownership only before lending.
+      resources = createVitestResourceOwner(directory);
+      resourcesReleased = false;
       return manifest;
     })());
   }
   return {
     descriptor: { directory } satisfies VitestWorkerDescriptor,
+    prepare,
     borrow<T>(
       child: ChildProcess,
       completion: Promise<T>,
@@ -172,7 +203,9 @@ export function createVitestWorkerRun(
         const settled = await Promise.allSettled(borrowers);
         const uncertain = settled.find((result) => result.status === "rejected");
         try {
-          await preparation;
+          const manifest = await preparation;
+          resources?.assertReleased();
+          resourcesReleased = true;
           if (uncertain?.status === "rejected") {
             throw uncertain.reason;
           }
@@ -181,13 +214,18 @@ export function createVitestWorkerRun(
           }
           if (fs.existsSync(path.join(directory, "manifest.json"))) {
             console.error("[vitest-workers] verifying completed generation before cleanup");
-            await verifyVitestWorkerArtifacts(directory);
+            await verifyVitestWorkerArtifacts(directory, manifest);
+          }
+          if (!parent && manifest?.cacheSignature) {
+            if (await retainArtifacts?.(root, directory, manifest)) {
+              console.error("[vitest-workers] retained completed compiler outputs for reuse");
+            }
           }
         } finally {
           process.off("disconnect", onParentDisconnect);
-          if (uncertain || !compilerJoined) {
+          if (uncertain || !compilerJoined || !resourcesReleased) {
             console.error(
-              `[vitest-workers] retaining ${directory}: ${!compilerJoined ? "compiler" : "borrower"} join failed`,
+              `[vitest-workers] retaining ${directory}: ${!compilerJoined ? "compiler" : !resourcesReleased ? "fixture resource" : "borrower"} join failed`,
             );
           } else if (!parent) {
             // Large generations must not block signal delivery during final cleanup.

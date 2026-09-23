@@ -3,9 +3,9 @@ import { claimPendingAgentQuestionAnswer } from "openclaw/plugin-sdk/agent-harne
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import type { CodexServerNotification } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
@@ -37,6 +37,11 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt question refresh", () => {
+  beforeEach(() => {
+    // Keep cold fixture setup from expiring the turn before its question can be published.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  });
+
   it.each([
     { name: "gateway-backed", isSecret: false, refresh: false, stagedSource: false },
     { name: "secret", isSecret: true, refresh: false, stagedSource: false },
@@ -78,13 +83,15 @@ describe("runCodexAppServerAttempt question refresh", () => {
         return threadStartResult();
       }
       if (method === "turn/start") {
-        turnStarted.resolve();
         return turnStartResult();
       }
       if (method === "turn/interrupt") {
         await notify({
           method: "turn/completed",
-          params: { threadId: "thread-1", turn: { id: "turn-1", status: "interrupted" } },
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "interrupted", items: [] },
+          },
         });
       }
       if (method === "thread/backgroundTerminals/list") {
@@ -128,7 +135,7 @@ describe("runCodexAppServerAttempt question refresh", () => {
         pendingRefresh = true;
         return { content: [{ type: "text" as const, text: "generation changed" }], details: {} };
       });
-      dynamicToolBuildState.openClawCodingToolsFactory = () => [reload];
+      setCodexTestToolFactory(params, () => [reload]);
       params.pluginRuntimeRefreshPending = () => pendingRefresh;
       if (!params.sessionKey) {
         throw new Error("Expected the fixture's managed session key");
@@ -153,14 +160,19 @@ describe("runCodexAppServerAttempt question refresh", () => {
       }
     }
     params.onBlockReply = vi.fn();
-    const onRunProgress = vi.fn();
+    const onRunProgress = vi.fn<NonNullable<typeof params.onRunProgress>>((event) => {
+      // Host progress fires after the active turn's input bridge is installed.
+      if (event.reason === "turn:start") {
+        turnStarted.resolve();
+      }
+    });
     params.onRunProgress = onRunProgress;
     const closeHost = refresh
       ? await bindProductionHarnessHostCapabilitiesForTest(params)
       : undefined;
     const run = runCodexAppServerAttempt(params);
     await turnStarted.promise;
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
+    expect(handleRequest).toBeTypeOf("function");
 
     const response = handleRequest?.({
       id: "request-input-1",
@@ -325,7 +337,7 @@ describe("runCodexAppServerAttempt question refresh", () => {
         params: {
           threadId: "thread-1",
           turnId: "turn-1",
-          turn: { id: "turn-1", status: "completed" },
+          turn: { id: "turn-1", status: "completed", items: [] },
         },
       });
       await run;

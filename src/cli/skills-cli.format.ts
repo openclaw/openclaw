@@ -1,4 +1,5 @@
 // Formatting layer for `openclaw skills` commands; keeps discovery data separate from terminal UI.
+import type { SkillsCuratorCompatibleStatusResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
@@ -6,6 +7,7 @@ import {
 } from "../../packages/terminal-core/src/decorative-emoji.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import {
   hasMissingSkillRequirements,
@@ -449,4 +451,51 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   }
 
   return appendClawHubHint(lines.join("\n"));
+}
+
+export function formatSkillCuratorStatus(status: SkillsCuratorCompatibleStatusResult): string {
+  const timestamp = (value: number | null) =>
+    value === null ? "never" : new Date(value).toISOString();
+  const lines = [
+    `Last attempt: ${timestamp(status.lastAttemptAtMs)}`,
+    `Last success: ${timestamp(status.lastSuccessAtMs)}`,
+    `Counts: ${status.counts.active} active, ${status.counts.stale} stale, ${status.counts.archived} archived`,
+  ];
+  if (!("inventory" in status)) {
+    lines.push(
+      "Legacy inventory: this Gateway reports limited coverage. Upgrade the Gateway for current Workshop inventory.",
+    );
+  }
+  if (status.lastError) {
+    lines.push(`Last error: ${status.lastError}`);
+  }
+  const relative = (value: number) => formatTimeAgo(Math.max(0, Date.now() - value));
+  for (const review of Object.values(status.collectionReview ?? {})) {
+    lines.push(
+      `Collection review: attempted ${relative(review.attemptedAtMs)}; ${review.error ? `failed: ${review.error}` : review.succeededAtMs ? `succeeded ${relative(review.succeededAtMs)}` : "running"}`,
+    );
+  }
+  for (const [workspace, review] of Object.entries(status.experienceReview ?? {})) {
+    lines.push(
+      `Experience review ${workspace.slice(0, 8)}: ${review.outcome}${review.error ? `: ${review.error}` : review.proposalId ? ` (${review.proposalId})` : ""}; attempted ${relative(review.attemptedAtMs)}`,
+    );
+  }
+  const keyCounts = new Map<string, number>();
+  for (const skill of status.skills) {
+    keyCounts.set(skill.skillKey, (keyCounts.get(skill.skillKey) ?? 0) + 1);
+  }
+  for (const skill of status.skills) {
+    const pinned = skill.pinned ? " pinned" : "";
+    const lastUsed =
+      skill.lastUsedAtMs === null ? "not recorded" : new Date(skill.lastUsedAtMs).toISOString();
+    const label =
+      keyCounts.get(skill.skillKey) === 1
+        ? skill.skillKey
+        : `${skill.skillKey} (${skill.skillFile})`;
+    lines.push(`${label}  ${skill.state}${pinned}  last-used=${lastUsed}  uses=${skill.useCount}`);
+  }
+  for (const overlap of status.overlaps) {
+    lines.push(`Legacy overlap: ${overlap.left} ~ ${overlap.right}`);
+  }
+  return `${lines.join("\n")}\n`;
 }

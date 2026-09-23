@@ -72,11 +72,13 @@ export class SessionLinkTitler {
   }
 
   refresh(root = this.host): void {
+    // Share repeated references only within this synchronous roster projection.
+    const targets = new Map<string, SessionTitleTarget | null>();
     if (root.matches(SESSION_LINK_SELECTOR)) {
-      void this.decorate(root);
+      void this.decorate(root, false, targets);
     }
     for (const anchor of root.querySelectorAll<HTMLElement>(SESSION_LINK_SELECTOR)) {
-      void this.decorate(anchor);
+      void this.decorate(anchor, false, targets);
     }
   }
 
@@ -84,8 +86,12 @@ export class SessionLinkTitler {
     this.observer.disconnect();
   }
 
-  async decorate(element: HTMLElement, load = false): Promise<void> {
-    const target = this.targetForAnchor(element);
+  async decorate(
+    element: HTMLElement,
+    load = false,
+    targets?: Map<string, SessionTitleTarget | null>,
+  ): Promise<void> {
+    const target = this.targetForAnchor(element, targets);
     const anchor = element instanceof HTMLAnchorElement ? element : document.createElement("a");
     if (element !== anchor && element.classList.contains("markdown-session-link")) {
       anchor.dataset.sessionHref = element.dataset.sessionHref;
@@ -119,7 +125,10 @@ export class SessionLinkTitler {
     });
   }
 
-  private targetForAnchor(anchor: HTMLElement): SessionTitleTarget | null {
+  private targetForAnchor(
+    anchor: HTMLElement,
+    targets?: Map<string, SessionTitleTarget | null>,
+  ): SessionTitleTarget | null {
     const rawKey = anchor.dataset.sessionKey?.trim();
     if (rawKey && !anchor.dataset.sessionHref) {
       const parsed = parseAgentSessionKey(rawKey);
@@ -137,19 +146,31 @@ export class SessionLinkTitler {
       return null;
     }
     // Keep URL route intent (face, query, fragment) even when its identity is cached.
-    anchor.setAttribute("href", `${path.url.pathname}${path.url.search}${path.url.hash}`);
-    anchor.classList.add("markdown-session-link");
+    const href = `${path.url.pathname}${path.url.search}${path.url.hash}`;
+    if (anchor.getAttribute("href") !== href) {
+      anchor.setAttribute("href", href);
+    }
+    if (!anchor.classList.contains("markdown-session-link")) {
+      anchor.classList.add("markdown-session-link");
+    }
     anchor.removeAttribute("target");
     anchor.removeAttribute("rel");
-    anchor.removeAttribute("data-session-key");
-    const row = findLocalSessionReference(
-      this.context?.sessions.state.result?.sessions ?? [],
-      path.target,
-      this.mainKey(),
-    );
-    return row
-      ? { sessionKey: row.key, agentId: path.target.agentId, namespace: path.target.namespace }
-      : null;
+    let target = targets?.get(path.url.pathname);
+    if (target === undefined) {
+      const row = findLocalSessionReference(
+        this.context?.sessions.state.result?.sessions ?? [],
+        path.target,
+        this.mainKey(),
+      );
+      target = row
+        ? { sessionKey: row.key, agentId: path.target.agentId, namespace: path.target.namespace }
+        : null;
+      targets?.set(path.url.pathname, target);
+    }
+    if (!target) {
+      anchor.removeAttribute("data-session-key");
+    }
+    return target;
   }
 
   private setCacheEntry(key: string, entry: CacheEntry): void {
@@ -235,8 +256,12 @@ export class SessionLinkTitler {
       this.context?.basePath,
       { displayName: title, exactKey: true, mainKey: this.mainKey() },
     );
-    anchor.dataset.sessionKey = target.sessionKey;
-    anchor.classList.add("markdown-session-link");
+    if (anchor.dataset.sessionKey !== target.sessionKey) {
+      anchor.dataset.sessionKey = target.sessionKey;
+    }
+    if (!anchor.classList.contains("markdown-session-link")) {
+      anchor.classList.add("markdown-session-link");
+    }
     if (!anchor.dataset.sessionHref && href && anchor.getAttribute("href") !== href) {
       anchor.setAttribute("href", href);
     }

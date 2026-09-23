@@ -59,53 +59,41 @@ describe("AppSidebar context menu boundary", () => {
 });
 
 describe("AppSidebar multi-select", () => {
-  it("uses generic pin labels and routes menu hints through the shared tooltip", async () => {
+  it("uses generic pin labels and routes archive hints through the shared tooltip", async () => {
     const { sidebar } = await mountMultiSelect();
 
     for (const key of ["agent:main:a", "agent:main:b"]) {
       const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
       const label = row?.querySelector(".sidebar-recent-session__name")?.textContent?.trim();
       const pin = row?.querySelector<HTMLElement>("[data-sidebar-session-pin]");
-      const menu = row?.querySelector<HTMLElement>("[data-session-menu]");
-      const tooltip = menu?.closest("openclaw-tooltip") as
+      const archive = row?.querySelector<HTMLElement>("[data-sidebar-session-archive]");
+      const tooltip = archive?.closest("openclaw-tooltip") as
         | (HTMLElement & { content: string; describe: boolean })
         | null;
       expect(label).toBeTruthy();
       expect(pin?.getAttribute("aria-label")).toBe("Pin session");
       expect(pin?.getAttribute("title")).toBe("Pin session");
-      expect(menu?.getAttribute("aria-label")).toBe(`Open session menu: ${label}`);
-      expect(menu?.hasAttribute("title")).toBe(false);
-      expect(tooltip?.content).toBe("Open session menu");
+      expect(archive?.getAttribute("aria-label")).toBe(`Archive session: ${label}`);
+      expect(archive?.hasAttribute("title")).toBe(false);
+      expect(tooltip?.content).toBe("Archive session");
       expect(tooltip?.describe).toBe(false);
     }
   });
 
-  it("restores the thread action anchor when Tab exits its keyboard context menu", async () => {
+  it("restores the thread link when Tab exits its keyboard context menu", async () => {
     const { sidebar } = await mountMultiSelect();
     const trigger = sidebar.querySelector<HTMLElement>(
-      '[data-session-key="agent:main:a"] [data-session-menu]',
+      '[data-session-key="agent:main:a"] .sidebar-recent-session__link',
     );
-    const tooltip = trigger?.closest("openclaw-tooltip") as
-      | (HTMLElement & {
-          disabled: boolean;
-          renderRoot: ShadowRoot;
-          updateComplete: Promise<unknown>;
-        })
-      | null;
-    if (!trigger || !tooltip) {
-      throw new Error("expected session menu tooltip");
+    if (!trigger) {
+      throw new Error("expected session row link");
     }
-    const popup = tooltip.renderRoot.querySelector("wa-tooltip") as
-      | (HTMLElement & { open: boolean })
-      | null;
     trigger.focus();
-    expect(popup?.open).toBe(true);
 
-    trigger.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    trigger.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true }),
+    );
     await sidebar.updateComplete;
-    await tooltip.updateComplete;
-    expect(tooltip.disabled).toBe(true);
-    expect(popup?.open).toBe(false);
 
     const menu = await sessionMenu(sidebar);
     const item = menu.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])");
@@ -685,7 +673,7 @@ describe("AppSidebar catalog session rows", () => {
       expect(rows).toHaveLength(1);
       expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).not.toBeNull();
       // Live-row parity: the adopted row exposes the regular session actions.
-      expect(rows[0]?.querySelector("[data-session-menu]")).not.toBeNull();
+      expect(rows[0]?.querySelector("[data-sidebar-session-archive]")).not.toBeNull();
     } finally {
       vi.useRealTimers();
     }

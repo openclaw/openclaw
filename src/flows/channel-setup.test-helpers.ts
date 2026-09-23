@@ -1,5 +1,6 @@
 // Channel setup test helpers build channel metadata and prompt fixtures.
 import { vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 
 type ChannelMeta = import("../channels/plugins/types.core.js").ChannelMeta;
@@ -123,4 +124,135 @@ export function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): Plu
     }
   }
   return registry;
+}
+
+type CollectChannelStatus = typeof import("./channel-setup.status.js").collectChannelStatus;
+type EnsureChannelSetupPluginInstalled =
+  typeof import("../commands/channel-setup/plugin-install.js").ensureChannelSetupPluginInstalled;
+
+export function createChannelSetupMocks() {
+  const resolveAgentWorkspaceDir = vi.fn(
+    (_cfg?: unknown, _agentId?: unknown) => "/tmp/openclaw-workspace",
+  );
+  const resolveDefaultAgentId = vi.fn((_cfg?: unknown) => "default");
+  const listTrustedChannelPluginCatalogEntries = vi.fn((_params?: unknown): unknown[] => []);
+  const getTrustedChannelPluginCatalogEntry = vi.fn(
+    (_channelId: string, _params?: unknown): unknown => undefined,
+  );
+  const getChannelSetupPlugin = vi.fn((_channel?: unknown) => undefined);
+  const listChannelSetupPlugins = vi.fn((): unknown[] => []);
+  const listActiveChannelSetupPlugins = vi.fn((): unknown[] => []);
+  const loadChannelSetupPluginRegistrySnapshotForChannel = vi.fn(
+    (_params: Parameters<LoadChannelSetupPluginRegistrySnapshotForChannel>[0]) =>
+      makePluginRegistry(),
+  );
+  const ensureChannelSetupPluginInstalled = vi.fn(
+    async ({ cfg, entry }: Parameters<EnsureChannelSetupPluginInstalled>[0]) => ({
+      cfg,
+      installed: true,
+      pluginId: entry?.pluginId,
+      status: "installed",
+    }),
+  );
+  const resolveChannelSetupEntries = vi.fn(
+    (
+      _params: Parameters<ResolveChannelSetupEntries>[0],
+    ): ReturnType<ResolveChannelSetupEntries> => ({
+      entries: [],
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    }),
+  );
+  const collectChannelStatus = vi.fn(async (_params: Parameters<CollectChannelStatus>[0]) => ({
+    installedPlugins: [],
+    catalogEntries: [],
+    installedCatalogEntries: [],
+    statusByChannel: new Map(),
+    statusLines: [],
+  }));
+  const resolveChannelSetupWorkspaceDir = vi.fn((_cfg?: unknown) => "/tmp/openclaw-workspace");
+  const isChannelConfigured = vi.fn((_cfg?: unknown, _channel?: unknown) => true);
+  const factories = {
+    agentScope: () => ({
+      resolveAgentWorkspaceDir: (cfg?: unknown, agentId?: unknown) =>
+        resolveAgentWorkspaceDir(cfg, agentId),
+      resolveDefaultAgentId: (cfg?: unknown) => resolveDefaultAgentId(cfg),
+    }),
+    setupRegistry: () => ({
+      getChannelSetupPlugin: (channel?: unknown) => getChannelSetupPlugin(channel),
+      listActiveChannelSetupPlugins: () => listActiveChannelSetupPlugins(),
+      listChannelSetupPlugins: () => listChannelSetupPlugins(),
+    }),
+    channels: () => ({
+      getChatChannelMeta: (channelId: string) => ({ id: channelId, label: channelId }),
+      listChatChannels: () => [],
+      normalizeAnyChannelId: (channelId?: unknown) =>
+        typeof channelId === "string" ? channelId.trim().toLowerCase() || null : null,
+      normalizeChatChannelId: (channelId?: unknown) =>
+        typeof channelId === "string" ? channelId.trim().toLowerCase() || null : null,
+    }),
+    discovery: () => ({
+      resolveChannelSetupEntries: (params: Parameters<ResolveChannelSetupEntries>[0]) =>
+        resolveChannelSetupEntries(params),
+      shouldShowChannelInSetup: () => true,
+    }),
+    pluginInstall: () => ({
+      ensureChannelSetupPluginInstalled: (
+        params: Parameters<EnsureChannelSetupPluginInstalled>[0],
+      ) => ensureChannelSetupPluginInstalled(params),
+      loadChannelSetupPluginRegistrySnapshotForChannel: (
+        params: Parameters<LoadChannelSetupPluginRegistrySnapshotForChannel>[0],
+      ) => loadChannelSetupPluginRegistrySnapshotForChannel(params),
+    }),
+    registry: () => ({
+      resolveChannelSetupWizardAdapterForPlugin: (plugin?: { setupWizard?: unknown }) =>
+        plugin?.setupWizard,
+    }),
+    trustedCatalog: () => ({
+      listTrustedChannelPluginCatalogEntries: (params?: unknown) =>
+        listTrustedChannelPluginCatalogEntries(params),
+      getTrustedChannelPluginCatalogEntry: (channelId: string, params?: unknown) =>
+        getTrustedChannelPluginCatalogEntry(channelId, params),
+    }),
+    configured: () => ({
+      isChannelConfigured: (cfg?: unknown, channel?: unknown) => isChannelConfigured(cfg, channel),
+    }),
+    prompts: () => ({
+      maybeConfigureCommandOwner: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => cfg),
+      maybeConfigureDmPolicies: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => cfg),
+      promptConfiguredAction: vi.fn(),
+      promptRemovalAccountId: vi.fn(),
+      formatAccountLabel: vi.fn(),
+    }),
+    status: () => ({
+      collectChannelStatus: (params: Parameters<CollectChannelStatus>[0]) =>
+        collectChannelStatus(params),
+      findBundledSourceForCatalogChannel: vi.fn(() => undefined),
+      noteChannelPrimer: vi.fn(),
+      noteChannelStatus: vi.fn(),
+      resolveCatalogChannelSelectionHint: vi.fn(() => "download from <npm>"),
+      resolveChannelSelectionNoteLines: vi.fn(() => []),
+      resolveChannelSetupSelectionContributions: vi.fn(() => []),
+      resolveChannelSetupWorkspaceDir: (cfg?: unknown) => resolveChannelSetupWorkspaceDir(cfg),
+      resolveQuickstartDefault: vi.fn(() => undefined),
+    }),
+  };
+  return {
+    resolveAgentWorkspaceDir,
+    resolveDefaultAgentId,
+    listTrustedChannelPluginCatalogEntries,
+    getTrustedChannelPluginCatalogEntry,
+    getChannelSetupPlugin,
+    listChannelSetupPlugins,
+    listActiveChannelSetupPlugins,
+    loadChannelSetupPluginRegistrySnapshotForChannel,
+    ensureChannelSetupPluginInstalled,
+    resolveChannelSetupEntries,
+    collectChannelStatus,
+    resolveChannelSetupWorkspaceDir,
+    isChannelConfigured,
+    factories,
+  };
 }

@@ -23,7 +23,11 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import {
+  onInternalSessionTranscriptUpdate,
+  onSessionTranscriptUpdate,
+  type InternalSessionTranscriptUpdate,
+} from "../../sessions/transcript-events.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -60,8 +64,6 @@ const IDENTITY: WorkerConnectionIdentity = {
   protocolFeatures: ["worker-transcript-commit-v1"],
   credentialExpiresAtMs: 10_000,
 };
-
-const ADMITTED_OWNER = { identity: IDENTITY, assertCurrent: () => undefined };
 
 const ZERO_USAGE = createZeroUsageFixture();
 const PROVIDER_REPLAY = {
@@ -165,6 +167,7 @@ describe("worker transcript commit application", () => {
   let stateDatabasePath: string;
   let storePath: string;
   let sessionTarget: Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>>;
+  let ADMITTED_OWNER: Omit<Parameters<WorkerTranscriptCommitter["commit"]>[0], "request">;
   let cfg: OpenClawConfig;
   let committer: WorkerTranscriptCommitter;
   let ledgerStore: WorkerTranscriptCommitStore;
@@ -196,6 +199,7 @@ describe("worker transcript commit application", () => {
       sessionKey: SESSION_KEY,
       storePath,
     });
+    ADMITTED_OWNER = { identity: IDENTITY, sessionTarget, assertCurrent: () => undefined };
     const database = openOpenClawStateDatabase();
     stateDatabasePath = database.path;
     ledgerStore = createWorkerTranscriptCommitStore({ database });
@@ -251,7 +255,13 @@ describe("worker transcript commit application", () => {
 
   it("commits semantic turns as a generated parent-linked transcript and publishes normally", async () => {
     const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
-    unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+    const internalUpdates: InternalSessionTranscriptUpdate[] = [];
+    const offPublic = onSessionTranscriptUpdate((update) => updates.push(update));
+    const offInternal = onInternalSessionTranscriptUpdate((update) => internalUpdates.push(update));
+    unsubscribe = () => {
+      offPublic();
+      offInternal();
+    };
 
     const image = {
       type: "image" as const,
@@ -366,6 +376,10 @@ describe("worker transcript commit application", () => {
       ),
     );
     expect(updates[1]?.message).not.toHaveProperty("providerReplay");
+    expect(updates[1]).not.toHaveProperty("lifecycleRevision");
+    expect(internalUpdates.map((update) => update.lifecycleRevision)).toEqual(
+      entryIds.map(() => "worker-original-revision"),
+    );
   });
 
   it("durably materializes a user-only commit", async () => {
@@ -422,6 +436,7 @@ describe("worker transcript commit application", () => {
     });
     const outcome = await committer.commit({
       ...ADMITTED_OWNER,
+      sessionTarget: workTarget,
       request: createRequest({
         messages: [
           {
@@ -602,6 +617,8 @@ describe("worker transcript commit application", () => {
   });
 
   it("rejects a commit when lifecycle ownership changes in the writer queue", async () => {
+    const updates: InternalSessionTranscriptUpdate[] = [];
+    unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
     const { promise: ownerChangeGate, resolve: releaseOwnerChange } = createDeferred();
     const { promise: ownerChangeStarted, resolve: markOwnerChangeStarted } = createDeferred();
     const ownerChange = updateSessionEntry(
@@ -629,6 +646,7 @@ describe("worker transcript commit application", () => {
       },
     );
     expect(SessionManager.open(sessionTarget).getEntries()).toEqual([]);
+    expect(updates).toEqual([]);
   });
 
   it("replays the same tuple without duplicates and rejects a changed payload", async () => {
@@ -771,6 +789,7 @@ describe("worker transcript commit application", () => {
     await expect(
       committer.commit({
         identity: IDENTITY,
+        sessionTarget,
         request,
         assertCurrent: () => {
           if (++authorityChecks === 2) {

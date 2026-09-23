@@ -246,10 +246,9 @@ describe("AgentsHomePage", () => {
     );
     request.mockClear();
     emitChange();
-    await vi.waitFor(() => {
-      expect(page.textContent).toContain("Activity 299");
-      expect(second.textContent).toContain("Activity 299");
-    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(page.textContent).toContain("Activity 299");
+    expect(second.textContent).toContain("Activity 299");
     expect(calls("sessions.list")).toHaveLength(3);
     expect(calls("sessions.subscribe")).toHaveLength(0);
     expect(page.textContent).not.toContain("Activity 300");
@@ -258,13 +257,14 @@ describe("AgentsHomePage", () => {
     expect(rosterListenerCount()).toBe(1);
     request.mockClear();
     emitChange();
-    await vi.waitFor(() => expect(calls("sessions.list")).toHaveLength(3));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls("sessions.list")).toHaveLength(3);
     emitChange();
     second.remove();
     expect(rosterListenerCount()).toBe(0);
     request.mockClear();
     emitChange();
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(calls("sessions.list")).toHaveLength(0);
   });
 
@@ -284,6 +284,7 @@ describe("AgentsHomePage", () => {
     ]);
     emitChange();
     emitChange();
+    await vi.advanceTimersByTimeAsync(5_000);
     await vi.waitFor(() => expect(page.textContent).toContain("The tool is finished."));
     expect(page.querySelector(".agents-home__working")).toBeNull();
 

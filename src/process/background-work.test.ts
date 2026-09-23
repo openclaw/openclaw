@@ -24,6 +24,110 @@ describe("background work admission", () => {
   beforeEach(resetCommandQueueStateForTest);
   afterEach(resetCommandQueueStateForTest);
 
+  it("does not scan sibling lanes while reading registered owner widths", () => {
+    const owners = Array.from({ length: 32 }, (_, index) =>
+      createBackgroundWorkOwner({ owner: `core:stable-${index}`, maxConcurrent: (index % 3) + 1 }),
+    );
+    const members = owners.map((owner) => owner.lane);
+    const state = getQueueState();
+    const { lanes } = state;
+    const group = state.laneGroups.get("background-work");
+    const before = [...lanes.values()].map((lane) => ({
+      lane,
+      width: lane.maxConcurrent,
+      queue: lane.queue,
+      activeTaskIds: [...lane.activeTaskIds],
+      generation: lane.generation,
+    }));
+    const memberships = [...state.laneGroupByLane];
+    const nextTaskId = state.nextTaskId;
+    const nextQueueSequence = state.nextQueueSequence;
+    const ownGet = Object.getOwnPropertyDescriptor(lanes, "get");
+    const originalGet = lanes.get.bind(lanes);
+    let reads = 0;
+    const observed: string[] = [];
+    Object.defineProperty(lanes, "get", {
+      configurable: true,
+      value: (lane: string) => {
+        reads += 1;
+        return originalGet(lane);
+      },
+    });
+    try {
+      for (let index = 0; index < 1_000; index += 1) {
+        observed.push(owners[index % owners.length]!.lane);
+      }
+    } finally {
+      if (ownGet) {
+        Object.defineProperty(lanes, "get", ownGet);
+      } else {
+        Reflect.deleteProperty(lanes, "get");
+      }
+    }
+    expect(observed).toEqual(
+      Array.from({ length: 1_000 }, (_, index) => members[index % members.length]),
+    );
+    expect(lanes.size).toBe(members.length);
+    for (const saved of before) {
+      expect(lanes.get(saved.lane.lane)).toBe(saved.lane);
+      expect(saved.lane.maxConcurrent).toBe(saved.width);
+      expect(saved.lane.queue).toBe(saved.queue);
+      expect(saved.lane.queue.length).toBe(0);
+      expect([...saved.lane.activeTaskIds]).toEqual(saved.activeTaskIds);
+      expect(saved.lane.generation).toBe(saved.generation);
+      expect(saved.lane.draining).toBe(false);
+    }
+    expect(state.laneGroups.get("background-work")).toBe(group);
+    expect([...group!.members]).toEqual(members);
+    expect([...state.laneGroupByLane]).toEqual(memberships);
+    expect(state.nextTaskId).toBe(nextTaskId);
+    expect(state.nextQueueSequence).toBe(nextQueueSequence);
+    expect(reads).toBeLessThanOrEqual(1_000);
+  });
+
+  it("registers lazily and checks the current width without replacing matching owners", () => {
+    const owner = createBackgroundWorkOwner({ owner: "  core:current-width  ", maxConcurrent: 1 });
+    const state = getQueueState();
+    expect(state.lanes.size).toBe(0);
+    expect(state.laneGroups.size).toBe(0);
+    const lane = "background:core:current-width";
+    expect(owner.lane).toBe(lane);
+    const registered = state.lanes.get(lane);
+    const group = state.laneGroups.get("background-work");
+    expect(registered?.maxConcurrent).toBe(1);
+    expect([...group!.members]).toEqual([lane]);
+    expect(createBackgroundWorkOwner({ owner: "core:current-width", maxConcurrent: 1 }).lane).toBe(
+      lane,
+    );
+    for (const width of [0, 2, 3]) {
+      publishLaneConfiguration({ lanes: { [lane]: width } });
+      expect(() => owner.lane).toThrow("already registered with different concurrency");
+      expect(state.lanes.get(lane)).toBe(registered);
+      expect(registered?.maxConcurrent).toBe(width);
+      expect(state.laneGroups.get("background-work")).toBe(group);
+    }
+    publishLaneConfiguration({ lanes: { [lane]: 1 } });
+    expect(owner.lane).toBe(lane);
+    expect(state.lanes.get(lane)).toBe(registered);
+    expect(state.laneGroups.get("background-work")).toBe(group);
+  });
+
+  it.each([1, 2, 3])("keeps group-only membership lazy for owner width %s", (maxConcurrent) => {
+    const lane = "background:core:group-only";
+    publishLaneConfiguration({ groups: { "background-work": { budget: 3, members: [lane] } } });
+    const state = getQueueState();
+    const group = state.laneGroups.get("background-work");
+    const owner = createBackgroundWorkOwner({ owner: "core:group-only", maxConcurrent });
+    if (maxConcurrent === 1) {
+      expect(owner.lane).toBe(lane);
+    } else {
+      expect(() => owner.lane).toThrow("already registered with different concurrency");
+    }
+    expect(state.lanes.size).toBe(0);
+    expect(state.laneGroups.get("background-work")).toBe(group);
+    expect([...group!.members]).toEqual([lane]);
+  });
+
   it("reads absent and empty background groups without creating lanes", () => {
     const expected = {
       lane: CommandLane.Background,

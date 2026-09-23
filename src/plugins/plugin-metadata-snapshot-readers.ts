@@ -23,7 +23,54 @@ export const snapshotReaderSlot = resolveGlobalSingleton<SnapshotReaderSlot>(
   () => ({}),
 );
 
-/** Called by the snapshot modules at eval time; last registration wins. */
+const readerCustody = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginMetadataSnapshotReaderCustody"),
+  () => ({ owners: 0 }),
+);
+const readerKeys = [
+  "adoptCurrentPluginMetadataSnapshotIfAbsent",
+  "getCurrentPluginMetadataSnapshot",
+  "resolvePluginMetadataSnapshot",
+  "loadPluginMetadataSnapshot",
+] as const satisfies readonly (keyof SnapshotReaderSlot)[];
+
+/** Keep the running installation's readers until its final Gateway finishes closing. */
+export function retainPluginMetadataSnapshotReaders(): () => void {
+  if (readerCustody.owners++ === 0) {
+    for (const key of readerKeys) {
+      let reader = snapshotReaderSlot[key];
+      Object.defineProperty(snapshotReaderSlot, key, {
+        configurable: true,
+        enumerable: true,
+        get: () => reader,
+        set: (next: SnapshotReaderSlot[typeof key]) => {
+          // Released module copies assign this slot directly. Let bootstrap fill
+          // absent readers, but never replace a reader that owns live scope state.
+          reader ??= next;
+        },
+      });
+    }
+  }
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    if (--readerCustody.owners === 0) {
+      for (const key of readerKeys) {
+        Object.defineProperty(snapshotReaderSlot, key, {
+          configurable: true,
+          enumerable: true,
+          writable: true,
+          value: snapshotReaderSlot[key],
+        });
+      }
+    }
+  };
+}
+
+/** Called at module evaluation; a retained Gateway keeps its registered readers. */
 export function registerPluginMetadataSnapshotReaders(readers: SnapshotReaderSlot): void {
   Object.assign(snapshotReaderSlot, readers);
 }

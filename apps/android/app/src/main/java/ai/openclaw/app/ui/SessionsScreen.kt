@@ -50,8 +50,6 @@ import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.MicNone
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -533,7 +531,7 @@ internal fun SessionsScreen(
   }
 
   deleteGroupName?.let { group ->
-    AlertDialog(
+    AppAlertDialog(
       onDismissRequest = { deleteGroupName = null },
       containerColor = ClawTheme.colors.surfaceRaised,
       title = { Text(nativeString("Delete group?"), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
@@ -557,7 +555,7 @@ internal fun SessionsScreen(
   }
 
   deleteSessionTarget?.let { session ->
-    AlertDialog(
+    AppAlertDialog(
       onDismissRequest = { deleteSessionTarget = null },
       containerColor = ClawTheme.colors.surfaceRaised,
       title = { Text(nativeString("Delete thread?"), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
@@ -752,7 +750,7 @@ private fun SessionRow(
         }
         HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
       }
-      DropdownMenu(
+      AppDropdownMenu(
         expanded = menuExpanded,
         onDismissRequest = {
           menuExpanded = false
@@ -888,7 +886,7 @@ private fun SessionGroupHeader(
           onLongClick = { menuExpanded = true },
         ),
     )
-    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+    AppDropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
       SessionMenuItem(nativeString("Rename group…")) {
         menuExpanded = false
         onRename()
@@ -928,7 +926,7 @@ private fun SessionTextDialog(
 ) {
   var value by rememberSaveable(stateKey) { mutableStateOf(initialValue) }
   val canConfirm = allowEmpty || value.isNotBlank()
-  AlertDialog(
+  AppAlertDialog(
     onDismissRequest = onDismiss,
     containerColor = ClawTheme.colors.surfaceRaised,
     title = { Text(title, style = ClawTheme.type.section, color = ClawTheme.colors.text) },

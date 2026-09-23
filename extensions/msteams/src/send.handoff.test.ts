@@ -13,6 +13,7 @@ import { msteamsPlugin } from "./channel.js";
 import { sendMSTeamsMessages } from "./messenger.js";
 import { createMSTeamsReplayContext } from "./replay-context.js";
 import { loadMSTeamsSdkWithAuth } from "./sdk.js";
+import { sendPollMSTeams } from "./send.js";
 
 const { resolveMSTeamsSendContext } = vi.hoisted(() => ({
   resolveMSTeamsSendContext: vi.fn(),
@@ -209,74 +210,106 @@ describe("registered Teams delivery handoff", () => {
     }
   });
 
-  it("does not submit a Connector request when authority closes during SDK token acquisition", async () => {
-    const fixture = await createConnectorFixture();
-    const tokenStarted = createDeferred<void>();
-    const releaseToken = createDeferred<void>();
-    let active = true;
-    fixture.token.mockImplementation(async () => {
-      tokenStarted.resolve();
-      await releaseToken.promise;
-      return "fixture-token";
-    });
-    try {
-      const completion = msteamsPlugin.message!.send!.text!({
-        cfg,
-        to: `conversation:${conversationId}`,
-        text: "retired delivery",
-        assertDirectAdapterHandoff: () => {
-          if (!active) {
-            throw new Error("delivery authority closed");
-          }
-        },
-      }).then(
-        (result) => ({ result, error: undefined }),
-        (error: unknown) => ({ result: undefined, error }),
-      );
-      await tokenStarted.promise;
-      active = false;
-      releaseToken.resolve();
-      const settled = await completion;
-      expect(fixture.requests).toEqual([]);
-      expect(settled.error).toEqual(
-        expect.objectContaining({ message: expect.stringContaining("authority closed") }),
-      );
-    } finally {
-      releaseToken.resolve();
-      await fixture.close();
-    }
-  });
+  it.each(["text", "poll"] as const)(
+    "does not submit a %s Connector request when authority closes during SDK token acquisition",
+    async (kind) => {
+      const fixture = await createConnectorFixture();
+      const tokenStarted = createDeferred<void>();
+      const releaseToken = createDeferred<void>();
+      let active = true;
+      fixture.token.mockImplementation(async () => {
+        tokenStarted.resolve();
+        await releaseToken.promise;
+        return "fixture-token";
+      });
+      try {
+        const handoff = {
+          assertDirectAdapterHandoff: () => {
+            if (!active) {
+              throw new Error("delivery authority closed");
+            }
+          },
+        };
+        const completion = (
+          kind === "poll"
+            ? sendPollMSTeams({
+                cfg,
+                to: `conversation:${conversationId}`,
+                question: "Ship?",
+                options: ["Yes", "No"],
+                ...handoff,
+              })
+            : msteamsPlugin.message!.send!.text!({
+                cfg,
+                to: `conversation:${conversationId}`,
+                text: "retired delivery",
+                ...handoff,
+              })
+        ).then(
+          (result) => ({ result, error: undefined }),
+          (error: unknown) => ({ result: undefined, error }),
+        );
+        await tokenStarted.promise;
+        active = false;
+        releaseToken.resolve();
+        const settled = await completion;
+        expect(fixture.requests).toEqual([]);
+        expect(settled.error).toEqual(
+          expect.objectContaining({ message: expect.stringContaining("authority closed") }),
+        );
+      } finally {
+        releaseToken.resolve();
+        await fixture.close();
+      }
+    },
+  );
 
-  it("checks authority again after dispatch recording waits", async () => {
-    const fixture = await createConnectorFixture();
-    const dispatchStarted = createDeferred<void>();
-    const releaseDispatch = createDeferred<void>();
-    let active = true;
-    try {
-      const completion = msteamsPlugin.message!.send!.text!({
-        cfg,
-        to: `conversation:${conversationId}`,
-        text: "retired during dispatch recording",
-        assertDirectAdapterHandoff: () => {
-          if (!active) {
-            throw new Error("delivery authority closed");
-          }
-        },
-        onPlatformSendDispatch: async () => {
-          dispatchStarted.resolve();
-          await releaseDispatch.promise;
-        },
-      }).catch((error: unknown) => error);
-      await dispatchStarted.promise;
-      active = false;
-      releaseDispatch.resolve();
-      expect(await completion).toMatchObject({ retryable: false });
-      expect(fixture.requests).toEqual([]);
-    } finally {
-      releaseDispatch.resolve();
-      await fixture.close();
-    }
-  });
+  it.each(["text", "poll"] as const)(
+    "checks %s authority again after dispatch recording waits",
+    async (kind) => {
+      const fixture = await createConnectorFixture();
+      const dispatchStarted = createDeferred<void>();
+      const releaseDispatch = createDeferred<void>();
+      let active = true;
+      try {
+        const handoff = {
+          assertDirectAdapterHandoff: () => {
+            if (!active) {
+              throw new Error("delivery authority closed");
+            }
+          },
+          onPlatformSendDispatch: async () => {
+            dispatchStarted.resolve();
+            await releaseDispatch.promise;
+          },
+        };
+        const completion = (
+          kind === "poll"
+            ? sendPollMSTeams({
+                cfg,
+                to: `conversation:${conversationId}`,
+                question: "Ship?",
+                options: ["Yes", "No"],
+                ...handoff,
+              })
+            : msteamsPlugin.message!.send!.text!({
+                cfg,
+                to: `conversation:${conversationId}`,
+                text: "retired during dispatch recording",
+                ...handoff,
+              })
+        ).catch((error: unknown) => error);
+        await dispatchStarted.promise;
+        active = false;
+        releaseDispatch.resolve();
+        expect(await completion).toMatchObject({ retryable: false });
+        expect(fixture.requests).toEqual([]);
+      } finally {
+        releaseDispatch.resolve();
+        await fixture.close();
+      }
+    },
+  );
 
   it("checks at JSON transport submission after earlier SDK interceptors finish", async () => {
     const fixture = await createConnectorFixture();
@@ -339,6 +372,38 @@ describe("registered Teams delivery handoff", () => {
         receipt: { platformMessageIds: ["accepted-before-close"] },
       });
       expect(onDeliveryResult).toHaveBeenCalledOnce();
+      expect(fixture.requests).toHaveLength(1);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("retains the accepted poll ID when authority closes while the response is pending", async () => {
+    const fixture = await createConnectorFixture();
+    const submitted = createDeferred<ServerResponse>();
+    let active = true;
+    fixture.setResponder((response) => submitted.resolve(response));
+    try {
+      const completion = sendPollMSTeams({
+        cfg,
+        to: `conversation:${conversationId}`,
+        question: "Ship?",
+        options: ["Yes", "No"],
+        assertDirectAdapterHandoff: () => {
+          if (!active) {
+            throw new Error("delivery authority closed");
+          }
+        },
+      });
+      const response = await submitted.promise;
+      active = false;
+      response.writeHead(201, { "content-type": "application/json" });
+      response.end(JSON.stringify({ id: "accepted-poll-before-close" }));
+      await expect(completion).resolves.toMatchObject({
+        messageId: "accepted-poll-before-close",
+        conversationId,
+        pollId: expect.any(String),
+      });
       expect(fixture.requests).toHaveLength(1);
     } finally {
       await fixture.close();

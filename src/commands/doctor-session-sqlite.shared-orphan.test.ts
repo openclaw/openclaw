@@ -8,11 +8,11 @@ import {
 } from "../infra/deferred-plugin-migrations.js";
 import { readDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import * as directoryDurability from "../infra/directory-durability.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import {
   runDoctorSessionSqlite,

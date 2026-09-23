@@ -5,6 +5,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { Model } from "../llm/types.js";
 import { resolveClaudeThinkingProfile } from "../plugins/provider-claude-thinking.js";
 import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
 import type {
@@ -230,7 +231,6 @@ function appendCatalogAdvancedThinkingLevels(
   profile: ResolvedThinkingProfile,
   compat: ThinkingCatalogEntry["compat"],
   thinkingLevelMap: ThinkingCatalogEntry["thinkingLevelMap"],
-  agentRuntime?: string | null,
 ) {
   if (thinkingLevelMap) {
     for (const level of ["xhigh", "max"] as const) {
@@ -239,27 +239,19 @@ function appendCatalogAdvancedThinkingLevels(
       }
     }
   }
-  let supportsMax = profile.levels.some(({ id }) => id === "max");
-  for (const effort of compat?.supportedReasoningEfforts ?? []) {
-    const level = normalizeThinkLevel(effort);
+  for (const level of compat?.supportedReasoningEfforts ?? []) {
     if (
       level === "ultra" ||
       ((level === "adaptive" || level === "xhigh" || level === "max") &&
         (level === "adaptive" || thinkingLevelMap?.[level] !== null))
     ) {
       appendProfileLevel(profile, level);
-      supportsMax ||= level === "max";
     }
-  }
-  const runtime = normalizeOptionalLowercaseString(agentRuntime);
-  if (supportsMax && (runtime === "openclaw" || runtime === "auto")) {
-    // Max-only catalogs synthesize Ultra only for OpenClaw; other runtimes must advertise it.
-    appendProfileLevel(profile, "ultra");
   }
 }
 
-/** Resolve supported thinking levels and default for a provider/model pair. */
-export function resolveThinkingProfile(params: {
+/** Resolve only provider-owned effort choices, before adding harness modes. */
+function resolveModelThinkingProfile(params: {
   provider?: string | null;
   model?: string | null;
   catalog?: ThinkingCatalogEntry[];
@@ -327,13 +319,56 @@ export function resolveThinkingProfile(params: {
   }
 
   const profile = buildBaseThinkingProfile();
-  appendCatalogAdvancedThinkingLevels(
-    profile,
-    context.compat,
-    context.thinkingLevelMap,
-    params.agentRuntime,
-  );
+  appendCatalogAdvancedThinkingLevels(profile, context.compat, context.thinkingLevelMap);
   return normalizeThinkingProfile(profile, context.thinkingLevelMap, mappedLevels);
+}
+
+/** Ultra is a harness mode, independent of a model's native reasoning controls. */
+export function resolveThinkingProfile(
+  params: Parameters<typeof resolveModelThinkingProfile>[0],
+): ResolvedThinkingProfile {
+  const profile = resolveModelThinkingProfile(params);
+  const runtime = normalizeOptionalLowercaseString(params.agentRuntime);
+  const hostUltra = runtime === "openclaw" || runtime === "auto" || runtime === "claude-cli";
+  // Codex owns Ultra inference and cannot omit effort for an empty native ladder.
+  const nativeUltra =
+    runtime === "codex" && profile.levels.some(({ id }) => id !== "off" && id !== "ultra");
+  if (hostUltra || nativeUltra) {
+    appendProfileLevel(profile, "ultra");
+  }
+  return profile;
+}
+
+/** Lower harness-only Ultra at a provider boundary without inventing native effort support. */
+export function resolveProviderThinkingLevel(
+  params: Omit<Parameters<typeof resolveModelThinkingProfile>[0], "catalog"> & {
+    catalog?: (ThinkingCatalogEntry | Model)[];
+    level?: ThinkLevel;
+  },
+): Exclude<ThinkLevel, "ultra"> | undefined {
+  if (params.level !== "ultra") {
+    return params.level;
+  }
+  const catalog = params.catalog?.map(({ compat, ...entry }) => ({
+    ...entry,
+    // Transport-only compatibility (for example Anthropic cache controls) is
+    // not thinking metadata. Preserve every declared thinking capability.
+    compat:
+      compat &&
+      ("thinkingFormat" in compat ||
+        "supportsReasoningEffort" in compat ||
+        "supportedReasoningEfforts" in compat ||
+        "reasoningEffortMap" in compat)
+        ? compat
+        : undefined,
+  }));
+  const profile = resolveModelThinkingProfile({ ...params, catalog });
+  return profile.levels
+    .filter(
+      (entry): entry is RankedThinkingLevelOption & { id: Exclude<ThinkLevel, "ultra"> } =>
+        entry.id !== "ultra",
+    )
+    .toSorted((a, b) => b.rank - a.rank)[0]?.id;
 }
 
 /** List thinking level ids supported by provider/model. */
@@ -451,7 +486,10 @@ export function resolveSupportedThinkingLevelFromProfile(
     return profile.defaultLevel;
   }
   const requestedRank = THINKING_LEVEL_RANKS[level];
-  const ranked = profile.levels.toSorted((a, b) => b.rank - a.rank);
+  // A fallback or default must never opt into proactive orchestration.
+  const ranked = profile.levels
+    .filter((entry) => entry.id !== "ultra")
+    .toSorted((a, b) => b.rank - a.rank);
   return (
     ranked.find((entry) => entry.id !== "off" && entry.rank <= requestedRank)?.id ??
     ranked.findLast((entry) => entry.id !== "off")?.id ??

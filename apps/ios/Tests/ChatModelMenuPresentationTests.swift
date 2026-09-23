@@ -93,7 +93,7 @@ struct ChatModelMenuPresentationTests {
         #expect(ChatThinkingSliderPresentation.selectionID(index: 9, options: options) == nil)
     }
 
-    @Test func `thinking slider labels inherited and explicit effort distinctly`() {
+    @Test func `thinking slider labels show the effective level without a default caption`() {
         let options = [
             OpenClawChatThinkingLevelOption(id: "low", label: "Low"),
             OpenClawChatThinkingLevelOption(id: "high", label: "High"),
@@ -102,7 +102,7 @@ struct ChatModelMenuPresentationTests {
         #expect(ChatThinkingSliderPresentation.valueLabel(
             selectionID: OpenClawChatViewModel.inheritedThinkingSelectionID,
             effectiveLevelID: "high",
-            options: options) == "Default (High)")
+            options: options) == "High")
         #expect(ChatThinkingSliderPresentation.valueLabel(
             selectionID: "low",
             effectiveLevelID: "high",
@@ -110,7 +110,7 @@ struct ChatModelMenuPresentationTests {
         #expect(ChatThinkingSliderPresentation.valueLabel(
             selectionID: OpenClawChatViewModel.inheritedThinkingSelectionID,
             effectiveLevelID: "ultra",
-            options: options) == "Default (Ultra)")
+            options: options) == "Ultra")
     }
 
     @Test func `thinking slider exposes one notch per gateway stop`() {

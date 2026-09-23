@@ -37,9 +37,11 @@ export function createStaticCatalogSnapshotFixture(params: {
       ...(options?.readOnly ? { readOnly: true } : {}),
     };
     let current = true;
+    const retirement = new AbortController();
     const isCurrent = () => current;
     const supersede = () => {
       current = false;
+      retirement.abort();
     };
     retireAfterTest(supersede);
     const loadedMetadataSnapshot = options?.metadataWorkspace
@@ -64,6 +66,7 @@ export function createStaticCatalogSnapshotFixture(params: {
           input,
           catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
           isGenerationCurrent: isCurrent,
+          retirementSignal: retirement.signal,
           isBuildCurrent: isCurrent,
           prepareInboundPluginRegistry: options?.prepareInboundPluginRegistry,
         },
@@ -82,6 +85,7 @@ export function createStaticCatalogSnapshotFixture(params: {
       pluginMetadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
       snapshot: build.snapshot,
       isCurrent,
+      retirementSignal: retirement.signal,
       supersede,
       releaseGeneration,
     };

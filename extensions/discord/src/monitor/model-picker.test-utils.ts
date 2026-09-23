@@ -4,6 +4,7 @@ import type {
   ModelsProviderData,
   ModelsRuntimeChoice,
 } from "openclaw/plugin-sdk/models-provider-runtime";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 
 export function createModelsProviderData(
   entries: Record<string, string[]>,
@@ -70,4 +71,19 @@ export function setFixtureRuntimeChoices(
       byModel.set(`${provider}/${model}`, runtimes);
     }
   }
+}
+
+export function createResolvedAgentRoute(
+  overrides: Partial<ResolvedAgentRoute> = {},
+): ResolvedAgentRoute {
+  return {
+    agentId: "main",
+    channel: "discord",
+    accountId: "default",
+    sessionKey: "agent:main:discord:dm:owner",
+    mainSessionKey: "agent:main:main",
+    lastRoutePolicy: "session",
+    matchedBy: "default",
+    ...overrides,
+  };
 }

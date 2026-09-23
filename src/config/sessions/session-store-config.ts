@@ -76,6 +76,24 @@ export function isPerAgentSessionStoreConfig(storeConfig: string | undefined): b
   return !storeConfig?.trim() || storeConfig.includes("{agentId}");
 }
 
+export function isSameAuthoredSessionStoreConfig(
+  source: string | undefined,
+  target: string | undefined,
+): boolean {
+  return (!source?.trim() && !target?.trim()) || source === target;
+}
+
+export function isSameSessionStoreConfig(
+  source: string | undefined,
+  target: string | undefined,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (isPerAgentSessionStoreConfig(source) || isPerAgentSessionStoreConfig(target)) {
+    return isSameAuthoredSessionStoreConfig(source, target);
+  }
+  return isSameFixedSessionStoreConfig(source, target, env);
+}
+
 export function isSameFixedSessionStoreConfig(
   source: string | undefined,
   target: string | undefined,

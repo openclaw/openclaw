@@ -7,7 +7,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { type AgentsConfig, getRuntimeConfig, resetConfigRuntimeState } from "../config/config.js";
-import { drainSystemEvents, enqueueSystemEvent } from "../infra/system-events.js";
+import { drainSystemEvents } from "../infra/system-events.js";
+import { enqueueRoutedSystemEvent } from "../plugin-sdk/system-event-runtime.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { GatewayStartupCleanupError, rethrowGatewayStartupError } from "./server-shutdown.js";
@@ -316,20 +317,23 @@ describe("Gateway test environment lifecycle", () => {
   });
 
   it.each([
-    { scope: "per-sender", sessionKey: "agent:ops:work" },
-    { scope: "global", sessionKey: "global" },
+    { scope: "per-sender", sessionKey: "agent:ops:work", queueKey: "agent:ops:work" },
+    { scope: "global", sessionKey: "global", queueKey: "agent:ops:global" },
   ])(
     "reads $scope system events from the fixture's configured owner",
-    async ({ scope, sessionKey }) => {
+    async ({ scope, sessionKey, queueKey }) => {
+      const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
       testState.agentsConfig = { ownership: "explicit", entries: { main: {}, ops: {} } };
       testState.agentConfig = { systemAgent: { agentId: "ops" } };
       testState.sessionConfig = { scope, mainKey: "work" };
       resetConfigRuntimeState();
-      enqueueSystemEvent("fixture system event", { sessionKey });
+      // Publish fixture overrides before the SDK's real config reader observes them.
+      createGatewayConfigOverrides(actual).getRuntimeConfig();
+      enqueueRoutedSystemEvent("fixture system event", { sessionKey, agentId: "ops" });
       try {
         await expect(waitForSystemEvent()).resolves.toEqual(["fixture system event"]);
       } finally {
-        drainSystemEvents(sessionKey);
+        drainSystemEvents(queueKey);
       }
     },
   );

@@ -588,6 +588,26 @@ function shouldScanUiLiterals(repoPath: string): boolean {
   );
 }
 
+function createDoubleQuoteScanner() {
+  let quoted = false;
+  let escaped = false;
+  return (character: string | undefined): boolean => {
+    if (escaped) {
+      escaped = false;
+      return true;
+    }
+    if (quoted && character === "\\") {
+      escaped = true;
+      return true;
+    }
+    if (character === '"') {
+      quoted = !quoted;
+      return true;
+    }
+    return quoted;
+  };
+}
+
 function findClosingDelimiter(
   source: string,
   openingOffset: number,
@@ -595,23 +615,10 @@ function findClosingDelimiter(
   closing: string,
 ): number | null {
   let depth = 0;
-  let quoted = false;
-  let escaped = false;
+  const skipQuoted = createDoubleQuoteScanner();
   for (let index = openingOffset; index < source.length; index += 1) {
     const character = source[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (quoted && character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (character === '"') {
-      quoted = !quoted;
-      continue;
-    }
-    if (quoted) {
+    if (skipQuoted(character)) {
       continue;
     }
     if (character === opening) {
@@ -632,26 +639,13 @@ function expressionEnd(source: string, expressionStart: number): number {
     return source.length;
   }
   const start = expressionStart + cursor;
-  let quoted = false;
-  let escaped = false;
+  const skipQuoted = createDoubleQuoteScanner();
   let lineStart = start;
   const depths = { "(": 0, "[": 0, "{": 0 };
   const closingToOpening = { ")": "(", "]": "[", "}": "{" } as const;
   for (let index = start; index < source.length; index += 1) {
     const character = source[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (quoted && character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (character === '"') {
-      quoted = !quoted;
-      continue;
-    }
-    if (quoted) {
+    if (skipQuoted(character)) {
       continue;
     }
     if (character === "(" || character === "[" || character === "{") {
@@ -691,27 +685,14 @@ function splitTopLevelSegments(
 ): Array<{ end: number; start: number; value: string }> {
   const segments: Array<{ end: number; start: number; value: string }> = [];
   let segmentStart = start;
-  let quoted = false;
-  let escaped = false;
+  const skipQuoted = createDoubleQuoteScanner();
   let typeArgumentDepth = 0;
   let inDefaultValue = false;
   const depths = { "(": 0, "[": 0, "{": 0 };
   const closingToOpening = { ")": "(", "]": "[", "}": "{" } as const;
   for (let index = start; index < end; index += 1) {
     const character = source[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (quoted && character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (character === '"') {
-      quoted = !quoted;
-      continue;
-    }
-    if (quoted) {
+    if (skipQuoted(character)) {
       continue;
     }
     if (options.trackTypeArguments && !inDefaultValue && character === "<") {

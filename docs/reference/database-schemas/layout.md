@@ -15,6 +15,23 @@ title: "Database layout"
 
 The task registry uses the shared state database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
+In agent schema 23, `transcript_events` retains original event JSON as either
+`event_json` TEXT or `event_zstd` BLOB, with byte counts and bounded navigation
+metadata for compressed rows. Use the transcript accessor or supported exports
+to reconstruct history; selecting `event_json` alone omits compressed events.
+Memory chunk/cache embeddings are little-endian Float64 BLOBs. See
+[compact agent payload storage](/reference/database-schemas/agent-schema-history#compact-agent-payload-storage).
+
+Doctor normalizes historical task run and child-session identifiers together
+with their related subagent bindings, so scoped mutations can use the existing
+indexes. Legacy sidecar imports use the same transactional repair. Gateway
+restore and reads consume stored identifiers without repairing them. New task
+records and explicit identifier changes normalize before persistence and receipt
+publication; unrelated patches preserve the existing identity. Schema versions
+and retention are unchanged. `openclaw update` runs Doctor before activation;
+after a direct binary replacement or using an older writer, run
+`openclaw doctor --fix` before starting the new Gateway.
+
 ### Activity session recaps
 
 [Activity](/web/control-ui/settings#activity-tab) stores one optional `activitySummary` object in the existing `session_nodes.entry_json` session metadata. This is a reconstructible cache; the transcript remains canonical. The [approved persistence design](https://github.com/openclaw/openclaw/issues/147383) adds no SQL table, column, or database schema-version change. Current and `v2026.9.4` metadata serializers preserve unknown optional fields; unknown recap payload versions are treated as cache misses.
@@ -22,6 +39,17 @@ The task registry uses the shared state database. Runtime trajectory events live
 Payload version 1 records the recap text, generation time, session ID and lifecycle revision, transcript generation and leaf, chronological coverage, and whether oversized message content was omitted. The optional `formatRevision` identifies the generated prose format; revision 2 uses one to three concise sentences. Missing or older format revisions retain their text and coverage while the existing queue refreshes the prose. This adds no SQL migration or payload-version bump. A rewind or replacement invalidates an incompatible source binding. The Gateway reads bounded transcript chunks outside the metadata write and rechecks the current lifecycle and transcript branch before committing. Recap writes preserve session activity timestamps and ordering.
 
 The latest recap survives restart and archival. Deleting the session removes it; reset or replacement makes the prior lifecycle's recap unusable. Incognito sessions do not persist or generate this cache. A shared, bounded Gateway queue deduplicates generation across viewers, retains the previous recap on failure, and uses only the configured utility route. Disabling that route stops new generation. Removing or ignoring the optional field is a rollback path that leaves session and transcript data intact; removing the feature does not require reversing a database migration.
+
+### Transcript search row ownership
+
+In agent schema 23, `session_transcript_fts_rows` maps each FTS `rowid` to its
+session and nullable message ID. `id` is the primary key; indexes on
+`session_id` and `(session_id, message_id)` support exact deletion and
+reconciliation. The transcript projection owner maintains these derived facts
+with their FTS rows. Migration preserves the FTS content and rowids while
+replacing schema 22's lazy mapping and completeness counter. See
+[compact agent payload storage](/reference/database-schemas/agent-schema-history#compact-agent-payload-storage)
+for migration, recovery and downgrade behavior.
 
 ### Cold transcript archives
 
@@ -85,17 +113,21 @@ persisted text field, plus 32 bytes per row. Session totals include their events
 This is a retained-content estimate, not a limit on SQLite file, page, or WAL size.
 
 Older releases counted characters inconsistently, undercounting Unicode and
-allowing unchanged metadata writes to drift. The existing app-version upgrade
-repair and explicit shared-state schema repair rebuild all derived totals
+allowing unchanged metadata writes to drift. Explicit Doctor shared-state
+repair rebuilds all derived totals
 atomically, preserving event JSON text, identifiers, timestamps, and sequence.
 Repair does not prune history. The next ordinary session write applies the
 existing caps and eviction order, so corrected Unicode history may trim sooner
 and use transcript fallback when loaded.
 
-A current-app-version reopen skips this repair. Replacing code without changing
-the app version does not repair an already-open or current-version database;
-explicit schema repair remains the repair owner for that case. Accounting repair
-cannot recover history already evicted by an older writer. See [ACP CLI](/cli/acp).
+Normal runtime opens and automatic startup schema preparation leave existing
+accounting columns unchanged, including after the application version changes. If
+the supported older shape lacks accounting columns, adding them also initializes
+their totals in the same transaction. Run
+`openclaw doctor --fix` during update maintenance to repair historical accounting.
+Supported older-schema upgrades still perform the content transformations needed
+to preserve data while changing its schema. Accounting repair cannot recover
+history already evicted by an older writer. See [ACP CLI](/cli/acp).
 
 ### Meeting transcript tables
 
@@ -185,6 +217,12 @@ verification facts, repair attempts, confirmation/finish timestamps, and known
 downtime. Each JSON column has a 16 KiB hard limit with deterministic truncation
 and redaction. The ledger stores bounded diagnostic summaries, not raw logs or
 credentials. There is no automatic history deletion.
+
+Asynchronous history lookup and listing run their queries and record decoding
+in the shared-state read worker. They preserve source artifacts and inherited
+snapshot or disposable-read scopes, and return empty history without creating
+a missing database or ledger table. Reconciliation and ledger writes retain
+their existing owners.
 
 New drivers store optional `origin.driver` fields `host` (the hostname), `pid`,
 and `startIdentity` (the operating system's process-start identity as a decimal
@@ -279,6 +317,19 @@ metadata alone exceeds a hard limit, the write fails without changing the row.
 The CLI and Gateway share WAL-backed transactions, including while the Gateway
 is stopped. The first terminal outcome wins; subsequent verification can enrich
 its observed facts without rewriting success, failure, skip, or rollback status.
+Interrupted completion has one narrowly verified exception: a candidate records
+its installed version and build ID in the retained `finalize:installed-candidate`
+step before returning post-core completion to the installed updater. The Gateway
+watcher and Doctor share one ledger reconciliation owner, which may finish the
+latest interrupted verification or correct its `abandoned` result to `succeeded`
+only after all recorded drivers are positively dead and fresh installed-build,
+serving-build, readiness, and generation checks agree. Recovery descriptors and
+recorded repair, failure, or rollback evidence prevent that correction. The transaction
+rechecks the complete row and latest-run identity after probing, then records the
+verification, outcome, and an explanatory warning together. Older rows without
+the target identity remain unchanged, and Doctor explains the missing evidence.
+This uses existing step and verification fields; schemas and rollback readers
+remain unchanged.
 Explicit `update repair` can correct the older package-owner refusal
 misclassification to `skipped` once the installed version satisfies its resolved
 target. This exception requires the latest run to contain only the untouched
@@ -324,6 +375,37 @@ This change requires no schema migration. See the
 The worktree service owns template creation, reuse, invalidation, and cleanup under its existing allocation lease. It reserves a `preparing` row before creating the artifact and publishes `ready` only after preparation completes. Durable mutations recheck the lease inside synchronous state transactions; filesystem work runs outside those transactions. Cleanup uses the reserved template ID so an old operation cannot delete its replacement. Templates are replaced when the commit or checkout policy changes and retired after seven days without use.
 
 The additive table is ensured on first use and does not change the numeric database schema version. Existing worktree and snapshot records retain their meaning; no existing checkout is migrated or moved. Template artifacts are reconstructible, while registered worktree contents and recovery snapshots retain their existing preservation rules.
+
+### Conversation environments
+
+Temporary desktops and app previews attached to a conversation use
+`worker_environment_session_attachments` in the shared state database. The worker
+environment store owns this additive companion table. One row binds an exact
+session ID and lifecycle revision to one environment, with an attachment
+generation, creation and last-use timestamps, and a nullable closed timestamp.
+The environment row continues to own provisioning, provider leases, transport
+identity, credentials, and teardown. Execution placement remains independent.
+
+Allocation intent and attachment reservation commit together before provisioning.
+Concurrent creation and retries reuse the owned allocation. Stop closes the
+relation before waiting for remote cleanup; cleanup failure retains the relation
+and prevents replacement until the old lease is confirmed destroyed. Session
+reset or deletion retires it, and startup checks the canonical session incarnation
+before allowing access. The configured profile's `suspendAfter` expires idle
+attachments; active agent runs and desktop observers keep them active. Provider
+lease lifetime limits continue to apply. Closing a sidebar panel only releases
+its viewer. Terminal attachment rows follow the environment owner's seven-day
+retention through a cascading foreign key.
+
+The table is ensured when the worker environment store opens and does not change
+the numeric schema version or the meaning of existing placement columns. Older
+builds ignore the relation and show these machines as ordinary unassigned
+environments; they do not maintain conversation attachment activity or cleanup.
+Stop attached machines before downgrading when they should not remain running.
+Existing environment destruction and provider lifetime limits remain available.
+Re-upgrading validates retained session identities and retries pending cleanup.
+Database backup and rollback include the companion table with the existing
+shared state database; no external attachment state needs reconstruction.
 
 ### Cloud repository workspaces
 

@@ -91,6 +91,7 @@ export type ArmedDialogResponse = {
 export type ConnectedBrowser = {
   browser: Browser;
   cdpUrl: string;
+  engine?: "chromium" | "lightpanda";
   onDisconnected?: () => void;
 };
 

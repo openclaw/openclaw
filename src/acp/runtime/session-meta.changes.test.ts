@@ -2,15 +2,95 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import { readAcpSessionMeta, upsertAcpSessionMeta } from "./session-meta.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { buildAcpDatabaseSessionKey, selectAcpSessionRow } from "./session-meta-keys.js";
+import {
+  readAcpSessionMeta,
+  upsertAcpSessionMeta,
+  writeAcpSessionMetaForMigration,
+} from "./session-meta.js";
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+});
+
+it.each([
+  {
+    databaseKey: buildAcpDatabaseSessionKey("global", "ops"),
+    targets: [
+      { agentId: "ops", sessionKey: "global" },
+      { sessionKey: buildAcpDatabaseSessionKey("global", "ops") },
+    ],
+  },
+  {
+    databaseKey: "@agent:ops:global",
+    targets: [{ agentId: "ops", sessionKey: "global" }, { sessionKey: "@agent:ops:global" }],
+  },
+  {
+    databaseKey: "agent:main:acp:project",
+    targets: [{ sessionKey: "agent:main:acp:project" }],
+  },
+  {
+    databaseKey: "agent:MAIN:acp:PROJECT",
+    targets: [{ sessionKey: "agent:MAIN:acp:PROJECT" }, { sessionKey: "agent:main:acp:project" }],
+  },
+])("publishes only ACP migration candidates after commit for $databaseKey", async (fixture) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const { db } = openOpenClawStateDatabase({ env });
+    const observed: Array<{ change: SessionRowChange; transaction: boolean; row: unknown }> = [];
+    const unsubscribe = sessionChanges.subscribe((change) => {
+      observed.push({
+        change,
+        transaction: db.isTransaction,
+        row: selectAcpSessionRow(db, fixture.databaseKey)?.runtime_session_name,
+      });
+    });
+    const write = () =>
+      writeAcpSessionMetaForMigration({
+        env,
+        sessionKey: fixture.databaseKey,
+        meta: {
+          backend: "fixture",
+          agent: "fixture",
+          runtimeSessionName: "committed",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      });
+    try {
+      expect(() =>
+        runOpenClawStateWriteTransaction(
+          () => {
+            write();
+            expect(observed).toEqual([]);
+            throw new Error("rollback");
+          },
+          { env },
+        ),
+      ).toThrow("rollback");
+      expect(observed).toEqual([]);
+      write();
+      expect(observed).toEqual(
+        fixture.targets.map((change) => ({
+          change,
+          transaction: false,
+          row: "committed",
+        })),
+      );
+    } finally {
+      unsubscribe();
+    }
+  });
 });
 
 it("persists bare global metadata under a configured fixed-store owner", async () => {

@@ -22,6 +22,7 @@ import {
   bindAssembledAgentToolActionDescriptor,
   copyAgentToolMetadata,
 } from "./agent-tool-metadata.js";
+import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import {
   filterToolsByMessageProvider,
@@ -35,7 +36,7 @@ import {
   mergeAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { isApplyPatchAllowedForModel } from "./apply-patch-model-policy.js";
+import { resolveConfiguredApplyPatchPolicy } from "./apply-patch-policy.js";
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
@@ -86,7 +87,6 @@ import {
 } from "./tool-search.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
-import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
@@ -294,19 +294,15 @@ export function createOpenClawCodingToolsInternal(
     ...(attachmentReadRoot ? { readOnlyRoots: [attachmentReadRoot] } : {}),
   };
   const readOnly = sessionCoreToolPolicy?.readOnly ?? false;
-  const applyPatchConfig = execConfig.applyPatch;
-  // Required file roots still constrain patches after a full-mode change; shell policy is separate.
-  const applyPatchWorkspaceOnly =
-    workspaceOnly ||
-    (sessionCoreToolPolicy?.applyPatchWorkspaceOnly ?? applyPatchConfig?.workspaceOnly !== false);
-  const applyPatchEnabled =
-    !readOnly &&
-    applyPatchConfig?.enabled !== false &&
-    isApplyPatchAllowedForModel({
-      modelProvider: options?.modelProvider,
-      modelId: options?.modelId,
-      allowModels: applyPatchConfig?.allowModels,
-    });
+  const applyPatchPolicy = resolveConfiguredApplyPatchPolicy({
+    config: execConfig.applyPatch,
+    workspaceOnly,
+    readOnly,
+    requireWorkspaceOnly: options?.requireWorkspaceOnly === true,
+    sessionPolicy: sessionCoreToolPolicy,
+    modelProvider: options?.modelProvider,
+    modelId: options?.modelId,
+  });
 
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   options?.recordToolPrepStage?.("workspace-policy");
@@ -338,8 +334,7 @@ export function createOpenClawCodingToolsInternal(
     imageSanitization,
     modelHasVision: options?.modelHasVision,
     memoryWriteProvenance,
-    applyPatchEnabled,
-    applyPatchWorkspaceOnly,
+    ...applyPatchPolicy,
     execDefaults: {
       ...execDefaults,
       ...effectiveExecPolicy,
@@ -429,21 +424,13 @@ export function createOpenClawCodingToolsInternal(
   });
   // Plugin-only plans bypass createOpenClawTools, so the capability gate must
   // apply here too or narrow allowlists leak gated tools onto capless surfaces.
-  const toolCallerIdentity =
-    options && executionAgentId && executionSessionKey?.trim()
-      ? {
-          agentId: executionAgentId,
-          sessionKey: executionSessionKey.trim(),
-          ...(options.abortSignal ? { approvalSignals: [options.abortSignal] } : {}),
-          turnSourceChannel: resolveGatewayMessageChannel(
-            options.messageChannel ?? options.messageProvider,
-          ),
-          turnSourceTo:
-            options.currentMessagingTarget ?? options.currentChannelId ?? options.messageTo,
-          turnSourceAccountId: gatewayCaller.accountId,
-          turnSourceThreadId: options.currentThreadTs ?? options.messageThreadId,
-        }
-      : undefined;
+  const wrapGatewayCaller = createCodingToolsGatewayCaller({
+    options,
+    agentId: executionAgentId,
+    sessionKey: executionSessionKey,
+    accountId: gatewayCaller.accountId,
+    capabilityProfile,
+  });
   const pluginToolsOnly = filterToolsByClientCaps(
     includeOpenClawTools || !includePluginTools
       ? []
@@ -709,16 +696,8 @@ export function createOpenClawCodingToolsInternal(
   );
   options?.recordToolPrepStage?.("message-provider-policy");
   const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {
-    config: options?.config,
-    modelProvider: options?.modelProvider,
-    modelApi: options?.modelApi,
-    modelId: options?.modelId,
+    ...options,
     agentId,
-    sessionKey: options?.sessionKey,
-    agentDir: options?.agentDir,
-    modelCompat: options?.modelCompat,
-    suppressManagedWebSearch: options?.suppressManagedWebSearch,
-    runtimeToolAllowlist: options?.runtimeToolAllowlist,
     localModelLeanPreserveToolNames,
   });
   options?.recordToolPrepStage?.("model-provider-policy");
@@ -823,7 +802,7 @@ export function createOpenClawCodingToolsInternal(
     ...(options?.swarmCollector ? { approvalMode: "deny" as const } : {}),
     abortSignal: options?.abortSignal,
     recordToolPrepStage: options?.recordToolPrepStage,
-  }).map((tool) => wrapToolWithGatewayCallerIdentity(tool, toolCallerIdentity));
+  }).map(wrapGatewayCaller);
 }
 
 /** Build the SDK tool list without exposing core-only auxiliary read scope. */

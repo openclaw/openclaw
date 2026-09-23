@@ -4,8 +4,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import {
   transitionOwnedDeliveryQueueEntryInDatabase,
-  claimDeliveryQueueEntryPlatformSendInDatabase,
-  renewDeliveryQueueEntryPlatformSendLeaseInDatabase,
+  type claimDeliveryQueueEntryPlatformSendInDatabase,
   promoteDeliveryQueueEntryPlatformSendInDatabase,
   dispatchDeliveryQueueEntryPlatformSendInDatabase,
 } from "./delivery-queue-sqlite-claim.kernel.js";
@@ -14,7 +13,6 @@ import {
   type DeliveryQueueStateContext,
   type DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.js";
-import { generateSecureUuid } from "./secure-random.js";
 
 type PlatformClaimParams = Parameters<typeof claimDeliveryQueueEntryPlatformSendInDatabase>[1] & {
   stateDir?: string;
@@ -43,33 +41,6 @@ export function transitionOwnedDeliveryQueueEntry(
     (database) => transitionOwnedDeliveryQueueEntryInDatabase(database, params, transition),
     { database: params.database, env: resolveDeliveryQueueStateEnv(params.stateDir, context) },
     { operationLabel: `mutate owned ${params.queueName} delivery platform send` },
-  );
-}
-
-/** Claim a recoverable producer lease before any provider invocation. */
-export function claimDeliveryQueueEntryPlatformSend(
-  params: PlatformClaimParams,
-  context?: DeliveryQueueStateContext,
-): string | undefined {
-  const claimId = generateSecureUuid();
-  return runOpenClawStateWriteTransaction(
-    (database) => claimDeliveryQueueEntryPlatformSendInDatabase(database, params, claimId),
-    { env: resolveDeliveryQueueStateEnv(params.stateDir, context) },
-    { operationLabel: `claim ${params.queueName} delivery platform send` },
-  );
-}
-
-/** Renew only the exact unexpired producer that already owns the row. */
-export function renewDeliveryQueueEntryPlatformSendLease(
-  params: Pick<PlatformClaimParams, "queueName" | "id" | "stateDir"> & {
-    claimId: string;
-  },
-  context?: DeliveryQueueStateContext,
-): number | undefined {
-  return runOpenClawStateWriteTransaction(
-    (database) => renewDeliveryQueueEntryPlatformSendLeaseInDatabase(database, params),
-    { env: resolveDeliveryQueueStateEnv(params.stateDir, context) },
-    { operationLabel: `renew ${params.queueName} delivery platform send` },
   );
 }
 

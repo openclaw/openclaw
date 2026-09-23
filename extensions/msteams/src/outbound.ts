@@ -1,4 +1,3 @@
-// Msteams plugin module implements outbound behavior.
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
@@ -294,7 +293,14 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         ),
       );
     },
-    sendPoll: async ({ cfg, to, poll, threadId }) => {
+    sendPoll: async ({
+      cfg,
+      to,
+      poll,
+      threadId,
+      assertDirectAdapterHandoff,
+      onPlatformSendDispatch,
+    }) => {
       const maxSelections = poll.maxSelections ?? 1;
       const result = await sendPollMSTeams({
         cfg,
@@ -302,6 +308,8 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         question: poll.question,
         options: poll.options,
         maxSelections,
+        assertDirectAdapterHandoff,
+        onPlatformSendDispatch,
       });
       const pollStore = createMSTeamsPollStoreState();
       await pollStore.createPoll({

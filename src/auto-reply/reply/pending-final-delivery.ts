@@ -53,34 +53,19 @@ export function buildRecoverablePendingFinalDeliveryText(
     return undefined;
   }
 
-  const recoveryPayloads: ReplyPayload[] = [];
+  const recoveryText: string[] = [];
   for (const payload of sendablePayloads) {
     const textAndMedia = [
       payload.text,
-      ...collectDurableMediaDirectives(payload).map((mediaUrl) => `MEDIA:${mediaUrl}`),
+      ...(payload.mediaUrls ?? []).map((mediaUrl) => `MEDIA:${mediaUrl}`),
     ]
       .filter((value): value is string => Boolean(value?.trim()))
       .join("\n");
     if (textAndMedia) {
-      recoveryPayloads.push({
-        ...payload,
-        mediaUrl: undefined,
-        mediaUrls: undefined,
-        text: textAndMedia,
-      });
+      recoveryText.push(textAndMedia);
     }
   }
-  return buildPendingFinalDeliveryText(recoveryPayloads) || undefined;
-}
-
-/** Build the restart-recovery text represented by one or more final payloads. */
-function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
-  const text = payloads
-    .filter((payload) => payload.isReasoning !== true)
-    .map((payload) => payload.text)
-    .filter((textLocal): textLocal is string => Boolean(textLocal))
-    .join("\n\n");
-  return sanitizePendingFinalDeliveryText(text);
+  return sanitizePendingFinalDeliveryText(recoveryText.join("\n\n")) || undefined;
 }
 
 export function resolvePendingFinalDeliveryCompletion(
@@ -99,23 +84,6 @@ export function resolvePendingFinalDeliveryCompletion(
           : {}),
       }
     : undefined;
-}
-
-function collectDurableMediaDirectives(payload: ReplyPayload): string[] {
-  if (payload.sensitiveMedia === true) {
-    return [];
-  }
-  const mediaUrls = [...(payload.mediaUrls ?? []), ...(payload.mediaUrl ? [payload.mediaUrl] : [])];
-  const seen = new Set<string>();
-  return mediaUrls
-    .map((mediaUrl) => mediaUrl.trim())
-    .filter((mediaUrl) => {
-      if (!mediaUrl || seen.has(mediaUrl)) {
-        return false;
-      }
-      seen.add(mediaUrl);
-      return true;
-    });
 }
 
 function hasUnsupportedDurableRecoveryShape(payload: ReplyPayload): boolean {

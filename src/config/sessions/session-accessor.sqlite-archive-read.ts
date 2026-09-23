@@ -9,12 +9,10 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import {
-  openOpenClawAgentDatabaseReadOnly,
-  readOpenClawAgentDatabaseReadOnly,
-} from "../../state/openclaw-agent-db-readonly-open.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { hashSessionArchiveBytes } from "./session-accessor.sqlite-archive-artifact.js";
 import type {
   TranscriptArchiveReadPlan,
@@ -29,6 +27,10 @@ export function listTranscriptArchivesFromDatabase(
   selectors: readonly string[],
   archiveNames: readonly string[],
 ) {
+  // Archive metadata is optional until the first archive write.
+  if (!tableExists(db, "session_transcript_archives")) {
+    return [];
+  }
   let query = getNodeSqliteKysely<ArchiveDatabase>(db)
     .selectFrom("session_transcript_archives")
     .select([
@@ -73,15 +75,12 @@ export async function readTranscriptArchiveFinalInWorker(
   try {
     database.db.exec("BEGIN"); // sqlite-allow-raw: keep archive identities and bytes in one read snapshot.
     transactionOpen = true;
-    const listed = readOpenClawAgentDatabaseReadOnly(database, () =>
-      listTranscriptArchivesFromDatabase(
-        database,
-        plan.logicalAgentId,
-        [plan.sessionId ?? plan.sessionKey],
-        [],
-      ),
-    );
-    const archives = listed.found ? listed.value.toReversed() : [];
+    const archives = listTranscriptArchivesFromDatabase(
+      database,
+      plan.logicalAgentId,
+      [plan.sessionId ?? plan.sessionKey],
+      [],
+    ).toReversed();
     let result: TranscriptArchiveReadResult = {};
     for (const archive of archives) {
       if (

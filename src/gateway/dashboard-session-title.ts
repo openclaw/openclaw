@@ -1,19 +1,23 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isValidBase64 } from "@openclaw/media-core/base64";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { resolveNativeModelPrimary } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
+import { createCrustaceanSlug } from "../agents/session-slug.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
-import { generateConversationLabelWithFallback } from "../auto-reply/reply/conversation-label-generator.js";
+import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
+import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import type { ChatAttachment } from "./chat-attachments.js";
-import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import {
   hasExplicitSessionName,
@@ -36,8 +40,7 @@ type DashboardSessionTitleModelEntry = Pick<
 
 const DASHBOARD_SESSION_TITLE_MAX_CHARS = 60;
 const DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS = 1_000;
-const WORKTREE_SESSION_TITLE_TIMEOUT_MS = 8_000;
-const WORKTREE_SESSION_TITLE_ATTEMPT_TIMEOUT_MS = 4_000;
+const WORKTREE_SESSION_TITLE_WAIT_MS = 30_000;
 const DASHBOARD_SESSION_TITLE_PROMPT =
   "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message, in sentence case: capitalize only the first word and words that language always capitalizes. No emoji. Return only the title.";
 
@@ -92,10 +95,20 @@ export function buildDashboardSessionTitleSource(params: {
   return truncateUtf16Safe(source.trim(), DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS);
 }
 
-type SessionTitleAttempt =
-  | { kind: "persisted" }
-  | { kind: "skipped" }
-  | { kind: "in-flight"; settled: Promise<boolean> };
+type SessionTitleParams = {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry: SessionEntry | undefined;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  currentUserMessage?: string;
+  userMessage: string;
+  commitGuard?: () => void;
+  withSource?: WorktreeSourceStage;
+  retryFailedJoin?: boolean;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+};
 
 function isAutoTitleSessionKey(sessionKey: string): boolean {
   const rest = parseAgentSessionKey(sessionKey)?.rest ?? "";
@@ -123,7 +136,7 @@ function resolveDashboardTitleAuthProfile(params: {
   if (sessionProfile) {
     return sessionProfile;
   }
-  const configuredRef = resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)?.trim();
+  const configuredRef = resolveNativeModelPrimary(params.cfg, params.agentId)?.trim();
   const configuredProfile = configuredRef
     ? splitTrailingAuthProfile(configuredRef).profile
     : undefined;
@@ -153,15 +166,13 @@ async function generateDashboardSessionTitle(params: {
   agentId: string;
   entry?: DashboardSessionTitleModelEntry;
   userMessage: string;
-  attachments?: readonly ChatAttachment[];
-  timeoutMs?: number;
   utilityOnly?: boolean;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   const sourceText = buildDashboardSessionTitleSource({
     message: params.userMessage,
-    attachments: params.attachments,
   });
   if (!sourceText || sourceText.startsWith("/")) {
     return null;
@@ -187,10 +198,13 @@ async function generateDashboardSessionTitle(params: {
     primaryProvider: regularModel.provider,
     primaryModelRef: regularModelRef,
   });
-  const boundedSource = truncateUtf16Safe(sourceText, DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS);
   try {
+    const { generateConversationLabelWithFallback } =
+      await import("../auto-reply/reply/conversation-label-generator.js");
+    params.assertCurrent?.();
+    params.abortSignal?.throwIfAborted();
     const generated = await generateConversationLabelWithFallback({
-      userMessage: boundedSource,
+      userMessage: sourceText,
       prompt: DASHBOARD_SESSION_TITLE_PROMPT,
       cfg: params.cfg,
       agentId: params.agentId,
@@ -202,7 +216,7 @@ async function generateDashboardSessionTitle(params: {
       maxLength: DASHBOARD_SESSION_TITLE_MAX_CHARS,
       abortSignal: params.abortSignal,
       assertCurrent: params.assertCurrent,
-      ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
+      operatorAuthority: params.operatorAuthority,
       ...(params.utilityOnly ? { utilityOnly: true } : {}),
     });
     if (generated) {
@@ -211,20 +225,14 @@ async function generateDashboardSessionTitle(params: {
   } catch {
     params.assertCurrent?.();
     params.abortSignal?.throwIfAborted();
-    if (params.utilityOnly) {
-      return null;
-    }
-    // Fall through to the deterministic goal title; keep provider errors private.
   }
   // Speculative utility-only naming must not persist a provisional title that
   // would skip the healthy primary-model pass after send.
   if (params.utilityOnly) {
     return null;
   }
-  // No model (or a failed isolated completion): persist a readable topic from the
-  // first real user task so phone/Control UI sidebars are not first-bubble leftovers.
-  const fallback = deriveGoalSessionTitle(boundedSource, DASHBOARD_SESSION_TITLE_MAX_CHARS);
-  return fallback ? normalizeDashboardSessionTitle(fallback) : null;
+  // Saved titles also name Git branches; never persist raw prompt text as a fallback.
+  return createCrustaceanSlug();
 }
 
 /** Prepares a creation draft's title without creating or updating a session. */
@@ -235,6 +243,7 @@ export async function prepareDashboardSessionTitle(params: {
   userMessage: string;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   try {
     return await generateDashboardSessionTitle({ ...params, utilityOnly: true });
@@ -248,83 +257,65 @@ export async function prepareDashboardSessionTitle(params: {
 
 /** Worktree callers bound their own wait without cancelling another naming owner's request. */
 export async function generateWorktreeSessionTitle(
-  params: Parameters<typeof maybeGenerateSessionTitle>[0] & {
+  params: SessionTitleParams & {
     onError: (error: unknown) => void;
     onPersisted: () => void;
   },
 ): Promise<string | undefined> {
-  const request = maybeGenerateSessionTitle({ ...params, worktree: true }).then(async (attempt) => {
-    if (attempt.kind === "in-flight") {
-      await attempt.settled;
-    } else if (attempt.kind === "persisted") {
+  const request = maybeGenerateSessionTitle(params).then((persisted) => {
+    if (persisted) {
       params.onPersisted();
     }
   });
   try {
-    await withTimeout(request, WORKTREE_SESSION_TITLE_TIMEOUT_MS, "worktree title generation");
+    await withTimeout(request, WORKTREE_SESSION_TITLE_WAIT_MS, "worktree title generation");
   } catch (error) {
     params.onError(error);
   }
-  params.commitGuard?.();
-  const current = loadSessionEntry({
-    agentId: params.agentId,
-    sessionKey: resolveStoredSessionKeyForAgentStore(params),
-    storePath: params.storePath,
-  });
-  if (current?.sessionId !== params.sessionId) {
-    throw new Error("Session changed while naming its worktree; retry from the current session.");
-  }
-  return resolveExplicitSessionName(current);
+  const readCurrent = (assertSourceCurrent?: () => void) => {
+    params.commitGuard?.();
+    assertSourceCurrent?.();
+    const current = loadSessionEntry({
+      agentId: params.agentId,
+      sessionKey: resolveStoredSessionKeyForAgentStore(params),
+      storePath: params.storePath,
+    });
+    if (current?.sessionId !== params.sessionId) {
+      throw new Error("Session changed while naming its worktree; retry from the current session.");
+    }
+    return resolveExplicitSessionName(current);
+  };
+  return params.withSource
+    ? await params.withSource((source) => readCurrent(source.assertCurrent))
+    : readCurrent();
 }
 
-export async function maybeGenerateDashboardSessionTitle(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  entry: SessionEntry | undefined;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-  currentUserMessage?: string;
-  userMessage: string;
-}): Promise<boolean> {
-  const sourceText = params.userMessage.trim();
-  if (
-    !isDashboardSessionTitleCandidate({
-      sessionKey: params.sessionKey,
-      userMessage: sourceText,
-    })
-  ) {
-    return false;
-  }
-  // Dashboard sends never wait on a duplicate request: only the owning call
-  // may claim persistence (and emit sessions.changed), duplicates skip fast.
-  const attempt = await maybeGenerateSessionTitle({ ...params, userMessage: sourceText });
-  return attempt.kind === "persisted";
+export async function maybeGenerateDashboardSessionTitle(
+  params: SessionTitleParams,
+): Promise<boolean> {
+  return (
+    isDashboardSessionTitleCandidate(params) &&
+    (await maybeGenerateSessionTitle({ ...params, retryFailedJoin: true }))
+  );
 }
 
-export async function maybeGenerateSessionTitle(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  entry: SessionEntry | undefined;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-  currentUserMessage?: string;
-  userMessage: string;
-  worktree?: boolean;
-  commitGuard?: () => void;
-}): Promise<SessionTitleAttempt> {
+/** Joins existing work; only the caller that persists a title returns true. */
+export async function maybeGenerateSessionTitle(params: SessionTitleParams): Promise<boolean> {
   const sessionKey = resolveStoredSessionKeyForAgentStore(params);
   const scope = { agentId: params.agentId, sessionKey, storePath: params.storePath };
   const entry = loadSessionEntry(scope);
   if (hasExplicitSessionName(entry) || entry?.sessionId !== params.sessionId) {
-    return { kind: "skipped" };
+    return false;
   }
 
   const requestTarget = { ...scope, sessionId: params.sessionId };
   const existing = sessionTitleRequests.get(requestTarget);
   if (existing) {
-    return { kind: "in-flight", settled: existing };
+    const persisted = await (params.retryFailedJoin ? existing.catch(() => false) : existing);
+    // A failed join can retry once with fresh session state and this caller's authority.
+    return !persisted && params.retryFailedJoin
+      ? await maybeGenerateSessionTitle({ ...params, retryFailedJoin: false })
+      : false;
   }
 
   // A retry may be triggered by a later send or by discussion open. Always
@@ -346,26 +337,33 @@ export async function maybeGenerateSessionTitle(params: {
       ? params.userMessage.trim()
       : transcriptText);
   if (!sourceText) {
-    return { kind: "skipped" };
+    return false;
   }
 
-  const request = sessionTitleRequests.run(requestTarget, () =>
-    Promise.resolve().then(async () => {
-      params.commitGuard?.();
-      const generation = generateDashboardSessionTitle({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        entry: params.entry ?? entry,
-        userMessage: sourceText,
-        ...(params.worktree ? { timeoutMs: WORKTREE_SESSION_TITLE_ATTEMPT_TIMEOUT_MS } : {}),
-      });
-      const displayName = await (params.worktree
-        ? withTimeout(generation, WORKTREE_SESSION_TITLE_TIMEOUT_MS, "worktree title generation")
-        : generation);
-      if (!displayName) {
-        return false;
+  const generate = (abortSignal?: AbortSignal) =>
+    generateDashboardSessionTitle({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      entry: params.entry ?? entry,
+      userMessage: sourceText,
+      operatorAuthority: params.operatorAuthority,
+      ...(abortSignal ? { abortSignal } : {}),
+    });
+  const finish = async (generation: Promise<string | null>) => {
+    const displayName = await generation;
+    if (!displayName) {
+      return false;
+    }
+    const persist = async (assertSourceCurrent?: () => void) => {
+      const assertCommitAllowed = assertSourceCurrent
+        ? () => {
+            params.commitGuard?.();
+            assertSourceCurrent();
+          }
+        : params.commitGuard;
+      if (assertSourceCurrent) {
+        assertCommitAllowed?.();
       }
-
       let persisted = false;
       await patchSessionEntryCore(
         scope,
@@ -378,11 +376,41 @@ export async function maybeGenerateSessionTitle(params: {
         },
         {
           requireWriteSuccess: true,
-          ...(params.commitGuard ? { assertCommitAllowed: params.commitGuard } : {}),
+          ...(assertCommitAllowed ? { assertCommitAllowed } : {}),
         },
       );
       return persisted;
+    };
+    return params.withSource
+      ? await params.withSource((source) => persist(source.assertCurrent))
+      : await persist();
+  };
+
+  const request = sessionTitleRequests.run(requestTarget, () =>
+    Promise.resolve().then(async () => {
+      const withSource = params.withSource;
+      if (!withSource) {
+        params.commitGuard?.();
+        return await finish(generate());
+      }
+      return await runWithAsyncWorkResources(
+        async () => {
+          const runInGenerationContext = AsyncLocalStorage.snapshot();
+          const pending = await withSource((source) => {
+            params.commitGuard?.();
+            source.assertCurrent();
+            // Release source custody during inference; reacquire it only to persist.
+            const completion = runInGenerationContext(() =>
+              trackAsyncWork(() => generate(getAsyncWorkSignal())),
+            );
+            void completion.catch(() => undefined);
+            return { completion };
+          });
+          return await finish(pending.completion);
+        },
+        { cancelOnError: true },
+      );
     }),
   );
-  return (await request) ? { kind: "persisted" } : { kind: "skipped" };
+  return await request;
 }

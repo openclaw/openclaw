@@ -188,6 +188,7 @@ function createPreparedModelRuntime(config: Record<string, unknown>) {
     workspaceDir: "/tmp/openclaw-model-resolution",
     pluginRegistry: {},
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores: () => ({ authStorage, modelRegistry: emptyModelRegistry }),
   };
@@ -304,6 +305,7 @@ describe("embedded model resolution consistency", () => {
     const preparedModelRuntime = createPreparedModelRuntime(config);
 
     const chat = await resolveEmbeddedRunModelSetup({
+      assertCurrent: () => {},
       runParams: {
         config,
         prompt: "hello",

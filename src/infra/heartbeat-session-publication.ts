@@ -89,7 +89,10 @@ export async function publishHeartbeatSessionReply(params: {
       ) {
         throw new Error("heartbeat publication no longer owns the active transcript");
       }
-      const unavailable = resolveSessionWorkStartError(scope.sessionKey, current, expected);
+      const unavailable = resolveSessionWorkStartError(scope.sessionKey, current, {
+        ...expected,
+        purpose: "accepted-result-settlement",
+      });
       if (unavailable) {
         throw new Error(unavailable);
       }
@@ -252,6 +255,7 @@ export async function publishHeartbeatSessionReply(params: {
           scope,
           receipt.appended
             ? {
+                lifecycleRevision: expected.expectedLifecycleRevision ?? undefined,
                 message: receipt.message,
                 messageId: receipt.messageId,
                 ...(messageSeq !== undefined ? { messageSeq } : {}),
