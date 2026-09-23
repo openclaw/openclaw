@@ -403,9 +403,9 @@ export async function updateGitCheckout(params: {
       };
       const selected = await selectGitInspectionTarget({
         gitRoot: inspectionRoot,
-        // Published checkouts move before promotion; existing checkouts retain
-        // their staging storage and build cache independently of the private Git mirror.
-        artifactRoot: opts.publishGitCheckout ? inspectionRoot : gitRoot,
+        // Clone publication moves the repository, so its owner supplies stationary
+        // artifact storage. Existing checkouts keep their durable staging and cache.
+        artifactRoot: opts.gitArtifactStorageRoot ?? gitRoot,
         runCommand: runInspectionCommand,
         step: inspectionStep,
         workStep: inspectionWorkStep,
@@ -440,13 +440,20 @@ export async function updateGitCheckout(params: {
             gitRoot = await opts.publishGitCheckout();
             publishedCandidate = true;
           }
-          runtimePromotion = await prepareGitRuntimePromotion(
-            gitRoot,
-            root,
-            runInspectionCommand,
-            timeoutMs,
-            cleanupRoot,
-          );
+          // Filesystem staging shares command steps' progress, heartbeat, and failure reporting.
+          await runStep({
+            ...inspectionWorkStep("preflight-runtime-stage", [], root),
+            runCommand: async () => {
+              runtimePromotion = await prepareGitRuntimePromotion(
+                gitRoot,
+                root,
+                runInspectionCommand,
+                timeoutMs,
+                cleanupRoot,
+              );
+              return { code: 0, stdout: "", stderr: "" };
+            },
+          });
         },
       });
       if (selected.status !== "ok") {

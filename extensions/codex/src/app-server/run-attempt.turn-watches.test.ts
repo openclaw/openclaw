@@ -11,8 +11,12 @@ import * as mediaStore from "openclaw/plugin-sdk/media-store";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
-import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import {
+  expectSuccessfulAttempt,
+  expectTimedOutAttempt,
+  projectAttemptResult,
+} from "./attempt-terminal.test-support.js";
 import {
   TURN_FINALIZE_DRAIN_ABORT_GRACE_MS,
   TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
@@ -43,11 +47,6 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
-
-const projectAttemptResult = (result: EmbeddedRunAttemptResult) => ({
-  ...result,
-  ...readAttemptTerminal(result),
-});
 
 setupRunAttemptTestHooks();
 
@@ -196,20 +195,6 @@ function makeMediaProjectionGate() {
     throw new Error("expected projection gate");
   });
   return { projectionStarted, releaseProjection };
-}
-
-function expectSuccessfulAttempt(result: EmbeddedRunAttemptResult): void {
-  expect(readAttemptTerminal(result).aborted).toBe(false);
-  expect(readAttemptTerminal(result).timedOut).toBe(false);
-  expect(readAttemptTerminal(result).promptError).toBeNull();
-}
-
-function expectTimedOutAttempt(result: EmbeddedRunAttemptResult): void {
-  expect(readAttemptTerminal(result).aborted).toBe(true);
-  expect(readAttemptTerminal(result).timedOut).toBe(true);
-  expect(readAttemptTerminal(result).promptError).toBe(
-    "codex app-server execution budget timed out",
-  );
 }
 
 async function runExecutionTimeoutScenario(notifications: CodexServerNotification[]) {
@@ -1336,22 +1321,28 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
   });
 
-  it("settles a client-close route after the host trajectory capability closes", async () => {
-    const harness = createStartedThreadHarness();
-    const params = Object.assign(createTestParams(), {
-      trajectoryRecorder: { recordEvent: vi.fn(), flush: vi.fn() },
-    });
-    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
-    const run = runCodexAppServerAttempt(params);
+  it.each([
+    undefined,
+    { profileId: "staff-fixture", scopes: ["operator.write"], assertCurrent: () => {} },
+  ])(
+    "settles a client-close route after the host trajectory capability closes (%j)",
+    async (operatorSource) => {
+      const harness = createStartedThreadHarness();
+      const params = Object.assign(createTestParams(), {
+        trajectoryRecorder: { recordEvent: vi.fn(), flush: vi.fn() },
+      });
+      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, operatorSource);
+      const run = runCodexAppServerAttempt(params);
 
-    await harness.waitForMethod("turn/start");
-    closeHost();
-    harness.close();
+      await harness.waitForMethod("turn/start");
+      closeHost();
+      harness.close();
 
-    await expect(run).resolves.toMatchObject({
-      codexAppServerFailure: { kind: "client_closed_before_turn_completed" },
-    });
-  });
+      await expect(run).resolves.toMatchObject({
+        codexAppServerFailure: { kind: "client_closed_before_turn_completed" },
+      });
+    },
+  );
 
   it("retains completed-looking assistant text as a failure when the client closes before terminal", async () => {
     const result = await runClientCloseScenario([

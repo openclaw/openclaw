@@ -12,6 +12,11 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { validateFullReleaseCandidateBinding } from "./full-release-candidate-contract.mjs";
 import {
+  normalizeKnownFlakyJobs,
+  validateReleaseFlakeRecords,
+} from "./full-release-flake-policy.mjs";
+import { verifyReleaseFlakeRetryRecords } from "./full-release-flake-retry.mjs";
+import {
   publicationAdmissionContract,
   publicationObservationJson,
   publicationSourceContract,
@@ -26,6 +31,8 @@ import {
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   isReleaseCheckJobAdvisory,
+  normalizeReleaseLaneWaiver,
+  releaseJobAdvisoryReason,
   isReleaseGhArtifactMissingError,
   isSplitChangelogEvidenceDelta,
   classifyReleaseChangelogEvidenceComparison,
@@ -1117,25 +1124,60 @@ function normalizeManifestChildEvidence(value) {
   );
 }
 
-export function releaseAdvisoryJobEvidence(childEvidence, releaseProfile, workflowRef) {
+export function releaseAdvisoryJobEvidence(
+  childEvidence,
+  releaseProfile,
+  workflowRef,
+  laneWaiver = "",
+) {
+  const normalizedWaiver = normalizeReleaseLaneWaiver(laneWaiver);
   return Object.entries(childEvidence ?? {})
     .toSorted(([left], [right]) => left.localeCompare(right))
-    .flatMap(([child, evidence]) =>
-      /^releaseChecks(?:Independent|Candidate)?$/u.test(child)
-        ? evidence.jobs
-            .filter((job) =>
-              isReleaseCheckJobAdvisory({ jobName: job.name, releaseProfile, workflowRef }),
-            )
-            .toSorted(compareReleaseJobsByName)
-            .map((job) => ({
-              child,
-              job: job.name,
-              status: job.status,
-              conclusion: job.conclusion,
-              policy: "advisory",
-            }))
-        : [],
-    );
+    .flatMap(([child, evidence]) => {
+      const historical = /^releaseChecks(?:Independent|Candidate)?$/u.test(child)
+        ? evidence.jobs.filter((job) =>
+            isReleaseCheckJobAdvisory({ jobName: job.name, releaseProfile, workflowRef }),
+          )
+        : [];
+      const listed = new Set(historical.map((job) => job.name));
+      // Failed lanes that policy or the operator lane waiver keeps advisory.
+      const failed = evidence.jobs.filter(
+        (job) =>
+          !listed.has(job.name) &&
+          job.status === "completed" &&
+          !["neutral", "skipped", "success"].includes(String(job.conclusion ?? "")),
+      );
+      return [...historical, ...failed]
+        .map((job) => ({
+          job,
+          reason: listed.has(job.name)
+            ? "policy"
+            : releaseJobAdvisoryReason({
+                childKey: child,
+                jobName: job.name,
+                releaseProfile,
+                workflowRef,
+                laneWaiver: normalizedWaiver,
+                jobs: evidence.jobs,
+              }),
+        }))
+        .filter(({ reason }) => reason !== "")
+        .toSorted((left, right) => compareReleaseJobsByName(left.job, right.job))
+        .map(({ job, reason }) => {
+          /** @type {{ child: string, job: string, status: string, conclusion: string, policy: string, reason?: string }} */
+          const entry = {
+            child,
+            job: job.name,
+            status: job.status,
+            conclusion: job.conclusion,
+            policy: "advisory",
+          };
+          if (reason === "lane_waiver") {
+            entry.reason = reason;
+          }
+          return entry;
+        });
+    });
 }
 
 function manifestEvidenceIdentity(manifest) {
@@ -1241,6 +1283,13 @@ export function validateParentManifest(value, expected) {
           value.validationInputs,
           "release validation manifest validation inputs",
         );
+  const knownFlakyJobs = normalizeKnownFlakyJobs(value.knownFlakyJobs ?? []);
+  if (
+    JSON.stringify(knownFlakyJobs) !==
+    JSON.stringify(normalizeKnownFlakyJobs(validationInputs?.knownFlakyJobsJson || []))
+  ) {
+    throw new Error("release manifest known flaky jobs differ from validation inputs");
+  }
   const sourceAdmission = validatePublicationSourceBinding(value, expected);
   const publicationAdmission = validatePublicationAdmissionBinding(value, expected);
   normalizeReleaseTelegramWaiver({
@@ -1273,7 +1322,12 @@ export function validateParentManifest(value, expected) {
     );
   }
   const childEvidence = normalizeManifestChildEvidence(value.childEvidence);
-  const advisoryJobs = releaseAdvisoryJobEvidence(childEvidence, releaseProfile, value.workflowRef);
+  const advisoryJobs = releaseAdvisoryJobEvidence(
+    childEvidence,
+    releaseProfile,
+    value.workflowRef,
+    validationInputs?.laneWaiver,
+  );
   if (
     value.advisoryJobs !== undefined &&
     JSON.stringify(sortReleaseJsonValueKeys(value.advisoryJobs)) !==
@@ -1381,6 +1435,9 @@ export function validateParentManifest(value, expected) {
   }
   return {
     advisoryJobs,
+    ...(value.knownFlakyJobs !== undefined
+      ? { knownFlakyJobs, automaticRetries: value.automaticRetries }
+      : {}),
     ...(value.publicationAdmissionContract !== undefined
       ? { publicationAdmissionContract: value.publicationAdmissionContract, publicationAdmission }
       : {}),
@@ -1818,10 +1875,8 @@ export function validateManifestChildRun(
   return run;
 }
 
-export function validatePerformanceArtifactOnlyJobs(jobs, runAttempt) {
-  const normalizedRunAttempt = normalizePositiveInteger(runAttempt, "performance run attempt");
-  const currentJobs = jobs.filter((job) => Number(job.run_attempt) === normalizedRunAttempt);
-  const guards = currentJobs.filter((job) => job.name === "Verify artifact-only report mode");
+export function validatePerformanceArtifactOnlyJobs(jobs) {
+  const guards = jobs.filter((job) => job.name === "Verify artifact-only report mode");
   if (
     guards.length !== 1 ||
     guards[0].status !== "completed" ||
@@ -1829,7 +1884,7 @@ export function validatePerformanceArtifactOnlyJobs(jobs, runAttempt) {
   ) {
     throw new Error("performance artifact-only guard is missing or unsuccessful");
   }
-  const unsafePublisher = currentJobs.find(
+  const unsafePublisher = jobs.find(
     (job) =>
       String(job.name ?? "").startsWith("Publish ") &&
       String(job.name ?? "").endsWith(" report") &&
@@ -2471,7 +2526,6 @@ async function validateStrictChildRun({
   );
   let jobs;
   let composite;
-  let currentAttemptJobs;
   if (plannedChild && childEvidence) {
     if (childEvidence.effectiveRunAttempt > effectiveRunAttempt) {
       throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
@@ -2482,7 +2536,7 @@ async function validateStrictChildRun({
       runAttempt <= childEvidence.effectiveRunAttempt;
       runAttempt += 1
     ) {
-      currentAttemptJobs = await client.getRunAttemptJobs(runId, runAttempt);
+      const currentAttemptJobs = await client.getRunAttemptJobs(runId, runAttempt);
       attempts.push({ jobs: currentAttemptJobs, runAttempt });
     }
     const evidence = composeReleaseChildAttemptEvidence({
@@ -2540,20 +2594,16 @@ async function validateStrictChildRun({
       },
       releaseProfile,
       parentEvidence.manifest.workflowRef,
+      parentEvidence.manifest.validationInputs?.laneWaiver,
     )
   ) {
     throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
   if (child.manifestKey === "productPerformance") {
-    // A composite may carry earlier successes; the publication guard must pass
-    // in the current raw attempt, already fetched while composing the evidence.
+    // The authenticated composite selects the newest executed attempt per job,
+    // including a carried guard or a newer failure that supersedes its success.
     validatePerformanceArtifactOnlyJobs(
-      composite
-        ? currentAttemptJobs.map((job) =>
-            Object.assign({}, job, { run_attempt: effectiveRunAttempt }),
-          )
-        : jobs,
-      effectiveRunAttempt,
+      composite ? jobs : jobs.filter((job) => Number(job.run_attempt) === effectiveRunAttempt),
     );
   }
 
@@ -2562,6 +2612,7 @@ async function validateStrictChildRun({
       { [child.manifestKey]: { jobs } },
       releaseProfile,
       parentEvidence.manifest.workflowRef,
+      parentEvidence.manifest.validationInputs?.laneWaiver,
     ),
     conclusion: run.conclusion,
     dispatchNonce: `full-release-validation-${parentEvidence.manifest.runId}-${originAttempt}${child.suffix}`,
@@ -2644,7 +2695,21 @@ export async function validateReleaseRunEvidence(
     trustedWorkflowFullRef,
     trustedWorkflowSha,
   );
-  const evidenceClient = client ?? createReleaseEvidenceClient(normalizedRepository);
+  const rawClient = client ?? createReleaseEvidenceClient(normalizedRepository);
+  const attemptJobs = new Map();
+  const evidenceClient = {
+    ...rawClient,
+    getRunAttemptJobs(childRunId, runAttempt, options) {
+      const key = `${childRunId}:${runAttempt}:${options?.requireComplete === true}`;
+      if (!attemptJobs.has(key)) {
+        attemptJobs.set(
+          key,
+          Promise.resolve(rawClient.getRunAttemptJobs(childRunId, runAttempt, options)),
+        );
+      }
+      return attemptJobs.get(key);
+    },
+  };
   const verifier = resolveVerifierIdentity(verifierSourceSha, verifierSourceContent);
   const currentEvidence = await loadValidatedParentEvidence({
     client: evidenceClient,
@@ -2853,6 +2918,48 @@ export async function validateReleaseRunEvidence(
     : undefined;
   validateReleaseTelegramWaiverBinding(executionPlan, rootEvidence.manifest.validationInputs);
   validateReleaseCoveragePolicyBinding(executionPlan, rootEvidence.manifest.validationInputs);
+  if (
+    JSON.stringify(rootEvidence.manifest.knownFlakyJobs ?? []) !==
+    JSON.stringify(executionPlan?.knownFlakyJobs ?? [])
+  ) {
+    throw new Error("release manifest known flaky jobs differ from the immutable plan");
+  }
+  if (executionPlan) {
+    if (
+      executionPlan.knownFlakyJobs !== undefined &&
+      !Array.isArray(rootEvidence.manifest.automaticRetries)
+    ) {
+      throw new Error("release manifest omitted automatic retry receipts");
+    }
+    const retries = validateReleaseFlakeRecords(
+      rootEvidence.manifest.automaticRetries ?? [],
+      executionPlan,
+      Object.fromEntries(
+        Object.entries(rootEvidence.manifest.childEvidence ?? {}).map(([key, child]) => [
+          key,
+          { ...child, runAttempt: child.effectiveRunAttempt },
+        ]),
+      ),
+    );
+    if (
+      retries.some(
+        (record) => !["observed", "not-attempted", "rejected"].includes(record.outcome),
+      ) ||
+      (executionPlan.knownFlakyJobs ?? []).some(
+        (selector) => !retries.some((record) => record.child === selector.split(":", 1)[0]),
+      )
+    ) {
+      throw new Error("release manifest contains an unresolved automatic retry");
+    }
+  }
+  if (executionPlan && (executionPlan.knownFlakyJobs?.length ?? 0) > 0) {
+    await verifyReleaseFlakeRetryRecords(executionPlan, rootEvidence.manifest.automaticRetries, {
+      getRun: (childRunId) => evidenceClient.getRun(childRunId),
+      getAttempt: (childRunId, runAttempt) => evidenceClient.getRunAttempt(childRunId, runAttempt),
+      getJobs: (childRunId, runAttempt) => evidenceClient.getRunAttemptJobs(childRunId, runAttempt),
+      getLog: (jobId) => evidenceClient.getJobLog(jobId),
+    });
+  }
   const plannedByKey = new Map(
     (executionPlan?.children ?? []).map((plannedChild) => [plannedChild.key, plannedChild]),
   );
@@ -3482,8 +3589,13 @@ async function main() {
     }
 
     const selectedKeys = requiredChildKeysForManifest(sourceManifest);
+    if (sourceManifest.validationInputs?.laneWaiver) {
+      console.log(`lane-waiver: ${sourceManifest.validationInputs.laneWaiver}`);
+    }
     for (const job of sourceManifest.advisoryJobs) {
-      console.log(`advisory: ${job.child} ${job.status}/${job.conclusion || "none"} ${job.job}`);
+      console.log(
+        `advisory${job.reason === "lane_waiver" ? " (lane waiver)" : ""}: ${job.child} ${job.status}/${job.conclusion || "none"} ${job.job}`,
+      );
     }
     const expectedChildren = expectedSelectedChildDispatches(
       sourceManifest.runId,
@@ -3526,8 +3638,9 @@ async function main() {
       );
       if (child.manifestKey === "productPerformance") {
         validatePerformanceArtifactOnlyJobs(
-          await findParentJobsAll(childRunId, repository),
-          run.run_attempt,
+          (await findParentJobsAll(childRunId, repository)).filter(
+            (job) => Number(job.run_attempt) === Number(run.run_attempt),
+          ),
         );
       }
       children.push({ child, run: validatedRun });

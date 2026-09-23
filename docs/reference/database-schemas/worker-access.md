@@ -252,6 +252,17 @@ For writes, shared-state domain operations registered by
 `src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results
 through their original store/projection owner.
 
+Subagent completion, recovery, and delivery settlement use the task registry's
+worker transition owner. Accepted run updates retain FIFO order through preparation,
+commit, and publication. The worker rereads exact task and backing records, while
+the host rechecks the captured runtime, registry entry, and execution authority at
+admission. Delivery callbacks await settlement before mirroring or cleanup. The
+shipped synchronous detached-task SDK remains a separate compatibility adapter;
+other native task mutation callers remain migration debt. Slow main-thread
+coordinator warnings include the caller stack as well as the operation label,
+captured only after a wait exceeds 100 ms. Schemas, retention, and update behavior
+are unchanged.
+
 Streaming assistant and tool-result completion events use the session manager's
 existing SQLite writer domain. The host retains extension hooks, redaction, and
 tool-result custody; the worker validates the prepared parent, appends the exact

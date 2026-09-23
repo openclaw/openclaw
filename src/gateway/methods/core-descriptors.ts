@@ -713,4 +713,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.linkChannelIdentity", "users", "operator.admin", "2026.9"],
   ["users.unlinkChannelIdentity", "users", "operator.admin", "2026.9"],
   ["users.listChannelIdentities", "users", "operator.admin", "2026.9"],
+  // Self-service personal instructions never authorize shared workspace writes.
+  ["users.personalFile.get", "users", "operator.read", "2026.9"],
+  ["users.personalFile.set", "users", "operator.read", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

@@ -50,96 +50,97 @@ export async function waitForCommittedState(
   await expect.poll(readCommittedState).toBe(true);
 }
 
+export async function isComposerDraftCommitted(expected: CommittedStateArgs): Promise<boolean> {
+  const app = document.querySelector("openclaw-app") as HTMLElement & {
+    runtime?: {
+      context: {
+        gateway: {
+          connection: { gatewayUrl: string };
+          snapshot: { client: { recoveryScope?: string } | null };
+        };
+      };
+    };
+  };
+  const gateway = app.runtime?.context.gateway;
+  const recoveryScope = gateway?.snapshot.client?.recoveryScope;
+  if (
+    !gateway ||
+    !recoveryScope ||
+    !(await indexedDB.databases()).some((db) => db.name === "openclaw-control-ui")
+  ) {
+    return false;
+  }
+  const gatewayOwner = gateway.connection.gatewayUrl.trim() || "default";
+  // Browser probes cannot import Vitest-transformed modules. Read the exact
+  // durable owner/key and await the transaction, independently of the renderer.
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open("openclaw-control-ui");
+    request.addEventListener("success", () => resolve(request.result), { once: true });
+    request.addEventListener(
+      "error",
+      () => reject(request.error ?? new Error("IndexedDB open failed")),
+      { once: true },
+    );
+  });
+  try {
+    type DraftRecord = {
+      revision: number;
+      text: string;
+      attachments: { fileName?: string; selectionAnnotation?: { comment: string } }[];
+    };
+    const draft = await new Promise<DraftRecord | undefined>((resolve, reject) => {
+      const transaction = database.transaction("composerDrafts", "readonly");
+      const request = transaction
+        .objectStore("composerDrafts")
+        .get(JSON.stringify([gatewayOwner, recoveryScope, expected.scopeKey])) as IDBRequest<
+        DraftRecord | undefined
+      >;
+      transaction.addEventListener("complete", () => resolve(request.result), { once: true });
+      transaction.addEventListener(
+        "abort",
+        () => reject(transaction.error ?? new Error("IndexedDB read aborted")),
+        { once: true },
+      );
+      transaction.addEventListener(
+        "error",
+        () => reject(transaction.error ?? new Error("IndexedDB read failed")),
+        { once: true },
+      );
+    });
+    if (!draft) {
+      return false;
+    }
+    if (expected.text === null) {
+      return (
+        typeof draft.revision === "number" && draft.text === "" && draft.attachments.length === 0
+      );
+    }
+    return (
+      draft.text === expected.text &&
+      draft.attachments.length === expected.attachmentCount &&
+      (expected.attachmentNames === null ||
+        JSON.stringify(draft.attachments.map((a) => a.fileName)) === expected.attachmentNames) &&
+      (expected.annotationComments === null ||
+        JSON.stringify(draft.attachments.map((a) => a.selectionAnnotation?.comment ?? null)) ===
+          expected.annotationComments)
+    );
+  } finally {
+    database.close();
+  }
+}
+
 export async function waitForCommittedComposerDraft(
   page: Page,
   scopeKey: string,
   text: string | null,
   attachments: number | readonly string[],
+  annotationComments?: readonly (string | null)[],
 ): Promise<void> {
-  await waitForCommittedState(
-    page,
-    async (expected) => {
-      const app = document.querySelector("openclaw-app") as HTMLElement & {
-        runtime?: {
-          context: {
-            gateway: {
-              connection: { gatewayUrl: string };
-              snapshot: { client: { recoveryScope?: string } | null };
-            };
-          };
-        };
-      };
-      const gateway = app.runtime?.context.gateway;
-      const recoveryScope = gateway?.snapshot.client?.recoveryScope;
-      if (
-        !gateway ||
-        !recoveryScope ||
-        !(await indexedDB.databases()).some((db) => db.name === "openclaw-control-ui")
-      ) {
-        return false;
-      }
-      const gatewayOwner = gateway.connection.gatewayUrl.trim() || "default";
-      // Browser probes cannot import Vitest-transformed modules. Read the exact
-      // durable owner/key and await the transaction, independently of the renderer.
-      const database = await new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open("openclaw-control-ui");
-        request.addEventListener("success", () => resolve(request.result), { once: true });
-        request.addEventListener(
-          "error",
-          () => reject(request.error ?? new Error("IndexedDB open failed")),
-          { once: true },
-        );
-      });
-      try {
-        type DraftRecord = {
-          revision: number;
-          text: string;
-          attachments: { fileName?: string }[];
-        };
-        const draft = await new Promise<DraftRecord | undefined>((resolve, reject) => {
-          const transaction = database.transaction("composerDrafts", "readonly");
-          const request = transaction
-            .objectStore("composerDrafts")
-            .get(JSON.stringify([gatewayOwner, recoveryScope, expected.scopeKey])) as IDBRequest<
-            DraftRecord | undefined
-          >;
-          transaction.addEventListener("complete", () => resolve(request.result), { once: true });
-          transaction.addEventListener(
-            "abort",
-            () => reject(transaction.error ?? new Error("IndexedDB read aborted")),
-            { once: true },
-          );
-          transaction.addEventListener(
-            "error",
-            () => reject(transaction.error ?? new Error("IndexedDB read failed")),
-            { once: true },
-          );
-        });
-        if (!draft) {
-          return false;
-        }
-        if (expected.text === null) {
-          return (
-            typeof draft.revision === "number" &&
-            draft.text === "" &&
-            draft.attachments.length === 0
-          );
-        }
-        return (
-          draft.text === expected.text &&
-          draft.attachments.length === expected.attachmentCount &&
-          (expected.attachmentNames === null ||
-            JSON.stringify(draft.attachments.map((a) => a.fileName)) === expected.attachmentNames)
-        );
-      } finally {
-        database.close();
-      }
-    },
-    {
-      scopeKey,
-      text,
-      attachmentCount: typeof attachments === "number" ? attachments : attachments.length,
-      attachmentNames: typeof attachments === "number" ? null : JSON.stringify(attachments),
-    },
-  );
+  await waitForCommittedState(page, isComposerDraftCommitted, {
+    scopeKey,
+    text,
+    attachmentCount: typeof attachments === "number" ? attachments : attachments.length,
+    attachmentNames: typeof attachments === "number" ? null : JSON.stringify(attachments),
+    annotationComments: annotationComments ? JSON.stringify(annotationComments) : null,
+  });
 }

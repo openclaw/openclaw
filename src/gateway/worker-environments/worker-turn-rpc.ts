@@ -141,6 +141,11 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
 
   const placementClaim = (identity: WorkerConnectionIdentity) => identity.turnClaim ?? undefined;
 
+  const sourceFor = (identity: WorkerConnectionIdentity) => {
+    const claim = placementClaim(identity);
+    return claim ? options.placementStore?.getExecutionIdentityCapability?.(claim) : undefined;
+  };
+
   const processTurnBinding = (
     identity: WorkerConnectionIdentity,
   ): WorkerProcessTurnBinding | undefined => {
@@ -351,6 +356,10 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     request: WorkerTranscriptCommitParams,
   ): Promise<WorkerTranscriptCommitServiceResult> =>
     withLock(identity.environmentId, async () => {
+      const source = sourceFor(identity);
+      if (!source) {
+        return { ok: false, closeReason: "placement-mismatch" };
+      }
       const assertCurrent: () => undefined = () => {
         const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
           kind: "transcript",
@@ -359,13 +368,19 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
         if (!binding.ok) {
           throw new WorkerTranscriptAuthorityError(binding);
         }
+        source.receiptAuthority();
       };
       try {
         assertCurrent();
         if (!options.applyTranscriptCommit) {
           return { ok: false, closeReason: "gateway-unavailable" };
         }
-        const result = await options.applyTranscriptCommit({ identity, request, assertCurrent });
+        const result = await options.applyTranscriptCommit({
+          identity,
+          request,
+          sessionTarget: source.sessionTarget,
+          assertCurrent,
+        });
         // Persistence checks this owner after its queues and before commit; ACKs
         // also require the claim to remain live after post-commit publication.
         assertCurrent();
@@ -496,6 +511,10 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       if (!options.liveEvents) {
         return { ok: false, closeReason: "gateway-unavailable" };
       }
+      const source = sourceFor(identity);
+      if (!source) {
+        return { ok: false, closeReason: "placement-mismatch" };
+      }
       const placement = placementClaim(identity);
       const processTurn = processTurnBinding(identity);
       if (!placement || !processTurn) {
@@ -505,7 +524,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       const wasNewSequence = request.seq > (observed?.liveSeq ?? 0);
       // The environment lock owns trajectory settlement along with transcript
       // commits and terminal fences. Revocation remains immediate during this wait.
-      const result = await options.liveEvents.apply({ identity, request });
+      const result = await options.liveEvents.apply({ identity, request, source });
       const stale = validateLiveEvent(identity, request);
       if (stale) {
         return stale;
@@ -581,11 +600,19 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     if (!binding.ok) {
       return binding;
     }
+    const source = sourceFor(identity);
+    if (!source) {
+      return { ok: false, reason: "session-not-attached" };
+    }
     return inference.start({
       identity,
       request,
       sink,
-      revalidate: () => revalidateInference(identity, request),
+      sessionTarget: source.sessionTarget,
+      revalidate: () => {
+        source.receiptAuthority();
+        return revalidateInference(identity, request);
+      },
     });
   };
 
@@ -700,8 +727,6 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       inference.cancelSession(params.sessionId, params.runId),
     hasInferenceForSession: (sessionId: string, runId?: string): boolean =>
       inference.hasSession(sessionId, runId),
-    resolveInferenceSessionForRunId: (runId: string): string | undefined =>
-      inference.resolveSessionIdForRunId(runId),
     clear: () => {
       observedAckCursors.clear();
       pendingTerminalTurnFences.clear();

@@ -22,6 +22,7 @@ export type FileEditorDecorations = {
 export type FileEditorViewHandle = {
   destroy: () => void;
   setContent: (content: string) => void;
+  contentEquals: (content: string) => boolean;
   setEditable: (editable: boolean) => void;
   setLineWrapping: (wrap: boolean) => void;
   setDecorations: (decorations: FileEditorDecorations) => void;
@@ -110,6 +111,9 @@ export async function createFileEditorView(params: {
   });
 
   const clampLine = (line: number) => Math.max(1, Math.min(Math.floor(line), view.state.doc.lines));
+  // Compare through the configured separator: mixed line endings can serialize
+  // differently without changing the editor document or creating a draft.
+  const contentEquals = (content: string) => view.state.toText(content).eq(view.state.doc);
 
   return {
     destroy: () => {
@@ -128,11 +132,12 @@ export async function createFileEditorView(params: {
         view.setState(buildState(content));
         return;
       }
-      if (content === view.state.sliceDoc()) {
+      if (contentEquals(content)) {
         return;
       }
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
     },
+    contentEquals,
     setEditable: (nextEditable) => {
       if (destroyed) {
         return;

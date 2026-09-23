@@ -129,6 +129,11 @@ function isTaskRegistryReadCurrent(taskId: string, mode: "identity" | "settled")
   return true;
 }
 
+/** Inspect resident settlement inside an already admitted synchronous read batch. */
+export function isTaskRegistryTaskSettled(taskId: string): boolean {
+  return !hasPendingTaskRegistryEvents(taskId) && isTaskRegistryReadCurrent(taskId, "settled");
+}
+
 type TaskRegistryReadOwner = {
   context: OpenClawStateWorkerContext;
   store: TaskRegistryStore;
@@ -250,7 +255,7 @@ export async function prepareTaskRegistryRead(
     isTaskCurrent,
     isTaskSettled(taskId) {
       assertCurrent();
-      return !hasPendingTaskRegistryEvents(taskId) && isTaskRegistryReadCurrent(taskId, "settled");
+      return isTaskRegistryTaskSettled(taskId);
     },
     isChildSessionCurrent(childSessionKey) {
       assertCurrent();

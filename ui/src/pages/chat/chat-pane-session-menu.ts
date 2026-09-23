@@ -187,6 +187,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const toActionSession = (candidate: GatewaySessionRow) => ({
       key: candidate.key,
       sessionId: candidate.sessionId,
+      sharingRole: candidate.sharingRole,
       label:
         normalizeOptionalString(candidate.label) ??
         normalizeOptionalString(this.paneTitle) ??
@@ -258,6 +259,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
               currentSession,
               { pinned: !currentSession.pinned },
               scope,
+              { sessionScope: true },
             );
           }
           break;
@@ -332,7 +334,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         }
         case "toggle-archived":
           if (session.archived) {
-            await operations.patchSession(host, session, { archived: false }, scope);
+            await operations.patchSession(host, session, { archived: false }, scope, {
+              sessionScope: true,
+            });
           } else {
             await operations.archiveSessionWithUndo(host, session, scope);
           }
@@ -456,6 +460,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
       method: "sessions.patch",
       params: { key: row.key, label: null },
+      sessionScope: true,
+      session: row,
     });
     if (!access.allowed) {
       this.publishHeaderError(access.reason);
@@ -497,6 +503,11 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
       method: "sessions.patch",
       params: { key: session.key, ...patch },
+      sessionScope: true,
+      session: state.sessionsResult?.sessions.find(
+        (row) =>
+          areUiSessionKeysEquivalent(row.key, session.key) && row.sessionId === session.sessionId,
+      ),
     });
     if (!access.allowed) {
       this.publishHeaderError(access.reason);

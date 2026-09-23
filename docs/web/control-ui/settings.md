@@ -301,6 +301,11 @@ show the installed → target short commit SHAs on a separate line below the com
 count. **Compare on GitHub** opens a comparison when the tracked upstream is
 a GitHub repository; other installs show plain revisions. This distinguishes
 revisions that share a version number.
+After a checkout refresh, the count, revisions, and comparison link describe the
+same checked upstream. An automatic update campaign keeps its announced target;
+its displayed comparison stays bound to that target. If the installed revision
+has changed, the campaign shows its target without an outdated count or link.
+Commit details from a different comparison stay hidden.
 
 After confirmation, one update view shows the ordered phases, current or last
 step details, and verification results for the service, version, plugins,

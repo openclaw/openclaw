@@ -17,6 +17,7 @@ import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
+import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import type { FollowupQueueDisposition, QueuedFollowupReplyDelivery } from "./queue/types.js";
 import type { ReplyOptionsWithAdmissionTicket } from "./reply-admission-ticket.js";
@@ -70,6 +71,7 @@ type InternalReplySessionOptions = {
   /** Defers the child-completion wake until the visible waiting status is delivered. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
+  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   /** Publishes each executing turn's preferences without persisting them to its session. */
   onRunVerbosityResolved?: (settings: ReplyRunVerbosity) => void;
   /** Prevent implicit rollover after a caller has durably admitted this exact session. */

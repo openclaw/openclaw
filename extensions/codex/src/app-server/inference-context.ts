@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { isJsonObject, type JsonObject } from "./protocol.js";
+import { readCodexInferenceMetadata, type CodexInferenceMetadata } from "./inference-metadata.js";
+import type { JsonObject } from "./protocol-json.js";
+
+export { CODEX_INFERENCE_GENERATION_KEY } from "./inference-metadata.js";
 
 const MAX_CONTEXT_BYTES = 256 * 1024;
 const MAX_ACTIVE_ROOTS = 64;
-export const CODEX_INFERENCE_GENERATION_KEY = "openclaw_inference_generation";
 
 type Registration = {
   generation: string;
@@ -68,29 +70,11 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       return { generation: registration.generation, release: registration.release };
     },
     /** Caller must authenticate its private transport before parsing any model request. */
-    prepare(body: JsonObject) {
+    prepare(body: JsonObject, preparedMetadata?: CodexInferenceMetadata) {
       assertOpen();
-      const metadata = isJsonObject(body.client_metadata) ? body.client_metadata : undefined;
-      const raw = metadata?.["x-codex-turn-metadata"];
-      if (typeof raw !== "string" || Buffer.byteLength(raw) > 1024 * 1024) {
-        throw new Error("Codex inference request is missing bounded native metadata");
-      }
-      const value: unknown = JSON.parse(raw);
-      if (!isJsonObject(value)) {
-        throw new Error("Codex inference request has invalid native metadata");
-      }
-      const threadId = value.thread_id;
-      // Native memory requests omit nested turn identity; only present IDs can disagree.
-      if (metadata?.thread_id != null && threadId != null && metadata.thread_id !== threadId) {
-        throw new Error("Codex inference thread metadata disagrees");
-      }
-      const child = Boolean(
-        value.parent_thread_id ||
-        value.subagent_kind ||
-        metadata?.["x-openai-subagent"] ||
-        metadata?.["x-codex-parent-thread-id"],
-      );
-      const kind = value.request_kind;
+      const metadata = preparedMetadata ?? readCodexInferenceMetadata(body);
+      const child = Boolean(metadata.parentThreadId || metadata.subagentKind || metadata.subagent);
+      const kind = metadata.requestKind;
       // Native children/reviewers and compaction/memory keep their original instructions.
       if (child || kind === "compaction" || kind === "memory") {
         return { body, assertCurrent: assertOpen, signal: undefined };
@@ -98,8 +82,8 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       if (kind !== "turn" && kind !== "prewarm") {
         throw new Error("Codex inference request has an unsupported native purpose");
       }
-      const registration = typeof threadId === "string" ? roots.get(threadId) : undefined;
-      const generation = value[CODEX_INFERENCE_GENERATION_KEY];
+      const registration = metadata.threadId ? roots.get(metadata.threadId) : undefined;
+      const generation = metadata.generation;
       // Startup prewarm precedes host admission; it must never borrow a later turn's persona.
       if (kind === "prewarm" && body.generate === false && generation == null) {
         return { body, assertCurrent: assertOpen, signal: undefined };

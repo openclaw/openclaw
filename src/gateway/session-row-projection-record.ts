@@ -8,6 +8,7 @@ import type {
   InternalSessionEntry as SessionEntry,
   SessionAcpMeta,
 } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -19,6 +20,17 @@ import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
+import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+
+export type ProjectionOptions = {
+  cfg: OpenClawConfig;
+  getConfig?: () => OpenClawConfig;
+  getPolicyConfig?: () => OpenClawConfig;
+  modelCatalog?: Inputs["modelCatalog"];
+  getModelCatalog?: () => Promise<Inputs["modelCatalog"]>;
+  context?: Parameters<typeof readSessionRowFacts>[0]["context"];
+  placementFactsReader?: Pick<WorkerSessionPlacementStore, "readProjection">;
+};
 
 export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
   acpMeta: SessionAcpMeta | null;

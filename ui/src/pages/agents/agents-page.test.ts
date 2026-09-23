@@ -218,7 +218,7 @@ describe("AgentsPage gateway lifecycle", () => {
     page.loadActivePanelData();
     page.loadActivePanelData();
 
-    await waitForFast(() => expect(page.chatModelCatalog).toEqual(models));
+    await waitForFast(() => expect(page.modelCatalog.models).toEqual(models));
     expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("models.list", { view: "configured", agentId: "main" });
   });
@@ -239,15 +239,15 @@ describe("AgentsPage gateway lifecycle", () => {
     page.agentsSelectedId = "main";
 
     page.loadActivePanelData();
-    await waitForFast(() => expect(page.chatModelCatalog).toEqual(defaultModels));
+    await waitForFast(() => expect(page.modelCatalog.models).toEqual(defaultModels));
 
     page.agentsSelectedId = "worker";
     page.loadActivePanelData();
-    await waitForFast(() => expect(page.chatModelCatalog).toEqual(workerModels));
+    await waitForFast(() => expect(page.modelCatalog.models).toEqual(workerModels));
 
     page.agentsSelectedId = "main";
     page.loadActivePanelData();
-    await waitForFast(() => expect(page.chatModelCatalog).toEqual(defaultModels));
+    await waitForFast(() => expect(page.modelCatalog.models).toEqual(defaultModels));
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(1, "models.list", {
       view: "configured",
@@ -276,7 +276,7 @@ describe("AgentsPage gateway lifecycle", () => {
       page.agentsSelectedId = "main";
 
       page.loadActivePanelData();
-      await waitForFast(() => expect(page.chatModelCatalog[0]?.id).toBe("old"));
+      await waitForFast(() => expect(page.modelCatalog.models[0]?.id).toBe("old"));
       emitCatalogChanged(page.context.gateway);
       await waitForFast(() =>
         expect(page.chatModelCatalogStatus.error).toBe(
@@ -285,12 +285,12 @@ describe("AgentsPage gateway lifecycle", () => {
             : "Models unavailable",
         ),
       );
-      expect(page.chatModelCatalog).toEqual(models);
+      expect(page.modelCatalog.models).toEqual(models);
 
       page.ensureModelCatalog({ refresh: true });
       await waitForFast(() => expect(page.chatModelCatalogStatus.stale).toBe(false));
       expect(page.chatModelCatalogStatus.error).toBeNull();
-      expect(page.chatModelCatalog).toEqual([]);
+      expect(page.modelCatalog.models).toEqual([]);
       expect(request.mock.calls.map(([method, params]) => ({ method, params }))).toEqual(
         Array.from({ length: 3 }, () => ({
           method: "models.list",
@@ -322,12 +322,12 @@ describe("AgentsPage gateway lifecycle", () => {
     page.agentsSelectedId = "worker";
     page.loadActivePanelData();
 
-    await waitForFast(() => expect(page.chatModelCatalog).toEqual(workerModels));
+    await waitForFast(() => expect(page.modelCatalog.models).toEqual(workerModels));
     defaultResult.resolve({ models: defaultModels });
     await defaultResult.promise;
     await Promise.resolve();
 
-    expect(page.chatModelCatalog).toEqual(workerModels);
+    expect(page.modelCatalog.models).toEqual(workerModels);
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {
       view: "configured",
@@ -348,17 +348,17 @@ describe("AgentsPage gateway lifecycle", () => {
     page.agentsSelectedId = "main";
 
     page.loadActivePanelData();
-    await waitForFast(() => expect(page.chatModelCatalog).toEqual(oldModels));
+    await waitForFast(() => expect(page.modelCatalog.models).toEqual(oldModels));
 
     page.ensureModelCatalog();
     expect(request).toHaveBeenCalledTimes(1);
 
     page.ensureModelCatalog({ refresh: true });
-    await waitForFast(() => expect(page.chatModelCatalog).toEqual(oldModels));
+    await waitForFast(() => expect(page.modelCatalog.models).toEqual(oldModels));
     expect(request).toHaveBeenCalledTimes(1);
 
     emitCatalogChanged(page.context.gateway);
-    await waitForFast(() => expect(page.chatModelCatalog).toEqual(nextModels));
+    await waitForFast(() => expect(page.modelCatalog.models).toEqual(nextModels));
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -400,15 +400,15 @@ describe("AgentsPage gateway lifecycle", () => {
 
       if (replacement === "publication" || replacement === "gateway source") {
         expect(oldRequest.mock.calls.length + nextRequest.mock.calls.length).toBe(1);
-        expect(page.chatModelCatalog).toEqual([]);
+        expect(page.modelCatalog.models).toEqual([]);
         oldResult.resolve({ models: oldModels });
       }
-      await waitForFast(() => expect(page.chatModelCatalog).toEqual(nextModels));
+      await waitForFast(() => expect(page.modelCatalog.models).toEqual(nextModels));
       oldResult.resolve({ models: oldModels });
       await oldResult.promise;
       await Promise.resolve();
 
-      expect(page.chatModelCatalog).toEqual(nextModels);
+      expect(page.modelCatalog.models).toEqual(nextModels);
       expect(oldRequest.mock.calls.length + nextRequest.mock.calls.length).toBe(2);
     },
   );
@@ -427,15 +427,15 @@ describe("AgentsPage gateway lifecycle", () => {
     page.agentsSelectedId = "main";
 
     page.loadActivePanelData();
-    await waitForFast(() => expect(page.chatModelCatalog).toEqual(oldModels));
+    await waitForFast(() => expect(page.modelCatalog.models).toEqual(oldModels));
 
     setPageGateway(page, client, false);
-    expect(page.chatModelCatalog).toEqual([]);
+    expect(page.modelCatalog.models).toEqual([]);
     emitCatalogChanged(page.context.gateway);
     setPageGateway(page, client);
     page.loadActivePanelData();
 
-    await waitForFast(() => expect(page.chatModelCatalog).toEqual(nextModels));
+    await waitForFast(() => expect(page.modelCatalog.models).toEqual(nextModels));
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {
       view: "configured",
@@ -458,10 +458,10 @@ describe("AgentsPage gateway lifecycle", () => {
     await waitForFast(() => {
       expect(page.chatModelCatalogStatus.error).toBe("model catalog unavailable");
     });
-    expect(page.chatModelCatalog).toEqual([]);
+    expect(page.modelCatalog.models).toEqual([]);
 
     page.loadActivePanelData();
-    await waitForFast(() => expect(page.chatModelCatalog).toEqual(models));
+    await waitForFast(() => expect(page.modelCatalog.models).toEqual(models));
 
     expect(page.chatModelCatalogStatus.error).toBeNull();
     expect(request).toHaveBeenCalledTimes(2);

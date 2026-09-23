@@ -7,30 +7,43 @@ import type { SubagentRegistryHarness } from "../../subagent-test-fixtures.test-
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export function observeRootWork(): () => Promise<void> {
+export function observeRootWork(): (keepObserving?: boolean) => Promise<void> {
   const observations = [
+    vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission"),
     vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkContinuation"),
     // Detached completion resolves its result before this scope drains and releases its root.
     vi.spyOn(AsyncWorkScope.prototype, "run"),
   ];
-  return async () => {
+  const positions = observations.map(() => 0);
+  return async (keepObserving = false) => {
     const failures: unknown[] = [];
     try {
-      for (const observation of observations) {
-        for (const result of observation.mock.results) {
-          try {
-            if (result.type === "throw") {
-              throw result.value;
+      // A settled task writer can admit cleanup roots while another scope drains.
+      while (
+        observations.some(
+          (observation, index) => observation.mock.results.length > positions[index]!,
+        )
+      ) {
+        for (const [index, observation] of observations.entries()) {
+          while (positions[index]! < observation.mock.results.length) {
+            const result = observation.mock.results[positions[index]!]!;
+            positions[index]! += 1;
+            try {
+              if (result.type === "throw") {
+                throw result.value;
+              }
+              await result.value;
+            } catch (error) {
+              failures.push(error);
             }
-            await result.value;
-          } catch (error) {
-            failures.push(error);
           }
         }
       }
     } finally {
-      for (const observation of observations) {
-        observation.mockRestore();
+      if (!keepObserving) {
+        for (const observation of observations) {
+          observation.mockRestore();
+        }
       }
     }
     if (failures.length > 0) {

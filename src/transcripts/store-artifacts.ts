@@ -45,7 +45,9 @@ function dateSegment(value: string | undefined): string {
   return isoDate ?? new Date().toISOString().slice(0, 10);
 }
 
-export function transcriptSessionSelector(session: TranscriptSessionDescriptor): string {
+export function transcriptSessionSelector(
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+): string {
   return `${dateSegment(session.startedAt)}/${safeTranscriptPathSegment(session.sessionId)}`;
 }
 
@@ -70,7 +72,9 @@ export function legacyTranscriptSessionSelector(
   return `${date}/${segment}`;
 }
 
-export function transcriptSessionExportKey(session: TranscriptSessionDescriptor): string {
+export function transcriptSessionExportKey(
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+): string {
   return transcriptSessionSelector(session).toLowerCase();
 }
 
