@@ -25,7 +25,7 @@ describe("Agents API native session receipts", () => {
       if (request.init?.method === "POST") {
         return guardedResponse(request.url, Response.json({}));
       }
-      if (new URL(request.url).pathname.endsWith("/events")) {
+      if (new Headers(request.init?.headers).get("accept") === "text/event-stream") {
         return guardedResponse(request.url, stream.response(request.signal));
       }
       return guardedResponse(
@@ -100,14 +100,14 @@ describe("Agents API native session receipts", () => {
         }
         return guardedResponse(request.url, Response.json({}));
       }
-      if (request.url.includes("/turns?")) {
+      if (new Headers(request.init?.headers).get("accept") === "text/event-stream") {
+        return guardedResponse(request.url, stream.response(request.signal));
+      }
+      if (!inputTypes.includes("agent.session.input.cancel")) {
         return guardedResponse(
           request.url,
           Response.json({ data: [], has_more: false, last_id: null }),
         );
-      }
-      if (new URL(request.url).pathname.endsWith("/events")) {
-        return guardedResponse(request.url, stream.response(request.signal));
       }
       idleRequested.resolve();
       return guardedResponse(request.url, await idleReceipt.promise);
