@@ -110,13 +110,55 @@ loading the provider runtime or resolving credentials.
 ```json
 {
   "contracts": { "decisionProviders": ["example-decisions"] },
-  "decisionModels": [{ "provider": "example-decisions", "id": "fast", "name": "Fast decisions" }]
+  "decisionModels": [
+    {
+      "provider": "example-decisions",
+      "id": "fast",
+      "name": "Fast decisions",
+      "capabilities": {
+        "questionTypes": ["boolean", "choice", "score"],
+        "maxQuestions": 32,
+        "maxChoiceAlternatives": 64,
+        "maxScoreLevels": 16,
+        "maxInputTokens": 8192,
+        "inputTokenScope": "encoded-question",
+        "requiresBooleanCriteria": true,
+        "confidence": "provider-specific"
+      }
+    }
+  ]
 }
 ```
 
 Each entry requires a provider ID, model ID, and display name. The selector uses
 `example-decisions/fast`. Disabled plugins are excluded from the decision picker;
 saved unavailable selections remain visible for the operator to repair.
+
+`capabilities` is optional static metadata. It describes provider support for
+discovery and guidance; it does not prove that credentials or the runtime are
+ready, and its limits do not raise OpenClaw's host admission bounds.
+
+| Field                     | Required | Accepted value                                                             | Omission semantics                                                                                        |
+| ------------------------- | -------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `questionTypes`           | Yes      | Non-empty array containing up to three of `boolean`, `choice`, and `score` | The entire `capabilities` object is omitted when this field is absent or invalid; duplicates are removed. |
+| `maxQuestions`            | No       | Positive safe integer                                                      | No provider-specific question limit is advertised.                                                        |
+| `maxChoiceAlternatives`   | No       | Positive safe integer                                                      | No provider-specific Choice-alternative limit is advertised.                                              |
+| `maxScoreLevels`          | No       | Positive safe integer                                                      | No provider-specific Score-level limit is advertised.                                                     |
+| `maxInputTokens`          | No       | Positive safe integer                                                      | No provider-specific input-token limit is advertised.                                                     |
+| `inputTokenScope`         | No       | `encoded-question` or `state-plus-each-criterion`                          | The provider does not declare how `maxInputTokens` is accounted.                                          |
+| `requiresBooleanCriteria` | No       | Boolean                                                                    | No extra Boolean-criteria requirement is advertised.                                                      |
+| `confidence`              | No       | `provider-specific` or `none`                                              | No confidence-result semantic is advertised.                                                              |
+
+`encoded-question` means the provider counts its encoded request, including
+provider-added rubric overhead. `state-plus-each-criterion` means the shared
+state is counted with each criterion evaluation. `provider-specific` confidence
+is a provider metric, not a calibrated probability that an answer is correct;
+`none` declares that the provider does not return confidence.
+
+Malformed optional fields and unknown fields are ignored individually. A
+malformed `questionTypes` value removes the whole capability descriptor but does
+not remove the model entry. Duplicate `provider/id` entries keep the first valid
+model descriptor.
 
 ## Tool metadata reference
 

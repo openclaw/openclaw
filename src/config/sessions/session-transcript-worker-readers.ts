@@ -68,6 +68,23 @@ export function createSessionHistoryWorkerReaders(
           return value.fields;
         },
       ),
+    readRowBackfill: async (params) =>
+      await runRequest(
+        () => ({ kind: "session-row-backfill", params }),
+        JSON.stringify(params).length * 2,
+        (value) => {
+          if (
+            typeof value === "boolean" ||
+            Array.isArray(value) ||
+            value.kind !== "session-row-backfill"
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of transcript fields",
+            );
+          }
+          return value.fields;
+        },
+      ),
     run: async (prepare, inputBytes) =>
       await runRequest(prepare, inputBytes, (value) => {
         if (
@@ -76,6 +93,7 @@ export function createSessionHistoryWorkerReaders(
           (value.kind !== "rpc" &&
             value.kind !== "http" &&
             value.kind !== "delta" &&
+            value.kind !== "recent" &&
             value.kind !== "message-lookup")
         ) {
           throw new Error("Session history worker returned metadata instead of history");

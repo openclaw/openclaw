@@ -23,7 +23,7 @@ working.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
 - Codex app-server reports `0.149.0` or newer. The official plugin ships
-  `@openai/codex` `0.154.0`; newer custom, remote, and macOS desktop-owned
+  `@openai/codex` `0.155.1`; newer custom, remote, and macOS desktop-owned
   binaries continue with a compatibility warning and normal runtime validation.
 - The target Codex app-server can see the expected marketplace, plugin, and
   app inventory.
@@ -551,7 +551,10 @@ plugins, while unsafe schemas and ambiguous ownership fail closed:
 - Global `allow_destructive_actions` defaults to `true`.
 - Per-plugin `allow_destructive_actions` overrides the global policy for
   that plugin.
-- `false`: OpenClaw returns a deterministic decline.
+- `false`: OpenClaw excludes destructive hosted app tools before execution.
+  Native approval requests for permitted tools still go through OpenClaw consent,
+  including during a `/btw` side question. Plugin-provided MCP server approval
+  requests receive a deterministic decline.
 - `true`: OpenClaw auto-accepts only safe schemas it can map to an approval
   response, such as a boolean approve field.
 - `"auto"`: OpenClaw exposes destructive plugin actions to Codex, then

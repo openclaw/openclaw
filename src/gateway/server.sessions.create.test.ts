@@ -82,11 +82,13 @@ import {
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createMentionInbox } from "./mention-inbox.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionLog } from "./server-methods/sessions-shared.js";
 import { identifiedClient, soloClient } from "./server-methods/sessions-sharing.test-support.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import {
   copyGitWorkspace,
+  createGitWorkspace,
   settleWorkspaceRuns,
   waitForCreatedSessionRun,
 } from "./server.sessions.create.projects.test-support.js";
@@ -1983,26 +1985,6 @@ function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
-async function createGitWorkspace(root: string): Promise<string> {
-  const workspace = path.join(root, "workspace");
-  await fs.mkdir(workspace, { recursive: true });
-  await execFileAsync("git", ["-C", workspace, "init", "-b", "main"]);
-  await fs.writeFile(path.join(workspace, "README.md"), "base\n");
-  await execFileAsync("git", ["-C", workspace, "add", "README.md"]);
-  await execFileAsync("git", [
-    "-c",
-    "user.name=OpenClaw Test",
-    "-c",
-    "user.email=openclaw-test@example.invalid",
-    "-C",
-    workspace,
-    "commit",
-    "-m",
-    "initial",
-  ]);
-  return await fs.realpath(workspace);
-}
-
 async function removeSessionWorktree(key: string | undefined) {
   const worktree = key ? managedWorktrees.findLiveByOwner("session", key) : undefined;
   if (worktree) {
@@ -2466,7 +2448,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
         allowSnapshotLoss: true,
       });
     }
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     testState.sessionConfig = undefined;
     await openClawState.cleanup();
@@ -2598,7 +2580,7 @@ test.each([
         });
       }
       diskSpace.mockRestore();
-      closeOpenClawStateDatabaseForTest();
+      await disposeSessionReadContexts();
       testState.agentConfig = undefined;
       testState.sessionConfig = undefined;
       await openClawState.cleanup();
@@ -2866,7 +2848,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
       reason: "test-cleanup",
       allowSnapshotLoss: true,
     });
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentsConfig = undefined;
     await openClawState.cleanup();
   }
@@ -2918,7 +2900,7 @@ test("sessions.create preserves pending worktree intent when initial-turn admiss
     });
     expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toBeUndefined();
   } finally {
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
@@ -3209,7 +3191,7 @@ test("sessions.create does not start title generation for a model denied by poli
     expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toBeUndefined();
     expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
   } finally {
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
@@ -3246,7 +3228,7 @@ test("sessions.create keeps the crustacean fallback when no title source exists"
         allowSnapshotLoss: true,
       });
     }
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
@@ -3333,7 +3315,7 @@ test.each(["packages/app", "..notes"])(
       expect(rejected.ok).toBe(false);
     } finally {
       createSpy.mockRestore();
-      closeOpenClawStateDatabaseForTest();
+      await disposeSessionReadContexts();
       testState.agentConfig = undefined;
       await openClawState.cleanup();
     }
@@ -3402,7 +3384,7 @@ test("sessions.create maps an admin-selected worktree cwd and rejects repository
   } finally {
     createSpy.mockRestore();
     findSpy.mockRestore();
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
@@ -3989,7 +3971,7 @@ test("sessions.create skips the worktree setup script for non-admin callers", as
         allowSnapshotLoss: true,
       });
     }
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
@@ -4099,7 +4081,7 @@ test.each([
           allowSnapshotLoss: true,
         });
       }
-      closeOpenClawStateDatabaseForTest();
+      await disposeSessionReadContexts();
       testState.agentConfig = undefined;
       testState.sessionConfig = undefined;
       await openClawState.cleanup();
@@ -4247,7 +4229,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
         allowSnapshotLoss: true,
       });
     }
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     testState.sessionConfig = undefined;
     await openClawState.cleanup();
@@ -4962,7 +4944,7 @@ test("sessions.create removes a provisioned worktree when authority closes befor
     ).toEqual([]);
   } finally {
     createSpy.mockRestore();
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }

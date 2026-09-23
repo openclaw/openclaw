@@ -370,8 +370,9 @@ plugin migration window; the bundled failed-image path does not call it.
 
 Core failed-image settlement uses the internal `appendSessionTranscriptNote`
 operation, which accepts a custom message and returns a promise for its persisted `messageId`, canonical
-`message`, the append owner's `appended` result, and a `currentTail` fact from the same snapshot. File-backed
-notes use the same canonical agent worker and writer queue, reserving their turn
+`message`, the append owner's `appended` result, and a `currentTail` fact from the same snapshot.
+The tail fact uses the transaction's visible leaf and generation: side metadata does not suppress a retry's publication, while a later visible entry does.
+File-backed notes use the same canonical agent worker and writer queue, reserving their turn
 before asynchronous target preparation. The embedded runner awaits its failed-image note before publishing that stored message in live context or the
 completed result when the owner appended it or confirms it is still the current tail after a lost reply. An idempotent historical result does not reintroduce a note omitted by compaction. Input and target capture precede awaited work; transaction and
 publication checks retain the original writer and session binding. A known

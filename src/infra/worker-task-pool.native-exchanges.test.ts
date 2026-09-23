@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { workerTaskPoolEntrypoints } from "./worker-task-pool-runtime.test-support.js";
 import type { NativeExchangeScenario } from "./worker-task-pool.native-exchanges.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
@@ -12,10 +13,8 @@ async function runFixture(scenario: NativeExchangeScenario): Promise<unknown> {
   const { stdout } = await promisify(execFile)(
     process.execPath,
     [
-      "--import",
-      fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
-      fileURLToPath(
-        new URL("./worker-task-pool.native-exchanges.test-support.ts", import.meta.url),
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.nativeExchanges),
       ),
       scenario,
     ],

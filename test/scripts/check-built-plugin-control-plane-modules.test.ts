@@ -10,7 +10,12 @@ import {
   probeBuiltPluginControlPlaneModules,
   verifyBuiltPluginControlPlaneModules,
 } from "../../scripts/check-built-plugin-control-plane-modules.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const roots: string[] = [];
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -53,11 +58,11 @@ afterEach(() => {
 describe("built plugin control-plane module loads", () => {
   it("keeps TypeScript unloaded for checker imports and runtime inventory checks", () => {
     const rootDir = makeRoot();
+    const checkerUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.controlPlane);
     const result = spawnSync(
       testNodeExecPath,
       [
-        "--import",
-        "./scripts/tsx.mjs",
+        ...resolveRuntimeWorkerArgv(checkerUrl, testNodeExecPath).slice(0, -1),
         "--input-type=module",
         "--eval",
         `import assert from "node:assert/strict";
@@ -66,12 +71,12 @@ const require = createRequire(import.meta.url);
 const compilerPath = require.resolve("typescript");
 const compilerLoaded = () => Boolean(require.cache[compilerPath]);
 assert.equal(compilerLoaded(), false, "TypeScript loaded before the checker");
-await import("./scripts/check-built-plugin-control-plane-modules.mts");
+await import(${JSON.stringify(checkerUrl.href)});
 assert.equal(compilerLoaded(), false, "TypeScript loaded by the checker import");
-const { listCoreRuntimePostBuildOutputs } = await import("./scripts/runtime-postbuild.mts");
+const { listCoreRuntimePostBuildOutputs } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.runtimePostbuild).href)});
 listCoreRuntimePostBuildOutputs({ rootDir: ${JSON.stringify(rootDir)} });
 assert.equal(compilerLoaded(), false, "TypeScript loaded by runtime postbuild inventory checks");
-await import("./scripts/run-node.mts");
+await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.runNode).href)});
 assert.equal(compilerLoaded(), false, "TypeScript loaded by the development runner import");
 require("typescript");
 assert.equal(compilerLoaded(), true, "the compiler cache observation must detect an actual load");

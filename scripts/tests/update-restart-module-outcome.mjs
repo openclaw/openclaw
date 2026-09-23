@@ -86,7 +86,6 @@ async function fixture({
   const opts = { json: true, yes: true, run };
   const assertCurrent = () => run.executorFence.assertCurrent();
   const restartContext = {
-    restartScriptPath: null,
     refreshGatewayServiceEnv: false,
     gatewayServiceEnv: {},
     gatewayServiceInstallEnv: null,

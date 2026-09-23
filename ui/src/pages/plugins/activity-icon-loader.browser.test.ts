@@ -1,5 +1,5 @@
 import type { ImportGlobFunction } from "vite/types/importGlob.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { fetchPluginActivityIconBlobUrl, fetchPluginThemeArtworkBlobUrl } from "./icon-loader.ts";
 
 declare global {
@@ -22,42 +22,63 @@ const common = {
   gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
 };
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
-
 describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder", () => {
-  const assets = Object.entries(bundledActivityIcons);
+  const assets = Object.entries(bundledActivityIcons).map(
+    ([path, source], index) => [path, source, `synthetic-plugin-${index}`] as const,
+  );
+  const sourceByRoute = new Map(
+    assets.map(([, source, pluginId]) => [
+      new URL(`/openclaw/__openclaw__/plugin-activity-icon/${pluginId}`, window.location.origin)
+        .href,
+      source,
+    ]),
+  );
+
+  const fetchGlyph: typeof globalThis.fetch = async (input) => {
+    const url = new URL(input instanceof Request ? input.url : input, window.location.origin);
+    const source = sourceByRoute.get(url.href);
+    if (source === undefined) {
+      throw new Error(`Unexpected activity glyph route: ${url.href}`);
+    }
+    return new Response(source, { headers: { "content-type": "image/svg+xml" } });
+  };
+
+  beforeAll(() => {
+    vi.stubGlobal("fetch", fetchGlyph);
+  });
+
+  afterEach(({ task }) => {
+    if (!task.concurrent) {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+      vi.stubGlobal("fetch", fetchGlyph);
+    }
+  });
+
+  afterAll(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   it("includes shipped activity glyphs", () => {
     expect(assets.length).toBeGreaterThan(0);
   });
 
-  it.each(assets)(
+  it.concurrent.for(assets)(
     "decodes %s through the bounded SVG loader into a transparent PNG mask",
-    async (path, source) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(
-          async () =>
-            new Response(source, {
-              headers: { "content-type": "image/svg+xml" },
-            }),
-        ),
-      );
+    async ([path, , pluginId], { expect: expectGlyph }) => {
       const url = await fetchPluginActivityIconBlobUrl({
         ...common,
-        pluginId: "synthetic-plugin",
+        pluginId,
         signal: new AbortController().signal,
       });
-      expect(url, path).not.toBeNull();
+      expectGlyph(url, path).not.toBeNull();
       if (!url) {
         return;
       }
       try {
         const blob = await (await nativeFetch(url)).blob();
-        expect(blob.type, path).toBe("image/png");
+        expectGlyph(blob.type, path).toBe("image/png");
         const image = await createImageBitmap(blob);
         try {
           const canvas = document.createElement("canvas");
@@ -75,8 +96,8 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
               visible++;
             }
           }
-          expect(visible, path).toBeGreaterThan(0);
-          expect(transparent, path).toBeGreaterThan(0);
+          expectGlyph(visible, path).toBeGreaterThan(0);
+          expectGlyph(transparent, path).toBeGreaterThan(0);
         } finally {
           image.close();
         }
@@ -88,7 +109,7 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
 
   it("authenticates the distinct activity route and preserves exact tool names", async () => {
     const fetch = vi
-      .fn<typeof globalThis.fetch>()
+      .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response(null, { status: 401 }))
       .mockResolvedValue(
         new Response(
@@ -98,7 +119,6 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
           },
         ),
       );
-    vi.stubGlobal("fetch", fetch);
     const url = await fetchPluginActivityIconBlobUrl({
       ...common,
       auth: {
@@ -126,14 +146,15 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
   });
 
   it("rasterizes plugin theme artwork once per content URL, including concurrent callers", async () => {
-    const fetch = vi.fn(
-      async () =>
-        new Response(
-          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ff0000" d="M4 4h16v16H4Z"/></svg>',
-          { headers: { "content-type": "image/svg+xml" } },
-        ),
-    );
-    vi.stubGlobal("fetch", fetch);
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(
+        async () =>
+          new Response(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ff0000" d="M4 4h16v16H4Z"/></svg>',
+            { headers: { "content-type": "image/svg+xml" } },
+          ),
+      );
     const params = { ...common, url: "/__openclaw__/plugin-theme-art/test/theme/hat/beret?v=1" };
     const [first, concurrent] = await Promise.all([
       fetchPluginThemeArtworkBlobUrl(params),
@@ -169,14 +190,11 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path/><path/><path/><path/></svg>',
     ],
   ])("keeps %s out of compact activity", async (_name, contentType, body) => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(body, {
-            headers: { "content-type": contentType },
-          }),
-      ),
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(body, {
+          headers: { "content-type": contentType },
+        }),
     );
     await expect(
       fetchPluginActivityIconBlobUrl({

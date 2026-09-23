@@ -195,20 +195,32 @@ export function renderAgentOverview(params: {
               : nothing
           }
           <div class="agent-identity-editor__actions">
-            <label class="btn btn--sm">
+            <button
+              type="button"
+              class="btn btn--sm"
+              ?disabled=${identityBusy}
+              @click=${(event: Event) => {
+                const button = event.currentTarget;
+                const input =
+                  button instanceof HTMLButtonElement ? button.nextElementSibling : null;
+                if (input instanceof HTMLInputElement) {
+                  input.click();
+                }
+              }}
+            >
               ${
                 identityAvatarUrl
                   ? t("agents.identity.replaceImage")
                   : t("agents.identity.chooseImage")
               }
-              <input
-                type="file"
-                accept="image/*"
-                hidden
-                ?disabled=${identityBusy}
-                @change=${handleAvatarFileSelect}
-              />
-            </label>
+            </button>
+            <input
+              type="file"
+              accept="image/*"
+              hidden
+              ?disabled=${identityBusy}
+              @change=${handleAvatarFileSelect}
+            />
             <button
               type="button"
               class="btn btn--sm primary"

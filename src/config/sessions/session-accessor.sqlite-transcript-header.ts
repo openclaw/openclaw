@@ -8,7 +8,7 @@ export function ensureTranscriptHeader(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
   cwd: string | undefined,
-  projection?: { scheduleProjectionReconcile: false; onProjectionReconcileNeeded: () => void },
+  projection?: { scheduleProjectionReconcile?: boolean; onProjectionReconcileNeeded?: () => void },
 ): void {
   const db = getSessionKysely(database.db);
   const existing = executeSqliteQueryTakeFirstSync(

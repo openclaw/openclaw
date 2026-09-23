@@ -91,6 +91,15 @@ export function executeTaskInitialMutation(
         return write(() => {
           let result: Result;
           switch (command.type) {
+            case "tasks.bindRunOwner": {
+              result = transitionTaskRecordInDatabase(
+                database.db,
+                { kind: "run-owner", ...command.input },
+                (operation) => operation(),
+                { assertCurrent, onCommitted() {} },
+              );
+              break;
+            }
             case "tasks.finalizeActive": {
               result = transitionTaskRecordInDatabase(
                 database.db,

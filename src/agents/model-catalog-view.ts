@@ -15,7 +15,7 @@ import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { modelKey as pickerModelKey } from "../shared/model-key.js";
 import {
   resolveAgentDir,
-  resolveAgentEffectiveModelPrimary,
+  resolveNativeModelPrimary,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
@@ -188,7 +188,7 @@ export type ModelCatalogViewFacts = {
 
 /** Projects captured catalog facts while keeping native observations revocable. */
 export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
-  const defaultModel = resolveAgentEffectiveModelPrimary(params.cfg, params.agentId);
+  const defaultModel = resolveNativeModelPrimary(params.cfg, params.agentId);
   const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, params.agentId);
   const catalog = [...params.snapshot.entries];
   if (

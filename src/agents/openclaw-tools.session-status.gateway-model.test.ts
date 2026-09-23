@@ -125,7 +125,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await flushPendingSessionsChangedEvents();
-  disposeSessionReadContexts();
+  await disposeSessionReadContexts();
   unregisterInternalHook("session:patch", onPatch);
   vi.restoreAllMocks();
   if (originalRegistry) {

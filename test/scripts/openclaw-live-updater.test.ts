@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -55,12 +56,23 @@ import {
   writeUpdateCompatibilityBuildFixture,
 } from "./update-compat-chunks.test-support.js";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, openSync: vi.fn(actual.openSync) };
+});
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const script = path.join(repoRoot, ".agents/skills/openclaw-live-updater/scripts/update-main.mjs");
 const fixtureOrigins = new Map<string, string>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let fixtureTemplate: ReturnType<typeof initializeFixture> | undefined;
 const posixTest = process.platform === "win32" ? test.skip : test;
+
+function writeSystemLaunchDaemonFixture(contents: string, name = "fixture.plist") {
+  const file = path.join(tempDirs.make("updater-plist-"), name);
+  writeFileSync(file, contents);
+  return path.relative("/Library/LaunchDaemons", file);
+}
 
 function git(cwd: string, ...args: string[]) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -562,20 +574,20 @@ describe("openclaw live updater", () => {
 
   test("fails closed on same-label system LaunchDaemon ownership", () => {
     const missing = { status: 113, stdout: "", stderr: "Could not find service" };
+    const entries = [
+      writeSystemLaunchDaemonFixture("com.example.other", "com.example.other.plist"),
+      writeSystemLaunchDaemonFixture("ai.openclaw.gateway", "openclaw-system.plist"),
+    ];
     expect(() =>
       assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
-        readdirSync: () => ["com.example.other.plist", "openclaw-system.plist"],
-        spawnSync: (command: string, args: string[]) => {
+        readdirSync: () => entries,
+        spawnSync: (command: string, _args: string[], options: { input?: Buffer }) => {
           if (command === "/bin/launchctl") {
             return missing;
           }
           return {
             status: 0,
-            stdout: JSON.stringify({
-              Label: args.at(-1)?.endsWith("openclaw-system.plist")
-                ? "ai.openclaw.gateway"
-                : "com.example.other",
-            }),
+            stdout: options.input?.toString(),
             stderr: "",
           };
         },
@@ -600,20 +612,19 @@ describe("openclaw live updater", () => {
   test("skips valid system LaunchDaemon plists without a string Label", () => {
     const missing = { status: 113, stdout: "", stderr: "Could not find service" };
     const calls: string[] = [];
+    const entry = writeSystemLaunchDaemonFixture("valid plist without a string Label");
 
     expect(() =>
       assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
-        readdirSync: () => ["com.google.keystone.daemon.plist", "com.vendor.numeric-label.plist"],
+        readdirSync: () => [entry],
         spawnSync: (command: string, args: string[]) => {
           calls.push([command, ...args].join(" "));
           if (command === "/bin/launchctl") {
             return missing;
           }
           return {
-            status: 0,
-            stdout: JSON.stringify(
-              args.at(-1)?.endsWith("numeric-label.plist") ? { Label: 42 } : { RunAtLoad: true },
-            ),
+            status: args[0] === "-lint" ? 0 : 1,
+            stdout: "",
             stderr: "",
           };
         },
@@ -624,15 +635,143 @@ describe("openclaw live updater", () => {
 
   test("fails closed when a system LaunchDaemon plist cannot be decoded", () => {
     const missing = { status: 113, stdout: "", stderr: "Could not find service" };
+    const entry = writeSystemLaunchDaemonFixture("not a plist");
 
     expect(() =>
       assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
-        readdirSync: () => ["com.vendor.broken.plist"],
+        readdirSync: () => [entry],
         spawnSync: (command: string) =>
-          command === "/bin/launchctl" ? missing : { status: 0, stdout: "not json", stderr: "" },
+          command === "/bin/launchctl"
+            ? missing
+            : { status: 1, stdout: "", stderr: "invalid plist" },
       }),
     ).toThrow("could not inspect system LaunchDaemon plist");
   });
+
+  test.each(["ENOENT", "ENOTDIR", "EACCES", "EPERM", "EIO"])(
+    "uses actual plist read errno %s, then rechecks ownership",
+    (code) => {
+      let probes = 0;
+      vi.mocked(openSync).mockImplementationOnce(() => {
+        throw Object.assign(new Error("read failed"), { code });
+      });
+      const check = () =>
+        assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+          readdirSync: () => ["com.vendor.plist"],
+          spawnSync: (command: string) =>
+            command === "/bin/launchctl"
+              ? (++probes, { status: 113, stderr: "Could not find service" })
+              : { status: 1, stderr: "Operation not permitted" },
+        });
+      if (code === "EIO") {
+        expect(check).toThrow("could not read system LaunchDaemon plist");
+        expect(probes).toBe(1);
+      } else {
+        expect(check).not.toThrow();
+        expect(probes).toBe(2);
+      }
+    },
+  );
+
+  test("rejects a loaded owner appearing after an unreadable plist was skipped", () => {
+    let probes = 0;
+    vi.mocked(openSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error("denied"), { code: "EPERM" });
+    });
+    expect(() =>
+      assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+        readdirSync: () => ["com.vendor.plist"],
+        spawnSync: (command: string) =>
+          command === "/bin/launchctl"
+            ? { status: ++probes === 1 ? 113 : 0, stderr: "Could not find service" }
+            : { status: 1 },
+      }),
+    ).toThrow("system/ai.openclaw.gateway already owns");
+    expect(probes).toBe(2);
+  });
+
+  test.each([
+    { status: null, signal: "SIGKILL" },
+    { status: null, error: Object.assign(new Error("query timed out"), { code: "ETIMEDOUT" }) },
+    { status: 113, error: Object.assign(new Error("query failed"), { code: "EIO" }) },
+  ])("rejects incomplete ownership queries: %j", (result) => {
+    expect(() =>
+      assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+        readdirSync: () => [],
+        spawnSync: () => ({ ...result, stderr: "Could not find service" }),
+      }),
+    ).toThrow("could not verify system LaunchDaemon ownership");
+  });
+
+  test.each([
+    ["extraction", { status: null, signal: "SIGKILL" }],
+    ["extraction", { status: 0, error: new Error("timed out after exit zero") }],
+    ["lint", { status: 0, error: new Error("timed out after exit zero") }],
+  ] as const)("refuses incomplete native %s", (phase, result) => {
+    const entry = writeSystemLaunchDaemonFixture("captured plist bytes");
+    expect(() =>
+      assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+        readdirSync: () => [entry],
+        spawnSync: (command: string, args: string[]) => {
+          if (command === "/bin/launchctl") {
+            return { status: 113, stderr: "Could not find service" };
+          }
+          return args[0] === "-lint"
+            ? phase === "lint"
+              ? result
+              : { status: 0 }
+            : phase === "extraction"
+              ? result
+              : { status: 1 };
+        },
+      }),
+    ).toThrow("could not inspect system LaunchDaemon plist");
+  });
+
+  test.skipIf(process.platform !== "darwin")(
+    "native scan accepts XML/binary metadata and preserves exact Label types",
+    () => {
+      const file = path.join(tempDirs.make("updater-plist-proof-"), "fixture.plist");
+      const check = () =>
+        assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+          readdirSync: () => [path.relative("/Library/LaunchDaemons", file)],
+          spawnSync: (command: string, args: string[], options: object) => {
+            if (command === "/bin/launchctl") {
+              return { status: 113, stderr: "Could not find service" };
+            }
+            return spawnSync(command, args, options);
+          },
+        });
+      for (const [label, ownsGateway] of [
+        ["<key>Label</key><string>com.vendor</string>", false],
+        ["<key>Label</key><string>ai.openclaw.gateway</string>", true],
+        ["<key>Label</key><string>ai.openclaw.gateway\n</string>", false],
+        ["<key>Label</key><integer>42</integer>", false],
+        ["<key>Label</key><dict><key>ai.openclaw.gateway</key><true/></dict>", false],
+        [
+          "<key>Nested</key><dict><key>Label</key><string>ai.openclaw.gateway</string></dict>",
+          false,
+        ],
+      ] as const) {
+        for (const format of ["xml1", "binary1"]) {
+          writeFileSync(
+            file,
+            `<plist version="1.0"><dict>${label}<key>Date</key><date>2026-01-01T00:00:00Z</date><key>Data</key><data>YWJj</data></dict></plist>`,
+          );
+          execFileSync("/usr/bin/plutil", ["-convert", format, "--", file]);
+          if (ownsGateway) {
+            expect(check).toThrow("already owns the managed Gateway label");
+          } else {
+            expect(check).not.toThrow();
+          }
+        }
+      }
+      writeFileSync(file, "not a plist");
+      expect(check).toThrow("could not inspect system LaunchDaemon plist");
+      writeFileSync(file, Buffer.alloc(1024 * 1024 + 1));
+      expect(check).toThrow("could not read system LaunchDaemon plist");
+    },
+  );
 
   test("audits raw file logs when RPC log retrieval is unavailable", () => {
     const output = [
@@ -2904,15 +3043,16 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
         serviceLoaded = true;
       }
     };
+    const systemPlist = writeSystemLaunchDaemonFixture("valid plist without a Label");
     const assertSystemOwnership = () =>
       assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
-        readdirSync: () => ["com.google.keystone.daemon.plist"],
-        spawnSync: (command: string) =>
+        readdirSync: () => [systemPlist],
+        spawnSync: (command: string, args: string[]) =>
           command === "/bin/launchctl"
             ? { status: 113, stdout: "", stderr: "Could not find service" }
             : {
-                status: 0,
-                stdout: JSON.stringify({ RunAtLoad: true }),
+                status: args[0] === "-lint" ? 0 : 1,
+                stdout: "",
                 stderr: "",
               },
       });

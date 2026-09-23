@@ -229,7 +229,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(document.activeElement).toBe(searchToggle);
   });
 
-  it("enables save after an edit and keeps the saved content", async () => {
+  it("keeps the named file view keyboard accessible through editing and saving", async () => {
     const save = vi.fn().mockResolvedValue({ ok: true, hash: "hash-2" });
     const panel = await mountFile({
       kind: "file",
@@ -239,9 +239,19 @@ describe.runIf(browserMode)("chat file editor", () => {
       edit: { hash: "hash-1", save, fetchLatest: vi.fn() },
     });
 
-    await userEvent.click(button(panel, "Edit file"));
     const editor = panel.querySelector<HTMLElement>(".cm-content");
     expect(editor).not.toBeNull();
+    button(panel, "Copy file contents").focus();
+    await userEvent.tab();
+    await expect.element(editor!).toHaveFocus();
+    await expect.element(editor!).toHaveAccessibleName("notes.txt");
+    expect(editor!.getAttribute("aria-readonly")).toBe("true");
+
+    button(panel, "Edit file").focus();
+    await userEvent.keyboard("{Enter}");
+    await expect.element(editor!).toHaveFocus();
+    await expect.element(editor!).toHaveAccessibleName("notes.txt");
+    expect(editor!.hasAttribute("aria-readonly")).toBe(false);
     await userEvent.fill(editor!, "after");
     const saveButton = button(panel, "Save");
     expect(saveButton.disabled).toBe(false);
@@ -251,6 +261,13 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(save).toHaveBeenCalledWith({ content: "after", expectedHash: "hash-1" });
     await expect.poll(() => button(panel, "Save").disabled).toBe(true);
     expect(panel.querySelector(".cm-content")?.textContent).toContain("after");
+
+    await userEvent.click(button(panel, "Discard"));
+    button(panel, "Copy file contents").focus();
+    await userEvent.tab();
+    await expect.element(editor!).toHaveFocus();
+    await expect.element(editor!).toHaveAccessibleName("notes.txt");
+    expect(editor!.getAttribute("aria-readonly")).toBe("true");
   });
 
   it.each(["\n", "\r\n", "\r"])(

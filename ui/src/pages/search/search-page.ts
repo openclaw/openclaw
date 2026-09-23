@@ -593,7 +593,7 @@ class SearchPage extends OpenClawLightDomElement {
                     </button>`,
                   },
                   html`
-                    ${renderSettingsRow({ title: t("searchPage.health"), description: this.testResult ? `${this.testResult.provider} · ${t("searchPage.duration", { ms: String(this.testResult.latencyMs) })}${this.testResult.cached ? ` · ${t("searchPage.cached")}` : ""}` : undefined, control: renderSettingsStatus({ kind: this.testError || this.testResult?.status === "error" ? "danger" : this.testResult ? "ok" : "muted", label: this.testing ? t("searchPage.testing") : this.testError || this.testResult?.status === "error" ? t("searchPage.failure") : this.testResult ? t("searchPage.success") : t("searchPage.untested") }) })}
+                    ${renderSettingsRow({ title: t("searchPage.health"), description: this.testResult ? `${this.testResult.provider} · ${t("searchPage.duration", { ms: String(this.testResult.latencyMs) })}${this.testResult.cached ? ` · ${t("searchPage.cached")}` : ""}` : undefined, control: html`<span role="status">${renderSettingsStatus({ kind: this.testError || this.testResult?.status === "error" ? "danger" : this.testResult ? "ok" : "muted", label: this.testing ? t("searchPage.testing") : this.testError || this.testResult?.status === "error" ? t("searchPage.failure") : this.testResult ? t("searchPage.success") : t("searchPage.untested") })}</span>` })}
                     ${
                       result.testProvider || result.route.testable
                         ? html`

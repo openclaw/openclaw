@@ -144,7 +144,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     appendMode?: "side";
   },
   preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
-  projection?: { scheduleProjectionReconcile: false; onProjectionReconcileNeeded: () => void },
+  projection?: { scheduleProjectionReconcile?: boolean; onProjectionReconcileNeeded?: () => void },
 ): TranscriptMessageAppendResult<TMessage> | undefined {
   const pending = resolveSessionPendingInputAppend(database, resolved, options.message);
   if (

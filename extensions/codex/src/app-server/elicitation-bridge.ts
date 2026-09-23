@@ -413,8 +413,14 @@ async function buildPluginPolicyElicitationResponse(params: {
   paramsForRun: EmbeddedRunAttemptParams;
   signal?: AbortSignal;
 }): Promise<CodexElicitationResponse> {
-  const mode = resolvePluginDestructiveApprovalMode(params.entry);
-  if (mode === "deny") {
+  const mode =
+    params.entry.destructiveApprovalMode ??
+    (params.entry.allowDestructiveActions ? "allow" : "deny");
+  const meta = isJsonObject(params.requestParams._meta) ? params.requestParams._meta : {};
+  // Hosted apps have their destructive ceiling enforced in the thread's tool
+  // config before dispatch. A remaining native prompt can require consent for
+  // an allowed read; plugin-provided MCP servers still use the decline policy.
+  if (mode === "deny" && !isCodexConnectorApprovalElicitation(params.requestParams, meta)) {
     logPluginElicitationDecline("destructive_actions_disabled", params.requestParams);
     return createCodexElicitationResponse("decline");
   }
@@ -424,28 +430,22 @@ async function buildPluginPolicyElicitationResponse(params: {
     return createCodexElicitationResponse("decline");
   }
   const response = buildElicitationResponse(approvalPrompt, "approved-once");
-  if (response.action === "accept") {
-    if (mode === "allow") {
-      return response;
-    }
-    const outcome = await requestPluginApprovalOutcome({
-      hostCapabilities: params.paramsForRun.hostCapabilities,
-      title: approvalPrompt.title,
-      description: approvalPrompt.description,
-      allowedDecisions: allowedPluginPolicyApprovalDecisions(mode, approvalPrompt),
-      toolName: "codex_mcp_tool_approval",
-      signal: params.signal,
-    });
-    return buildElicitationResponse(approvalPrompt, outcome);
+  if (response.action !== "accept") {
+    logPluginElicitationDecline("unmappable_schema", params.requestParams);
+    return createCodexElicitationResponse("decline");
   }
-  logPluginElicitationDecline("unmappable_schema", params.requestParams);
-  return createCodexElicitationResponse("decline");
-}
-
-function resolvePluginDestructiveApprovalMode(
-  entry: CodexAppPolicyContextEntry,
-): "allow" | "deny" | "auto" | "ask" {
-  return entry.destructiveApprovalMode ?? (entry.allowDestructiveActions ? "allow" : "deny");
+  if (mode === "allow") {
+    return response;
+  }
+  const outcome = await requestPluginApprovalOutcome({
+    hostCapabilities: params.paramsForRun.hostCapabilities,
+    title: approvalPrompt.title,
+    description: approvalPrompt.description,
+    allowedDecisions: allowedPluginPolicyApprovalDecisions(mode, approvalPrompt),
+    toolName: "codex_mcp_tool_approval",
+    signal: params.signal,
+  });
+  return buildElicitationResponse(approvalPrompt, outcome);
 }
 
 function allowedPluginPolicyApprovalDecisions(
