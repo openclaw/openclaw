@@ -153,7 +153,7 @@ export function applyTestExclusions(config, paths, cwd, defaultExcludes) {
 }
 
 /** Keep canonical config names: the candidate's native runners use them for preparation. */
-export async function withTestExclusions({ paths, configs, cwd = process.cwd() }, callback) {
+async function withTestExclusions({ paths, configs, cwd = process.cwd() }, callback) {
   assertTestFiles(paths, cwd);
   if (paths.length === 0) {
     return callback();

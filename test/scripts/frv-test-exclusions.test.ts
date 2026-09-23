@@ -128,14 +128,14 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { validateTestExclusions, withTestExclusions } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/frv-test-exclusions.mjs")).href)};
+import { validateTestExclusions } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/frv-test-exclusions.mjs")).href)};
 
 const root = ${JSON.stringify(root)};
 const configs = ${JSON.stringify([pluginConfig, extensionConfig])};
 const excluded = ${JSON.stringify([target, native, extension])};
 const sibling = ${JSON.stringify(sibling)};
 const extensionOutsideSelection = ${JSON.stringify(extensionOutsideSelection)};
-const original = configs.map(config => fs.readFileSync(path.join(root, config)));
+const original = ${JSON.stringify([pluginConfig, extensionConfig].map((config) => fs.readFileSync(path.join(root, config), "base64")))}.map(bytes => Buffer.from(bytes, "base64"));
 const candidateRequire = createRequire(path.join(root, "package.json"));
 const { createVitest } = await import(pathToFileURL(candidateRequire.resolve("vitest/node")).href);
 
@@ -157,8 +157,24 @@ function assertRestored() {
   });
 }
 
-// The old workflow's root exclude options never reached the extends:false leaves.
 const pluginBaseline = [...excluded.slice(0, 2), sibling].sort();
+const mode = process.argv[2];
+if (mode) {
+  if (mode === "unaffected") {
+    assertRestored();
+  } else if (mode === "extensions") {
+    assert.deepEqual(await discover(configs[0]), pluginBaseline);
+    assert.deepEqual(await discover(configs[1]), [extensionOutsideSelection]);
+  } else {
+    assert.deepEqual(fs.readFileSync(path.join(root, configs[1])), original[1]);
+    assert.deepEqual(await discover(configs[0]), mode === "single" ? [excluded[1], sibling].sort() : [sibling]);
+    const pluginExports = await import(pathToFileURL(path.join(root, configs[0])).href);
+    assert.deepEqual(pluginExports.nativeFiles, [excluded[1]]);
+  }
+  process.exit(mode === "failure" ? 23 : 0);
+}
+
+// The old workflow's root exclude options never reached the extends:false leaves.
 assert.deepEqual(await discover(configs[0]), pluginBaseline);
 assert.deepEqual(await discover(configs[0], ["**/retry.test.ts", "**/native-loader.test.ts"]), pluginBaseline);
 assert.deepEqual(await discover(configs[1]), [excluded[2], extensionOutsideSelection]);
@@ -185,35 +201,6 @@ await assert.rejects(
 );
 assertRestored();
 
-await withTestExclusions({ paths: [excluded[0]], configs, cwd: root }, async () => {
-  assert.deepEqual(fs.readFileSync(path.join(root, configs[1])), original[1]);
-  assert.deepEqual(await discover(configs[0]), [excluded[1], sibling].sort());
-});
-assertRestored();
-await withTestExclusions({ paths: excluded.slice(0, 2), configs: [configs[1]], cwd: root }, async () => {
-  assertRestored();
-});
-
-const result = await withTestExclusions({ paths: excluded, configs, cwd: root }, async () => {
-  assert.deepEqual(await discover(configs[0]), [sibling]);
-  assert.deepEqual(await discover(configs[1]), [extensionOutsideSelection]);
-  const pluginExports = await import(pathToFileURL(path.join(root, configs[0])).href);
-  assert.deepEqual(pluginExports.nativeFiles, [excluded[1]]);
-  return "callback result";
-});
-assert.equal(result, "callback result");
-assertRestored();
-assert.deepEqual(await discover(configs[0]), pluginBaseline);
-
-const failure = new Error("candidate command failed");
-await assert.rejects(
-  () => withTestExclusions({ paths: excluded, configs, cwd: root }, async () => {
-    assert.deepEqual(await discover(configs[0]), [sibling]);
-    throw failure;
-  }),
-  error => error === failure,
-);
-assertRestored();
 const adapter = ${JSON.stringify(path.join(repoRoot, "scripts/frv-test-exclusions.mjs"))};
 const commandEnv = {
   ...process.env,
@@ -221,6 +208,28 @@ const commandEnv = {
   FRV_TEST_EXCLUDE_PATHS_JSON: JSON.stringify(excluded.slice(0, 2)),
   FRV_TEST_CONFIGS_JSON: JSON.stringify(configs),
 };
+for (const [mode, scope, paths, selectedConfigs, expectedExit] of [
+  ["single", "plugins", [excluded[0]], configs, 0],
+  ["unaffected", "plugins", excluded.slice(0, 2), [configs[1]], 0],
+  ["plugins", "plugins", excluded.slice(0, 2), configs, 0],
+  ["extensions", "extensions", [excluded[2]], configs, 0],
+  ["failure", "plugins", excluded.slice(0, 2), configs, 23],
+]) {
+  const result = spawnSync(process.execPath, [adapter, "run", "--", process.execPath, process.argv[1], mode], {
+    cwd: root,
+    env: {
+      ...commandEnv,
+      FRV_TEST_EXCLUDE_SCOPE: scope,
+      FRV_TEST_EXCLUDE_PATHS_JSON: JSON.stringify(paths),
+      FRV_TEST_CONFIGS_JSON: JSON.stringify(selectedConfigs),
+    },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, expectedExit, mode + ": " + result.stderr);
+  assertRestored();
+}
+assert.deepEqual(await discover(configs[0]), pluginBaseline);
+
 const failedSpawn = spawnSync(process.execPath, [adapter, "run", "--", path.join(root, "missing-command")], {
   cwd: root, env: commandEnv, encoding: "utf8",
 });
