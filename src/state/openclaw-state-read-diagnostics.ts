@@ -4,7 +4,7 @@ import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identi
 import { readConfigSnapshotAuditRecordInDatabase } from "../config/config-journal-snapshot.kernel.js";
 import type {
   OpenClawStateReadCommand,
-  OpenClawStateReadReply,
+  OpenClawStateReadResult,
 } from "./openclaw-state-read.types.js";
 
 export function readStateDiagnosticCommand(
@@ -13,18 +13,15 @@ export function readStateDiagnosticCommand(
     OpenClawStateReadCommand,
     { type: "config.snapshot.read" | "audit.run.inspect" }
   >,
-): OpenClawStateReadReply {
-  const admitted = { ok: true, sourceAdmitted: true } as const;
+): OpenClawStateReadResult {
   if (command.type === "config.snapshot.read") {
     return {
-      ...admitted,
       type: command.type,
       snapshot: readConfigSnapshotAuditRecordInDatabase(db),
     };
   }
   try {
     return {
-      ...admitted,
       type: command.type,
       result: {
         status: "inspected",
@@ -36,7 +33,6 @@ export function readStateDiagnosticCommand(
       throw error;
     }
     return {
-      ...admitted,
       type: command.type,
       result: { status: "invalid-cursor", message: error.message },
     };

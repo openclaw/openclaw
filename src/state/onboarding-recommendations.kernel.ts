@@ -147,13 +147,6 @@ function clearPendingOnboardingRecommendations(
   return cleared;
 }
 
-function clearOnboardingRecommendations(
-  configKey: string,
-  databaseOptions: OpenClawStateDatabaseOptions = {},
-): boolean {
-  return deleteConfigMachineState(configKey, databaseOptions);
-}
-
 export function executeOnboardingRecommendationCommand(
   command: SqliteWorkerCommand<OnboardingRecommendationWriteOperations>,
   database: OpenClawStateDatabaseOptions,
@@ -184,7 +177,7 @@ export function executeOnboardingRecommendationCommand(
         database,
       );
     case "onboardingRecommendations.clear":
-      return clearOnboardingRecommendations(command.input.configKey, database);
+      return deleteConfigMachineState(command.input.configKey, database);
   }
   throw new Error("Unexpected onboarding recommendation write command");
 }

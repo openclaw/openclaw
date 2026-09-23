@@ -225,234 +225,160 @@ export type OpenClawStateReadRequest = {
   snapshotRoot?: string;
   command: OpenClawStateReadCommand | { type: "admit" };
 };
-export type OpenClawStateReadReply = (
+type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "sourceAdmitted"> : never;
+
+export type OpenClawStateReadResult =
   | {
-      ok: true;
       type: "tui.lastSession.read";
-      sourceAdmitted: true;
       row: Pick<Selectable<ConfigMachineState>, "value_json" | "updated_at_ms"> | undefined;
     }
-  | { ok: true; type: "tui.lastSession.retiredPointers"; sourceAdmitted: true; stateKeys: string[] }
-  | ChannelIngressReadReply
+  | { type: "tui.lastSession.retiredPointers"; stateKeys: string[] }
+  | ReadResult<ChannelIngressReadReply>
   | {
-      ok: true;
       type: "agentDeletionJournal.status";
-      sourceAdmitted: true;
       status: AgentDeletionJournalStatus;
     }
   | {
-      ok: true;
       type: "deliveryQueue.outbound";
-      sourceAdmitted: true;
       entries: OutboundDeliveryStorageEntry[];
     }
   | {
-      ok: true;
       type: "config.snapshot.read";
-      sourceAdmitted: true;
       snapshot: ConfigSnapshotAuditRecord | null;
     }
   | {
-      ok: true;
       type: "acpSessions.list";
-      sourceAdmitted: true;
       rows: AcpSessionRow[];
     }
   | {
-      ok: true;
       type: "acpSessions.metadata";
-      sourceAdmitted: true;
       rows: Array<AcpSessionRow | null>;
     }
   | {
       [Kind in keyof McpOAuthReadOnlyOperations]: {
-        ok: true;
         type: Kind;
-        sourceAdmitted: true;
         value: McpOAuthReadOnlyOperations[Kind]["output"];
       };
     }[keyof McpOAuthReadOnlyOperations]
   | {
-      ok: true;
       type: "conversationBindings.inspect";
-      sourceAdmitted: true;
       record: SessionBindingRecord | null;
     }
-  | DevicePairingReadReply
+  | ReadResult<DevicePairingReadReply>
   | {
-      ok: true;
       type: "operatorApprovals.history";
-      sourceAdmitted: true;
       history: ListTerminalOperatorApprovalsResult;
     }
-  | PluginBlobReadReply
-  | { ok: true; type: "subagents.forChildSession"; sourceAdmitted: true; runs: SubagentRunRecord[] }
+  | ReadResult<PluginBlobReadReply>
+  | { type: "subagents.forChildSession"; runs: SubagentRunRecord[] }
   | {
-      ok: true;
       type: "tasks.mutationSnapshot";
-      sourceAdmitted: true;
       snapshot: TaskRegistryStoreSnapshot;
     }
   | {
-      ok: true;
       type: "tasks.retentionSource";
-      sourceAdmitted: true;
       source: TaskRetentionSource | undefined;
     }
   | {
       [Kind in keyof SkillLibraryReadOnlyOperations]: {
-        ok: true;
         type: Kind;
-        sourceAdmitted: true;
         value: SkillLibraryReadOnlyOperations[Kind]["output"];
       };
     }[keyof SkillLibraryReadOnlyOperations]
   | {
-      ok: true;
       type: "sessionGroups.members";
-      sourceAdmitted: true;
       snapshot: SessionGroupMembershipSnapshot;
     }
   | {
-      ok: true;
       type: "sessionGroups.snapshot";
-      sourceAdmitted: true;
       snapshot: SessionGroupCatalogSnapshot;
     }
   | {
-      ok: true;
       type: "userProfiles.email.resolve";
-      sourceAdmitted: true;
       profileId: string | undefined;
     }
   | {
-      ok: true;
       type: "githubPublication.lifecycle";
-      sourceAdmitted: true;
       lifecycle: GitHubPublicationSessionLifecycle | undefined;
     }
   | {
-      ok: true;
       type: "githubPublication.request";
-      sourceAdmitted: true;
       row: GitHubPublicationRow | undefined;
     }
   | {
-      ok: true;
       type: "githubRepository.request";
-      sourceAdmitted: true;
       row: RepositoryGitHubPublicationRow | undefined;
     }
   | {
-      ok: true;
       type: "githubPublication.knownPullRequestUrls";
-      sourceAdmitted: true;
       urls: string[];
     }
   | {
-      ok: true;
       type: "githubRepository.knownPullRequestUrls";
-      sourceAdmitted: true;
       urls: string[];
     }
   | {
-      ok: true;
       type: "cron.observeRunRecovery";
-      sourceAdmitted: true;
       observation: CronRunRecoveryObservation;
     }
   | {
-      ok: true;
       type: "cron.jobNames";
-      sourceAdmitted: true;
       names: Map<string, string | undefined>;
     }
   | {
-      ok: true;
       type: "cron.activeReceiptOwners";
-      sourceAdmitted: true;
       owners: CronRunReceiptOwnerObservation[];
     }
   | {
-      ok: true;
       type: "subagents.sessionList";
-      sourceAdmitted: true;
       runs: Map<string, SubagentRunReadRecord>;
     }
   | {
-      ok: true;
       type: "subagents.sessionList";
-      sourceAdmitted: true;
       unavailable: { message: string; error: OpenClawStateWorkerErrorPayload | undefined };
     }
-  | { ok: true; type: "subagents.runs"; sourceAdmitted: true; runs: Map<string, SubagentRunRecord> }
+  | { type: "subagents.runs"; runs: Map<string, SubagentRunRecord> }
   | {
-      ok: true;
-      type: "agentDatabaseRegistry.read";
-      sourceAdmitted?: true;
-      result: OpenClawAgentDatabaseRegistryReadResult;
-    }
-  | {
-      ok: true;
       type: "agentDatabaseDeletion.snapshot";
-      sourceAdmitted: true;
       snapshot: AgentDatabaseDeletionSnapshot;
     }
   | {
-      ok: true;
       type: "workerEnvironments.pruneCandidates";
-      sourceAdmitted: true;
       page: WorkerEnvironmentPrunePage;
     }
   | {
-      ok: true;
       type: "workerEnvironments.snapshot";
-      sourceAdmitted: true;
       facts: WorkerEnvironmentFacts;
     }
   | {
-      ok: true;
       type: "onboardingRecommendations.read";
-      sourceAdmitted: true;
       record: OnboardingRecommendationsRecord | null;
     }
   | {
-      ok: true;
       type: "userProfiles.catalog";
-      sourceAdmitted: true;
       profiles: Array<[string, ProfileDisplayRow]>;
       emailBindings: UserProfileEmailBinding[];
     }
   | {
-      ok: true;
       type: "userPreferences.values";
-      sourceAdmitted: true;
       values: Map<string, unknown>;
     }
   | {
-      ok: true;
       type: "userProfiles.reconcile";
-      sourceAdmitted: true;
       profile: ProfileDisplayRow | undefined;
       emailBindings: UserProfileEmailBinding[];
     }
-  | ({ ok: true; sourceAdmitted: true } & UserProfileAvatarReadReply)
+  | UserProfileAvatarReadReply
   | {
-      ok: true;
       type: "userProfiles.channelIdentity.list";
-      sourceAdmitted: true;
       result: UserChannelIdentityResult<UserChannelIdentityLink[]>;
     }
   | {
-      ok: true;
       type: "userProfiles.channelIdentity.resolve";
-      sourceAdmitted: true;
       linked: UserChannelIdentityAuthorityFacts | undefined;
     }
   | {
-      ok: true;
       type: "userProfiles.authority.resolve";
-      sourceAdmitted: true;
       profile:
         | {
             profileId: string;
@@ -463,99 +389,76 @@ export type OpenClawStateReadReply = (
         | undefined;
     }
   | {
-      ok: true;
       type: "userProfiles.githubIdentity.cached";
-      sourceAdmitted: true;
       identity: CachedGitHubIdentity | undefined;
     }
-  | ({
-      ok: true;
-      type: "userProfiles.githubAttribution.resolve";
-      sourceAdmitted: true;
-    } & UserProfileGitHubAttributionRead)
+  | ({ type: "userProfiles.githubAttribution.resolve" } & UserProfileGitHubAttributionRead)
   | {
-      ok: true;
       type: "audit.run.inspect";
-      sourceAdmitted: true;
       result: ExecutionIdentityInspectionOutcome;
     }
-  | { ok: true; type: "admit" }
   | {
-      ok: true;
       type: "exec-approvals.read";
-      sourceAdmitted: true;
       row: ReturnType<typeof readExecApprovalsConfigRow>;
     }
   | {
-      ok: true;
       type: "updateRuns.get";
-      sourceAdmitted: true;
       run: ReturnType<typeof readUpdateRunRecord>;
     }
   | {
-      ok: true;
       type: "updateRuns.list";
-      sourceAdmitted: true;
       runs: ReturnType<typeof readUpdateRuns>;
     }
   | {
-      ok: true;
       type: "updateRuns.interruptedCandidate";
-      sourceAdmitted: true;
       run: ReturnType<typeof readInterruptedUpdateCandidate>;
     }
   | {
-      ok: true;
       type: "worktrees.cleanupState";
-      sourceAdmitted: true;
       records: ManagedWorktreeRecord[];
       leases: ReturnType<typeof readWorktreeRunLeaseStateInDatabase>;
     }
-  | { ok: true; type: "fleet.list"; sourceAdmitted: true; cells: FleetCellRecord[] }
+  | { type: "fleet.list"; cells: FleetCellRecord[] }
   | {
-      ok: true;
       type: "workerPlacements.changeSnapshot";
-      sourceAdmitted: true;
       placements: WorkerSessionPlacementChangeSnapshot[];
     }
-  | { ok: true; type: "fleet.get"; sourceAdmitted: true; cell: FleetCellRecord | undefined }
+  | { type: "fleet.get"; cell: FleetCellRecord | undefined }
   | {
-      ok: true;
       type: "nodeHost.config" | "operator.channelPolicy";
-      sourceAdmitted: true;
       row: Pick<Selectable<ConfigMachineState>, "value_json" | "updated_at_ms"> | undefined;
     }
   | {
-      ok: true;
       type: "sessionRepositoryWorkspaces.find";
-      sourceAdmitted: true;
       workspaces: SessionRepositoryWorkspaceRecord[];
     }
-  | { ok: true; type: "workspace.snapshot"; sourceAdmitted: true; snapshot: WorkspaceStateSnapshot }
+  | { type: "workspace.snapshot"; snapshot: WorkspaceStateSnapshot }
   | {
-      ok: true;
       type: "sandboxRegistry.list";
-      sourceAdmitted: true;
       entries: SandboxRegistryEntry[];
     }
   | {
-      ok: true;
       type: "sandboxRegistry.get";
-      sourceAdmitted: true;
       entry: SandboxRegistryEntry | null;
     }
-  | { ok: true; type: "sandboxRegistry.runtimeIds"; sourceAdmitted: true; runtimeIds: string[] }
+  | { type: "sandboxRegistry.runtimeIds"; runtimeIds: string[] }
   | {
-      ok: true;
       type: "sandboxRegistry.browsers";
-      sourceAdmitted: true;
       entries: SandboxBrowserRegistryEntry[];
     }
   | {
-      ok: true;
       type: "workers.placementProjection";
-      sourceAdmitted: true;
       result: WorkerSessionPlacementReadResult;
+    };
+
+export type OpenClawStateReadReply = (
+  | ({ ok: true; sourceAdmitted: true } & OpenClawStateReadResult)
+  | { ok: true; type: "admit" }
+  | {
+      ok: true;
+      type: "agentDatabaseRegistry.read";
+      sourceAdmitted?: true;
+      result: OpenClawAgentDatabaseRegistryReadResult;
     }
   | {
       ok: false;

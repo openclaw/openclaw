@@ -243,62 +243,41 @@ export async function applyOpenClawDatabaseVerificationResults(options: {
     if (!target) {
       continue;
     }
+    const details = { kind: target.kind, label: target.label, path: result.path };
     if (result.ok) {
-      log.info("database integrity verification passed", {
-        kind: target.kind,
-        label: target.label,
-        path: result.path,
-      });
+      log.info("database integrity verification passed", details);
       continue;
     }
     if (!result.terminal) {
       log.warn("database integrity verification was inconclusive", {
-        kind: target.kind,
-        label: target.label,
-        path: result.path,
+        ...details,
         error: result.error,
       });
       continue;
     }
-    const confirmation =
+    const confirmIntegrity =
       target.kind === "state"
-        ? await confirmOpenClawStateDatabaseIntegrity(result.path)
-        : await confirmOpenClawAgentDatabaseIntegrity(result.path);
+        ? confirmOpenClawStateDatabaseIntegrity
+        : confirmOpenClawAgentDatabaseIntegrity;
+    const confirmation = await confirmIntegrity(result.path);
     if (confirmation.status === "healthy") {
-      log.info("discarding stale database integrity verification result", {
-        kind: target.kind,
-        label: target.label,
-        path: result.path,
-      });
+      log.info("discarding stale database integrity verification result", details);
       continue;
     }
     if (!confirmation.terminal) {
       log.warn("database integrity verification was inconclusive", {
-        kind: target.kind,
-        label: target.label,
-        path: result.path,
+        ...details,
         error: confirmation.error.message,
       });
       continue;
     }
-    const latched =
+    const recordFailure =
       target.kind === "state"
-        ? recordOpenClawStateDatabaseOpenFailure(
-            result.path,
-            confirmation.error,
-            confirmation.generation,
-          )
-        : recordOpenClawAgentDatabaseOpenFailure(
-            result.path,
-            confirmation.error,
-            confirmation.generation,
-          );
+        ? recordOpenClawStateDatabaseOpenFailure
+        : recordOpenClawAgentDatabaseOpenFailure;
+    const latched = recordFailure(result.path, confirmation.error, confirmation.generation);
     if (!latched) {
-      log.info("discarding database integrity result after database generation changed", {
-        kind: target.kind,
-        label: target.label,
-        path: result.path,
-      });
+      log.info("discarding database integrity result after database generation changed", details);
       continue;
     }
     if (target.kind === "agent") {
@@ -320,9 +299,7 @@ export async function applyOpenClawDatabaseVerificationResults(options: {
       });
     }
     log.error("database integrity verification failed", {
-      kind: target.kind,
-      label: target.label,
-      path: result.path,
+      ...details,
       error: confirmation.error.message,
     });
   }

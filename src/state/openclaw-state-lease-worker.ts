@@ -17,14 +17,16 @@ import {
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
 import {
+  createOpenClawStateLeaseLostError,
   OpenClawStateLeaseError,
-  toOpenClawStateLeaseVerificationError,
 } from "./openclaw-state-lease-error.js";
 import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
-import { withLeaseWriteTransaction } from "./openclaw-state-lease-storage.js";
+import {
+  verifyOpenClawStateLeaseOwnership,
+  withLeaseWriteTransaction,
+} from "./openclaw-state-lease-storage.js";
 import {
   acquireOpenClawStateLeaseInTransaction,
-  readOpenClawStateLeaseExpiry,
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
   type OpenClawStateLeaseIdentity,
@@ -75,17 +77,11 @@ function readOwnedLeaseExpiry(
   database: DatabaseSync,
   identity: OpenClawStateLeaseIdentity,
 ): number {
-  try {
-    const expiresAt = readOpenClawStateLeaseExpiry(database, identity);
-    if (expiresAt === undefined) {
-      throw new OpenClawStateLeaseError(`state lease ${identity.scope}/${identity.key} was lost`, {
-        code: "OPENCLAW_STATE_LEASE_LOST",
-      });
-    }
-    return expiresAt;
-  } catch (error) {
-    throw toOpenClawStateLeaseVerificationError(identity, error);
-  }
+  return verifyOpenClawStateLeaseOwnership({
+    ...identity,
+    leaseLabel: "state lease",
+    transaction: database,
+  });
 }
 
 function assertOpenClawStateLeaseWorkerOwned(
@@ -212,10 +208,7 @@ export function executeOpenClawStateLeaseCommand(
             command.input.leaseMs,
           );
           if (expiresAt === undefined) {
-            throw new OpenClawStateLeaseError(
-              `state lease ${command.input.identity.scope}/${command.input.identity.key} was lost`,
-              { code: "OPENCLAW_STATE_LEASE_LOST" },
-            );
+            throw createOpenClawStateLeaseLostError(command.input.identity);
           }
           assertOpenClawStateLeaseWorkerOwnedInTransaction(
             db,

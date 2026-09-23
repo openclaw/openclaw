@@ -26,7 +26,7 @@ export type OpenClawStateLeaseWorkerAuthority = {
   beforeCommit?(this: void): void;
 };
 
-type WorkerLeaseScope = {
+export type WorkerLeaseScope = {
   identity: OpenClawStateLeaseIdentity;
   assertCurrent(this: void): void;
   createAdmission: SqliteWorkerAdmissionFactory;

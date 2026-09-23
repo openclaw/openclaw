@@ -16,6 +16,7 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
+  createOpenClawStateLeaseLostError,
   OpenClawStateLeaseError,
   toOpenClawStateLeaseVerificationError,
 } from "./openclaw-state-lease-error.js";
@@ -167,12 +168,7 @@ export function renewOpenClawStateLease(
   return withLeaseWriteTransaction(params.database, params.operationLabel, (db) => {
     const expiresAt = renewOpenClawStateLeaseInTransaction(db, params, params.leaseMs);
     if (expiresAt === undefined) {
-      throw new OpenClawStateLeaseError(
-        `${params.leaseLabel} ${params.scope}/${params.key} was lost`,
-        {
-          code: "OPENCLAW_STATE_LEASE_LOST",
-        },
-      );
+      throw createOpenClawStateLeaseLostError(params);
     }
     return expiresAt;
   });
@@ -184,12 +180,7 @@ export function assertOpenClawStateLeaseOwnedInDatabase(
 ): number {
   const expiresAt = readOpenClawStateLeaseExpiry(database, params);
   if (expiresAt === undefined) {
-    throw new OpenClawStateLeaseError(
-      `${params.leaseLabel} ${params.scope}/${params.key} was lost`,
-      {
-        code: "OPENCLAW_STATE_LEASE_LOST",
-      },
-    );
+    throw createOpenClawStateLeaseLostError(params);
   }
   return expiresAt;
 }
