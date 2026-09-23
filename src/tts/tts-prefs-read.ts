@@ -8,7 +8,7 @@ import { closeSync, openSync } from "node:fs";
 import { readFileWindowFullySync } from "../infra/file-read.js";
 
 // Far above any legitimate prefs document; anything larger is treated as unreadable.
-export const TTS_PREFS_MAX_BYTES = 1024 * 1024;
+const TTS_PREFS_MAX_BYTES = 1024 * 1024;
 
 /**
  * Read a TTS prefs file without letting an oversized file be slurped whole.

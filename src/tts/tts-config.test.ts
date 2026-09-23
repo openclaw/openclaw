@@ -10,7 +10,7 @@ import {
   resolveEffectiveTtsConfig,
   shouldAttemptTtsPayload,
 } from "./tts-config.js";
-import { TTS_PREFS_MAX_BYTES, readBoundedTtsPrefsTextSync } from "./tts-prefs-read.js";
+import { readBoundedTtsPrefsTextSync } from "./tts-prefs-read.js";
 import { readTtsPrefs, resolveTtsSettingsSnapshot } from "./tts-settings.js";
 
 describe("shouldAttemptTtsPayload", () => {
@@ -259,27 +259,24 @@ describe("TTS prefs reads are bounded", () => {
   it("readBoundedTtsPrefsTextSync accepts a file of exactly the bound", () => {
     // A file that fills the window exactly is not oversized; the one-byte probe
     // past the window must not reject it.
-    const exactly = "x".repeat(TTS_PREFS_MAX_BYTES);
+    const exactly = "x".repeat(64);
     writeFileSync(prefsPath, exactly, "utf8");
 
-    expect(readBoundedTtsPrefsTextSync(prefsPath)).toBe(exactly);
+    expect(readBoundedTtsPrefsTextSync(prefsPath, 64)).toBe(exactly);
   });
 
   it("readBoundedTtsPrefsTextSync rejects a file larger than the bound", () => {
     // One byte past the limit is enough to reject; the old readFileSync path read
     // the whole document into memory first.
-    writeFileSync(prefsPath, "x".repeat(TTS_PREFS_MAX_BYTES + 1), "utf8");
+    writeFileSync(prefsPath, "x".repeat(65), "utf8");
 
-    expect(readBoundedTtsPrefsTextSync(prefsPath)).toBeUndefined();
+    expect(readBoundedTtsPrefsTextSync(prefsPath, 64)).toBeUndefined();
   });
 
   it("readTtsPrefs falls back to defaults for an oversized prefs file", () => {
-    // Pre-fix this parsed the oversized document and returned its contents.
-    writeFileSync(
-      prefsPath,
-      `{"tts":{"auto":"always","summarize":false},"pad":"${"x".repeat(TTS_PREFS_MAX_BYTES)}"}`,
-      "utf8",
-    );
+    // Far past the production bound, so the default invocation is the one under test.
+    const pad = "x".repeat(2 * 1024 * 1024);
+    writeFileSync(prefsPath, `{"tts":{"auto":"always","summarize":false},"pad":"${pad}"}`, "utf8");
 
     expect(readTtsPrefs(prefsPath)).toEqual({});
   });
@@ -302,11 +299,8 @@ describe("TTS prefs reads are bounded", () => {
   });
 
   it("shouldAttemptTtsPayload ignores an oversized prefs file named by OPENCLAW_TTS_PREFS", () => {
-    writeFileSync(
-      prefsPath,
-      `{"tts":{"auto":"always"},"pad":"${"x".repeat(TTS_PREFS_MAX_BYTES)}"}`,
-      "utf8",
-    );
+    const pad = "x".repeat(2 * 1024 * 1024);
+    writeFileSync(prefsPath, `{"tts":{"auto":"always"},"pad":"${pad}"}`, "utf8");
     const envSnapshot = captureEnv(["OPENCLAW_TTS_PREFS"]);
     process.env.OPENCLAW_TTS_PREFS = prefsPath;
     try {

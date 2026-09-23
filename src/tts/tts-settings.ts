@@ -29,7 +29,6 @@ import { readBoundedTtsPrefsTextSync } from "./tts-prefs-read.js";
 import type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "./tts-types.js";
 
 export type { ResolvedTtsConfig, ResolvedTtsModelOverrides };
-export { readBoundedTtsPrefsTextSync, TTS_PREFS_MAX_BYTES } from "./tts-prefs-read.js";
 
 export const DEFAULT_TTS_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
