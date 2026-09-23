@@ -408,6 +408,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/tasks/task-registry.restore-ownership.test.ts",
   "src/tasks/task-run-owner.test.ts",
   "src/agents/agent-harness-completion-delivery.test.ts",
+  "src/agents/agent-harness-native-custody.test.ts",
   "src/agents/openclaw-tools.subagents.scope.test.ts",
   "src/agents/media-generation-task-status.cold.test.ts",
   "src/agents/tools/media-generate-tool.donor-resources.test.ts",

@@ -1,5 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AgentHarnessTaskRecord } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import {
+  matchesAgentHarnessTaskAssignment,
+  type AgentHarnessTaskRecord,
+} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import {
   asFiniteNumber,
   normalizeOptionalString,
@@ -253,10 +256,10 @@ export class CodexNativeSubagentHistoryRecovery {
     if (
       tasks.length !== 1 ||
       !task ||
-      task.taskId !== candidate.taskId ||
+      !matchesAgentHarnessTaskAssignment(task, candidate.expectedTask) ||
       !this.acceptsTask(task, candidate.parentState) ||
       !this.shouldReconcileTask(task, now) ||
-      (child?.completionTaskId && child.completionTaskId !== candidate.taskId)
+      (child?.expectedTask && !matchesAgentHarnessTaskAssignment(task, child.expectedTask))
     ) {
       return undefined;
     }
@@ -287,8 +290,8 @@ export class CodexNativeSubagentHistoryRecovery {
     if (
       currentTasks.length !== 1 ||
       !current ||
-      current.taskId !== candidate.taskId ||
-      task.taskId !== candidate.taskId
+      !matchesAgentHarnessTaskAssignment(current, candidate.expectedTask) ||
+      !matchesAgentHarnessTaskAssignment(task, candidate.expectedTask)
     ) {
       return false;
     }

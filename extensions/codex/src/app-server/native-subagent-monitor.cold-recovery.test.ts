@@ -180,11 +180,7 @@ describe("native completion custody and recovery", () => {
       const owner = registerParent(monitor, "parent-thread", requesterSessionKey, historyOwner);
       await notifyChildStarted(client);
       await owner.unregister();
-      const task = {
-        ...taskRecord({ childThreadId: "child-thread", historyOwner }),
-        requesterSessionKey,
-        ownerKey: requesterSessionKey,
-      };
+      const task = runtime.listTaskRecords()[0]!;
       runtime.listTaskRecords.mockImplementation(() => [task]);
       runtime.setDetachedTaskDeliveryStatusByRunId.mockImplementation((params) => {
         task.deliveryStatus = params.deliveryStatus;
@@ -235,11 +231,7 @@ describe("native completion custody and recovery", () => {
       });
       await notifyChildStarted(client);
       await owner.unregister();
-      const task = {
-        ...taskRecord({ childThreadId: "child-thread" }),
-        requesterSessionKey,
-        ownerKey: requesterSessionKey,
-      };
+      const task = runtime.listTaskRecords()[0]!;
       const saved = { ...historyOwner };
       if (kind === "connection") {
         saved.connectionFingerprint = "b".repeat(64);
@@ -286,11 +278,7 @@ describe("native completion custody and recovery", () => {
       const owner = registerParent(monitor, "parent-thread", requesterSessionKey, historyOwner);
       await notifyChildStarted(client);
       await owner.unregister();
-      const task = {
-        ...taskRecord({ childThreadId: "child-thread", historyOwner }),
-        requesterSessionKey,
-        ownerKey: requesterSessionKey,
-      };
+      const task = runtime.listTaskRecords()[0]!;
       const peer = { ...task, taskId: "distinct-peer-task", task: "different requested work" };
       const rows = phase === "before-finalize" ? [task, peer] : [task];
       runtime.listTaskRecords.mockImplementation(() => rows);
@@ -338,10 +326,8 @@ describe("native completion custody and recovery", () => {
     });
     await notifyChildStarted(client);
     await parent.unregister();
-    const task = {
-      ...taskRecord({ childThreadId: "child-thread", requesterSessionKey }),
-      detail: undefined,
-    };
+    const task = runtime.listTaskRecords()[0]!;
+    task.detail = undefined;
     runtime.listTaskRecords.mockReturnValue([task]);
     runtime.finalizeTaskRunByRunId.mockReturnValue([task]);
     runtime.setDetachedTaskDeliveryStatusByRunId.mockImplementation((params) => {

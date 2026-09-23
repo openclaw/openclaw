@@ -1,9 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import {
-  createAgentHarnessTaskRuntime,
-  type AgentHarnessTaskRecord,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import type { AgentHarnessTaskRecord } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -18,6 +15,7 @@ import {
   isCodexAppServerLiveThreadClaimed,
 } from "./client-runtime.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import type { NativeSubagentMonitorRuntime } from "./native-subagent-monitor-types.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
@@ -171,7 +169,10 @@ it.each([
           return delivery;
         },
       );
-      const runtime = { createAgentHarnessTaskRuntime, deliverAgentHarnessTaskCompletion: deliver };
+      const runtime = {
+        ...defaultNativeSubagentMonitorRuntime,
+        deliverAgentHarnessTaskCompletion: deliver,
+      };
       const initialParent = registerCodexNativeSubagentMonitor({
         client: first.client,
         parentThreadId: initialBinding.threadId,
@@ -459,7 +460,7 @@ it.each([
             client: current.client,
             taskRuntimeScope: resumedScope,
             runtime: {
-              createAgentHarnessTaskRuntime,
+              ...defaultNativeSubagentMonitorRuntime,
               deliverAgentHarnessTaskCompletion: resumedDelivery,
             },
           });

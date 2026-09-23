@@ -2,7 +2,14 @@
  * Mirrors Codex native subagent thread lifecycle events into OpenClaw task
  * runtime rows so parent sessions can observe child progress.
  */
-import type { AgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import {
+  captureAgentHarnessTaskAssignment,
+  matchesAgentHarnessTaskAssignment,
+  type AgentHarnessCompletionCustody,
+  type AgentHarnessTaskAssignment,
+  type AgentHarnessTaskRecord,
+  type AgentHarnessTaskRuntime,
+} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import {
   normalizeOptionalString,
   readStringField as readString,
@@ -41,6 +48,8 @@ type CodexNativeSubagentTaskMirrorParams = {
   historyOwner?: CodexNativeSubagentHistoryOwner;
   agentId?: string;
   now?: () => number;
+  onTaskCreated?: (assignment: AgentHarnessTaskAssignment) => void;
+  getCompletionCustody?: (runId: string) => AgentHarnessCompletionCustody | undefined;
 };
 
 /** Projects Codex thread and collab-agent notifications into task lifecycle updates. */
@@ -51,6 +60,7 @@ export class CodexNativeSubagentTaskMirror {
   private readonly terminalRunIds = new Set<string>();
   private readonly authoritativeRunIds = new Set<string>();
   private readonly runIdsByThreadId = new Map<string, string>();
+  private readonly assignments = new Map<string, AgentHarnessTaskAssignment>();
   private readonly now: () => number;
 
   constructor(
@@ -66,9 +76,42 @@ export class CodexNativeSubagentTaskMirror {
     this.terminalRunIds.add(runId);
   }
 
-  restoreCurrentTaskRun(threadId: string, runId: string): void {
+  restoreCurrentTaskRun(threadId: string, task: AgentHarnessTaskRecord): void {
+    const runId = task.runId!;
+    this.pinTaskAssignment(task);
     this.runIdsByThreadId.set(threadId, runId);
     this.mirrorStateByThreadId.set(threadId, "mirrored");
+  }
+
+  getTaskAssignment(runId: string): AgentHarnessTaskAssignment | undefined {
+    return this.assignments.get(runId);
+  }
+
+  pinTaskAssignment(
+    task: AgentHarnessTaskRecord | AgentHarnessTaskAssignment,
+  ): AgentHarnessTaskAssignment {
+    const assignment = this.assignments.get(task.runId!) ?? captureAgentHarnessTaskAssignment(task);
+    this.assignments.set(assignment.runId, assignment);
+    return assignment;
+  }
+
+  advanceTaskAssignment(
+    previous: AgentHarnessTaskAssignment,
+    committed: AgentHarnessTaskAssignment,
+  ): boolean {
+    const current = this.assignments.get(previous.runId);
+    if (!current || !matchesAgentHarnessTaskAssignment(current, previous)) {
+      return false;
+    }
+    this.assignments.set(previous.runId, committed);
+    return true;
+  }
+
+  private ownership(runId: string) {
+    const expectedTask = this.assignments.get(runId);
+    return expectedTask
+      ? { expectedTask, completionCustody: this.params.getCompletionCustody?.(runId) }
+      : {};
   }
 
   startFollowupTurn(threadId: string, turnId: string, nativeParentThreadId: string): void {
@@ -94,13 +137,9 @@ export class CodexNativeSubagentTaskMirror {
     if (!task || detail.nativeTurnId === turnId) {
       return;
     }
-    this.runtime.tryCreateRunningTaskRun({
+    this.runtime.recordTaskRunProgressByRunId({
       runId,
-      sourceId: task.sourceId,
-      label: task.label,
-      task: task.task,
-      notifyPolicy: task.notifyPolicy,
-      deliveryStatus: task.deliveryStatus,
+      ...this.ownership(runId),
       detail: { ...detail, nativeTurnId: turnId },
     });
   }
@@ -198,6 +237,7 @@ export class CodexNativeSubagentTaskMirror {
     if (statusType === "active") {
       this.runtime.recordTaskRunProgressByRunId({
         runId,
+        ...this.ownership(runId),
         lastEventAt: eventAt,
         progressSummary: "Subagent is active.",
       });
@@ -206,6 +246,7 @@ export class CodexNativeSubagentTaskMirror {
     if (statusType === "idle") {
       this.runtime.recordTaskRunProgressByRunId({
         runId,
+        ...this.ownership(runId),
         lastEventAt: eventAt,
         progressSummary: "Subagent is idle.",
       });
@@ -215,6 +256,7 @@ export class CodexNativeSubagentTaskMirror {
       this.terminalRunIds.delete(runId);
       this.runtime.recordTaskRunProgressByRunId({
         runId,
+        ...this.ownership(runId),
         lastEventAt: eventAt,
         progressSummary: "Subagent hit a system error; awaiting recovery.",
       });
@@ -223,6 +265,7 @@ export class CodexNativeSubagentTaskMirror {
     if (statusType === "notLoaded") {
       this.runtime.recordTaskRunProgressByRunId({
         runId,
+        ...this.ownership(runId),
         lastEventAt: eventAt,
         progressSummary: "Subagent is not loaded.",
       });
@@ -238,7 +281,13 @@ export class CodexNativeSubagentTaskMirror {
     if (senderThreadId !== this.params.parentThreadId) {
       return;
     }
-    const isSpawnAgentTool = normalizeToolName(readString(item, "tool")) === "spawnagent";
+    const tool = normalizeToolName(readString(item, "tool"));
+    // Wait snapshots name a thread, not its assignment. Predecessor results
+    // belong to delivery receipts and must not mutate the current task run.
+    if (tool === "wait") {
+      return;
+    }
+    const isSpawnAgentTool = tool === "spawnagent";
     const receiverThreadIds = readNativeSubagentThreadIds(item.receiverThreadIds);
     const agentsStates = readAgentsStates(item.agentsStates);
     const spawnChildThreadIds = new Set([...receiverThreadIds, ...agentsStates.keys()]);
@@ -386,6 +435,10 @@ export class CodexNativeSubagentTaskMirror {
     }
     this.terminalRunIds.delete(runId);
     this.authoritativeRunIds.delete(runId);
+    // Publication observers may already have replaced the row. Pin the actual
+    // admitted return value so later native producers cannot adopt that successor.
+    const assignment = this.pinTaskAssignment(taskRecord);
+    this.params.onTaskCreated?.(assignment);
     return true;
   }
 
@@ -414,6 +467,7 @@ export class CodexNativeSubagentTaskMirror {
       // makes cancellation sticky and discards their later successful result.
       this.runtime.recordTaskRunProgressByRunId({
         runId,
+        ...this.ownership(runId),
         lastEventAt: eventAt,
         progressSummary:
           normalizeOptionalString(message) ??
@@ -430,6 +484,7 @@ export class CodexNativeSubagentTaskMirror {
       const summary = normalizeOptionalString(message) ?? "Subagent completed.";
       this.runtime.recordTaskRunProgressByRunId({
         runId,
+        ...this.ownership(runId),
         lastEventAt: eventAt,
         progressSummary: summary,
       });
@@ -439,6 +494,7 @@ export class CodexNativeSubagentTaskMirror {
       this.terminalRunIds.add(runId);
       this.runtime.finalizeTaskRunByRunId({
         runId,
+        ...this.ownership(runId),
         status: "succeeded",
         endedAt: eventAt,
         lastEventAt: eventAt,
@@ -451,6 +507,7 @@ export class CodexNativeSubagentTaskMirror {
     this.terminalRunIds.add(runId);
     this.runtime.finalizeTaskRunByRunId({
       runId,
+      ...this.ownership(runId),
       status: normalizedStatus === "shutdown" ? "cancelled" : "failed",
       endedAt: eventAt,
       lastEventAt: eventAt,

@@ -134,6 +134,7 @@ export function recordTaskProgressByRunId(params: {
   lastEventAt?: number;
   progressSummary?: string | null;
   eventSummary?: string | null;
+  detail?: JsonValue;
 }) {
   return updateTaskStateByRunId({
     runId: params.runId,
@@ -141,6 +142,7 @@ export function recordTaskProgressByRunId(params: {
     runtime: params.runtime,
     sessionKey: params.sessionKey,
     childSessionKey: params.childSessionKey,
+    detail: params.detail,
     lastEventAt: params.lastEventAt,
     progressSummary: params.progressSummary,
     eventSummary: params.eventSummary,

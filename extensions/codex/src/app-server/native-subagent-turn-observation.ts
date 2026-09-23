@@ -19,6 +19,10 @@ import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
 type NativeSubagentTurnObservationCallbacks = {
+  emitTaskEvent: (
+    child: ChildState,
+    event: Pick<Parameters<typeof emitAgentEvent>[0], "stream" | "data">,
+  ) => void;
   currentChild: (threadId: string) => ChildState | undefined;
   dependencyRunId: (parentThreadId: string, childThreadId: string) => string | undefined;
   onTurnEnded: (childState: ChildState) => ChildState | undefined;
@@ -33,9 +37,7 @@ export class CodexNativeSubagentTurnObservation {
   invalidate(childState: ChildState): void {
     this.projectedActivityWaits.delete(childState);
     if (!childState.terminal && childState.activityObserved) {
-      emitAgentEvent({
-        runId: childState.runId,
-        ...(childState.agentId ? { agentId: childState.agentId } : {}),
+      this.callbacks.emitTaskEvent(childState, {
         stream: "execution",
         data: { state: "unknown", sourceId: this.observationSourceId, invalidate: true },
       });
@@ -45,9 +47,7 @@ export class CodexNativeSubagentTurnObservation {
   markActivityUnknown(childState: ChildState): void {
     this.projectedActivityWaits.delete(childState);
     childState.activityObserved = true;
-    emitAgentEvent({
-      runId: childState.runId,
-      ...(childState.agentId ? { agentId: childState.agentId } : {}),
+    this.callbacks.emitTaskEvent(childState, {
       stream: "execution",
       data: {
         state: "unknown",
@@ -104,9 +104,7 @@ export class CodexNativeSubagentTurnObservation {
       this.projectedActivityWaits.delete(childState);
     }
     childState.activityObserved = true;
-    emitAgentEvent({
-      runId: childState.runId,
-      ...(childState.agentId ? { agentId: childState.agentId } : {}),
+    this.callbacks.emitTaskEvent(childState, {
       stream: "execution",
       data: {
         state,
@@ -122,10 +120,6 @@ export class CodexNativeSubagentTurnObservation {
     if (!params) {
       return;
     }
-    const owner = {
-      runId: childState.runId,
-      ...(childState.agentId ? { agentId: childState.agentId } : {}),
-    };
     const turn = isJsonObject(params.turn) ? params.turn : undefined;
     const turnId = readString(params, "turnId") ?? readString(turn, "id");
     if (notification.method === "turn/started") {
@@ -192,8 +186,7 @@ export class CodexNativeSubagentTurnObservation {
         if (!childState.activityObserved) {
           observe("running");
         }
-        emitAgentEvent({
-          ...owner,
+        this.callbacks.emitTaskEvent(childState, {
           stream: notification.method === "item/agentMessage/delta" ? "assistant" : "thinking",
           data: { delta },
         });
@@ -242,7 +235,7 @@ export class CodexNativeSubagentTurnObservation {
       if (!childState.activityObserved) {
         observe("running");
       }
-      emitAgentEvent({ ...owner, stream: "assistant", data: { text: item.text } });
+      this.callbacks.emitTaskEvent(childState, { stream: "assistant", data: { text: item.text } });
     }
     const projection = projectNormalizedToolItem({
       phase: notification.method === "item/started" ? "start" : "result",
@@ -252,7 +245,7 @@ export class CodexNativeSubagentTurnObservation {
       if (!childState.activityObserved) {
         observe("running");
       }
-      emitAgentEvent({ ...owner, ...projection.event });
+      this.callbacks.emitTaskEvent(childState, projection.event);
     }
   }
 

@@ -153,6 +153,7 @@ export function recordTaskRunProgressByRunIdCore(params: {
   lastEventAt?: number;
   progressSummary?: string | null;
   eventSummary?: string | null;
+  detail?: TaskRecord["detail"];
 }) {
   return recordTaskProgressByRunId(params);
 }

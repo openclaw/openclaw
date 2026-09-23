@@ -1,5 +1,10 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isDurableAgentHarnessCompletionDelivery } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import {
+  AgentHarnessTaskAssignmentOwnerRetiredError,
+  AgentHarnessTaskAssignmentUnsupportedError,
+  isDurableAgentHarnessCompletionDelivery,
+  matchesAgentHarnessTaskAssignment,
+} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import {
   readCodexNativeSubagentHistoryOwner,
   assertHistoryOwnerMatchesRegistration,
@@ -54,6 +59,7 @@ export class CodexNativeSubagentCompletionDelivery {
       return;
     }
     childState.deliveringCompletion = true;
+    let deferredToForeground = false;
     try {
       if (!this.persistPending(state, childState)) {
         return;
@@ -61,6 +67,7 @@ export class CodexNativeSubagentCompletionDelivery {
       // Foreground parents already receive native completion input. Persist the
       // result now, but only wake a detached parent after its last owner leaves.
       if (state.owners.size > 0 || !state.taskRuntimeScope) {
+        deferredToForeground = state.owners.size > 0;
         return;
       }
       const task = state.taskRuntime
@@ -69,6 +76,8 @@ export class CodexNativeSubagentCompletionDelivery {
       const historyOwner = readCodexNativeSubagentHistoryOwner(task?.detail);
       const delivery = await this.dependencies.deliver({
         scope: state.taskRuntimeScope,
+        completionCustody: childState.completionCustody,
+        expectedTask: childState.expectedTask,
         ...(historyOwner
           ? {
               expectedRequester: {
@@ -124,11 +133,23 @@ export class CodexNativeSubagentCompletionDelivery {
       const error = delivery.error ?? "completion delivery did not produce a parent response";
       state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
         runId: childState.runId,
+        expectedTask: childState.expectedTask,
+        completionCustody: childState.completionCustody,
         deliveryStatus: "pending",
         error,
       });
       this.scheduleRetry(childState, error);
     } catch (error) {
+      if (
+        error instanceof AgentHarnessTaskAssignmentUnsupportedError ||
+        error instanceof AgentHarnessTaskAssignmentOwnerRetiredError
+      ) {
+        // Neither permanent owner failure can be repaired by retrying this assignment.
+        // Retire it before a finalize-phase retry can retain the Gateway root indefinitely.
+        this.dependencies.unregisterChild(childState);
+        embeddedAgentLog.warn(error.message);
+        return;
+      }
       if (
         !this.dependencies.isCurrentChild(childState) ||
         !this.dependencies.isCurrentParent(state)
@@ -143,6 +164,8 @@ export class CodexNativeSubagentCompletionDelivery {
       if (!childState.completionTaskPhase) {
         state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
           runId: childState.runId,
+          expectedTask: childState.expectedTask,
+          completionCustody: childState.completionCustody,
           deliveryStatus: "pending",
           error: message,
         });
@@ -154,6 +177,11 @@ export class CodexNativeSubagentCompletionDelivery {
         error: message,
       });
     } finally {
+      if (!childState.completionTaskPhase && !deferredToForeground) {
+        // Keep the root through the first handoff, including a foreground parent's
+        // pending unregister. Once attempted, sleeping retries retain only delivery authority.
+        childState.completionCustody?.settleExecution();
+      }
       childState.deliveringCompletion = false;
     }
   }
@@ -228,6 +256,7 @@ export class CodexNativeSubagentCompletionDelivery {
   }
 
   release(childState: ChildState): void {
+    childState.completionCustody?.release();
     if (childState.completionDeliveryTimer) {
       clearTimeout(childState.completionDeliveryTimer);
     }
@@ -255,6 +284,8 @@ export class CodexNativeSubagentCompletionDelivery {
         .find((record) => record.runId === runId);
       const updated = state.taskRuntime?.finalizeTaskRunByRunId({
         runId,
+        expectedTask: child.expectedTask,
+        completionCustody: child.completionCustody,
         status: completion.status,
         endedAt: eventAt,
         lastEventAt: eventAt,
@@ -275,7 +306,7 @@ export class CodexNativeSubagentCompletionDelivery {
         !updated?.some(
           (task) =>
             task.runId === runId &&
-            (!child.completionTaskId || task.taskId === child.completionTaskId),
+            (!child.expectedTask || matchesAgentHarnessTaskAssignment(task, child.expectedTask)),
         )
       ) {
         const current = state.taskRuntime.listTaskRecords().find((task) => task.runId === runId);
@@ -301,6 +332,8 @@ export class CodexNativeSubagentCompletionDelivery {
     if (child.completionTaskPhase === "delivery") {
       const updated = state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
         runId,
+        expectedTask: child.expectedTask,
+        completionCustody: child.completionCustody,
         deliveryStatus: child.nativeCompletionDelivered ? "delivered" : "pending",
       });
       if (
@@ -308,7 +341,7 @@ export class CodexNativeSubagentCompletionDelivery {
         !updated?.some(
           (task) =>
             task.runId === runId &&
-            (!child.completionTaskId || task.taskId === child.completionTaskId),
+            (!child.expectedTask || matchesAgentHarnessTaskAssignment(task, child.expectedTask)),
         )
       ) {
         if (!state.taskRuntime.listTaskRecords().some((task) => task.runId === runId)) {
@@ -345,6 +378,8 @@ export class CodexNativeSubagentCompletionDelivery {
       const state = this.dependencies.getParent(childState.parentThreadId);
       state?.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
         runId: childState.runId,
+        expectedTask: childState.expectedTask,
+        completionCustody: childState.completionCustody,
         deliveryStatus: "failed",
         error,
       });
@@ -369,6 +404,9 @@ export class CodexNativeSubagentCompletionDelivery {
   }
 
   private claim(state: ParentState, childState: ChildState): boolean {
+    if (childState.completionCustody && !childState.completionCustody.isCurrent()) {
+      return false;
+    }
     const requesterSessionKey = state.requesterSessionKey?.trim();
     if (!requesterSessionKey) {
       return true;
@@ -380,7 +418,10 @@ export class CodexNativeSubagentCompletionDelivery {
     const task = tasks[0];
     if (
       tasks.length > 1 ||
-      (childState.completionTaskId && task?.taskId !== childState.completionTaskId)
+      (state.taskRuntime &&
+        (!childState.expectedTask ||
+          !task ||
+          !matchesAgentHarnessTaskAssignment(task, childState.expectedTask)))
     ) {
       return false;
     }
@@ -405,7 +446,6 @@ export class CodexNativeSubagentCompletionDelivery {
     if (owner) {
       return owner === childState;
     }
-    childState.completionTaskId = task?.taskId;
     // Delivery no longer needs the app-server client. Keep one process owner
     // across client replacement so fallback steering cannot inject twice.
     completionDeliveryOwners.set(key, childState);

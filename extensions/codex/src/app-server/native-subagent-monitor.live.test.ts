@@ -114,6 +114,8 @@ function createDeliveryRecorder(
     deliveries,
     records: taskRecords,
     runtime: {
+      captureAgentHarnessCompletionCustody: () => undefined,
+      createAgentHarnessTaskEventSink: () => () => {},
       createAgentHarnessTaskRuntime: () => taskRuntime,
       deliverAgentHarnessTaskCompletion: async (params: RecordedDelivery) => {
         traceNativeLive("delivery-callback", {

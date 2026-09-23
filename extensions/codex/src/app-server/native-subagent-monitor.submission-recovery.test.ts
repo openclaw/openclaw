@@ -14,6 +14,7 @@ import {
   ensureCodexAppServerClientRuntime,
 } from "./client-runtime.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import {
   childTurnCompletedNotification,
   createClient,
@@ -171,7 +172,7 @@ describe("CodexNativeSubagentMonitor", () => {
         submissionStore: firstSubmissionStore,
         agentId: identity.agentId,
         runtime: {
-          createAgentHarnessTaskRuntime,
+          ...defaultNativeSubagentMonitorRuntime,
           deliverAgentHarnessTaskCompletion: firstDelivery,
         },
       });
@@ -393,7 +394,10 @@ describe("CodexNativeSubagentMonitor", () => {
         historyOwner: resumedHistory,
         submissionStore: makeSubmissionStore(reopenedBindingStore, resumedHistory),
         agentId: identity.agentId,
-        runtime: { createAgentHarnessTaskRuntime, deliverAgentHarnessTaskCompletion: delivery },
+        runtime: {
+          ...defaultNativeSubagentMonitorRuntime,
+          deliverAgentHarnessTaskCompletion: delivery,
+        },
       });
       try {
         resumedParent.bindTurn("resumed-parent-turn");
