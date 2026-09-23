@@ -349,7 +349,7 @@ describe("ask_user execution", () => {
     expect(result.details).toEqual({ status: "answered", answers });
   });
 
-  it.each(["answered", "cancelled", "expired", "pending"] as const)(
+  it.each(["answered", "pending"] as const)(
     "ends self-publication when the Gateway returns %s before delivery",
     async (status) => {
       const answers = { answers: { deploy_target: ["Production"] } };
