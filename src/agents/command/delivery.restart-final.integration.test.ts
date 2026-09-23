@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
+import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
 import {
   SessionWorkStartChangedError,
   SessionWorkStartInvalidatedError,
@@ -120,7 +121,11 @@ it.each(["restart", "revoked", "replaced"] as const)(
                       }
                     },
                   },
-                  text: async ({ text, onPlatformSendDispatch, assertDirectAdapterHandoff }) => {
+                  text: async ({
+                    text,
+                    onPlatformSendDispatch,
+                    assertDirectAdapterHandoff,
+                  }: ChannelMessageSendTextContext) => {
                     await onPlatformSendDispatch?.();
                     assertDirectAdapterHandoff?.();
                     writes.push(text);
@@ -167,7 +172,7 @@ it.each(["restart", "revoked", "replaced"] as const)(
         },
       }).then(
         (value) => ({ value }),
-        (error) => ({ error }),
+        (error: unknown) => ({ error }),
       );
       try {
         await Promise.race([
