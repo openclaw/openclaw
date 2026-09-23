@@ -6029,12 +6029,18 @@ describe("restricted same-thread continuation with mock transport", () => {
       sourceReplyDeliveryMode: "message_tool_only" as const,
     };
     const respond = vi.fn(async (method: string) => {
-      if (method === "config/read") return { config: {}, origins: {}, layers: [] };
-      if (method === "configRequirements/read") return { requirements: null };
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start" || method === "thread/resume") {
         return threadStartResult("thread-restricted-same");
       }
-      if (method === "mcpServerStatus/list") return { data: [], nextCursor: null };
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
       throw new Error(`unexpected method: ${method}`);
     });
     const fixture = await createLeasedCodexLifecycleHarness({
@@ -6121,11 +6127,18 @@ describe("restricted same-thread continuation with mock transport", () => {
     const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     let starts = 0;
     const respond = vi.fn(async (method: string) => {
-      if (method === "config/read") return { config: {}, origins: {}, layers: [] };
-      if (method === "configRequirements/read") return { requirements: null };
-      if (method === "thread/start")
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start") {
         return threadStartResult(++starts === 1 ? "thread-unrestricted" : "thread-transient");
-      if (method === "mcpServerStatus/list") return { data: [], nextCursor: null };
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
       throw new Error(`unexpected method: ${method}`);
     });
     const fixture = await createLeasedCodexLifecycleHarness({
