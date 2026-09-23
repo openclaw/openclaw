@@ -2,7 +2,6 @@
  * Schedules and runs deferred context-engine turn maintenance.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { publishTranscriptUpdate } from "../../config/sessions/session-accessor.js";
@@ -37,7 +36,6 @@ import {
   failTaskRunByRunIdAsync,
 } from "../../tasks/detached-task-runtime.async.js";
 import {
-  createQueuedTaskRun,
   recordTaskRunProgressByRunId,
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
@@ -55,6 +53,7 @@ import { SessionManager } from "../sessions/index.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import {
+  buildTurnMaintenanceTaskDescriptor,
   disposeDeferredMaintenanceContextEngine,
   mergeContextEngineFactoryWork,
   runContextEngineMaintenanceWork,
@@ -211,33 +210,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 
 export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: string): Promise<void> {
   await waitForSessionMaintenance(sessionKey);
-}
-
-function buildTurnMaintenanceTaskDescriptor(params: {
-  sessionKey: string;
-  runId?: string;
-  notifyPolicy?: "silent" | "done_only" | "state_changes";
-  deliveryStatus?: "not_applicable" | "pending";
-}) {
-  const runId =
-    params.runId ??
-    `turn-maint:${params.sessionKey}:${Date.now().toString(36)}:${randomUUID().slice(0, 8)}`;
-  return createQueuedTaskRun({
-    runtime: "acp",
-    taskKind: TURN_MAINTENANCE_TASK_KIND,
-    sourceId: TURN_MAINTENANCE_TASK_KIND,
-    requesterSessionKey: params.sessionKey,
-    ownerKey: params.sessionKey,
-    scopeKind: "session",
-    runId,
-    label: "Context engine turn maintenance",
-    task: "Deferred context-engine maintenance after turn.",
-    notifyPolicy: params.notifyPolicy ?? "silent",
-    // Fast maintenance stays silent and must not create a one-task flow.
-    // Long-running and failed workers promote it to pending before notifying.
-    deliveryStatus: params.deliveryStatus ?? "not_applicable",
-    preferMetadata: true,
-  });
 }
 
 /**
