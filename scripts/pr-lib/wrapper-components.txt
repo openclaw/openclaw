@@ -115,6 +115,7 @@ scripts/lib/error-format.mts
 scripts/lib/extension-test-plan.mts
 scripts/lib/failed-trailer.mts
 scripts/lib/gateway-server-test-plan.mts
+scripts/lib/list-test-files.mts
 scripts/lib/local-check-runtime.mts
 scripts/lib/managed-child-process.mts
 scripts/lib/managed-windows-job-entrypoint.mts
@@ -718,6 +719,7 @@ src/infra/sqlite-integrity.ts
 src/infra/sqlite-live-snapshot.ts
 src/infra/sqlite-maintenance-cache.ts
 src/infra/sqlite-number.ts
+src/infra/sqlite-pinned-read-snapshot.ts
 src/infra/sqlite-post-commit.ts
 src/infra/sqlite-private-directory.ts
 src/infra/sqlite-read-cache.ts
@@ -733,6 +735,7 @@ src/infra/sqlite-readonly-worker.ts
 src/infra/sqlite-runtime-version.ts
 src/infra/sqlite-schema-contract-assembly.ts
 src/infra/sqlite-schema-contract.ts
+src/infra/sqlite-schema-facts.ts
 src/infra/sqlite-schema-header.ts
 src/infra/sqlite-schema-issues.ts
 src/infra/sqlite-schema-sql.ts
@@ -774,6 +777,7 @@ src/infra/startup-migration-checkpoint.ts
 src/infra/state-database-coordinator-delegate.ts
 src/infra/state-database-coordinator-errors.ts
 src/infra/state-database-coordinator-paths.ts
+src/infra/state-database-coordinator-acquisition.ts
 src/infra/state-database-coordinator.ts
 src/infra/state-lease-process-owner.ts
 src/infra/state-migrations.cron-run-logs.ts

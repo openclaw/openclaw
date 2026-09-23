@@ -118,12 +118,17 @@ export function createWatchdogClock() {
 const CLI_FIXTURE = String.raw`
 const fs = require("node:fs");
 const path = require("node:path");
+const { createConnection } = require("node:net");
 const { createInterface } = require("node:readline");
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
 const publish = (name, value) => {
   const target = path.join(process.env.OPENCLAW_TEST_CLI_RECEIPTS, name);
   fs.writeFileSync(target + ".tmp", JSON.stringify(value));
   fs.renameSync(target + ".tmp", target);
+  // Filesystem notifications can coalesce or disappear; signal this completed publication directly.
+  const socket = createConnection({ host: "127.0.0.1", port: Number(process.env.OPENCLAW_TEST_CLI_RECEIPT_PORT) });
+  socket.on("error", (error) => { console.error(error); process.exit(1); });
+  socket.end(name);
 };
 if (process.argv.includes("--version")) { console.log("2.1.226 (fixture)"); process.exit(0); }
 if (process.argv.includes("auth")) { send({ loggedIn: true }); process.exit(0); }

@@ -286,14 +286,19 @@ generic peak requires a paged state API.
 
 Pasted text saved as a `.txt` attachment is extracted by OpenClaw and included in
 the current turn as untrusted external content, subject to the existing file
-extraction limits. This also applies to adopted and forked Codex sessions with
-locked model selection. Images continue through Codex's native image input.
+extraction limits. Extracted attachments use the sender's filename in model context,
+even when the stored or staged copy has a generated name. This also applies to
+adopted and forked Codex sessions with locked model selection. Images continue
+through Codex's native image input.
 
 For an unsandboxed local Codex process with file-read permission, OpenClaw also
 supplies verified paths to saved documents. Codex can process the complete file
-when inline extraction is bounded. The paths are current-turn execution context;
-canonical attachment references and transcript text remain unchanged. This does
-not expand workspace-only policies or expose Gateway paths to remote app-servers.
+when inline extraction is bounded. OpenClaw adds the paths to the admitted native
+input without changing its canonical attachment references or transcript text.
+Codex retains that input in its own native conversation history. The path note
+identifies a file; later turns still use the existing execution and tool-policy
+admission. This does not expand workspace-only policies or expose Gateway paths
+to remote app-servers.
 
 Remote Codex app-servers can run on a different machine from the Gateway. Set
 `remoteWorkspaceRoot` to validate remote workspace attachment paths. OpenClaw

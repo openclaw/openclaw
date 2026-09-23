@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import {
   createSqliteIndexContract,
   createSqliteTableContract,
@@ -27,7 +28,6 @@ import {
   quoteSqliteIdentifier,
   readSqlToken,
 } from "./sqlite-schema-sql.js";
-import { runSqlitePinnedReadSnapshotSync } from "./sqlite-transaction.js";
 
 export type { SqliteSchemaCompatibility, SqliteSchemaIssue } from "./sqlite-schema-issues.js";
 

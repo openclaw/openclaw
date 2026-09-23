@@ -50,6 +50,13 @@ import {
 import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { execPlainGh } from "./lib/plain-gh.mjs";
 import { parseReleaseContextRef, resolveReleaseContextIdentity } from "./lib/release-context.mjs";
+import {
+  RELEASE_PRIORITY_RECORD_KIND,
+  RELEASE_PRIORITY_VARIABLE,
+  defaultReleasePriorityRecordPath,
+  readReleasePriorityRecord,
+  writeReleasePriorityRecord,
+} from "./lib/release-priority.mjs";
 import { validatePackageSourceRef } from "./package-source-preflight.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
@@ -1404,6 +1411,46 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
   }
 }
 
+// Release priority: the active parent holds hosted-runner priority until it seals.
+// The variable is advisory tooling state, so a failure here never fails validation.
+function setReleasePriority(parentRunId: string, dryRun: boolean, mode: "set" | "clear" = "set") {
+  const variableArgs = [RELEASE_PRIORITY_VARIABLE, "--repo", REPOSITORY];
+  try {
+    if (mode === "set") {
+      // The pause window is recorded before the gate so `prioritize --restore`
+      // can re-queue deferred work even if this parent never seals.
+      const recordPath = defaultReleasePriorityRecordPath(parentRunId);
+      if (!dryRun && !readReleasePriorityRecord(recordPath, { optional: true })) {
+        writeReleasePriorityRecord(recordPath, {
+          kind: RELEASE_PRIORITY_RECORD_KIND,
+          parentRunId,
+          repository: REPOSITORY,
+          recordedAt: new Date().toISOString(),
+          cancelled: [],
+        });
+      }
+      runGh(["variable", "set", ...variableArgs, "--body", parentRunId], { dryRun });
+    } else if (
+      dryRun ||
+      runGh([
+        "api",
+        `repos/${REPOSITORY}/actions/variables/${RELEASE_PRIORITY_VARIABLE}`,
+        "--jq",
+        ".value",
+      ]) === parentRunId
+    ) {
+      runGh(["variable", "delete", ...variableArgs], { dryRun });
+    } else {
+      return;
+    }
+    console.log(`Release priority ${mode}: ${RELEASE_PRIORITY_VARIABLE}=${parentRunId}`);
+  } catch (error) {
+    console.warn(
+      `Release priority ${mode} failed (${error instanceof Error ? error.message : String(error)}); use pnpm frv prioritize ${mode === "set" ? `--run ${parentRunId}` : "--restore <record>"}.`,
+    );
+  }
+}
+
 function readWorkflowRun(parentRunId: string, workflowSha: string) {
   if (!/^[1-9][0-9]*$/u.test(parentRunId)) {
     throw new Error("parent run ID must be a positive decimal");
@@ -2032,6 +2079,7 @@ async function main() {
       retain({ ...record, phase: "observed", run: observed });
       parentRunId = String(observed.id);
       console.log(`dispatch=observed: attempt=${observed.attempt}`);
+      setReleasePriority(parentRunId, args.dryRun);
     }
     if (parentRunId) {
       console.log(`Parent run: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`);
@@ -2056,6 +2104,11 @@ async function main() {
         `node scripts/full-release-validation-at-sha.mjs --reconcile-request ${JSON.stringify(requestPath)}`,
       );
     }
+  }
+
+  // Never leave hosted-runner priority set once this operation ends, sealed or not.
+  if (parentRunId) {
+    setReleasePriority(parentRunId, args.dryRun, "clear");
   }
 
   const createdRefs = [

@@ -98,6 +98,7 @@ export function renderChatWorkingIndicator(
       }
       <span class="chat-working-indicator__status">
         <span
+          title=${preamble ?? nothing}
           class=${
             preamble
               ? "chat-working-indicator__preamble"

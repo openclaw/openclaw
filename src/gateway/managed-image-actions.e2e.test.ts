@@ -412,8 +412,8 @@ describe("managed image actions Gateway E2E", () => {
           expect(thumbnail.headers.get("content-type")).toBe("image/png");
           const thumbnailBytes = Buffer.from(await thumbnail.arrayBuffer());
           expect(readImageProbeFromHeader(thumbnailBytes)).toMatchObject({
-            width: 300,
-            height: 84,
+            width: 1200,
+            height: 336,
           });
 
           const authenticated = await fetch(new URL(imageUrl, fullUrl), {

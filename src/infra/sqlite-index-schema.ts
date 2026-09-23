@@ -9,13 +9,13 @@ import {
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
 } from "./sqlite-integrity.js";
+import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import {
   collectSqliteNamedIndexContract,
   getCanonicalSqliteNamedIndexContracts,
   getCanonicalSqliteTableNames,
   type CanonicalSqliteNamedIndexContract,
 } from "./sqlite-schema-contract.js";
-import { runSqlitePinnedReadSnapshotSync } from "./sqlite-transaction.js";
 
 const SQLITE_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 

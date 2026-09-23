@@ -46,8 +46,11 @@ originals even when native image projection clears the ordinary media field.
 For steering, pass the current `turn: { media, userTurnTranscriptRecorder }`.
 Path metadata must fit the supplied native input budget; excessive input fails
 with a request to send fewer attachments.
-The note belongs only in the current native input; do not persist it over the
-canonical prompt, transcript, or media references.
+Append the note to the current native input without rewriting OpenClaw's
+canonical prompt, transcript, or media references. This separation does not imply
+that a harness discards its native input after the turn: Codex retains it in its
+native conversation history. Prepared paths do not replace the existing
+execution and tool-policy admission for later turns.
 
 This optional addition preserves the shipped V2 host capability contract: older
 hosts omit it, so plugins retain ordinary inline attachment context when absent.
