@@ -16,6 +16,7 @@ import {
 type FleetContainerCommandOptions = {
   allowFailure?: boolean;
   redactValues?: readonly string[];
+  timeoutMs?: number;
 };
 
 type FleetContainerCommandResult = {
@@ -423,7 +424,7 @@ const defaultFleetContainerCommandExecutor: FleetContainerCommandExecutor = asyn
   options,
 ) => {
   const result = await runCommandWithTimeout([runtime, ...args], {
-    timeoutMs: COMMAND_TIMEOUT_MS,
+    timeoutMs: Math.min(options.timeoutMs ?? COMMAND_TIMEOUT_MS, COMMAND_TIMEOUT_MS),
     maxOutputBytes: COMMAND_MAX_OUTPUT_BYTES,
   });
   const normalized = {
@@ -595,11 +596,12 @@ export function createFleetContainerRuntime(
     async inspect(
       runtime: FleetContainerRuntimeName,
       containerName: string,
+      options: { timeoutMs?: number } = {},
     ): Promise<FleetContainerInspectResult> {
       const args = ["container", "inspect", validateContainerName(containerName)];
       let result: FleetContainerCommandResult;
       try {
-        result = await execute(runtime, args, { allowFailure: true });
+        result = await execute(runtime, args, { allowFailure: true, ...options });
       } catch (error) {
         return {
           kind: "unavailable",

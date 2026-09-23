@@ -264,10 +264,11 @@ export async function probeLoopbackPort(port: number): Promise<boolean> {
 export async function probeCellHealth(params: {
   port: number;
   fetchImpl: typeof fetch;
+  timeoutMs?: number;
 }): Promise<FleetHealthResult> {
   const url = `http://127.0.0.1:${params.port}/healthz`;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), params.timeoutMs ?? HEALTH_TIMEOUT_MS);
   let response: Response | undefined;
   try {
     response = await params.fetchImpl(url, {
@@ -504,10 +505,16 @@ export async function verifyReplacementHealthy(params: {
   context: "upgrade" | "restore" | "create";
 }): Promise<void> {
   const deadline = params.now() + params.timeoutMs;
+  const remainingMs = () => deadline - params.now();
   for (;;) {
+    const inspectTimeoutMs = remainingMs();
+    if (inspectTimeoutMs <= 0) {
+      break;
+    }
     const replacement = await params.containers.inspect(
       params.record.runtime,
       params.record.containerName,
+      { timeoutMs: inspectTimeoutMs },
     );
     if (
       replacement.kind !== "ok" ||
@@ -520,19 +527,31 @@ export async function verifyReplacementHealthy(params: {
           : `Replacement cell container could not be verified after ${params.context}.`,
       );
     }
+    const probeTimeoutMs = Math.min(HEALTH_TIMEOUT_MS, remainingMs());
+    if (probeTimeoutMs <= 0) {
+      break;
+    }
     const health = await probeCellHealth({
       port: params.record.hostPort,
       fetchImpl: params.fetchImpl,
+      timeoutMs: probeTimeoutMs,
     });
-    if (health.status === "ok") {
+    if (health.status === "ok" && remainingMs() > 0) {
       return;
     }
-    if (params.now() >= deadline) {
-      throw new Error(`Replacement cell container did not become healthy after ${params.context}.`);
+    if (remainingMs() <= 0) {
+      break;
     }
     await params.checkpoint();
-    await params.sleep(params.pollMs);
+    // The authoritative lease heartbeat can consume the remaining verification budget.
+    // Recompute after it settles so the subsequent poll cannot outlive the deadline.
+    const pollTimeoutMs = Math.min(params.pollMs, remainingMs());
+    if (pollTimeoutMs <= 0) {
+      break;
+    }
+    await params.sleep(pollTimeoutMs);
   }
+  throw new Error(`Replacement cell container did not become healthy after ${params.context}.`);
 }
 
 export async function cleanupFailedCreateContainer(

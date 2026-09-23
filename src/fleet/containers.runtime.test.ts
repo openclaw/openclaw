@@ -248,6 +248,23 @@ describe("fleet container runtime", () => {
     });
   });
 
+  it("passes a bounded inspect timeout to the command executor", async () => {
+    const executor = vi.fn<FleetContainerCommandExecutor>(async () => ({
+      stdout: "not-json",
+      stderr: "",
+      code: 0,
+    }));
+
+    await createFleetContainerRuntime(executor).inspect("docker", "cell-acme", {
+      timeoutMs: 250,
+    });
+
+    expect(executor).toHaveBeenCalledWith("docker", ["container", "inspect", "cell-acme"], {
+      allowFailure: true,
+      timeoutMs: 250,
+    });
+  });
+
   it("detects a rootless Docker daemon from security options", async () => {
     const executor = vi.fn<FleetContainerCommandExecutor>(async () => ({
       stdout: JSON.stringify(["name=seccomp,profile=builtin", "name=rootless"]),
