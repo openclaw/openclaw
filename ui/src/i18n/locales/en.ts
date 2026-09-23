@@ -260,7 +260,7 @@ export const en: TranslationMap & {
     linkedChannel: "Linked to {channel}",
     viaAccount: "Via {account}",
     topicNumber: "Topic {id}",
-    sessionParticipants: "In this session",
+    sessionParticipants: "Participants",
     chatKinds: {
       direct: "Direct chat",
       group: "Group chat",
@@ -972,7 +972,8 @@ export const en: TranslationMap & {
     active: "Updated within",
     limit: "Limit",
     createdBy: "Created by {name}",
-    ownedBy: "Owned by {name}",
+    ownedBy: "Owner: {name}",
+    owner: "Owner",
     archivedBy: "Archived by {name}",
     archiveReason: "Archive reason",
     archiveReasonManual: "Archived manually",

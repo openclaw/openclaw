@@ -594,7 +594,7 @@ describe("AppSidebar session ownership", () => {
     expect(
       sidebar.querySelector('openclaw-session-owner-chip span[title="Archived by Bob"]'),
     ).not.toBeNull();
-    expect(sidebar.querySelector('span[title="Created by Ada"]')).toBeNull();
+    expect(sidebar.querySelector('span[title="Owner: Ada"]')).toBeNull();
     // Facepile dedup follows the rendered lead: the archivist chip is shown,
     // so Bob is excluded while owner Ada must stay visible as a viewer.
     const archivedFacepile = sidebar.querySelector(

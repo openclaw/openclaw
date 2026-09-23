@@ -335,7 +335,7 @@ describe("AppSidebar session mutation feedback", () => {
         sidebar
           .querySelector(`[data-session-key="${row.key}"] .session-owner-chip`)
           ?.getAttribute("title"),
-      ).toBe("Owned by Bob");
+      ).toBe("Owner: Bob");
     });
 
     const selfMenu = await openSessionMenu(sidebar, row.key);
@@ -360,7 +360,7 @@ describe("AppSidebar session mutation feedback", () => {
         sidebar
           .querySelector(`[data-session-key="${row.key}"] .session-owner-chip`)
           ?.getAttribute("title"),
-      ).toBe("Owned by Ada");
+      ).toBe("Owner: Ada");
     });
   });
 

@@ -582,7 +582,7 @@ suite.define(() => {
           activePane.getByRole("alert").filter({ hasText: message }),
         ).toBeVisible();
         await expectBrowser(
-          activePane.getByRole("img", { name: "Created by Bob", exact: true }),
+          activePane.getByRole("img", { name: "Owner: Bob", exact: true }),
         ).toHaveCount(1);
       },
     );
@@ -604,9 +604,7 @@ suite.define(() => {
       });
 
       await expectBrowser(page.getByRole("alert").filter({ hasText: message })).toBeVisible();
-      await expectBrowser(
-        row.getByRole("img", { name: "Created by Bob", exact: true }),
-      ).toHaveCount(1);
+      await expectBrowser(row.getByRole("img", { name: "Owner: Bob", exact: true })).toHaveCount(1);
     });
   });
 });

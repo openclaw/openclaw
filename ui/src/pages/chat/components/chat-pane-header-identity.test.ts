@@ -18,10 +18,12 @@ function mountHeader(patch: Partial<ChatPaneHeaderProps> = {}) {
 }
 
 describe("chat pane header identity links", () => {
-  it("links the owner chip and each participant face to their activity feed", async () => {
+  it("opens owner assignment while keeping participant activity links", async () => {
     const navigate = vi.fn();
+    const assignOwner = vi.fn();
     const { container } = mountHeader({
       showOwnerChip: true,
+      onAssignOwner: assignOwner,
       personActivity: { basePath: "", navigate },
       session: row({
         owner: {
@@ -44,10 +46,8 @@ describe("chat pane header identity links", () => {
       "openclaw-viewer-facepile.chat-pane__participants",
     );
     await facepile?.updateComplete;
-    const ownerLink = container.querySelector<HTMLAnchorElement>(
-      "a.person-activity-avatar-link:has(openclaw-session-owner-chip)",
-    );
-    expect(ownerLink?.getAttribute("href")).toBe("/activity/ada");
+    const ownerControl = container.querySelector<HTMLButtonElement>("button.chat-pane__owner");
+    expect(ownerControl?.getAttribute("aria-label")).toBe("Owner: Ada King");
     const participantLinks = [
       ...container.querySelectorAll<HTMLAnchorElement>(
         ".chat-pane__participants a.person-activity-avatar-link",
@@ -58,8 +58,9 @@ describe("chat pane header identity links", () => {
       "/activity/riley",
     ]);
 
-    ownerLink?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(navigate).toHaveBeenCalledWith("ada", "Ada King");
+    ownerControl?.click();
+    expect(assignOwner).toHaveBeenCalledOnce();
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("leaves identities unlinked when the header has no activity routing", () => {
@@ -81,5 +82,7 @@ describe("chat pane header identity links", () => {
 
     expect(container.querySelector("a.person-activity-avatar-link")).toBeNull();
     expect(container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
+    expect(container.querySelector("button.chat-pane__owner")).toBeNull();
+    expect(container.querySelector(".chat-pane__owner")?.textContent).toContain("Owner:");
   });
 });

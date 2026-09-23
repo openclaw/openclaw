@@ -21,6 +21,7 @@ function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSessio
       identity: { type: "profile", id: "alice" },
       label: "Alice Baker",
     },
+    participants: [{ identity: { type: "profile", id: "alice" }, label: "Alice Baker" }],
     subtitle: "openclaw ⎇ feature/session-hovercard",
     workContext: {
       kind: "project",
@@ -89,9 +90,9 @@ describe("renderSessionHovercard", () => {
     expect(header?.textContent).toContain("Via personal");
     expect(header?.textContent?.match(/Weekend plans/g)).toHaveLength(1);
     expect(header?.textContent).not.toContain("CLI");
-    const contributors = container.querySelector('[aria-label="In this session"]');
-    expect(contributors?.textContent).toContain("CLI");
-    expect(contributors?.textContent).toContain("1 other");
+    const contributors = container.querySelector('[aria-label="Participants"]');
+    expect(contributors?.textContent).toContain("Alice");
+    expect(contributors?.textContent).not.toContain("CLI");
     expect(container.textContent).not.toContain("members");
   });
 
@@ -103,6 +104,7 @@ describe("renderSessionHovercard", () => {
           label: "Alex",
           workContext: undefined,
           createdActor: undefined,
+          participants: [],
           channelPresentation: {
             channel: "imessage",
             channelLabel: "iMessage",
@@ -117,7 +119,7 @@ describe("renderSessionHovercard", () => {
       "alex@example.com",
     );
     expect(container.querySelector(".session-hovercard__conversation a")).toBeNull();
-    expect(container.querySelector('[aria-label="In this session"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Participants"]')).toBeNull();
     expect(container.textContent).not.toContain("Via");
   });
 
@@ -289,57 +291,28 @@ describe("renderSessionHovercard", () => {
     expect(navigate).toHaveBeenCalledExactlyOnceWith();
   });
 
-  it("renders the channel avatar with gateway auth instead of an initials span", () => {
+  it("distinguishes the assigned owner from creator, participants, and channel avatar", () => {
     const container = document.createElement("div");
-    const channelAvatarUrl = "/__openclaw__/channel-avatar/agent%3Amain%3Awork";
-    render(
-      renderSessionHovercard({
-        row: row({ channelAvatarUrl }),
-        avatarAuth: {
-          authTokens: ["device-token", "saved-token"],
-          authReady: true,
-        },
-      }),
-      container,
-    );
-
-    const avatar = container.querySelector<
-      HTMLElement & {
-        routeUrl: string;
-        authTokens: readonly string[];
-        authReady: boolean;
-      }
-    >("openclaw-channel-avatar.session-hovercard__creator-avatar");
-    expect(avatar).not.toBeNull();
-    expect(avatar?.routeUrl).toBe(channelAvatarUrl);
-    expect(avatar?.authTokens).toEqual(["device-token", "saved-token"]);
-    expect(avatar?.authReady).toBe(true);
-    expect(container.querySelector("openclaw-viewer-avatar")).toBeNull();
-  });
-
-  it("keeps initials visible inside the channel avatar while auth is unavailable", async () => {
-    const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderSessionHovercard({
-        row: row({ channelAvatarUrl: "/__openclaw__/channel-avatar/pending" }),
-        avatarAuth: { authTokens: [], authReady: false },
-      }),
-      container,
-    );
-
-    await customElements.whenDefined("openclaw-channel-avatar");
-    const avatar = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-channel-avatar",
-    );
-    await avatar?.updateComplete;
-
-    await vi.waitFor(() => {
-      expect(
-        avatar?.querySelector(".session-hovercard__creator-avatar-fallback")?.textContent,
-      ).toBe("AB");
+    const session = row({
+      owner: { actor: { type: "human", id: "gideon", label: "Gideon" }, assignedAt: 1 },
+      participants: [{ identity: { type: "profile", id: "alice" }, label: "Alice Baker" }],
+      participantCount: 1,
+      channelAvatarUrl: "/__openclaw__/channel-avatar/example",
     });
-    expect(avatar?.querySelector("img.channel-avatar")).toBeNull();
-    expect(container.querySelector("openclaw-viewer-avatar")).toBeNull();
+    render(renderSessionHovercard({ row: session }), container);
+    expect(container.querySelector(".session-hovercard__owner")?.textContent).toContain("Owner");
+    expect(container.querySelector(".session-hovercard__owner")?.textContent).toContain("Gideon");
+    expect(container.querySelector(".session-hovercard__participants")?.textContent).toContain(
+      "Alice Baker",
+    );
+    expect(container.querySelector(".session-hovercard__owner")?.textContent).not.toContain(
+      "Alice Baker",
+    );
+    render(renderSessionHovercard({ row: { ...session, owner: undefined } }), container);
+    expect(container.querySelector(".session-hovercard__owner")).toBeNull();
+    expect(container.querySelector(".session-hovercard__participants")?.textContent).toContain(
+      "Alice Baker",
+    );
   });
 
   it("renders one titled PR row with compact diff facts and an overflow count", () => {
@@ -753,11 +726,10 @@ describe("renderSessionHovercard", () => {
     },
   );
 
-  it("deduplicates creator and self from the compact attribution", () => {
+  it("deduplicates participant identities without hiding the signed-in participant", () => {
     const container = document.createElement("div");
     render(
       renderSessionHovercard({
-        selfUserId: "self",
         row: row({
           participants: [
             { identity: { type: "profile", id: "alice" }, label: "Alice Baker" },
@@ -772,18 +744,20 @@ describe("renderSessionHovercard", () => {
       container,
     );
 
-    expect(attributionSummary(container)).toBe("Alice Baker & 5 others");
+    expect(attributionSummary(container)).toBe("Alice Baker & 6 others");
     expect(
       container.querySelector(".session-hovercard__attribution")?.getAttribute("aria-label"),
-    ).toBe("Alice Baker, 5 more participants");
+    ).toBe("Alice Baker, 6 more participants");
   });
 
-  it("opens the creator's activity feed from the attribution", () => {
+  it("opens the participant's activity feed from the attribution", () => {
     const container = document.createElement("div");
     const navigate = vi.fn();
     render(
       renderSessionHovercard({
-        row: row(),
+        row: row({
+          participants: [{ identity: { type: "profile", id: "alice" }, label: "Alice Baker" }],
+        }),
         personActivity: { basePath: "/ui", navigate },
       }),
       container,
@@ -801,12 +775,11 @@ describe("renderSessionHovercard", () => {
     expect(click.defaultPrevented).toBe(true);
   });
 
-  it("links participant avatars while keeping the creator first", async () => {
+  it("links the full participant projection without substituting the creator", async () => {
     const container = document.body.appendChild(document.createElement("div"));
     const navigate = vi.fn();
     render(
       renderSessionHovercard({
-        selfUserId: "self",
         row: row({
           participants: [
             { identity: { type: "profile", id: "self" }, label: "You" },
@@ -828,7 +801,7 @@ describe("renderSessionHovercard", () => {
       container,
     );
 
-    expect(attributionSummary(container)).toBe("Alice Baker & 4 others");
+    expect(attributionSummary(container)).toBe("You & 4 others");
     const facepile = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
       "openclaw-viewer-facepile",
     );
@@ -881,7 +854,6 @@ describe("renderSessionHovercard", () => {
     const container = document.createElement("div");
     render(
       renderSessionHovercard({
-        selfUserId: "self",
         row: row({
           createdActor: undefined,
           participants: [
@@ -895,7 +867,7 @@ describe("renderSessionHovercard", () => {
       container,
     );
 
-    expect(attributionSummary(container)).toBe("Mira & 3 others");
+    expect(attributionSummary(container)).toBe("You & 4 others");
   });
 
   it("keeps the identity plain text when no activity route is available", () => {
@@ -910,7 +882,6 @@ describe("renderSessionHovercard", () => {
     const container = document.body.appendChild(document.createElement("div"));
     render(
       renderSessionHovercard({
-        selfUserId: "self",
         row: row({
           participants: [
             { identity: { type: "profile", id: "mira" }, label: "Mira" },
@@ -929,7 +900,7 @@ describe("renderSessionHovercard", () => {
     );
     await facepile?.updateComplete;
     expect(facepile?.querySelectorAll(".viewer-avatar:not(.viewer-avatar--overflow)")).toHaveLength(
-      4,
+      3,
     );
     expect(facepile?.querySelector(".viewer-avatar--overflow")?.textContent).toBe("+1");
   });

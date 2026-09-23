@@ -6,7 +6,7 @@ import { i18n } from "../../../i18n/index.ts";
 import "../../../styles.css";
 import "../../../styles/chat/startup-layout.css";
 import "../../../styles/chat/split-view.css";
-import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
+import { chatPaneHeaderSessionRow, mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 
 describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
@@ -26,6 +26,34 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
     afterEach(() => {
       dispose();
       containers.splice(0).forEach((container) => container.remove());
+    });
+
+    it("keeps the owner name and assignment reachable before participant faces at narrow widths", async () => {
+      const onAssignOwner = vi.fn();
+      const { container } = mountChatPaneHeader(containers, {
+        narrow: true,
+        showOwnerChip: true,
+        onAssignOwner,
+        session: chatPaneHeaderSessionRow({
+          owner: { actor: { type: "human", id: "gideon", label: "Gideon" } },
+          participants: [{ identity: { type: "profile", id: "ada" }, label: "Ada" }],
+          participantCount: 1,
+        }),
+      });
+      container.style.width = "390px";
+      await container.querySelector("openclaw-viewer-facepile")?.updateComplete;
+      const owner = container.querySelector<HTMLButtonElement>(".chat-pane__owner")!;
+      const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
+      expect(
+        container.querySelector(".chat-pane__participants .viewer-facepile")?.checkVisibility(),
+      ).toBe(false);
+      expect(owner.checkVisibility()).toBe(true);
+      expect(owner.textContent).toContain("Gideon");
+      expect(owner.getBoundingClientRect().right).toBeLessThanOrEqual(
+        header.getBoundingClientRect().right,
+      );
+      await page.elementLocator(owner).click();
+      expect(onAssignOwner).toHaveBeenCalledOnce();
     });
 
     it.each(["idle", "busy", "editor"] as const)(

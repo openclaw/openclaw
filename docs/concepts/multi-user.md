@@ -53,7 +53,7 @@ In the Control UI, the session context menu (kebab or right-click on a sidebar r
 
 Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups). Use `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`. It targets the current session by default, or another visible session via `sessionKey`.
 
-Both paths call the Gateway method `sessions.assignOwner` (`operator.write`). Assignment requires an identified caller — an authenticated Gateway profile or a trusted agent identity — and is authorized by session visibility. Agent owner ids must name a configured agent. After assignment the avatar tooltip switches from "Created by" to "Owned by".
+Both paths call the Gateway method `sessions.assignOwner` (`operator.write`). Assignment requires an identified caller — an authenticated Gateway profile or a trusted agent identity — and is authorized by session visibility. Agent owner ids must name a configured agent. The sidebar owner avatar tooltip consistently identifies the current owner. The session hovercard shows **Owner** separately from **Participants**, and the chat header keeps an **Owner: name** chip visible even when there is only one owner in the roster. Select that chip to open the existing assignment picker when your access permits it; otherwise it remains read-only attribution.
 
 Reassigning the owner changes responsibility and display only. It does not transfer sharing authority (which stays with the creator) and does not grant or remove any access.
 

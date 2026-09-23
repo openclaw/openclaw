@@ -31,7 +31,7 @@ import "./chat-header-session-menu.ts";
 import type { ChatSessionSharingProps } from "./chat-session-sharing.ts";
 import { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 
-type HeaderMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
+type HeaderMenuElement = HTMLElementTagNameMap["openclaw-chat-header-session-menu"];
 type MenuItemElement = HTMLElement & { checked: boolean; disabled: boolean; submenuOpen?: boolean };
 
 const containers: HTMLElement[] = [];
@@ -539,6 +539,32 @@ describe("chat header session menu", () => {
       [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada" } }],
       [{ kind: "assign-owner", owner: { type: "agent", id: "research:one" } }],
     ]);
+  });
+
+  it("opens the existing assignment picker directly and preserves disabled access", async () => {
+    const onAction = vi.fn<(action: HeaderMenuAction) => void>();
+    const { context } = createSessionOwnerMenuHarness();
+    const menu = await mountMenu({
+      context,
+      currentOwner: { type: "agent", id: "research:one" },
+      onAction,
+    });
+    menu.openOwnerMenu();
+    await menu.updateComplete;
+    expect(menu.querySelector("wa-dropdown")?.open).toBe(true);
+    expect(menu.querySelector('[value="assign-owner:human:profile-ada"]')).not.toBeNull();
+    expect(
+      menu.querySelector('[value="assign-owner:human:profile-ada"]')?.getAttribute("slot"),
+    ).toBeNull();
+    select(menu, "assign-owner:human:profile-ada");
+    expect(onAction).toHaveBeenCalledWith({
+      kind: "assign-owner",
+      owner: { type: "human", id: "profile-ada" },
+    });
+    menu.actionDisabledReasons = { "assign-owner": "Read only" };
+    await menu.updateComplete;
+    menu.openOwnerMenu();
+    expect(menu.querySelector("wa-dropdown")?.open).toBe(false);
   });
 
   it("drills into compact menu groups without rendering side flyouts", async () => {

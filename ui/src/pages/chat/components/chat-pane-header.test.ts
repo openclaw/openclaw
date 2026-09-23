@@ -318,7 +318,7 @@ describe("chat pane header", () => {
     );
   });
 
-  it("replaces the header owner avatar when visibility is available", () => {
+  it("keeps the owner visible beside the separate sharing control", () => {
     const actor = {
       type: "human" as const,
       id: "profile-ada",
@@ -331,7 +331,8 @@ describe("chat pane header", () => {
       sharingControl: html`<span data-slot="sharing"></span>`,
     });
 
-    expect(container.querySelector("openclaw-session-owner-chip")).toBeNull();
+    expect(container.querySelector(".chat-pane__owner")?.textContent).toContain("Ada");
+    expect(container.querySelectorAll("openclaw-session-owner-chip")).toHaveLength(1);
     expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
       "chat-pane__header-leading",
     );
@@ -467,12 +468,12 @@ describe("chat pane header", () => {
       expectedViewers: ["profile-zoe"],
     },
     {
-      name: "keeps the owner when the owner chip is hidden",
+      name: "shows and deduplicates the sole owner without requiring other roster owners",
       owners: [{ type: "human" as const, id: "profile-ada", label: "Ada" }],
       viewers: ["profile-ada", "profile-zoe"],
       qualified: true,
-      expectedChip: false,
-      expectedViewers: ["profile-ada", "profile-zoe"],
+      expectedChip: true,
+      expectedViewers: ["profile-zoe"],
     },
     {
       name: "omits the facepile when the shown owner is the only viewer",
@@ -600,8 +601,8 @@ describe("chat pane header", () => {
       expect(mounted.container.querySelector("openclaw-session-owner-chip img")).not.toBeNull();
     });
     const chip = mounted.container.querySelector(".session-owner-chip--header");
-    expect(chip?.getAttribute("aria-label")).toBe("Created by Ada");
-    expect(chip?.getAttribute("title")).toBe("Created by Ada");
+    expect(chip?.getAttribute("aria-label")).toBe("Owner: Ada");
+    expect(chip?.getAttribute("title")).toBe("Owner: Ada");
   });
 
   it.each([

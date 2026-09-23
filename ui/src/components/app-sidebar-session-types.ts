@@ -210,6 +210,7 @@ export type SidebarSessionHovercardRow = Pick<
   | "label"
   | "lastMessagePreview"
   | "expandedParticipants"
+  | "owner"
   | "participantCount"
   | "participants"
   | "placementProviderId"

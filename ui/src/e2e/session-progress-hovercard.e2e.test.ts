@@ -329,7 +329,7 @@ suite.define(() => {
               .allTextContents();
             return labels.join(" ").replace(/\s+/gu, " ").trim();
           })
-          .toBe("Ada King & 4 others");
+          .toBe("Ada King & 5 others");
         const attribution = card.locator(".session-hovercard__attribution");
         const attributionName = attribution.locator("a.session-hovercard__attribution-name");
         expect(await attributionName.getAttribute("href")).toBe("/activity/profile-ada");
@@ -355,9 +355,9 @@ suite.define(() => {
         await expect.poll(() => participantMenu.isVisible()).toBe(true);
         expect(
           await participantMenu.locator("a.session-hovercard__participant-link").allTextContents(),
-        ).toEqual(["Mira", "Riley", "Sam", "Lee"]);
+        ).toEqual(["You", "Mira", "Riley", "Sam", "Lee"]);
         await captureProof(page, "sidebar-row-hovercard-participants-dropdown.png");
-        expect(await card.locator(".session-hovercard__attribution").textContent()).not.toContain(
+        expect(await card.locator(".session-hovercard__attribution").textContent()).toContain(
           "You",
         );
         expect(await card.locator(".session-hovercard__context-text").allTextContents()).toEqual([
@@ -371,7 +371,7 @@ suite.define(() => {
         expect(await card.locator(".session-hovercard__meta").count()).toBe(0);
         expect(await card.locator("time").count()).toBe(0);
         expect(await card.locator(".session-progress-card__heading-actions").count()).toBe(0);
-        const avatar = card.locator("openclaw-viewer-avatar.session-hovercard__creator-avatar");
+        const avatar = card.locator("openclaw-viewer-avatar.session-hovercard__participant-avatar");
         await avatar.waitFor({ state: "visible" });
         await expect
           .poll(async () => (await avatar.locator(".viewer-avatar").textContent())?.trim())
@@ -903,10 +903,8 @@ suite.define(() => {
         const card = page.locator(".session-progress-hovercard");
         await card.waitFor({ state: "visible" });
         expect(["left", "right"]).toContain(await card.getAttribute("data-side"));
-        const avatar = card.locator("openclaw-channel-avatar.session-hovercard__creator-avatar");
-        await expect
-          .poll(() => avatar.locator(".session-hovercard__creator-avatar-fallback").textContent())
-          .toBe("AK");
+        const avatar = card.locator("openclaw-channel-avatar.session-hovercard__channel-avatar");
+        await expect.poll(() => avatar.locator("svg").count()).toBe(1);
         expect(await avatar.locator("img.channel-avatar").count()).toBe(0);
         expect(await card.locator("openclaw-viewer-avatar").count()).toBe(0);
         await expect
@@ -928,7 +926,7 @@ suite.define(() => {
           .poll(() => card.locator(".session-hovercard__title").textContent())
           .toBe("Channel avatar");
         const successfulAvatar = card.locator(
-          "openclaw-channel-avatar.session-hovercard__creator-avatar",
+          "openclaw-channel-avatar.session-hovercard__channel-avatar",
         );
         await expect.poll(() => successfulAvatar.locator("img.channel-avatar").count()).toBe(1);
         expect(

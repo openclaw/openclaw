@@ -7,11 +7,7 @@ import {
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
 import { icons } from "../../../components/icons.ts";
-import {
-  personActivityLink,
-  renderStandalonePersonLink,
-  type PersonActivityRouting,
-} from "../../../components/person-activity-link.ts";
+import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import { renderSessionColorDot } from "../../../components/session-color.ts";
 import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
@@ -41,6 +37,7 @@ type ChatPaneHeaderProps = {
   session: GatewaySessionRow | undefined;
   showOwnerChip?: boolean;
   ownerViewing?: boolean;
+  onAssignOwner?: () => void;
   personActivity?: PersonActivityRouting;
   catalog: boolean;
   catalogColor?: string;
@@ -288,6 +285,29 @@ export function canRevealSessionWorkspace(params: {
   );
 }
 
+function renderOwner(props: ChatPaneHeaderProps) {
+  const owner = props.showOwnerChip ? props.session?.owner?.actor : undefined;
+  if (!owner?.id) {
+    return nothing;
+  }
+  const label = t("sessionsView.ownedBy", { name: owner.label || owner.id });
+  const content = html`${renderSessionOwnerChip(owner, "header", "owned", props.ownerViewing)}
+    <span class="chat-pane__owner-label">${t("sessionsView.owner")}:</span>
+    <span class="chat-pane__owner-name">${owner.label || owner.id}</span>`;
+  return props.onAssignOwner
+    ? html`<button
+        class="chat-pane__owner"
+        type="button"
+        aria-label=${label}
+        title=${label}
+        aria-haspopup="menu"
+        @click=${props.onAssignOwner}
+      >
+        ${content}
+      </button>`
+    : html`<span class="chat-pane__owner" title=${label}>${content}</span>`;
+}
+
 export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   const copyPathLabel =
     props.copiedAction === "copy-path"
@@ -345,30 +365,10 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             : nothing
         }
         ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
-        ${props.publicAccessIndicator ?? nothing}
+        ${props.publicAccessIndicator ?? nothing} ${renderOwner(props)}
+        ${hasSharingControl ? props.sharingControl : nothing}
         ${
-          hasSharingControl
-            ? props.sharingControl
-            : renderStandalonePersonLink(
-                renderSessionOwnerChip(
-                  props.showOwnerChip ? props.session?.owner?.actor : undefined,
-                  "header",
-                  props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
-                  props.ownerViewing,
-                ),
-                props.showOwnerChip
-                  ? personActivityLink(
-                      props.session?.owner?.actor.identity?.type === "profile"
-                        ? props.session.owner.actor.identity.id
-                        : undefined,
-                      props.personActivity,
-                      props.session?.owner?.actor.label,
-                    )
-                  : null,
-              )
-        }
-        ${
-          props.showOwnerChip && props.session?.participants?.length
+          props.session?.participants?.length
             ? html`<openclaw-viewer-facepile
                 class="chat-pane__participants"
                 .staticParticipants=${props.session.participants}

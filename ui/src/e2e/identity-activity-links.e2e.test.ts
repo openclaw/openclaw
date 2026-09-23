@@ -450,11 +450,11 @@ suite.define(() => {
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
 
-        const ownerLink = page.locator(
-          ".chat-pane__header a.person-activity-avatar-link:has(openclaw-session-owner-chip)",
-        );
-        await ownerLink.waitFor({ state: "visible" });
-        expect(await ownerLink.getAttribute("href")).toBe("/activity/profile-ada");
+        const owner = page.locator(".chat-pane__header .chat-pane__owner");
+        await owner.waitFor({ state: "visible" });
+        expect(await owner.locator(".chat-pane__owner-label").textContent()).toBe("Owner:");
+        expect(await owner.locator(".chat-pane__owner-name").textContent()).toBe("Ada King");
+        expect(await owner.getAttribute("href")).toBeNull();
         const participantLink = page.locator(
           ".chat-pane__participants a.person-activity-avatar-link",
         );

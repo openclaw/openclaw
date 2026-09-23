@@ -20,7 +20,7 @@ import {
   renderSessionHovercardContext,
   type SessionHovercardContextInput,
 } from "./session-hovercard-context.ts";
-import { sessionOwnerInitials, type SessionCreatedActor } from "./session-owner-chip.ts";
+import { renderSessionOwnerChip } from "./session-owner-chip.ts";
 import { progressCardHeadsUp, renderProgressCardMarkdown } from "./session-progress-card.ts";
 import "./session-hovercard.css";
 import "./tooltip.ts";
@@ -33,36 +33,14 @@ function participantLabel(participant: SessionParticipant): string {
   return participant.label?.trim() || participant.identity.id;
 }
 
-function excludesParticipant(
-  participant: SessionParticipant,
-  creator: SessionCreatedActor | undefined,
-  selfUserId: string | undefined,
-): boolean {
-  return (
-    (participant.identity.type === "profile" && participant.identity.id === selfUserId) ||
-    JSON.stringify(participant.identity) === JSON.stringify(creator?.identity)
-  );
-}
-
 type SessionAgeUnit = RelativeTimeUnit | "week" | "month" | "year";
 
-type SessionHovercardAvatarAuth = {
-  authTokens: readonly string[];
-  authReady: boolean;
-};
-
 type SessionHovercardInput = SessionHovercardContextInput & {
-  selfUserId?: string;
-  avatarAuth?: SessionHovercardAvatarAuth;
+  avatarAuth?: { authTokens: readonly string[]; authReady: boolean };
   personActivity?: PersonActivityRouting;
   pullRequests?: ControlUiSessionPullRequestSnapshot;
   progressCard?: ProgressCard | null;
 };
-
-let channelAvatarElementLoad: Promise<unknown> | undefined;
-function ensureChannelAvatarElement(): void {
-  channelAvatarElementLoad ??= import("./channel-avatar.ts");
-}
 
 function pullRequestStateLabel(state: ControlUiSessionPullRequest["state"]): string {
   return t(`sessionHovercard.states.${state}`);
@@ -173,49 +151,18 @@ function formatSessionAge(timestamp: number | null | undefined, suffix: boolean)
   }).format(value);
 }
 
-type SessionAttribution = {
-  creator?: SessionCreatedActor;
-  primaryIdentity: SessionParticipant["identity"] | undefined;
-  primaryLabel: string;
-  participants: SessionParticipant[];
-  otherCount: number;
-};
-
-function sessionAttribution(
-  row: SidebarSessionHovercardRow,
-  selfUserId: string | undefined,
-): SessionAttribution | undefined {
-  const creator = row.createdActor;
-  const creatorLabel = creator?.label?.trim() || creator?.id?.trim();
-  const participantIds = new Set<string>();
-  let excludedProjectedCount = 0;
+function sessionAttribution(row: SidebarSessionHovercardRow) {
+  const seen = new Set<string>();
   const participants = (row.expandedParticipants ?? row.participants ?? []).filter(
     (participant) => {
-      const id = JSON.stringify(participant.identity);
-      if (participantIds.has(id)) {
+      const key = JSON.stringify(participant.identity);
+      if (seen.has(key)) {
         return false;
       }
-      participantIds.add(id);
-      if (excludesParticipant(participant, creator, selfUserId)) {
-        excludedProjectedCount += 1;
-        return false;
-      }
+      seen.add(key);
       return true;
     },
   );
-  const participantCount = Math.max(
-    participants.length,
-    (row.participantCount ?? 0) - excludedProjectedCount,
-  );
-  if (creator && creatorLabel) {
-    return {
-      creator,
-      primaryIdentity: creator.identity,
-      primaryLabel: creatorLabel,
-      participants,
-      otherCount: participantCount,
-    };
-  }
   const primary = participants[0];
   if (!primary) {
     return undefined;
@@ -224,8 +171,20 @@ function sessionAttribution(
     primaryIdentity: primary.identity,
     primaryLabel: participantLabel(primary),
     participants,
-    otherCount: Math.max(0, participantCount - 1),
+    otherCount: Math.max(participants.length, row.participantCount ?? 0) - 1,
   };
+}
+
+function renderSessionOwner(row: SidebarSessionHovercardRow) {
+  const owner = row.owner?.actor;
+  if (!owner?.id) {
+    return nothing;
+  }
+  return html`<div class="session-hovercard__owner">
+    <span class="session-hovercard__attribution-label">${t("sessionsView.owner")}</span>
+    ${renderSessionOwnerChip(owner, "header", "owned")}
+    <span class="session-hovercard__owner-name">${owner.label || owner.id}</span>
+  </div>`;
 }
 
 function renderParticipantMenu(
@@ -267,73 +226,36 @@ function renderParticipantMenu(
   </div>`;
 }
 
-function renderSessionAttribution({
-  row,
-  selfUserId,
-  avatarAuth,
-  personActivity,
-}: SessionHovercardInput) {
+function renderSessionAttribution({ row, personActivity }: SessionHovercardInput) {
   if (!row) {
     return nothing;
   }
-  const attribution = sessionAttribution(row, selfUserId);
+  const attribution = sessionAttribution(row);
   if (!attribution) {
     return nothing;
   }
-  const { creator, primaryIdentity, primaryLabel, participants, otherCount } = attribution;
-  const primaryParticipant = creator ? undefined : participants[0];
+  const { primaryIdentity, primaryLabel, participants, otherCount } = attribution;
+  const primaryParticipant = participants[0];
   const primaryActivity =
     primaryIdentity?.type === "profile"
       ? personActivityLink(primaryIdentity.id, personActivity, primaryLabel)
       : null;
-  const creatorInitials = creator ? sessionOwnerInitials(creator) : "";
-  const avatarFallback = creatorInitials
-    ? html`<span class="session-hovercard__creator-avatar-fallback" aria-hidden="true"
-        >${creatorInitials}</span
-      >`
+  const primaryAvatar = primaryParticipant
+    ? html`<openclaw-viewer-avatar
+        class="session-hovercard__participant-avatar"
+        .user=${{
+          id: primaryParticipant.identity.id,
+          name: primaryParticipant.label,
+          avatarUrl: primaryParticipant.avatarUrl,
+          watchedSessions: [],
+        }}
+        .markAsViewer=${false}
+        .identity=${primaryParticipant.identity}
+        variant="session"
+        aria-hidden="true"
+      ></openclaw-viewer-avatar>`
     : nothing;
-  if (creator && row.channelAvatarUrl) {
-    ensureChannelAvatarElement();
-  }
-  const primaryAvatar = creator
-    ? row.channelAvatarUrl
-      ? html`<openclaw-channel-avatar
-          class="session-hovercard__creator-avatar"
-          .routeUrl=${row.channelAvatarUrl}
-          .authTokens=${avatarAuth?.authTokens ?? []}
-          .authReady=${avatarAuth?.authReady ?? false}
-          .fallback=${avatarFallback}
-          aria-hidden="true"
-        ></openclaw-channel-avatar>`
-      : html`<openclaw-viewer-avatar
-          class="session-hovercard__creator-avatar"
-          .user=${{
-            id: creator.id,
-            name: creator.label,
-            avatarUrl: creator.avatarUrl,
-            watchedSessions: [],
-          }}
-          .markAsViewer=${false}
-          .identity=${creator.identity}
-          variant="session"
-          aria-hidden="true"
-        ></openclaw-viewer-avatar>`
-    : primaryParticipant
-      ? html`<openclaw-viewer-avatar
-          class="session-hovercard__creator-avatar"
-          .user=${{
-            id: primaryParticipant.identity.id,
-            name: primaryParticipant.label,
-            avatarUrl: primaryParticipant.avatarUrl,
-            watchedSessions: [],
-          }}
-          .markAsViewer=${false}
-          .identity=${primaryParticipant.identity}
-          variant="session"
-          aria-hidden="true"
-        ></openclaw-viewer-avatar>`
-      : nothing;
-  const remainingParticipants = creator ? participants : participants.slice(1);
+  const remainingParticipants = participants.slice(1);
   const attributionLabel = [
     primaryLabel,
     otherCount > 0
@@ -351,50 +273,71 @@ function renderSessionAttribution({
           { count: String(otherCount) },
         )
       : "";
-  return html`<div class="session-hovercard__attribution" aria-label=${attributionLabel}>
-    <span class="session-hovercard__attribution-copy">
-      ${renderPersonName(primaryLabel, primaryActivity, "session-hovercard__attribution-name")}
-      ${
-        otherCount > 0
-          ? remainingParticipants.length > 0
-            ? html`<openclaw-tooltip
-                class="session-hovercard__participants-tooltip"
-                .describe=${false}
-                open-on-click
-              >
-                <button
-                  type="button"
-                  class="session-hovercard__attribution-others"
-                  style="padding: 1px 3px; border: 0; border-radius: var(--radius-sm); background: transparent; font: inherit;"
-                  aria-label=${t("sessionHovercard.moreParticipantsLabel", {
-                    count: String(otherCount),
-                  })}
+  return html`<div class="session-hovercard__participants">
+    <span class="session-hovercard__attribution-label"
+      >${t("sessionHovercard.sessionParticipants")}</span
+    >
+    <div class="session-hovercard__attribution" aria-label=${attributionLabel}>
+      <span class="session-hovercard__attribution-copy">
+        ${renderPersonName(primaryLabel, primaryActivity, "session-hovercard__attribution-name")}
+        ${
+          otherCount > 0
+            ? remainingParticipants.length > 0
+              ? html`<openclaw-tooltip
+                  class="session-hovercard__participants-tooltip"
+                  .describe=${false}
+                  open-on-click
                 >
-                  ${otherLabel}
-                </button>
-                ${renderParticipantMenu(remainingParticipants, otherCount, personActivity)}
-              </openclaw-tooltip>`
-            : html`<span class="session-hovercard__attribution-others">${otherLabel}</span>`
-          : nothing
-      }
-    </span>
-    <span class="session-hovercard__attribution-avatars">
-      ${renderPersonAvatarLink(primaryAvatar, primaryActivity)}
-      ${
-        remainingParticipants.length > 0
-          ? html`<openclaw-viewer-facepile
-              .staticParticipants=${remainingParticipants}
-              .totalCount=${otherCount}
-              .maxVisible=${Math.min(
-                remainingParticipants.length,
-                MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS,
-              )}
-              .personActivity=${personActivity}
-            ></openclaw-viewer-facepile>`
-          : nothing
-      }
-    </span>
+                  <button
+                    type="button"
+                    class="session-hovercard__attribution-others"
+                    style="padding: 1px 3px; border: 0; border-radius: var(--radius-sm); background: transparent; font: inherit;"
+                    aria-label=${t("sessionHovercard.moreParticipantsLabel", {
+                      count: String(otherCount),
+                    })}
+                  >
+                    ${otherLabel}
+                  </button>
+                  ${renderParticipantMenu(remainingParticipants, otherCount, personActivity)}
+                </openclaw-tooltip>`
+              : html`<span class="session-hovercard__attribution-others">${otherLabel}</span>`
+            : nothing
+        }
+      </span>
+      <span class="session-hovercard__attribution-avatars">
+        ${renderPersonAvatarLink(primaryAvatar, primaryActivity)}
+        ${
+          remainingParticipants.length > 0
+            ? html`<openclaw-viewer-facepile
+                .staticParticipants=${remainingParticipants}
+                .totalCount=${otherCount}
+                .maxVisible=${Math.min(
+                  remainingParticipants.length,
+                  MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS,
+                )}
+                .personActivity=${personActivity}
+              ></openclaw-viewer-facepile>`
+            : nothing
+        }
+      </span>
+    </div>
   </div>`;
+}
+
+let channelAvatarElementLoad: Promise<unknown> | undefined;
+function renderChannelAvatar(input: SessionHovercardInput) {
+  if (!input.row?.channelAvatarUrl) {
+    return nothing;
+  }
+  channelAvatarElementLoad ??= import("./channel-avatar.ts");
+  return html`<openclaw-channel-avatar
+    class="session-hovercard__channel-avatar"
+    .routeUrl=${input.row.channelAvatarUrl}
+    .authTokens=${input.avatarAuth?.authTokens ?? []}
+    .authReady=${input.avatarAuth?.authReady ?? false}
+    .fallback=${icons.link}
+    aria-hidden="true"
+  ></openclaw-channel-avatar>`;
 }
 
 function renderHeader(input: SessionHovercardInput) {
@@ -420,7 +363,10 @@ function renderHeader(input: SessionHovercardInput) {
             >`
           : nothing
       }
-      <span class="session-hovercard__title">${renderSessionColorDot(row.color)}${row.label}</span>
+      <span class="session-hovercard__title"
+        >${renderChannelAvatar(input)}${renderSessionColorDot(row.color)}${row.label}</span
+      >
+      ${renderSessionOwner(row)}
       ${
         channel
           ? html`<span class="session-hovercard__conversation">
@@ -606,9 +552,6 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
             class="session-hovercard__section session-hovercard__section--attribution"
             aria-label=${t("sessionHovercard.sessionParticipants")}
           >
-            <div class="session-hovercard__attribution-label">
-              ${t("sessionHovercard.sessionParticipants")}
-            </div>
             ${channelAttribution}
           </section>`
         : nothing

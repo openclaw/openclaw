@@ -279,10 +279,10 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
           ? ".session-owner-stack__back .viewer-avatar"
           : ".session-owner-stack__overflow",
       )!;
-      expect(primary.getAttribute("aria-label")).toBe("Owned by Ada");
+      expect(primary.getAttribute("aria-label")).toBe("Owner: Ada");
       expect(primary.textContent?.trim()).toBe("A");
       expect(stack.getAttribute("aria-label")).toBe(
-        ownerCount === 2 ? "Owned by Ada · with Bob" : `Owned by Ada · +${ownerCount - 1} more`,
+        ownerCount === 2 ? "Owner: Ada · with Bob" : `Owner: Ada · +${ownerCount - 1} more`,
       );
       for (const state of ["idle", "hover", "active", "selected"]) {
         if (state === "hover") {

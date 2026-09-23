@@ -484,12 +484,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       row,
     });
     const key = this.state?.sessionKey ?? "";
-    const result = this.state?.sessionsResult;
     const knownGroups = collectKnownSessionGroups(
       this.context.sessions?.state?.groups ?? [],
       this.context.sessions?.state?.result?.sessions ?? [],
     );
-    const showOwnerChip = (result?.owners?.length ?? 0) >= 2 || (row?.participantCount ?? 0) > 0;
+    const showOwnerChip = Boolean(row?.owner?.actor.id);
     const personActivity = this.personActivityRouting();
     const renderedOwnerIdentity = showOwnerChip ? row?.owner?.actor.identity : undefined;
     const viewers = catalog
@@ -501,7 +500,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           key,
           [
             ...(renderedOwnerIdentity ? [renderedOwnerIdentity] : []),
-            ...(showOwnerChip ? (row?.participants ?? []).map(({ identity }) => identity) : []),
+            ...(row?.participants ?? []).map(({ identity }) => identity),
           ],
         );
     const ownerViewing = projectPresencePayload(this.presencePayload).users.some(
@@ -536,7 +535,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             onCopyPublicLink: () => void this.copySessionPublicLink(row),
             ownerViewing,
             personActivity,
-            showOwner: showOwnerChip,
+            showOwner: false,
             onOpen: () => void this.loadSessionSharing(row),
             onVisibilityChange: (visibility: SessionVisibility) =>
               void this.setSessionVisibility(row, visibility),
@@ -552,6 +551,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       title: (catalog ? this.catalogSession?.name?.trim() : undefined) || this.paneTitle,
       session: row,
       showOwnerChip,
+      onAssignOwner: assignmentAccess?.allowed
+        ? () => this.querySelector("openclaw-chat-header-session-menu")?.openOwnerMenu()
+        : undefined,
       ownerViewing,
       personActivity,
       catalog,

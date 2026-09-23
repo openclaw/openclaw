@@ -111,13 +111,13 @@ export function registerSessionOwnershipAvatarTests() {
       '[data-session-key="agent:main:bob"] .session-owner-chip',
     );
     expect(bobChip?.classList.contains("session-owner-chip--away")).toBe(false);
-    expect(bobChip?.getAttribute("title")).toBe("Created by Bob · viewing now");
+    expect(bobChip?.getAttribute("title")).toBe("Owner: Bob · viewing now");
 
     const adaChip = sidebar.querySelector(
       '[data-session-key="agent:main:ada"] .session-owner-chip',
     );
-    expect(adaChip?.getAttribute("aria-label")).toBe("Created by Ada");
-    expect(adaChip?.getAttribute("title")).toBe("Created by Ada");
+    expect(adaChip?.getAttribute("aria-label")).toBe("Owner: Ada");
+    expect(adaChip?.getAttribute("title")).toBe("Owner: Ada");
     const adaImage = adaChip?.querySelector("img");
     adaImage?.dispatchEvent(new Event("error"));
     expect(adaChip?.querySelector(".viewer-avatar")?.classList.contains("is-fallback")).toBe(true);

@@ -182,12 +182,7 @@ function renderSidebarSessionIndicators(
   const pullRequest = session.worktreeId
     ? host.sessionPullRequests.summary(session.key, session.worktreeId, initialPullRequest)
     : initialPullRequest;
-  const ownerAttribution =
-    host.sessionsStatusFilter === "archived"
-      ? "archived"
-      : session.owner?.assignedAt !== undefined
-        ? "owned"
-        : "created";
+  const ownerAttribution = host.sessionsStatusFilter === "archived" ? "archived" : "owned";
   const ownerActor = host.sessionOwnershipVisibility.avatars
     ? host.sessionsStatusFilter === "archived"
       ? session.archivedBy

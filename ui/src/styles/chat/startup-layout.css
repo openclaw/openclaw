@@ -322,6 +322,54 @@
   gap: 8px;
 }
 
+.chat-pane__owner {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 220px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+button.chat-pane__owner:is(:hover, :focus-visible) {
+  background: var(--bg-hover);
+}
+
+.chat-pane__owner-label {
+  flex: none;
+  color: var(--muted);
+}
+
+.chat-pane__owner-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-pane__owner openclaw-session-owner-chip {
+  flex: none;
+}
+
+@container (max-width: 640px) {
+  .chat-pane__header .chat-pane__participants .viewer-facepile,
+  .chat-pane__header .chat-pane__presence .viewer-facepile {
+    display: none;
+  }
+
+  .chat-pane__owner {
+    flex-shrink: 0;
+    max-width: 160px;
+  }
+}
+
 .chat-pane__header-center {
   position: relative;
   justify-self: center;

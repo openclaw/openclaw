@@ -477,7 +477,7 @@ suite.define(() => {
     await captureSessionOwnerProof(suite, currentPage, "multiple-humans.png");
   });
 
-  it("renders zero ownership chrome for a single owner", async () => {
+  it("keeps the current owner visible without single-owner sidebar controls", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -500,7 +500,12 @@ suite.define(() => {
       await ownerMenu.locator(".sidebar-session-sort-menu__title", { hasText: "People" }).count(),
     ).toBe(0);
     expect(await ownerMenu.locator('[value^="owner:"]').count()).toBe(0);
-    expect(await currentPage.locator("openclaw-session-owner-chip").count()).toBe(0);
+    expect(
+      await currentPage.locator(".sidebar-recent-session openclaw-session-owner-chip").count(),
+    ).toBe(0);
+    await expectBrowser(currentPage.locator(".chat-pane__header .chat-pane__owner")).toHaveText(
+      /Owner:\s*Ada/,
+    );
   });
 
   it("keeps global session actions accessible to keyboard users", async () => {

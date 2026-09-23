@@ -53,7 +53,7 @@ it("uses the explicit session owner, never the creator or a guessed transcript a
     ),
     container,
   );
-  expect(container.textContent).toContain("Owned by Current owner");
+  expect(container.textContent).toContain("Owner: Current owner");
   expect(container.textContent).not.toContain("Former owner");
   expect(container.querySelector(".cmd-palette__owner")).not.toBeNull();
 });

@@ -149,8 +149,12 @@ suite.define(() => {
             .toBe("1");
           await expect.poll(() => header.locator('[data-viewer-id="profile-ada"]').count()).toBe(0);
           await expect
-            .poll(() => header.locator('.viewer-avatar[aria-label="Zoe"]:visible').count())
+            .poll(() => header.locator('.viewer-avatar[aria-label="Zoe"]').count())
             .toBe(1);
+          await expect
+            .poll(() => header.locator('.viewer-avatar[aria-label="Zoe"]:visible').count())
+            .toBe(face === "dashboard" ? 0 : 1);
+          await expect.poll(() => header.locator(".chat-pane__owner").isVisible()).toBe(true);
           await expect
             .poll(() => header.locator(".session-owner-chip--header").getAttribute("class"))
             .not.toContain("session-owner-chip--away");
@@ -158,8 +162,12 @@ suite.define(() => {
           await gateway.emitGatewayEvent("presence", { presence: [] });
           await expect.poll(() => header.locator(".chat-pane__presence").count()).toBe(0);
           await expect
-            .poll(() => header.locator('.viewer-avatar[aria-label="Zoe"]:visible').count())
+            .poll(() => header.locator('.viewer-avatar[aria-label="Zoe"]').count())
             .toBe(1);
+          await expect
+            .poll(() => header.locator('.viewer-avatar[aria-label="Zoe"]:visible').count())
+            .toBe(face === "dashboard" ? 0 : 1);
+          await expect.poll(() => header.locator(".chat-pane__owner").isVisible()).toBe(true);
         },
       );
     },

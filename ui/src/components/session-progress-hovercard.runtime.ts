@@ -431,6 +431,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
             channelPresentation: sidebarRow.channelPresentation,
             lastMessagePreview: sidebarRow.lastMessagePreview,
             createdActor: sidebarRow.createdActor,
+            owner: sidebarRow.owner,
             participants: sidebarRow.participants,
             expandedParticipants: sidebarRow.expandedParticipants,
             participantCount: sidebarRow.participantCount,
@@ -476,7 +477,6 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     render(
       renderSessionHovercard({
         row: sidebarRow,
-        selfUserId: this.applicationContext?.gateway.snapshot.selfUser?.id,
         avatarAuth: channelAvatarAuth,
         personActivity: this.personActivity(),
         automationLink: this.applicationContext

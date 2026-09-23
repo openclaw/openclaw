@@ -36,9 +36,7 @@ it("keeps the single owner chip unchanged without participants", async () => {
   const chip = await mount({});
   expect(chip.querySelector(".session-owner-stack")).toBeNull();
   expect(chip.querySelectorAll(".session-owner-chip")).toHaveLength(1);
-  expect(chip.querySelector(".session-owner-chip")?.getAttribute("aria-label")).toBe(
-    "Owned by Ada",
-  );
+  expect(chip.querySelector(".session-owner-chip")?.getAttribute("aria-label")).toBe("Owner: Ada");
 });
 
 it("renders one participant behind the owner with combined accessibility", async () => {
@@ -55,7 +53,7 @@ it("renders one participant behind the owner with combined accessibility", async
   expect(chip.querySelector(".session-owner-stack__back .viewer-avatar")).not.toBeNull();
   expect(chip.querySelector(".session-owner-stack__front")).not.toBeNull();
   expect(chip.querySelector(".session-owner-stack")?.getAttribute("aria-label")).toBe(
-    "Owned by Ada · with Research",
+    "Owner: Ada · with Research",
   );
   expect(chip.querySelector(".session-owner-stack__back img")?.getAttribute("src")).toBe(
     "/avatar/research",
@@ -104,6 +102,6 @@ it("renders the total participant count in the back slot for three identities", 
   });
   expect(chip.querySelector(".session-owner-stack__overflow")?.textContent).toBe("+2");
   expect(chip.querySelector(".session-owner-stack")?.getAttribute("aria-label")).toBe(
-    "Owned by Ada · +2 more",
+    "Owner: Ada · +2 more",
   );
 });

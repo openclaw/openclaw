@@ -106,8 +106,8 @@ suite.define(() => {
         "Via personal",
       );
       expect(await card.locator(".session-hovercard__header").textContent()).not.toContain("cli");
-      expect(await card.textContent()).toContain("In this session");
-      expect(await card.locator(".session-hovercard__attribution").textContent()).toContain("cli");
+      expect(await card.textContent()).toContain("Participants");
+      expect(await card.locator(".session-hovercard__attribution").textContent()).toContain("Ada");
       expect(await card.textContent()).not.toMatch(/members|120363000001/);
       expect(await card.textContent()).toContain("The picnic is booked for Saturday.");
       await gateway.waitForRequest("progressCard.get", { match: { sessionKey: group.key } });

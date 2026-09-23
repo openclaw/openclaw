@@ -426,8 +426,19 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     </wa-dropdown-item>`;
   }
 
+  openOwnerMenu(): void {
+    if (this.actionDisabled("assign-owner")) {
+      return;
+    }
+    this.compactView = "assign-owner";
+    const dropdown = this.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
+    if (dropdown) {
+      dropdown.open = true;
+      this.managementActions.focusCurrentView();
+    }
+  }
+
   private readonly handleShow = () => {
-    this.compactView = "root";
     this.managementActions.loadOwners();
     this.onOpen();
   };
@@ -461,11 +472,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
         >
           ${icons.moreHorizontal}
         </button>
-        ${
-          this.compact && this.compactView !== "root"
-            ? this.renderCompactView()
-            : this.renderRootView()
-        }
+        ${this.compactView !== "root" ? this.renderCompactView() : this.renderRootView()}
       </wa-dropdown>
     `;
   }

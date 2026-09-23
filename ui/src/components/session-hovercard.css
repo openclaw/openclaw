@@ -64,6 +64,19 @@
   white-space: normal;
 }
 
+.session-hovercard__channel-avatar {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  margin-right: var(--space-2);
+  vertical-align: middle;
+}
+
+.session-hovercard__channel-avatar :is(.channel-avatar, svg) {
+  width: 18px;
+  height: 18px;
+}
+
 .session-hovercard__channel {
   display: flex;
   align-items: center;
@@ -96,8 +109,30 @@
 }
 
 .session-hovercard__attribution-label {
+  flex: none;
+  white-space: nowrap;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
+}
+
+.session-hovercard__owner,
+.session-hovercard__participants {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.session-hovercard__participants {
+  flex-wrap: wrap;
+}
+
+.session-hovercard__owner-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 550;
 }
 
 .session-hovercard__attribution {
@@ -107,11 +142,7 @@
   gap: 7px;
   max-width: 100%;
   min-width: 0;
-  padding: 3px 8px 3px 3px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 58%, transparent);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--panel-strong) 72%, transparent);
-  color: var(--text);
+  color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.35;
 }
@@ -154,7 +185,7 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-weight: 550;
+  font-weight: 450;
 }
 
 .session-hovercard__attribution-others {
@@ -284,8 +315,8 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   white-space: nowrap;
 }
 
-.session-hovercard__creator-avatar,
-.session-hovercard__creator-avatar .viewer-avatar {
+.session-hovercard__participant-avatar,
+.session-hovercard__participant-avatar .viewer-avatar {
   display: block;
   width: var(--session-hovercard-context-icon-size);
   height: var(--session-hovercard-context-icon-size);
@@ -301,41 +332,19 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   box-shadow: none;
 }
 
-.session-hovercard__creator-avatar .channel-avatar {
-  width: var(--session-hovercard-context-icon-size);
-  height: var(--session-hovercard-context-icon-size);
-  box-shadow: none;
-}
-
-.session-hovercard__creator-avatar .viewer-avatar img {
+.session-hovercard__participant-avatar .viewer-avatar img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.session-hovercard__creator-avatar-fallback {
-  display: grid;
-  width: var(--session-hovercard-context-icon-size);
-  height: var(--session-hovercard-context-icon-size);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent-subtle) 70%, var(--panel-strong));
-  color: var(--text);
-  font-size: 8px;
-  font-weight: 700;
-  place-items: center;
-}
-
-.session-hovercard__attribution .session-hovercard__creator-avatar,
-.session-hovercard__attribution .session-hovercard__creator-avatar .viewer-avatar,
-.session-hovercard__attribution .session-hovercard__creator-avatar .channel-avatar,
-.session-hovercard__attribution .session-hovercard__creator-avatar-fallback {
+.session-hovercard__attribution .session-hovercard__participant-avatar,
+.session-hovercard__attribution .session-hovercard__participant-avatar .viewer-avatar {
   width: 18px;
   height: 18px;
 }
 
-.session-hovercard__attribution .session-hovercard__creator-avatar .viewer-avatar,
-.session-hovercard__attribution .session-hovercard__creator-avatar .channel-avatar,
-.session-hovercard__attribution .session-hovercard__creator-avatar-fallback {
+.session-hovercard__attribution .session-hovercard__participant-avatar .viewer-avatar {
   border: 1.5px solid var(--panel-strong);
 }
 
