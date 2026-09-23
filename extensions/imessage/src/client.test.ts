@@ -8,9 +8,15 @@ import type { IMessagePrivateApiStatus } from "./private-api-status.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const runIMessageCliJsonCommandMock = vi.hoisted(() => vi.fn());
+const logVerboseMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  logVerbose: logVerboseMock,
 }));
 
 vi.mock("./cli-output.js", () => ({
@@ -229,6 +235,7 @@ describe("IMessageRpcClient child stream error handling", () => {
     child = createMockChild();
     spawnMock.mockReset().mockReturnValue(child);
     runIMessageCliJsonCommandMock.mockReset().mockResolvedValue({ status: "launched" });
+    logVerboseMock.mockReset();
   });
 
   afterEach(async () => {
@@ -458,6 +465,41 @@ describe("IMessageRpcClient child stream error handling", () => {
     await expect(pending).rejects.toThrow("imsg rpc exited (code 1)");
     await expect(client.waitForClose()).rejects.toThrow("imsg rpc exited (code 1)");
     expect(runtimeError).toHaveBeenCalledWith("imsg rpc: unrelated warning");
+  });
+
+  it("downgrades known-benign Apple framework stderr to verbose instead of ERROR", async () => {
+    const runtimeError = vi.fn();
+    const client = new IMessageRpcClient({
+      cliPath: "imsg",
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+    });
+    await client.start();
+
+    child.stderr.emit(
+      "data",
+      Buffer.from(
+        "2026-08-04 00:32:38.518 imsg[88305:38969629] Could not fetch group for change type 1 with identifier 9E2F71C2:ABGroup, making it a delete change type.\n",
+      ),
+    );
+
+    expect(runtimeError).not.toHaveBeenCalled();
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      expect.stringContaining("Could not fetch group for change type"),
+    );
+  });
+
+  it("keeps a genuine imsg stderr failure at ERROR", async () => {
+    const runtimeError = vi.fn();
+    const client = new IMessageRpcClient({
+      cliPath: "imsg",
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+    });
+    await client.start();
+
+    child.stderr.emit("data", Buffer.from("unable to connect to Messages database\n"));
+
+    expect(runtimeError).toHaveBeenCalledWith("imsg rpc: unable to connect to Messages database");
+    expect(logVerboseMock).not.toHaveBeenCalled();
   });
 
   it("expands cliPath locally while preserving remote dbPath and JSON data", async () => {

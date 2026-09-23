@@ -1,13 +1,20 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { recoverIMessageBridge } from "./bridge-recovery.js";
 import { expandIMessageUserPath } from "./cli-path.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { invalidateCachedIMessagePrivateApiStatus } from "./private-api-status.js";
+
+// Apple framework code linked into the imsg process (AddressBook/CoreData change
+// history) writes reconciliation notes to stderr that are not imsg failures. The
+// imsg binary contains none of these strings; they come from the OS frameworks
+// running inside the child. Genuine child failures must stay at ERROR.
+const IMSG_APPLE_FRAMEWORK_STDERR_PATTERN =
+  /\bCould not fetch (?:group|record) for change type\b|\bABGroup\b|\bAddressBook\b|\bCoreData\b/u;
 
 type IMessageRpcError = {
   code?: number;
@@ -407,7 +414,13 @@ export class IMessageRpcClient {
     if (!trimmed) {
       return;
     }
+    // The Full Disk Access promotion below must still see every line, including
+    // the benign ones, so record before choosing the log level.
     this.recordProcessDiagnostic(trimmed);
+    if (IMSG_APPLE_FRAMEWORK_STDERR_PATTERN.test(trimmed)) {
+      logVerbose(`imsg rpc: ${trimmed}`);
+      return;
+    }
     this.runtime?.error?.(`imsg rpc: ${trimmed}`);
   }
 
