@@ -7,7 +7,10 @@ import {
   validateSkillProposalRecord,
 } from "../skills/workshop/store.js";
 import { listPendingLegacyCollectionBackupRoots } from "./doctor-skill-workshop-collection-backups.js";
-import { classifyWorkshopRelocation } from "./doctor-skill-workshop-relocation.js";
+import {
+  classifyWorkshopRelocation,
+  isReadOnlyRehearsalProposal,
+} from "./doctor-skill-workshop-relocation.js";
 import {
   LEGACY_WORKSHOP_PROPOSALS_DIR as PROPOSALS_DIR,
   LEGACY_WORKSHOP_MAX_RECORD_BYTES as MAX_RECORD_BYTES,
@@ -54,7 +57,11 @@ export async function collectDoctorSkillWorkshopBackupResources(params: {
       }
     }
   }
-  const { external } = classifyWorkshopRelocation(records, params.config, env);
+  const { external } = classifyWorkshopRelocation(
+    records.filter(({ record }) => !isReadOnlyRehearsalProposal(record, env)),
+    params.config,
+    env,
+  );
   for (const candidate of external) {
     if (!candidate.workspaceDir || !candidate.ownerAgentId) {
       continue;

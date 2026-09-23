@@ -443,6 +443,7 @@ async function rehearseDeferredUpdateDoctorSchemaForParent(
       await import("./doctor-update-rehearsal-inventory.js");
     const admitted = await inspectPreparedDoctorRehearsal({
       stateDir: rehearsal.stateDir,
+      pluginCodeLinks: rehearsal.pluginCodeLinks,
       env,
       assertCurrent: assertParent,
     });

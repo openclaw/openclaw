@@ -6,6 +6,7 @@ import { resolveUserPath } from "./home-dir.js";
 import { tryListenOnPort } from "./ports-probe.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { resolveUpdateCandidateStatePath } from "./update-candidate-paths.js";
+import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
@@ -33,6 +34,7 @@ export type UpdateCandidateRehearsal = {
   port: number;
   snapshotCapacity: UpdateSnapshotCapacity;
   cleanupDirectories: string[];
+  pluginCodeLinks?: UpdateCandidatePluginCodeLink[];
   cleanup: (assertDirectoryCurrent?: (directory: string) => void) => Promise<void>;
 };
 
@@ -188,6 +190,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
   const {
     stateDir: tempDir,
     pluginPaths,
+    pluginCodeLinks,
     snapshotCapacity,
     cleanupDirectories,
   } = await prepareUpdateCandidateStateSnapshot({
@@ -232,6 +235,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
       port,
       snapshotCapacity,
       cleanupDirectories,
+      pluginCodeLinks,
       cleanup,
     };
   } catch (error) {

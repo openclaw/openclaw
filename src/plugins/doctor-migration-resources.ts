@@ -51,7 +51,7 @@ export async function collectPluginDoctorMigrationResources(
       if (!isMigrationBackupResource(resource)) {
         throw new Error(`Invalid migration backup resource from ${pluginId}/${migration.id}`);
       }
-      const resourcePath = path.normalize(resource.path);
+      const resourcePath = resource.path;
       const previous = resources.get(resourcePath);
       if (previous && previous.kind !== resource.kind) {
         throw new Error(`Conflicting migration backup resource kinds for ${resourcePath}`);
@@ -67,6 +67,8 @@ function isMigrationBackupResource(value: unknown): value is PluginDoctorMigrati
     isRecord(value) &&
     typeof value.path === "string" &&
     path.isAbsolute(value.path) &&
+    // Normalization must not erase traversal through a filesystem link.
+    path.normalize(value.path) === value.path &&
     (value.kind === "sqlite" || value.kind === "file" || value.kind === "directory")
   );
 }

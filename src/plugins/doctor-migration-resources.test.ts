@@ -166,6 +166,13 @@ it.each([
     "Invalid migration backup resource",
   ],
   [
+    "parent traversal before normalization",
+    () => [
+      { path: `${stateDir}${path.sep}linked${path.sep}..${path.sep}data.sqlite`, kind: "sqlite" },
+    ],
+    "Invalid migration backup resource",
+  ],
+  [
     "unknown kind",
     () => [{ path: path.join(stateDir, "data"), kind: "unknown" }],
     "Invalid migration backup resource",

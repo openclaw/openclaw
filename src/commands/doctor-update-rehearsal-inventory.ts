@@ -1,23 +1,15 @@
-import { lstatSync, readFileSync, readdirSync, realpathSync, type Stats } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveUserPath } from "../infra/home-dir.js";
+import type { UpdateCandidatePluginCodeLink } from "../infra/update-candidate-plugin-code-links.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
-
-function refuse(detail: string): never {
-  throw new Error(
-    `Legacy update rehearsal was refused: ${detail}. Run npx openclaw@latest update from a terminal for a protected update.`,
-  );
-}
-
-function within(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
-  );
-}
+import {
+  createRehearsalPathInspector,
+  refuseRehearsal as refuse,
+  isWithinRehearsal as within,
+} from "./doctor-update-rehearsal-paths.js";
 
 function valueAt(value: unknown, keys: string): unknown {
   let current = value;
@@ -112,6 +104,7 @@ export async function inspectPreparedDoctorRehearsal(params: {
   stateDir: string;
   env: NodeJS.ProcessEnv;
   assertCurrent: () => void;
+  pluginCodeLinks?: readonly UpdateCandidatePluginCodeLink[];
 }) {
   const stateDir = params.stateDir;
   const env = params.env;
@@ -201,43 +194,10 @@ export async function inspectPreparedDoctorRehearsal(params: {
     }
   };
   assertEnv();
-  const uid = process.getuid?.();
-  const identities = new Map<string, Stats>();
-  function inspectPath(filename: string, privateMode = false): Stats | undefined {
-    if (!path.isAbsolute(filename) || !within(stateDir, filename)) {
-      refuse(`migration data escapes the copied state: ${filename}`);
-    }
-    let current = stateDir;
-    let last: Stats | undefined;
-    for (const part of ["", ...path.relative(stateDir, filename).split(path.sep).filter(Boolean)]) {
-      current = path.join(current, part);
-      try {
-        last = lstatSync(current);
-      } catch (error) {
-        if (isRecord(error) && error.code === "ENOENT") {
-          return undefined;
-        }
-        throw error;
-      }
-      if (
-        last.isSymbolicLink() ||
-        (!last.isDirectory() && !last.isFile()) ||
-        (last.isFile() && last.nlink !== 1) ||
-        (uid !== undefined && last.uid !== uid) ||
-        (process.platform !== "win32" &&
-          (current === stateDir || (privateMode && current === filename)) &&
-          (last.mode & 0o077) !== 0)
-      ) {
-        refuse(`copied data has unsafe ownership or links: ${current}`);
-      }
-      const previous = identities.get(current);
-      if (previous && (previous.dev !== last.dev || previous.ino !== last.ino)) {
-        refuse(`copied data identity changed: ${current}`);
-      }
-      identities.set(current, last);
-    }
-    return last;
-  }
+  const { identities, inspectPath } = createRehearsalPathInspector(
+    stateDir,
+    params.pluginCodeLinks ?? [],
+  );
   const rootIdentity = inspectPath(stateDir);
   if (
     !rootIdentity?.isDirectory() ||
@@ -245,6 +205,12 @@ export async function inspectPreparedDoctorRehearsal(params: {
     realpathSync(stateDir) !== stateDir
   ) {
     refuse("the rehearsal root is not a private canonical directory");
+  }
+  // Revalidate producer bindings before plugin inventory can import copied code.
+  for (const fact of params.pluginCodeLinks ?? []) {
+    if (!inspectPath(fact.path, false, true)) {
+      refuse(`copied plugin code link disappeared: ${fact.path}`);
+    }
   }
   const configPath = path.join(stateDir, "openclaw.json");
   if (!inspectPath(configPath, true)?.isFile()) {
@@ -274,6 +240,10 @@ export async function inspectPreparedDoctorRehearsal(params: {
     // substituted target. This legacy copy has no receipt binding that expansion.
     if (typeof locator === "string" && locator.includes("${")) {
       refuse("migration locator retains an unresolved environment template");
+    }
+    // Check before home expansion/path.resolve can erase a link/.. traversal.
+    if (typeof locator === "string" && locator.trim().split(/[\\/]/u).includes("..")) {
+      refuse("migration locator retains parent traversal");
     }
   }
   if (
@@ -356,10 +326,11 @@ export async function inspectPreparedDoctorRehearsal(params: {
     },
     { env },
   );
-  const snapshot = await createConfigIO({ env, pluginValidation: "skip" }).readConfigFileSnapshot({
+  const snapshot = await createConfigIO({
+    env: { ...env },
     observe: false,
-    isolateEnv: true,
-  });
+    pluginValidation: "skip",
+  }).readConfigFileSnapshot();
   if (snapshot.path !== configPath || snapshot.raw !== raw) {
     refuse("the copied configuration changed during inspection");
   }
@@ -400,9 +371,6 @@ export async function inspectPreparedDoctorRehearsal(params: {
     result.status === "fulfilled" ? result.value : [],
   );
   const pendingPaths = [
-    // Also inspect undeclared data within the private copy; the warning alone
-    // must not admit a default plugin directory containing external aliases.
-    stateDir,
     ...configuredMigrationRoots,
     configPath,
     configPaths.resolveOAuthDir(env, stateDir),
@@ -424,25 +392,37 @@ export async function inspectPreparedDoctorRehearsal(params: {
         : [resource.path],
     ),
   ];
-  const visited = new Set<string>();
-  while (pendingPaths.length > 0) {
-    const filename = pendingPaths.pop();
-    if (filename === undefined) {
-      break;
-    }
-    if (visited.has(filename)) {
+  // Explicit data roots stay strict even when also reached by the whole-copy
+  // code walk. Unowned default data aliases still fail in that broader walk.
+  const pending = [
+    { filename: stateDir, code: true },
+    ...pendingPaths.map((companion) => ({ filename: companion, code: false })),
+  ];
+  const visited = new Map<string, boolean>();
+  while (pending.length > 0) {
+    const { filename, code } = pending.pop()!;
+    if (visited.has(filename) && (!visited.get(filename) || code)) {
       continue;
     }
-    visited.add(filename);
+    visited.set(filename, code);
     if (visited.size > 100_000) {
       refuse("the migration data inventory exceeds bounded inspection");
     }
-    const stat = inspectPath(filename);
+    const stat = inspectPath(filename, false, code);
     if (stat?.isDirectory()) {
-      pendingPaths.push(...(await fs.readdir(filename)).map((name) => path.join(filename, name)));
+      pending.push(
+        ...(await fs.readdir(filename)).map((name) => ({
+          filename: path.join(filename, name),
+          code,
+        })),
+      );
     } else if (stat?.isFile() && (await isSqliteSnapshotFile(filename))) {
       // Absent companions must still be rechecked after maintenance opens the copy.
-      pendingPaths.push(...sqliteFiles.resolveSqliteDatabaseFilePaths(filename));
+      pending.push(
+        ...sqliteFiles
+          .resolveSqliteDatabaseFilePaths(filename)
+          .map((companion) => ({ filename: companion, code: false })),
+      );
     }
   }
   const assertCurrent = () => {
@@ -464,12 +444,12 @@ export async function inspectPreparedDoctorRehearsal(params: {
   const assertPrepared = () => {
     assertCurrent();
     for (const filename of identities.keys()) {
-      if (!inspectPath(filename, filename === configPath)) {
+      if (!inspectPath(filename, filename === configPath, true)) {
         refuse(`copied data disappeared before admission: ${filename}`);
       }
     }
-    for (const filename of visited) {
-      inspectPath(filename, filename === configPath);
+    for (const [filename, code] of visited) {
+      inspectPath(filename, filename === configPath, code);
     }
     const remaining = [stateDir];
     let checked = 0;
@@ -478,7 +458,7 @@ export async function inspectPreparedDoctorRehearsal(params: {
       if (++checked > 100_000) {
         refuse("the migration data inventory exceeds bounded inspection");
       }
-      if (inspectPath(filename)?.isDirectory()) {
+      if (inspectPath(filename, false, true)?.isDirectory()) {
         remaining.push(...readdirSync(filename).map((name) => path.join(filename, name)));
       }
     }
