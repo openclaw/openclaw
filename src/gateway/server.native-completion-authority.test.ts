@@ -163,7 +163,7 @@ async function createCompletion(context: GatewayRequestContext) {
             const current = getTaskById(task.taskId);
             return (
               retainedCustody.isCurrent() &&
-              !!current &&
+              current !== undefined &&
               matchesAgentHarnessTaskAssignment(current, expectedTask)
             );
           },
@@ -219,8 +219,8 @@ describe("native completion final-effect authority", () => {
       const context = kernel.gatewayRequestContext;
       using completion = await createCompletion(context);
       const before = sessionAccessor.loadTranscriptEventsSync(completion.sessionScope);
-      const entered = createDeferred<void>();
-      const resume = createDeferred<void>();
+      const entered = createDeferred();
+      const resume = createDeferred();
       const release = () => resume.resolve();
       signal.addEventListener("abort", release, { once: true });
       const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
@@ -317,12 +317,12 @@ describe("native completion final-effect authority", () => {
       vi.spyOn(embeddedRuns, "isEmbeddedAgentRunActive").mockImplementation(
         isEmbeddedAgentRunActive,
       );
-      const entered = createDeferred<void>();
-      const resume = createDeferred<void>();
-      const compacting = createDeferred<void>();
-      const resumeCompaction = createDeferred<void>();
-      const modelEntered = createDeferred<void>();
-      const queued = createDeferred<void>();
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const compacting = createDeferred();
+      const resumeCompaction = createDeferred();
+      const modelEntered = createDeferred();
+      const queued = createDeferred();
       let finishModel: (() => void) | undefined;
       let closing = false;
       const release = () => {
