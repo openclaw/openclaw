@@ -137,11 +137,11 @@ function getCommandPaletteBaseItems(
       action: "nav:apps",
     },
     {
-      id: "nav-config",
+      id: "nav-settings",
       label: t("palette.items.settings"),
       icon: "settings",
       category: "navigation",
-      action: "nav:config",
+      action: "nav:appearance",
     },
     {
       id: "nav-agents",
@@ -334,7 +334,12 @@ export async function loadCommandPaletteCatalogItems(params: {
       routeId: "agents" as const,
       agentId: agent.id,
       description: agent.id,
-      searchText: [agent.id, agent.workspace, agent.model?.primary, agent.identity?.theme]
+      searchText: [
+        agent.id,
+        agent.workspace,
+        models && !models.modelSelectionPolicy?.restricted ? agent.model?.primary : undefined,
+        agent.identity?.theme,
+      ]
         .filter(Boolean)
         .join(" "),
     })),

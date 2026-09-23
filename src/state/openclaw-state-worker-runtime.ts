@@ -14,8 +14,13 @@ import {
   executeMcpOAuthWorkerCommand,
 } from "../agents/mcp-oauth-store.worker.js";
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
+import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
-import * as worktreeRegistry from "../agents/worktrees/registry-read.kernel.js";
+import {
+  isWorktreeRegistryReadCommand,
+  executeWorktreeRegistryReadCommand,
+} from "../agents/worktrees/registry-read.worker.js";
+import { releaseWorktreeRunLeaseInDatabase } from "../agents/worktrees/run-lease-store.kernel.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
 import { executeAuditWriterCommand } from "../audit/audit-event-writer.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
@@ -111,7 +116,10 @@ import * as skillWorkshop from "../skills/workshop/store.worker.js";
 import { isTaskRegistryWorkerCommand } from "../tasks/task-registry.worker-contract.js";
 import { executeTaskRegistryCommand } from "../tasks/task-registry.worker.js";
 import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
-import { executeTranscriptWrite } from "../transcripts/store-worker-write.js";
+import {
+  executeTranscriptWrite,
+  isTranscriptWriteCommand,
+} from "../transcripts/store-worker-write.js";
 import {
   listAgentProvenanceInDatabase,
   readAgentProvenanceBatchInDatabase,
@@ -408,6 +416,9 @@ export function executeSharedStateCommand(
       }) ?? { state: {}, basis: {} }
     );
   }
+  if (isNodeWorkerJournalCommand(command)) {
+    return executeNodeWorkerJournalCommand(command, context.databasePath, open);
+  }
   if (command.type === "deviceAuth.read" || command.type === "deviceAuth.readOrigin") {
     const read = (db: OpenClawStateDatabase["db"]) =>
       command.type === "deviceAuth.read"
@@ -430,10 +441,11 @@ export function executeSharedStateCommand(
   if (command.type === "deviceAuth.list") {
     return deviceAuth.readDeviceAuthTokensFromDatabase(database.db, command.input);
   }
-  if (command.type === "transcripts.append" || command.type === "transcripts.writeSummary") {
+  if (isTranscriptWriteCommand(command)) {
     return executeTranscriptWrite(command, { database, path: context.databasePath });
   }
   switch (command.type) {
+    case "transcripts.canonicalSessionRow":
     case "transcripts.readEntries":
     case "transcripts.exportOwnership":
     case "transcripts.exportPathCollisions":
@@ -503,6 +515,9 @@ export function executeSharedStateCommand(
   if (command.type === "sandboxRegistry.insertIfMissing") {
     return importSandboxRegistryRow(command.input, writeOptions);
   }
+  if (command.type === "sandboxRegistry.write") {
+    return writeSandboxRegistry(command.input, writeOptions);
+  }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
   }
@@ -511,9 +526,6 @@ export function executeSharedStateCommand(
     command.type === "conversationBindings.touch"
   ) {
     return executeCurrentConversationBindingCommand(command, writeOptions);
-  }
-  if (isNodeWorkerJournalCommand(command)) {
-    return executeNodeWorkerJournalCommand(command, writeOptions);
   }
   if (command.type === "sessionGroups.mutate") {
     return mutateSessionGroupCatalogInDatabase(database, command.input, writeOptions.env);
@@ -620,10 +632,19 @@ export function executeSharedStateCommand(
     ensureProjectRegistrySchema(writeOptions);
     return listProjectRegistryInDatabase(database.db);
   }
-  if (command.type === "worktrees.list" || command.type === "worktrees.liveIds") {
-    return command.type === "worktrees.list"
-      ? worktreeRegistry.listRegistryWorktreesInDatabase(database.db)
-      : worktreeRegistry.listLiveRegistryWorktreeIdsInDatabase(database.db);
+  if (isWorktreeRegistryReadCommand(command)) {
+    return executeWorktreeRegistryReadCommand(database.db, command);
+  }
+  if (command.type === "worktrees.releaseRunLease") {
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        releaseWorktreeRunLeaseInDatabase(db, command.input.worktreeId, command.input.token);
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      },
+      writeOptions,
+      { operationLabel: command.type },
+    );
   }
   if (command.type === "projects.resolve") {
     ensureProjectRegistrySchema(writeOptions);

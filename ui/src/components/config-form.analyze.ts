@@ -362,6 +362,24 @@ function normalizeSchemaNode(
     unsupported.add(pathLabel);
   }
 
+  const normalizeChild = (
+    child: JsonSchema,
+    childPath: Array<string | number>,
+    constraintPath?: string,
+  ): JsonSchema | null => {
+    if (compositionBranch && constraintPath !== undefined && !shouldNormalizeAllOfBranch(child)) {
+      if (!hasOnlySupportedConstraintKeywords(child)) {
+        unsupported.add(constraintPath);
+      }
+      return child;
+    }
+    const result = normalizeSchemaNode(child, childPath, compositionBranch);
+    for (const unsupportedPath of result.unsupportedPaths) {
+      unsupported.add(unsupportedPath);
+    }
+    return result.schema;
+  };
+
   if (type === "object" && (!inheritedCompositionOnly || hasLocalObjectStructure)) {
     const properties = schema.properties ?? {};
     const propertyKeys = new Set(objectPropertyKeys(schema));
@@ -377,19 +395,10 @@ function normalizeSchemaNode(
     }
     const normalizedProps: Record<string, JsonSchema> = {};
     for (const [key, value] of Object.entries(properties)) {
-      if (compositionBranch && !shouldNormalizeAllOfBranch(value)) {
-        normalizedProps[key] = value;
-        if (!hasOnlySupportedConstraintKeywords(value)) {
-          unsupported.add(pathKey([...path, key]) || "<root>");
-        }
-        continue;
-      }
-      const res = normalizeSchemaNode(value, [...path, key], compositionBranch);
-      if (res.schema) {
-        normalizedProps[key] = res.schema;
-      }
-      for (const entry of res.unsupportedPaths) {
-        unsupported.add(entry);
+      const childPath = [...path, key];
+      const child = normalizeChild(value, childPath, pathKey(childPath) || "<root>");
+      if (child !== null) {
+        normalizedProps[key] = child;
       }
     }
     normalized.properties = normalizedProps;
@@ -414,15 +423,9 @@ function normalizeSchemaNode(
       normalized.additionalProperties = false;
     } else if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
       if (!isAnySchema(schema.additionalProperties)) {
-        const res = normalizeSchemaNode(
-          schema.additionalProperties,
-          [...path, "*"],
-          compositionBranch,
-        );
-        normalized.additionalProperties = res.schema ?? schema.additionalProperties;
-        for (const unsupportedPath of res.unsupportedPaths) {
-          unsupported.add(unsupportedPath);
-        }
+        normalized.additionalProperties =
+          normalizeChild(schema.additionalProperties, [...path, "*"]) ??
+          schema.additionalProperties;
       }
     }
   } else if (type === "array" && (!inheritedCompositionOnly || hasLocalArrayStructure)) {
@@ -434,55 +437,20 @@ function normalizeSchemaNode(
           unsupported.add(pathLabel);
           continue;
         }
-        if (compositionBranch && !shouldNormalizeAllOfBranch(itemSchema)) {
-          normalizedItems.push(itemSchema);
-          if (!hasOnlySupportedConstraintKeywords(itemSchema)) {
-            unsupported.add(pathLabel);
-          }
-          continue;
-        }
-        const result = normalizeSchemaNode(itemSchema, [...path, index], compositionBranch);
-        normalizedItems.push(result.schema ?? itemSchema);
-        for (const unsupportedPath of result.unsupportedPaths) {
-          unsupported.add(unsupportedPath);
-        }
+        normalizedItems.push(normalizeChild(itemSchema, [...path, index], pathLabel) ?? itemSchema);
       }
       normalized.items = normalizedItems;
       if (schema.additionalItems && typeof schema.additionalItems === "object") {
-        if (compositionBranch && !shouldNormalizeAllOfBranch(schema.additionalItems)) {
-          normalized.additionalItems = schema.additionalItems;
-          if (!hasOnlySupportedConstraintKeywords(schema.additionalItems)) {
-            unsupported.add(pathLabel);
-          }
-        } else {
-          const result = normalizeSchemaNode(
-            schema.additionalItems,
-            [...path, "*"],
-            compositionBranch,
-          );
-          normalized.additionalItems = result.schema ?? schema.additionalItems;
-          for (const unsupportedPath of result.unsupportedPaths) {
-            unsupported.add(unsupportedPath);
-          }
-        }
+        normalized.additionalItems =
+          normalizeChild(schema.additionalItems, [...path, "*"], pathLabel) ??
+          schema.additionalItems;
       } else {
         normalized.additionalItems = schema.additionalItems;
       }
     } else if (!schema.items) {
       unsupported.add(pathLabel);
     } else {
-      if (compositionBranch && !shouldNormalizeAllOfBranch(schema.items)) {
-        normalized.items = schema.items;
-        if (!hasOnlySupportedConstraintKeywords(schema.items)) {
-          unsupported.add(pathLabel);
-        }
-      } else {
-        const res = normalizeSchemaNode(schema.items, [...path, "*"], compositionBranch);
-        normalized.items = res.schema ?? schema.items;
-        for (const unsupportedPath of res.unsupportedPaths) {
-          unsupported.add(unsupportedPath);
-        }
-      }
+      normalized.items = normalizeChild(schema.items, [...path, "*"], pathLabel) ?? schema.items;
     }
     if (schema.allOf) {
       for (const index of arrayItemSchemaIndexes(schema)) {

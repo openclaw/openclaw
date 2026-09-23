@@ -9,8 +9,8 @@ read_when:
 
 ## Nested sub-agents
 
-By default, sub-agents can recursively delegate through depth `5`. Global
-concurrency, per-session child limits, inherited tool policy, sandbox
+By default, sub-agents can recursively delegate through depth `5`. Per-session
+execution and child admission limits, inherited tool policy, sandbox
 inheritance, and target-agent allowlists still apply. Set a lower depth to
 create leaf workers sooner.
 
@@ -21,7 +21,7 @@ create leaf workers sooner.
       subagents: {
         maxSpawnDepth: 2, // stop nesting after depth 2 (default: 5, range 1-5)
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5, range 1-20)
-        maxConcurrent: 8, // global concurrency lane cap (default: 8)
+        maxConcurrent: 8, // concurrent child runs per spawning session (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn (0 = no timeout)
         announceTimeoutMs: 120000, // gateway announce timeout, excluding accepted queue waits
       },
@@ -74,7 +74,9 @@ final answer, the correct follow-up is the exact silent token
 
 Each agent session (at any depth) can have at most `maxChildrenPerAgent`
 (default `5`) active children at a time. This prevents runaway fan-out
-from a single orchestrator.
+from a single orchestrator. Separately, `maxConcurrent` limits executing child
+runs for that immediate spawning session. Each nested orchestrator gets its own
+execution budget; its children do not share the root session's slots.
 
 ### Reset a conversation
 

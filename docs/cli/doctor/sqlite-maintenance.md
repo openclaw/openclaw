@@ -130,6 +130,9 @@ changed transcripts against complete canonical history. Verified content refresh
 the receipt without overwriting current session settings or resurrecting deleted
 history. Changed index values and other unverifiable plugin inputs move to the protected
 migration archive with their validation error and recovery path in the report.
+For changed indexes, Doctor compares session keys and IDs with canonical SQLite and
+names differing metadata fields in per-session warnings. This comparison does not
+authorize replaying old values or accepting changed bytes as the original import.
 Snapshot-path repair leaves these historical inputs unchanged.
 
 A retained plugin source conflict does not prevent Gateway readiness after the
@@ -308,10 +311,14 @@ record why issue creation was skipped.
 
 Recovery selects the latest failed migration manifest, restores only the
 manifest's archived artifacts, validates the affected targets, and prepares
-sanitized `.failure.md` and `.failure.json` reports. Reports separate current
+sanitized `.failure.md` and `.failure.json` reports when failure evidence exists.
+Reports include the recorded run ID, failure timestamp (or `not recorded` for an
+older journal without one), target, and failure code and error. They separate current
 recovery findings from recorded migration and recovery evidence. A successful
 recovery can have zero current issues while preserving earlier failures for
 diagnosis; a target not inspected by this recovery is labeled accordingly.
+When recovery has no work, no current issues, and no recorded failure, Doctor prints
+`nothing to recover; no report filed` and does not prepare or open a GitHub issue.
 The JSON report keeps the combined `issues` evidence and adds `recoveryIssues`
 for inspected targets. The GitHub issue body avoids
 transcript contents, raw environment, secrets, and unbounded config. Once an

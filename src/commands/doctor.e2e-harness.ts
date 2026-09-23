@@ -120,14 +120,6 @@ const autoMigrateLegacyPluginDoctorState = defineMockFn(
     warnings: [],
   }),
 );
-const autoMigrateLegacyTaskStateSidecars = defineMockFn(
-  vi.fn().mockResolvedValue({
-    migrated: false,
-    skipped: false,
-    changes: [],
-    warnings: [],
-  }),
-);
 const runChannelPluginStartupMaintenance = defineMockFn(vi.fn().mockResolvedValue(undefined));
 
 function defaultRunDoctorHealthContributions(ctx: {
@@ -220,10 +212,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       targetDir: "/tmp/state/agents/main/agent",
       hasLegacy: false,
     },
-    pluginStateSidecar: {
-      sourcePath: "/tmp/state/plugin-state/state.sqlite",
-      hasLegacy: false,
-    },
     pluginInstallIndex: {
       sourcePath: "/tmp/state/plugins/installs.json",
       hasLegacy: false,
@@ -242,11 +230,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
     },
     worktrees: { hasLegacy: false, legacyIds: [], pathRewrites: [] },
-    taskStateSidecars: {
-      taskRunsPath: "/tmp/state/tasks/runs.sqlite",
-      flowRunsPath: "/tmp/state/flows/registry.sqlite",
-      hasLegacy: false,
-    },
     deliveryQueues: {
       outboundPath: "/tmp/state/delivery-queue",
       sessionPath: "/tmp/state/session-delivery-queue",
@@ -488,10 +471,13 @@ vi.mock("./doctor-browser.js", () => ({
   noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./doctor-memory-search.js", () => ({
+vi.mock("./doctor-memory-recall.js", () => ({
   maybeRepairMemoryRecallHealth,
-  noteMemorySearchHealth,
   noteMemoryRecallHealth,
+}));
+
+vi.mock("./doctor-memory-search.js", () => ({
+  noteMemorySearchHealth,
 }));
 
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
@@ -606,7 +592,6 @@ vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
 
 vi.mock("../infra/state-migrations.state-dir.js", () => ({
   autoMigrateLegacyStateDir,
-  autoMigrateLegacyTaskStateSidecars,
 }));
 
 vi.mock("../infra/state-migrations.config-machine-state.js", () => ({
@@ -696,7 +681,6 @@ beforeEach(() => {
     warnings: [],
   });
   autoMigrateLegacyState.mockReset().mockResolvedValue({ changes: [], warnings: [] });
-  autoMigrateLegacyTaskStateSidecars.mockReset().mockResolvedValue({ changes: [], warnings: [] });
   runChannelPluginStartupMaintenance.mockReset().mockResolvedValue(undefined);
 
   originalIsTTY = process.stdin.isTTY;

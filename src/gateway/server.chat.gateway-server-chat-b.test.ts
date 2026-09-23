@@ -43,6 +43,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import {
   waitForSessionTranscriptIndexReconcile,
@@ -59,6 +60,7 @@ import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { getMediaDir } from "../media/store.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
+  getSessionWorkAdmissionRelease,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
@@ -73,6 +75,7 @@ import {
   assertPluginMetadataSnapshotConsistency,
   createGatewayPluginMetadataSnapshot,
 } from "./plugin-metadata.test-helpers.js";
+import { readWarmChatStartup } from "./server-chat-startup.test-support.js";
 import {
   createChatVisionModelCatalogSnapshot,
   createDirectChatContext,
@@ -104,37 +107,10 @@ import {
   gatewayReplyMock,
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
-  onceMessage,
   rpcReq,
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
-
-async function readWarmChatStartup(ws: Parameters<typeof rpcReq>[0]) {
-  // rpcReq resets the runtime config before each request. Warm startup must reuse
-  // the exact config that prepared metadata, as an ordinary client does.
-  const config = getRuntimeConfig();
-  const id = randomUUID();
-  const response = onceMessage<{
-    type: string;
-    id: string;
-    ok: boolean;
-    payload?: {
-      metadata?: {
-        commands?: Array<{ name?: string; textAliases?: string[] }>;
-        models?: Array<{ id?: string; provider?: string }>;
-      };
-      messages?: unknown[];
-      sessionInfo?: { key?: string; sessionId?: string };
-    };
-  }>(ws, (message) => message.type === "res" && message.id === id);
-  ws.send(
-    JSON.stringify({ type: "req", id, method: "chat.startup", params: makeMainSessionParams() }),
-  );
-  const result = await response;
-  expect(getRuntimeConfig()).toBe(config);
-  return result;
-}
 
 const restartRecoveryMocks = vi.hoisted(() => ({
   retryRestartAbortedMainSessionRecovery: vi.fn<
@@ -196,7 +172,7 @@ const autoCleanupTempDirs = createTempDirTracker();
 
 afterEach(async () => {
   await disposeSessionReadContexts();
-  await releaseSessionTestDirectories([...autoCleanupTempDirs.dirs]);
+  await releaseSessionTestDirectories(autoCleanupTempDirs.dirs, { settleSuiteProjection: true });
   autoCleanupTempDirs.cleanup();
 });
 
@@ -218,11 +194,10 @@ async function withGatewayChatHarness(
   try {
     await run({ ws, createSessionDir });
   } finally {
+    await resetDirectChatSession();
     if (process.env.OPENCLAW_CONFIG_PATH) {
       await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
     }
-    testState.sessionStorePath = undefined;
-    resetConfigRuntimeState();
     ws.close();
   }
 }
@@ -308,7 +283,7 @@ async function withDirectChatSession(
   try {
     await run(sessionDir, storePath);
   } finally {
-    resetDirectChatSession();
+    await resetDirectChatSession();
   }
 }
 
@@ -321,9 +296,17 @@ function openDirectChatSession() {
   return { sessionDir, storePath };
 }
 
-function resetDirectChatSession() {
+function getDirectChatSessionWorkRelease(sessionKey = "agent:main:main") {
+  return getSessionWorkAdmissionRelease({
+    scope: resolveSessionStorePathForScope({ sessionKey }, getRuntimeConfig()),
+    identities: [sessionKey],
+  });
+}
+
+async function resetDirectChatSession() {
+  await disposeSessionReadContexts();
+  await releaseSessionTestDirectories(autoCleanupTempDirs.dirs, { settleSuiteProjection: true });
   dispatchInboundMessageMock.mockReset();
-  testState.sessionStorePath = undefined;
   resetConfigRuntimeState();
 }
 
@@ -558,7 +541,7 @@ test("chat.send replays a cached result after the session is archived", async ()
     ]);
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   } finally {
-    resetDirectChatSession();
+    await resetDirectChatSession();
   }
 });
 
@@ -703,7 +686,7 @@ describe("gateway server chat", () => {
         expect(responses[0]?.ok, JSON.stringify(responses[0]?.error ?? null)).toBe(true);
       } finally {
         testState.agentsConfig = undefined;
-        resetDirectChatSession();
+        await resetDirectChatSession();
       }
     },
   );
@@ -727,13 +710,11 @@ describe("gateway server chat", () => {
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok, JSON.stringify(responses[0]?.error ?? null)).toBe(true);
       expect(responses[0]?.payload).toMatchObject({ status: "started" });
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease(sessionKey);
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
       testState.agentsConfig = undefined;
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -759,7 +740,7 @@ describe("gateway server chat", () => {
       });
     } finally {
       testState.agentsConfig = undefined;
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -1427,7 +1408,7 @@ describe("gateway server chat", () => {
       const preparedMetadata = await rpcReq(ws, "chat.metadata", { agentId: "main" });
       expect(preparedMetadata.ok).toBe(true);
 
-      const startup = await readWarmChatStartup(ws);
+      const startup = await readWarmChatStartup(ws, makeMainSessionParams());
       const agents = await rpcReq<{
         agents?: Array<{
           id?: string;
@@ -1932,7 +1913,7 @@ describe("gateway server chat", () => {
               expect(
                 projection.thinkingLevels?.map((level) => level.id),
                 mode,
-              ).toEqual(["off"]);
+              ).toEqual(["off", "ultra"]);
             } else {
               expect.soft(projection.thinkingLevels, `${mode} unknown levels`).toBeUndefined();
               expect.soft(projection.thinkingOptions, `${mode} unknown options`).toBeUndefined();
@@ -2318,6 +2299,7 @@ describe("gateway server chat", () => {
                 "medium",
                 "high",
                 "xhigh",
+                "ultra",
               ]);
               const serialized = JSON.stringify(responses[0]?.payload);
               expect(serialized).not.toContain("private-route-token");
@@ -2466,7 +2448,7 @@ describe("gateway server chat", () => {
       const preparedMetadata = await rpcReq(ws, "chat.metadata", { agentId: "main" });
       expect(preparedMetadata.ok).toBe(true);
 
-      const startup = await readWarmChatStartup(ws);
+      const startup = await readWarmChatStartup(ws, makeMainSessionParams());
 
       expect(startup.ok, JSON.stringify(startup)).toBe(true);
       expect(startup.payload?.metadata?.models).toEqual(
@@ -2852,17 +2834,28 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
       dispatchRelease.resolve();
-      await waitForFast(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
-      }, FAST_WAIT_OPTS);
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
       dispatchRelease.resolve();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
   test("chat.send discards prepared inbound media when a hook blocks the turn", async () => {
     openDirectChatSession();
+    const attachments = await import("./chat-attachments.js");
+    const discard = attachments.discardPreparedInboundMedia;
+    const discarded = createDeferred();
+    const cleanup = vi
+      .spyOn(attachments, "discardPreparedInboundMedia")
+      .mockImplementation((...args) => {
+        const pending = discard(...args);
+        if (args[0].length > 0) {
+          discarded.resolve(pending);
+        }
+        return pending;
+      });
     try {
       await writeStoredMainSession({
         modelProvider: "test-provider",
@@ -2874,12 +2867,8 @@ describe("gateway server chat", () => {
       // A before_agent_run block persists only the redacted reason — no media
       // markers — so dispatch must discard the prepared refs on settle.
       dispatchInboundMessageMock.mockImplementationOnce(async (params: unknown) => {
-        const recorder = (
-          params as {
-            replyOptions?: { userTurnTranscriptRecorder?: { markBlocked: () => void } };
-          }
-        ).replyOptions?.userTurnTranscriptRecorder;
-        recorder?.markBlocked();
+        const replyOptions = (params as { replyOptions?: GetReplyOptions }).replyOptions;
+        replyOptions?.userTurnTranscriptRecorder?.markBlocked();
       });
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       await callDirectChat("chat.send", {
@@ -2904,18 +2893,16 @@ describe("gateway server chat", () => {
             scopes: ["operator.write"],
           },
         } as never,
-        respond: ((ok, payload, error) => {
-          responses.push({ ok, payload, error });
-        }) as RespondFn,
+        respond: captureChatResponse(responses),
         context,
       });
       expect(responses[0]?.ok, JSON.stringify(responses[0])).toBe(true);
-      await waitForFast(async () => {
-        const remaining = await fs.readdir(inboundDir).catch(() => []);
-        expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);
-      }, FAST_WAIT_OPTS);
+      await discarded.promise;
+      const remaining = await fs.readdir(inboundDir).catch(() => []);
+      expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);
     } finally {
-      resetDirectChatSession();
+      cleanup.mockRestore();
+      await resetDirectChatSession();
     }
   });
 
@@ -2962,9 +2949,7 @@ describe("gateway server chat", () => {
             scopes: ["operator.write"],
           },
         } as never,
-        respond: ((ok, payload, error) => {
-          responses.push({ ok, payload, error });
-        }) as RespondFn,
+        respond: captureChatResponse(responses),
         context,
       });
       expect(responses).toEqual([
@@ -2997,7 +2982,7 @@ describe("gateway server chat", () => {
         path.basename(retainedPath),
       ]);
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -3154,7 +3139,7 @@ describe("gateway server chat", () => {
       }, FAST_WAIT_OPTS);
     } finally {
       firstCatalogSnapshot.resolve(createChatVisionModelCatalogSnapshot());
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -3265,7 +3250,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       releaseMutation.resolve();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -3327,7 +3312,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       releaseMutation.resolve();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -3423,7 +3408,7 @@ describe("gateway server chat", () => {
     } finally {
       performDeletion.resolve();
       await Promise.allSettled(mutation ? [mutation] : []);
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -3480,7 +3465,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       releaseMutation.resolve();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -3596,7 +3581,7 @@ describe("gateway server chat", () => {
     } finally {
       releaseMutation.resolve();
       releaseTerminalMutation.resolve();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -3664,7 +3649,8 @@ describe("gateway server chat", () => {
           hydrationSuppressed: true,
         }),
       ]);
-      await waitForFast(() => expect(context.removeChatRun).toHaveBeenCalledTimes(1));
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
       dispatchInboundMessageMock.mockReset();
       testState.agentConfig = undefined;
@@ -3768,7 +3754,8 @@ describe("gateway server chat", () => {
             workspaceDir: expect.any(String),
           }),
         ]);
-        await waitForFast(() => expect(context.removeChatRun).toHaveBeenCalledTimes(1));
+        await getDirectChatSessionWorkRelease();
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
       } finally {
         dispatchInboundMessageMock.mockReset();
         testState.agentConfig = undefined;
@@ -3835,14 +3822,14 @@ describe("gateway server chat", () => {
         dispatchInboundMessageMock.mock.calls[0]?.[0] as { replyOptions?: GetReplyOptions }
       )?.replyOptions;
       expect(dispatchOptions?.suppressNextUserMessagePersistence).toBe(true);
+      const settled = getDirectChatSessionWorkRelease();
+      expect(settled).toBeDefined();
       dispatchRelease.resolve(undefined);
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await settled;
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
       dispatchRelease.resolve(undefined);
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -3867,10 +3854,8 @@ describe("gateway server chat", () => {
           ...params,
           respond: vi.fn() as RespondFn,
         });
-        await waitForFast(
-          () => expect(context.removeChatRun).toHaveBeenCalledTimes(removeCount + 1),
-          FAST_WAIT_OPTS,
-        );
+        await getDirectChatSessionWorkRelease();
+        expect(context.removeChatRun).toHaveBeenCalledTimes(removeCount + 1);
       };
 
       await send({
@@ -3936,7 +3921,7 @@ describe("gateway server chat", () => {
         ]),
       );
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4007,13 +3992,11 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
       dispatchRelease.resolve(undefined);
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
       dispatchRelease.resolve(undefined);
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4052,13 +4035,11 @@ describe("gateway server chat", () => {
       ).toHaveLength(1);
 
       dispatchRelease.resolve(undefined);
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
       dispatchRelease.resolve(undefined);
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4118,7 +4099,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       releaseCallback.resolve(undefined);
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4231,18 +4212,15 @@ describe("gateway server chat", () => {
         },
       ]);
       if (retryable) {
-        await waitForFast(
-          () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
-          FAST_WAIT_OPTS,
-        );
+        await getDirectChatSessionWorkRelease();
+        expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1);
         expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-        expect(
-          (
-            dispatchInboundMessageMock.mock.calls[0]?.[0] as
-              | { replyOptions?: GetReplyOptions }
-              | undefined
-          )?.replyOptions?.suppressNextUserMessagePersistence,
-        ).toBe(true);
+        const retryOptions = (
+          dispatchInboundMessageMock.mock.calls[0]?.[0] as
+            | { replyOptions?: GetReplyOptions }
+            | undefined
+        )?.replyOptions;
+        expect(retryOptions?.suppressNextUserMessagePersistence).toBe(true);
       } else {
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       }
@@ -4268,7 +4246,7 @@ describe("gateway server chat", () => {
       ).toHaveLength(1);
     } finally {
       stopListening?.();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4342,7 +4320,7 @@ describe("gateway server chat", () => {
       });
     } finally {
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4390,7 +4368,7 @@ describe("gateway server chat", () => {
       });
     } finally {
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4444,7 +4422,7 @@ describe("gateway server chat", () => {
     } finally {
       releaseMutation.resolve();
       await Promise.allSettled(mutation ? [mutation] : []);
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4480,7 +4458,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4525,7 +4503,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4559,7 +4537,7 @@ describe("gateway server chat", () => {
       ]);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4597,10 +4575,8 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expect(agentStarts).toHaveBeenCalledOnce();
       expect(recoveredAuthority).toMatchObject({ source: "local" });
@@ -4619,7 +4595,7 @@ describe("gateway server chat", () => {
         restartRecoveryDeliveryRunId: runId,
       });
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4647,10 +4623,8 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(3);
       expect(context.broadcast).toHaveBeenCalledTimes(1);
       expect(context.broadcast).toHaveBeenCalledWith(
@@ -4663,7 +4637,7 @@ describe("gateway server chat", () => {
         status: "failed",
       });
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4688,10 +4662,8 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
       const failed = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
       expect(failed).toMatchObject({ abortedLastRun: false, status: "failed" });
       expect(failed?.restartRecoveryDeliveryRequestFingerprint).toEqual(
@@ -4735,10 +4707,8 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await waitForFast(
-        () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease();
+      expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expect(
         (
@@ -4748,7 +4718,7 @@ describe("gateway server chat", () => {
         )?.replyOptions?.suppressNextUserMessagePersistence,
       ).toBe(true);
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4784,7 +4754,7 @@ describe("gateway server chat", () => {
       expect(failed?.restartRecoveryDeliveryRunId).toBe(runId);
       expect(failed?.restartRecoveryDeliverySourceRunId).toBe(runId);
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4840,10 +4810,8 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await waitForFast(
-        () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease();
+      expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(
         (
@@ -4853,7 +4821,7 @@ describe("gateway server chat", () => {
         )?.replyOptions?.suppressNextUserMessagePersistence,
       ).toBe(true);
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4907,12 +4875,10 @@ describe("gateway server chat", () => {
         status: "done",
       });
       expect(ackSnapshot.entry?.restartRecoveryDeliveryRunId).toBeUndefined();
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -5089,12 +5055,11 @@ describe("gateway server chat", () => {
 
       dispatchRelease.resolve();
       await Promise.all([first, duplicate, withSystemContext, withDifferentThinking]);
-      await waitForFast(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(4);
-      }, FAST_WAIT_OPTS);
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(4);
     } finally {
       dispatchRelease.resolve();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -5155,9 +5120,8 @@ describe("gateway server chat", () => {
         RawBody: "/reset examples",
       });
       expect(dispatchContext).not.toHaveProperty("CommandSource");
-      await waitForFast(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
-      }, FAST_WAIT_OPTS);
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -5185,14 +5149,12 @@ describe("gateway server chat", () => {
         });
 
       await callSend("first", "first message", "idem-sequential-a");
-      await waitForFast(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
-      }, FAST_WAIT_OPTS);
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
 
       await callSend("second", "second message", "idem-sequential-b");
-      await waitForFast(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(2);
-      }, FAST_WAIT_OPTS);
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(2);
 
       expect(responses).toEqual([
         {

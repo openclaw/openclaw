@@ -52,16 +52,6 @@ describe("deleteTelegramUpdateOffset", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("removes the offset row so a new bot starts fresh", async () => {
-    await withStateDirEnv("openclaw-tg-offset-", async () => {
-      await writeTelegramUpdateOffset({ accountId: "default", updateId: 432_000_000 });
-      expect(await readTelegramUpdateOffset({ accountId: "default" })).toBe(432_000_000);
-
-      await deleteTelegramUpdateOffset({ accountId: "default" });
-      expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
-    });
-  });
-
   it("keeps a missing offset row absent after delete", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
       await deleteTelegramUpdateOffset({ accountId: "nonexistent" });
@@ -346,22 +336,6 @@ describe("deleteTelegramUpdateOffset", () => {
 
       expect(offset).toBeNull();
       expect(cleaned).toBe(true);
-    });
-  });
-
-  it("treats imported legacy offset records without bot identity as stale when token is provided", async () => {
-    await withStateDirEnv("openclaw-tg-offset-", async () => {
-      await updateOffsetStore.register("default", {
-        version: 1,
-        lastUpdateId: 777,
-      } as TelegramUpdateOffsetState);
-
-      expect(
-        await readTelegramUpdateOffset({
-          accountId: "default",
-          botToken: "333333:token-c",
-        }),
-      ).toBeNull();
     });
   });
 

@@ -24,7 +24,7 @@ export type InteractionTargetOptions = {
   cdpUrl: string;
   browserFilesystemLocal?: boolean;
   targetId?: string;
-  assertCurrent?: () => Promise<void>;
+  assertCurrent?: () => void | Promise<void>;
 };
 
 export type NavigationTargetOptions = InteractionTargetOptions & BrowserNavigationPolicyOptions;
@@ -43,14 +43,19 @@ export class BrowserInteractionAuthorityError extends Error {
   }
 }
 
-export async function assertInteractionCurrent(
+export function assertInteractionCurrent(
   opts: Pick<InteractionTargetOptions, "assertCurrent">,
-): Promise<void> {
-  try {
-    await opts.assertCurrent?.();
-  } catch (error) {
+): void | Promise<void> {
+  const reject = (error: unknown): never => {
     // Authority loss is fatal even inside a batch configured to continue on errors.
     throw new BrowserInteractionAuthorityError(error);
+  };
+  try {
+    // Preserve a resident assertion's synchronous fence through native action dispatch.
+    const assertion = opts.assertCurrent?.();
+    return assertion ? assertion.catch(reject) : undefined;
+  } catch (error) {
+    reject(error);
   }
 }
 
@@ -606,7 +611,10 @@ export async function awaitNavigationGuardedInteraction<T>(
             try {
               // Preserve native dispatch ordering for callers without an authority check.
               if (opts.assertCurrent) {
-                await assertInteractionCurrent(opts);
+                const assertion = assertInteractionCurrent(opts);
+                if (assertion) {
+                  await assertion;
+                }
               }
               throwIfInteractionAborted(signal);
               return await opts.action();

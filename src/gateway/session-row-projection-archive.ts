@@ -78,7 +78,12 @@ export function createSessionRowProjectionArchive(params: {
           continue;
         }
         // Cold children retain metadata/indices; both parents must drop stale child links.
-        const next = { ...current, ...lineage, pendingDatabaseFacts: undefined };
+        const next = {
+          ...current,
+          ...lineage,
+          pendingDatabaseFacts: undefined,
+          databaseFactsRevision: current.databaseFactsRevision + 1,
+        };
         params.put(next);
         markRelated(current, indexes, false);
         markRelated(next, indexes, false);
@@ -111,8 +116,12 @@ export function createSessionRowProjectionArchive(params: {
       for (const row of candidates) {
         row.pendingDatabaseFacts = undefined;
         if (row.entry?.archivedAt !== undefined) {
-          if (row.materialized) {
-            demote(row);
+          const current = row.materialized ? demote(row) : row;
+          if (change.scope !== "catalog") {
+            records.invalidateDatabaseFacts(current);
+          }
+          if (current.preparedAcpMeta === undefined || current.hasBoard === undefined) {
+            params.dirty.add(records.identity(current));
           }
           continue;
         }

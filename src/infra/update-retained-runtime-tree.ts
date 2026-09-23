@@ -1,4 +1,4 @@
-import fsSync from "node:fs";
+import fsSync, { type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root as openRoot } from "./fs-safe.js";
@@ -44,16 +44,18 @@ export async function linkUpdateCandidatePluginTrees(
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
   const { privateRoot, candidateRoot, hostLinks, relocations, destinationFor } = targets;
   // Linking bumps the source inode's change time. Later entries that share that
-  // inode (pnpm store hard links) keep every other fingerprint field.
-  const linkedInodes = new Set<string>();
-  const assertEntry = async (entry: UpdateCandidatePluginTreeEntry) => {
-    await params.onProgress?.();
-    const current = await fs.lstat(entry.path, { bigint: true });
+  // inode (pnpm store hard links) must match the recorded post-link fingerprint.
+  const linkedInodes = new Map<string, string>();
+  const assertEntryStat = (entry: UpdateCandidatePluginTreeEntry, current: BigIntStats) => {
     const expected =
       entry.kind === "file" && linkedInodes.has(`${entry.dev}:${entry.ino}`)
-        ? { ...entry, ctimeNs: current.ctimeNs.toString() }
+        ? { ...entry, ctimeNs: linkedInodes.get(`${entry.dev}:${entry.ino}`)! }
         : entry;
     assertUpdateCandidatePluginEntryStat(expected, current);
+  };
+  const assertEntry = async (entry: UpdateCandidatePluginTreeEntry) => {
+    await params.onProgress?.();
+    assertEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
     if (entry.kind === "symlink" && (await fs.readlink(entry.path)) !== entry.link) {
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
     }
@@ -74,7 +76,7 @@ export async function linkUpdateCandidatePluginTrees(
       mode: entry.mode | 0o600,
       sourceHardlinks: "allow",
       assertBeforeMutation: () =>
-        assertUpdateCandidatePluginEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true })),
+        assertEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true })),
     });
     await assertEntry(entry);
     await relocateRuntimeEntry(destination, entry.path, destination, "file", relocations);
@@ -118,7 +120,6 @@ export async function linkUpdateCandidatePluginTrees(
       counts.copied += 1;
       continue;
     }
-    linkedInodes.add(`${entry.dev}:${entry.ino}`);
     // The private name must reference the inventoried inode, never a newer file.
     const linked = await fs.lstat(destination, { bigint: true });
     if (
@@ -130,6 +131,8 @@ export async function linkUpdateCandidatePluginTrees(
         `Retained runtime entry does not reference its inventoried file: ${entry.path}`,
       );
     }
+    assertUpdateCandidatePluginEntryStat({ ...entry, ctimeNs: linked.ctimeNs.toString() }, linked);
+    linkedInodes.set(`${entry.dev}:${entry.ino}`, linked.ctimeNs.toString());
     counts.linked += 1;
   }
   await targets.assertBindings();

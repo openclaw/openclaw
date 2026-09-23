@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   WORKER_INFERENCE_PROTOCOL_FEATURE,
@@ -5,9 +6,15 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { dispatchWorkerRequest } from "../server/ws-connection/worker-connection-dispatch.js";
 import { hashWorkerCredential } from "./credential.js";
+import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
@@ -119,7 +126,26 @@ describe("worker inference inventory publication", () => {
         placementStore: createWorkerSessionPlacementGate(placements),
       });
       let mutation: Promise<unknown> | undefined;
+      const instance = createOperationalRunInstanceRef(claim.runId);
+      const authority = claimAgentRunDelegatedAuthority(instance);
       try {
+        bindWorkerTurnOwner(
+          placements,
+          claim,
+          undefined,
+          instance,
+          {
+            agentId: "main",
+            sessionId,
+            sessionKey: `agent:main:${sessionId}`,
+            storePath: path.join(support.testState.root, "sessions.json"),
+          },
+          () => {
+            if (!placements.validateTurnClaim(claim)) {
+              throw new Error("Worker publication fixture claim is no longer current");
+            }
+          },
+        );
         const grant = await workerService.acquireTurnCredential(claim);
         expect(await workerService.acknowledgeCredentialDelivery(grant)).toBe(true);
         const admission = await workerService.admitWorker({
@@ -233,6 +259,10 @@ describe("worker inference inventory publication", () => {
         delivery.command = undefined;
         delivery.afterCommit = undefined;
         await workerService.stop();
+        if (placements.validateTurnClaim(claim)) {
+          placements.releaseTurn(claim);
+        }
+        releaseAgentRunDelegatedAuthority(authority);
       }
     },
   );

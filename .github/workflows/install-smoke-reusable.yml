@@ -163,6 +163,89 @@ jobs:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
+      - name: Checkout trusted build warning relay
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: main
+          path: .artifacts/build-warning-harness
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/relay-build-limit-warnings.mts
+            scripts/lib/check-limits.mts
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Restore exact trusted workflow revision
+        id: workflow
+        env:
+          EXPECTED_WORKFLOW_REPOSITORY: ${{ github.repository }}
+          HARNESS_PATH: .artifacts/build-warning-harness
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        shell: bash
+        run: &trusted_workflow_identity_run |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
+
+          const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+          const repository = process.env.EXPECTED_WORKFLOW_REPOSITORY ?? "";
+          const harnessPath = process.env.HARNESS_PATH ?? "";
+          if (repository !== "openclaw/openclaw" || job.workflow_repository !== repository) {
+            throw new Error("job.workflow_repository must exactly match github.repository");
+          }
+          if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
+            throw new Error("job.workflow_sha must be a full lowercase commit SHA");
+          }
+          if (harnessPath !== ".release-harness" && harnessPath !== ".artifacts/build-warning-harness") {
+            throw new Error("trusted harness path is invalid");
+          }
+          const git = (...args) =>
+            execFileSync("git", ["-C", harnessPath, ...args], {
+              encoding: "utf8",
+              stdio: ["ignore", "pipe", "inherit"],
+            }).trim();
+          const remote = git("remote", "get-url", "origin").replace(/\.git$/u, "");
+          if (remote !== `https://github.com/${repository}`) {
+            throw new Error("trusted harness remote does not match the workflow repository");
+          }
+          execFileSync(
+            "git",
+            [
+              "-C",
+              harnessPath,
+              "fetch",
+              "--no-tags",
+              "--no-recurse-submodules",
+              "--depth=1",
+              "origin",
+              job.workflow_sha,
+            ],
+            { stdio: "inherit" },
+          );
+          execFileSync("git", ["-C", harnessPath, "checkout", "--detach", job.workflow_sha], {
+            stdio: "inherit",
+          });
+          if (git("rev-parse", "HEAD") !== job.workflow_sha) {
+            throw new Error("trusted harness checkout did not resolve to job.workflow_sha");
+          }
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!outputPath) {
+            throw new Error("GITHUB_OUTPUT is required");
+          }
+          appendFileSync(
+            outputPath,
+            `repository=${repository}\nsha=${job.workflow_sha}\n`,
+          );
+          NODE
+
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
         with:
@@ -173,14 +256,18 @@ jobs:
       # builder stalls; an explicit buildx invocation fails closed instead.
       - name: Build root Dockerfile smoke image
         run: |
+          set -euo pipefail
+          build_log="$(mktemp "${RUNNER_TEMP}/root-build.XXXXXX")"
+          trap 'build_exit=$?; node .artifacts/build-warning-harness/scripts/relay-build-limit-warnings.mts "$build_log"; rm -f "$build_log"; exit "$build_exit"' EXIT
           timeout --kill-after=30s 45m docker buildx build \
             --progress=plain \
             --load \
             --build-arg OPENCLAW_EXTENSIONS=matrix \
+            --build-arg GITHUB_ACTIONS \
             -t openclaw-dockerfile-smoke:local \
             -t openclaw-ext-smoke:local \
             -f ./Dockerfile \
-            .
+            . 2>&1 | tee "$build_log"
 
       - name: Run root Dockerfile CLI smoke
         run: |
@@ -327,62 +414,7 @@ jobs:
           HARNESS_PATH: .release-harness
           JOB_CONTEXT: ${{ toJSON(job) }}
         shell: bash
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import { appendFileSync } from "node:fs";
-          import { execFileSync } from "node:child_process";
-
-          const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
-          const repository = process.env.EXPECTED_WORKFLOW_REPOSITORY ?? "";
-          const harnessPath = process.env.HARNESS_PATH ?? "";
-          if (repository !== "openclaw/openclaw" || job.workflow_repository !== repository) {
-            throw new Error("job.workflow_repository must exactly match github.repository");
-          }
-          if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
-            throw new Error("job.workflow_sha must be a full lowercase commit SHA");
-          }
-          if (harnessPath !== ".release-harness") {
-            throw new Error("trusted harness path is invalid");
-          }
-          const git = (...args) =>
-            execFileSync("git", ["-C", harnessPath, ...args], {
-              encoding: "utf8",
-              stdio: ["ignore", "pipe", "inherit"],
-            }).trim();
-          const remote = git("remote", "get-url", "origin").replace(/\.git$/u, "");
-          if (remote !== `https://github.com/${repository}`) {
-            throw new Error("trusted harness remote does not match the workflow repository");
-          }
-          execFileSync(
-            "git",
-            [
-              "-C",
-              harnessPath,
-              "fetch",
-              "--no-tags",
-              "--no-recurse-submodules",
-              "--depth=1",
-              "origin",
-              job.workflow_sha,
-            ],
-            { stdio: "inherit" },
-          );
-          execFileSync("git", ["-C", harnessPath, "checkout", "--detach", job.workflow_sha], {
-            stdio: "inherit",
-          });
-          if (git("rev-parse", "HEAD") !== job.workflow_sha) {
-            throw new Error("trusted harness checkout did not resolve to job.workflow_sha");
-          }
-          const outputPath = process.env.GITHUB_OUTPUT;
-          if (!outputPath) {
-            throw new Error("GITHUB_OUTPUT is required");
-          }
-          appendFileSync(
-            outputPath,
-            `repository=${repository}\nsha=${job.workflow_sha}\n`,
-          );
-          NODE
+        run: *trusted_workflow_identity_run
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
@@ -394,13 +426,17 @@ jobs:
           CANDIDATE_DIR: ${{ runner.temp }}/root-dockerfile-candidate
           IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
         run: |
+          set -euo pipefail
+          build_log="$(mktemp "${RUNNER_TEMP}/root-build.XXXXXX")"
+          trap 'build_exit=$?; node .release-harness/scripts/relay-build-limit-warnings.mts "$build_log"; rm -f "$build_log"; exit "$build_exit"' EXIT
           timeout --kill-after=30s 45m docker buildx build \
             --progress=plain \
             --load \
             --build-arg OPENCLAW_EXTENSIONS=matrix \
+            --build-arg GITHUB_ACTIONS \
             -t "$IMAGE_REF" \
             -f "$CANDIDATE_DIR/Dockerfile" \
-            "$CANDIDATE_DIR"
+            "$CANDIDATE_DIR" 2>&1 | tee "$build_log"
 
       - name: Pack root Dockerfile image artifact
         id: image_artifact
@@ -755,6 +791,10 @@ jobs:
           package_dir="${RUNNER_TEMP}/candidate-package"
           mkdir -p "$package_dir"
           chmod 0777 "$package_dir"
+          # Bind only a disposable receipt, never the runner's summary file.
+          limit_summary="$(mktemp "${RUNNER_TEMP}/candidate-limits.XXXXXX")"
+          chmod 0666 "$limit_summary"
+          trap 'pack_exit=$?; cat "$limit_summary" >> "$GITHUB_STEP_SUMMARY"; rm -f "$limit_summary"; exit "$pack_exit"' EXIT
           timeout --kill-after=30s 50m docker run --rm \
             --cap-drop ALL \
             --security-opt no-new-privileges \
@@ -763,6 +803,9 @@ jobs:
             --entrypoint /bin/bash \
             -e ALLOW_UNRELEASED_CHANGELOG \
             -e CI=1 \
+            -e GITHUB_ACTIONS \
+            -e GITHUB_STEP_SUMMARY=/tmp/openclaw-limit-summary.md \
+            -v "${limit_summary}:/tmp/openclaw-limit-summary.md" \
             -v "${RUNNER_TEMP}/candidate.tar.gz:/input/candidate.tar.gz:ro" \
             -v "${package_dir}:/output" \
             -v "$PWD/.release-harness:/harness:ro" \

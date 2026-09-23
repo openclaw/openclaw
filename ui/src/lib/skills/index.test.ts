@@ -7,6 +7,7 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createRuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 import { searchClawHub } from "./clawhub-search.ts";
+import { createDeferredRequestQueue, type TestRequest } from "./index.test-support.ts";
 import {
   clawhubVerdictKey,
   installFromClawHub,
@@ -23,8 +24,6 @@ import {
 } from "./index.ts";
 
 type SkillsState = Parameters<typeof loadSkills>[0];
-
-type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 
 function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
   const request = vi.fn<TestRequest>();
@@ -55,6 +54,10 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     skillsLoading: false,
     skillsReport: null,
     skillsError: null,
+    skillsFilter: "",
+    skillsStatusFilter: "all",
+    skillsDetailKey: null,
+    skillsDetailTab: "overview",
     skillOperation: null,
     skillEdits: {},
     skillMessages: {},
@@ -71,6 +74,7 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     ],
     clawhubSearchLoading: false,
     clawhubSearchError: "old error",
+    clawhubIconUrls: {},
     clawhubDetail: null,
     clawhubDetailRef: null,
     clawhubDetailLoading: false,
@@ -85,21 +89,6 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     skillCardErrors: {},
   };
   return { state, request };
-}
-
-function createDeferredRequestQueue(request: ReturnType<typeof vi.fn<TestRequest>>) {
-  const resolvers: Array<(value: unknown) => void> = [];
-  request.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        resolvers.push(resolve);
-      }),
-  );
-  return {
-    resolveNext(value: unknown) {
-      resolvers.shift()?.(value);
-    },
-  };
 }
 
 function mockSkillMutationRequests(

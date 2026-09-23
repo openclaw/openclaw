@@ -289,3 +289,40 @@ owner rechecks it after asynchronous routing and immediately before a new Gatewa
 turn or message injection is accepted. Work already accepted keeps its own
 lifecycle and can finish after the source retires. Use `signal` when the caller
 also intends to cancel accepted work.
+
+For detached native work, call `captureAgentHarnessCompletionCustody(scope)`
+during the admitting parent registration. Each accepted child assignment retains
+its own hold with `retain()` and passes it as `completionCustody` when delivering
+its result. Release each hold when its registration or assignment ends. The hold
+preserves the original operator ceiling and requester lifecycle; it does not
+grant general tool access or survive revocation or Gateway closure.
+
+Capture `captureAgentHarnessTaskAssignment(task)` from the exact task record returned
+by creation or selected for recovery, before history reads. Pass the same immutable
+receipt as `expectedTask` to task mutations, the event sink, and completion delivery.
+Metadata changes keep that receipt valid; replacing the assignment invalidates it.
+If a successful exact transition normalizes the creation timestamp, advance the
+receipt only from that transition's returned record. Carry the successor through
+later mutations, events, and delivery; never adopt it from a fresh task lookup.
+
+Before admitting exact-assignment work, call the scoped task runtime's
+`assertTaskAssignmentSupported()` on each registration, including reused runtimes.
+This checks the original runtime owner without rebinding it to a replacement.
+Custom detached runtimes must implement the optional `transitionTaskAssignment`
+operation for these guarded mutations. Check its `expectedTask` against the current
+record and call `assertCurrent()` immediately before persistence. An adapter without
+this operation receives an explicit unsupported-operation error before effects;
+legacy calls without `expectedTask` keep their existing behavior. Core never bypasses
+the registered adapter to perform the write.
+Native monitors reject registration before submitting a turn when the adapter
+lacks this operation. Upgrade the custom adapter to support exact transitions;
+existing persisted tasks remain available for recovery. Rejected registrations
+release their completion custody without starting child work or scheduling retries.
+
+Bind `createAgentHarnessTaskEventSink(...)` with that receipt as soon as the task row
+exists. It routes activity only to that exact task and keeps accepted persistence
+work within the admitting Gateway root during a drain. Call `settleExecution()`
+after terminal persistence and the current completion handoff finish, before
+sleeping delivery retries. Keep the hold until delivery settles. After restart,
+recovery must obtain fresh custody from a live registration and validate its
+historical task and requester; stored history never grants authority.

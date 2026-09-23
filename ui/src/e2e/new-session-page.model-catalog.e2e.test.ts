@@ -513,7 +513,7 @@ suite.define(() => {
     }
   });
 
-  it("shows the default and accepts a draft while model metadata loads", async () => {
+  it("accepts a draft while keeping the default hidden until model metadata arrives", async () => {
     if (captureUiProof) {
       await mkdir(path.join(suite.artifactDir, "new-session-skeleton-gap"), { recursive: true });
     }
@@ -538,9 +538,10 @@ suite.define(() => {
       const modelTrigger = page.locator(
         '.new-session-page__composer [data-chat-model-select="true"]',
       );
-      await expect.poll(() => modelTrigger.textContent()).toContain("gpt-5.6-luna");
-      expect(await modelTrigger.getAttribute("aria-busy")).toBe("false");
-      expect(await page.locator(".chat-controls__model-trigger-skeleton").count()).toBe(0);
+      await expect.poll(() => modelTrigger.getAttribute("aria-busy")).toBe("true");
+      expect(await modelTrigger.getAttribute("aria-label")).toContain("Loading models…");
+      expect(await modelTrigger.textContent()).not.toContain("gpt-5.6-luna");
+      expect(await page.locator(".chat-controls__model-trigger-skeleton").count()).toBe(1);
       await page
         .locator(".new-session-page__message")
         .fill("Start without waiting for the catalog");
@@ -566,6 +567,8 @@ suite.define(() => {
       }
 
       await gateway.resolveDeferred("models.list");
+      await expect.poll(() => modelTrigger.textContent()).toContain("GPT-5.6 Luna");
+      expect(await modelTrigger.getAttribute("aria-busy")).toBe("false");
       const effortPicker = page.locator(
         ".new-session-page__composer .chat-controls__effort-picker:not(.chat-controls__effort-picker--reserved)",
       );

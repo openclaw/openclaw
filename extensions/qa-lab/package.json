@@ -11,7 +11,7 @@
     "playwright-core": "1.63.0",
     "semver": "7.8.5",
     "ws": "8.21.3",
-    "yaml": "2.9.0",
+    "yaml": "2.9.1",
     "zod": "4.6.5"
   },
   "devDependencies": {

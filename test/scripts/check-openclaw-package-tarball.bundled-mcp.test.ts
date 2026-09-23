@@ -15,7 +15,7 @@ const MCP_PREFIX = `node_modules/${MCP_NAME}`;
 const MCP_CLI = "build/src/bin/chrome-devtools-mcp.js";
 const packageJson = {
   files: ["dist"],
-  dependencies: { [MCP_NAME]: "1.8.0" },
+  dependencies: { [MCP_NAME]: "1.9.0" },
   bundleDependencies: [MCP_NAME],
 };
 
@@ -62,7 +62,7 @@ function installPatchedMcp(packageRoot: string) {
     JSON.stringify({
       packages: ["."],
       autoInstallPeers: false,
-      overrides: { [MCP_NAME]: `file:${join(fixtureRoot, `${MCP_NAME}-1.8.0.tgz`)}` },
+      overrides: { [MCP_NAME]: `file:${join(fixtureRoot, `${MCP_NAME}-1.9.0.tgz`)}` },
     }),
   );
   const pnpm = resolvePnpmRunner({
@@ -147,7 +147,7 @@ describe("bundled browser MCP package", () => {
             },
           );
           expect(cli.status, cli.stderr).toBe(0);
-          expect(cli.stdout.trim()).toBe("1.8.0");
+          expect(cli.stdout.trim()).toBe("1.9.0");
         },
         undefined,
         {
@@ -173,8 +173,8 @@ describe("bundled browser MCP package", () => {
     },
     {
       name: "unpinned dependency",
-      manifest: { ...packageJson, dependencies: { [MCP_NAME]: "^1.8.0" } },
-      error: "must be pinned to 1.8.0",
+      manifest: { ...packageJson, dependencies: { [MCP_NAME]: "^1.9.0" } },
+      error: "must be pinned to 1.9.0",
     },
     {
       name: "missing generic declared bundle",

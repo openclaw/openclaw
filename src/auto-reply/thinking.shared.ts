@@ -76,7 +76,7 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (collapsed === "adaptive" || collapsed === "auto") {
     return "adaptive";
   }
-  if (collapsed === "max") {
+  if (collapsed === "max" || collapsed === "maximum") {
     return "max";
   }
   if (collapsed === "ultra") {

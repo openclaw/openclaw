@@ -4,6 +4,11 @@ const currentModuleUrl = import.meta.url;
 export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
 
 export const runtimeProcessEntrypoints = {
+  secretEgressProxy: {
+    currentModuleUrl,
+    sourceWorkerName: "../secrets/egress-proxy/proxy.worker",
+    distWorkerPath: "secrets/egress-proxy/proxy.worker.js",
+  },
   codeModeNode: {
     currentModuleUrl,
     sourceWorkerName: "../agents/code-mode-node.worker",

@@ -82,8 +82,13 @@ Select a model in `agents.defaults.model.primary` and set its
 `agents.defaults.models["openai/<model>"].agentRuntime.id` to `"agentsapi"`.
 Use OpenAI API-key authentication. The harness sends the configured model to the
 Agents API without a model allowlist; unsupported models return the API error.
-Reasoning remains `low`, and execution uses an OpenAI-hosted Linux VM.
-Automatic runtime selection is unchanged.
+Execution uses an OpenAI-hosted Linux VM. Reasoning follows the configured
+thinking level and model metadata: keep a supported effort, otherwise choose
+the next higher supported effort, or the highest available when none is higher.
+The selected effort applies to new sessions and later turns in existing
+sessions. `adaptive` and omitted native efforts use the model default; updating
+an existing session resets its effort to that default. The single-agent MVP
+does not support `ultra` delegation. Automatic runtime selection is unchanged.
 
 ```json5
 {
@@ -122,7 +127,10 @@ turns and input receipts before accepting completion. It does not resubmit the
 user's message. Native token usage is best effort; unavailable usage currently
 appears as zero in OpenClaw's usage totals.
 
-This MVP supports text and native hosted-workspace commands. Apps, connectors,
+New Agents API sessions enable built-in web search in live mode. Sessions
+created before web search was enabled need `/new` or `/reset` to pick it up.
+
+This MVP supports text, built-in web search, and native hosted-workspace commands. Apps, connectors,
 OpenClaw dynamic tools, file transfer, image generation, custom context engines,
 and self-hosted executors are outside its scope. Admitted turns are marked
 unsafe for replay because hosted commands may already have run. OpenClaw can

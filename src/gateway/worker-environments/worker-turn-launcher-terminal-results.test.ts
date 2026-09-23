@@ -123,7 +123,6 @@ describe("worker turn launcher terminal results", () => {
       const gate = createWorkerSessionPlacementGate(placements);
       const getConfig = () => ({ session: { store: sessionTarget.storePath } });
       const liveEvents = createWorkerLiveEventReceiver({
-        getConfig,
         startupBindings: [
           { environmentId: ENVIRONMENT_ID, runEpoch: OWNER_EPOCH, sessionId: SESSION_ID },
         ],

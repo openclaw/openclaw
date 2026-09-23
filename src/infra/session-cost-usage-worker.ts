@@ -44,7 +44,7 @@ import {
   decodeUsageCostRollupEnvelope,
   encodeUsageCostRollup,
   isUsageCostRollupFresh,
-  type UsageCostStoredRollup,
+  type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
 import type {
@@ -514,7 +514,7 @@ export async function executeUsageCostWorker(
   };
   for (const { file, row, envelope, rebuild } of stale.slice(0, maxFiles)) {
     control.throwIfCancelled();
-    let previous: UsageCostStoredRollup | undefined;
+    let previous: UsageCostRollupEntry | undefined;
     if (
       !rebuild &&
       row &&
@@ -522,12 +522,9 @@ export async function executeUsageCostWorker(
       canUseUsageCostRollupForPartial({ checkpoint: envelope.checkpoint, file })
     ) {
       const body = await readBody(row);
-      const entry = body
+      previous = body
         ? decodeUsageCostRollup(row.valueJson, operation.pricingFingerprint, body.blob)
         : undefined;
-      if (entry) {
-        previous = { entry };
-      }
     }
     const entry = await scanUsageCostRollupInWorker({
       file,

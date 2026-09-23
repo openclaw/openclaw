@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import {
+  isLegacySessionRecordOwnedByTarget,
+  shouldFilterLegacySessionRecordsByTarget,
+} from "../config/sessions/legacy-store-inspection.js";
+import { loadExactSessionEntryCandidates } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -34,7 +39,10 @@ import {
 } from "../infra/session-sqlite-migration-readers.js";
 import { planSessionJsonlArchiveMove } from "./doctor-session-sqlite-archive.js";
 import { countLegacyTranscript } from "./doctor-session-sqlite-diagnostics.js";
-import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
+import {
+  readLegacySessionRecords,
+  type LegacySessionRecord,
+} from "./doctor-session-sqlite-discovery.js";
 import type {
   DoctorSessionSqliteMode,
   DoctorSessionSqliteTargetReport,
@@ -105,7 +113,75 @@ export function prepareRetainedSessionImport(
       params.env,
       sourceVerification.verification,
     );
+  if (
+    retainedImport &&
+    (params.mode === "import" || params.mode === "recover") &&
+    sourceConflicts.has(path.resolve(params.target.storePath))
+  ) {
+    appendRetainedIndexComparison(params, issues);
+  }
   return { retainedImport, sourceConflicts, sourceVerification, retainedIndexPath };
+}
+
+/** Compare current rows for diagnosis only; changed index values never gain receipt authority. */
+function appendRetainedIndexComparison(
+  params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv; target: SessionStoreTarget },
+  issues: DoctorSessionSqliteIssue[],
+): void {
+  try {
+    const parsingIssues: DoctorSessionSqliteIssue[] = [];
+    const records = readLegacySessionRecords(params.target, parsingIssues).filter(
+      ({ sessionKey }) =>
+        !shouldFilterLegacySessionRecordsByTarget(params.target) ||
+        isLegacySessionRecordOwnedByTarget(params.cfg, params.target, sessionKey),
+    );
+    if (parsingIssues.length || !records.length) {
+      return;
+    }
+    const current = new Map(
+      loadExactSessionEntryCandidates({
+        readOnly: true,
+        env: params.env,
+        readSource: {
+          agentId: params.target.agentId,
+          path: resolveTargetSqlitePath(params.target, params.env),
+        },
+        sessionKeys: records.map(({ sessionKey }) => sessionKey),
+      }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    );
+    for (const { sessionKey, entry } of records) {
+      const canonical = current.get(sessionKey);
+      let message: string;
+      if (!canonical || canonical.sessionId !== entry.sessionId) {
+        message = "Retained session identity differs from the current canonical SQLite row.";
+      } else {
+        const sourceFields = new Map(Object.entries(entry));
+        const canonicalFields = new Map(Object.entries(canonical));
+        const changedFields = [...new Set([...sourceFields.keys(), ...canonicalFields.keys()])]
+          // Import replaces file locators with SQLite references, independent of metadata drift.
+          .filter(
+            (field) =>
+              field !== "sessionFile" &&
+              !isDeepStrictEqual(sourceFields.get(field), canonicalFields.get(field)),
+          )
+          .toSorted();
+        if (!changedFields.length) {
+          continue;
+        }
+        message = `Retained session identity matches canonical SQLite, but metadata differs: ${changedFields.join(", ")}.`;
+      }
+      issues.push({
+        code: "retained_plugin_source_conflict",
+        sessionKey,
+        message: `${message} Canonical values were kept; the retained index remains protected for recovery.`,
+      });
+    }
+  } catch (error) {
+    issues.push({
+      code: "retained_plugin_source_conflict",
+      message: `Could not compare retained session metadata: ${formatErrorMessage(error)}. Canonical SQLite sessions were not changed.`,
+    });
+  }
 }
 
 /** Preserve unverifiable plugin inputs through the existing reversible archive lifecycle. */

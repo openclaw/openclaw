@@ -118,14 +118,32 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
   ];
 }
 
-export function updateRunWarningMessages(steps: readonly UpdateRunStep[]): string[] {
-  return steps.flatMap((step) =>
+export function updateRunWarningMessages(
+  steps: readonly UpdateRunStep[],
+  maxMessages?: number,
+): string[] {
+  const messages = steps.flatMap((step) =>
     (step.step === "reconcile:settle" ||
       (step.status === "completed" && step.step.startsWith("warning:"))) &&
     step.detail
       ? [step.detail]
       : [],
   );
+  if (maxMessages === undefined) {
+    return messages;
+  }
+  // The operator's restart command must survive later advisory Doctor warnings.
+  const serviceWarning = steps.findLast(
+    (step) => step.step === "warning:managed-service-reconciliation" && step.status === "completed",
+  )?.detail;
+  return (
+    serviceWarning
+      ? [
+          serviceWarning,
+          ...messages.filter((message) => message !== serviceWarning).slice(1 - maxMessages),
+        ]
+      : messages.slice(-maxMessages)
+  ).slice(0, maxMessages);
 }
 
 /** Shared bounded receipt for history and rollback-readable diagnostics. */

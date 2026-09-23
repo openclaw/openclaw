@@ -80,6 +80,7 @@ import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
 import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
+import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.js";
 import {
   listUserChannelIdentitiesInDatabase,
   resolveUserChannelIdentityInDatabase,
@@ -586,6 +587,19 @@ serveOwnedWorkerTasks(
                     sourceAdmitted,
                     profileId: runSqliteDeferredTransactionSync(db, () =>
                       readUserProfileIdForEmail(db, command.email),
+                    ),
+                  };
+                }
+                if (command.type === "sessionRepositoryWorkspaces.find") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    workspaces: runSqliteDeferredTransactionSync(db, () =>
+                      command.owners.flatMap((owner) => {
+                        const workspace = findSessionRepositoryWorkspaceInDatabase(db, owner);
+                        return workspace ? [workspace] : [];
+                      }),
                     ),
                   };
                 }

@@ -40,6 +40,7 @@ import {
   type ExecApprovalsTarget,
   type DevicesPageDataState,
 } from "../../lib/nodes/page-operations.ts";
+import { readSystemInfo } from "../../lib/system-info.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -140,7 +141,7 @@ class DevicesPage extends OpenClawLightDomElement {
       [this.gateway.gateway, this.canLoadSystemInfo ? this.gateway.client : null] as const,
     task: ([gateway, client], { signal }) =>
       gateway && client
-        ? client.request<SystemInfoResult>("system.info", {}, { signal })
+        ? readSystemInfo(gateway, signal).then((sample) => sample.value)
         : initialState,
     onComplete: (result) => {
       this.gatewaySystemInfo = result;

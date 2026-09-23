@@ -71,76 +71,62 @@ export function buildCodexSubcommandPickerReply(): PluginCommandResult {
 }
 
 export function buildCodexFastMenuReply(): PluginCommandResult {
-  const modes = ["on", "off", "status"] as const;
-  const buttons: CodexCommandPickerButton[] = [
-    ...modes.map((mode) => ({ label: mode, command: `/codex fast ${mode}` })),
-    { label: "back", command: "/codex" },
-  ];
-  const fallbackTextLines = [
-    "Codex fast mode. Pick one or type /codex fast <mode>:",
-    "",
-    ...modes.map((m, i) => `  ${i + 1}. /codex fast ${m}`),
-    "",
-    "Type '/codex' to go back to the main menu.",
-  ];
-  return {
-    text: fallbackTextLines.join("\n"),
-    presentation: buildCodexCommandPickerPresentation(
-      "Codex fast mode",
-      "Pick a Codex fast mode:",
-      buttons,
-    ),
-  };
+  return buildCodexChoiceMenuReply({
+    title: "Codex fast mode",
+    prompt: "Pick a Codex fast mode:",
+    introduction: "Codex fast mode. Pick one or type /codex fast <mode>:",
+    command: "/codex fast",
+    choices: ["on", "off", "status"],
+  });
 }
 
 export function buildCodexPermissionsMenuReply(): PluginCommandResult {
-  const modes = ["default", "yolo", "status"] as const;
-  const buttons: CodexCommandPickerButton[] = [
-    ...modes.map((mode) => ({ label: mode, command: `/codex permissions ${mode}` })),
-    { label: "back", command: "/codex" },
-  ];
-  const fallbackTextLines = [
-    "Codex permissions. Pick one or type /codex permissions <mode>:",
-    "",
-    ...modes.map((m, i) => `  ${i + 1}. /codex permissions ${m}`),
-    "",
-    "Type '/codex' to go back to the main menu.",
-  ];
-  return {
-    text: fallbackTextLines.join("\n"),
-    presentation: buildCodexCommandPickerPresentation(
-      "Codex permissions",
-      "Pick a Codex permissions mode:",
-      buttons,
-    ),
-  };
+  return buildCodexChoiceMenuReply({
+    title: "Codex permissions",
+    prompt: "Pick a Codex permissions mode:",
+    introduction: "Codex permissions. Pick one or type /codex permissions <mode>:",
+    command: "/codex permissions",
+    choices: ["default", "yolo", "status"],
+  });
 }
 
 export function buildCodexComputerUseMenuReply(): PluginCommandResult {
-  const actions = ["status", "install"] as const;
+  return buildCodexChoiceMenuReply({
+    title: "Codex computer-use",
+    prompt: "Pick a Codex computer-use action:",
+    introduction: "Codex computer-use. Pick one or type /codex computer-use <action>:",
+    command: "/codex computer-use",
+    choices: ["status", "install"],
+    hint: "Flag-driven invocations (--source, --marketplace-path, --marketplace) are not in the picker. Type '/codex computer-use' or read '/codex help' for the full surface.",
+  });
+}
+
+function buildCodexChoiceMenuReply(params: {
+  title: string;
+  prompt: string;
+  introduction: string;
+  command: string;
+  choices: readonly string[];
+  hint?: string;
+}): PluginCommandResult {
   const buttons: CodexCommandPickerButton[] = [
-    ...actions.map((action) => ({
-      label: action,
-      command: `/codex computer-use ${action}`,
+    ...params.choices.map((choice) => ({
+      label: choice,
+      command: `${params.command} ${choice}`,
     })),
     { label: "back", command: "/codex" },
   ];
   const fallbackTextLines = [
-    "Codex computer-use. Pick one or type /codex computer-use <action>:",
+    params.introduction,
     "",
-    ...actions.map((a, i) => `  ${i + 1}. /codex computer-use ${a}`),
+    ...params.choices.map((choice, index) => `  ${index + 1}. ${params.command} ${choice}`),
     "",
-    "Flag-driven invocations (--source, --marketplace-path, --marketplace) are not in the picker. Type '/codex computer-use' or read '/codex help' for the full surface.",
-    "",
+    ...(params.hint ? [params.hint, ""] : []),
     "Type '/codex' to go back to the main menu.",
   ];
   return {
     text: fallbackTextLines.join("\n"),
-    presentation: buildCodexCommandPickerPresentation(
-      "Codex computer-use",
-      "Pick a Codex computer-use action:",
-      buttons,
-    ),
+    presentation: buildCodexCommandPickerPresentation(params.title, params.prompt, buttons),
   };
 }
 
@@ -209,33 +195,21 @@ export function parseBindArgs(args: string[]): ParsedBindArgs {
       parsed.help = true;
       continue;
     }
-    if (arg === "--cwd") {
+    const option =
+      arg === "--cwd"
+        ? "cwd"
+        : arg === "--model"
+          ? "model"
+          : arg === "--provider" || arg === "--model-provider"
+            ? "provider"
+            : undefined;
+    if (option) {
       const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.cwd !== undefined) {
+      if (!value || parsed[option] !== undefined) {
         parsed.help = true;
         continue;
       }
-      parsed.cwd = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--model") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.model !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.model = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--provider" || arg === "--model-provider") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.provider !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.provider = value;
+      parsed[option] = value;
       index += 1;
       continue;
     }
@@ -355,33 +329,21 @@ export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
       parsed.action = arg;
       continue;
     }
-    if (arg === "--source" || arg === "--marketplace-source") {
+    const option =
+      arg === "--source" || arg === "--marketplace-source"
+        ? "marketplaceSource"
+        : arg === "--marketplace-path" || arg === "--path"
+          ? "marketplacePath"
+          : arg === "--marketplace"
+            ? "marketplaceName"
+            : undefined;
+    if (option) {
       const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.marketplaceSource !== undefined) {
+      if (!value || parsed.overrides[option] !== undefined) {
         parsed.help = true;
         continue;
       }
-      parsed.overrides.marketplaceSource = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--marketplace-path" || arg === "--path") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.marketplacePath !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.overrides.marketplacePath = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--marketplace") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.marketplaceName !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.overrides.marketplaceName = value;
+      parsed.overrides[option] = value;
       index += 1;
       continue;
     }
@@ -398,8 +360,15 @@ export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
     }
     parsed.help = true;
   }
-  parsed.overrides = normalizeComputerUseStringOverrides(parsed.overrides);
-  parsed.hasOverrides = Object.values(parsed.overrides).some(Boolean);
+  const overrides = parsed.overrides;
+  parsed.overrides = {};
+  for (const key of ["marketplaceSource", "marketplacePath", "marketplaceName"] as const) {
+    const value = normalizeOptionalString(overrides[key]);
+    if (value) {
+      parsed.overrides[key] = value;
+      parsed.hasOverrides = true;
+    }
+  }
   return parsed;
 }
 
@@ -440,23 +409,4 @@ function readRequiredOptionValue(args: string[], index: number): string | undefi
     return undefined;
   }
   return value;
-}
-
-function normalizeComputerUseStringOverrides(
-  overrides: Partial<CodexComputerUseConfig>,
-): Partial<CodexComputerUseConfig> {
-  const normalized: Partial<CodexComputerUseConfig> = {};
-  const marketplaceSource = normalizeOptionalString(overrides.marketplaceSource);
-  if (marketplaceSource) {
-    normalized.marketplaceSource = marketplaceSource;
-  }
-  const marketplacePath = normalizeOptionalString(overrides.marketplacePath);
-  if (marketplacePath) {
-    normalized.marketplacePath = marketplacePath;
-  }
-  const marketplaceName = normalizeOptionalString(overrides.marketplaceName);
-  if (marketplaceName) {
-    normalized.marketplaceName = marketplaceName;
-  }
-  return normalized;
 }

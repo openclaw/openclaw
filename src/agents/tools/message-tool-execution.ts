@@ -369,7 +369,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         ),
         hasScheduledAuthority: Boolean(messageActionAuthorization.scheduled),
       });
-      decisions.runBoundary(() =>
+      await decisions.runBoundaryAsync(() =>
         validateExplicitMessageAccountSelection({
           cfg: rawConfig,
           accountId: requestedAccountId,
@@ -405,7 +405,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         action === "broadcast" &&
         (!requestedBroadcastChannel || requestedBroadcastChannel === "all") &&
         requestedAccountId !== undefined;
-      const explicitAccountId = decisions.runBoundary(() =>
+      const explicitAccountId = await decisions.runBoundaryAsync(() =>
         validateExplicitMessageAccountSelection({
           cfg: rawConfig,
           channel: unscopedExplicitBroadcast ? undefined : scope.channel,
@@ -415,7 +415,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       );
       const broadcastAccountPlan =
         unscopedExplicitBroadcast && explicitAccountId
-          ? resolveMessageBroadcastAccountPlan({
+          ? await resolveMessageBroadcastAccountPlan({
               cfg: rawConfig,
               accountId: explicitAccountId,
             })
