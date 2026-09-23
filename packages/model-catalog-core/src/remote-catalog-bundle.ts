@@ -237,6 +237,7 @@ export type RemoteModelCatalogBundleV2 = Omit<
 > & { models: RemoteModelCatalogModelV2[] };
 
 export function parseRemoteModelCatalogBundleV2(value: unknown): RemoteModelCatalogBundleV2 {
+  // SAFETY: the schema validates every model field; shared catalog types narrow compat metadata.
   return remoteModelCatalogBundleV2Schema.parse(value) as RemoteModelCatalogBundleV2;
 }
 
@@ -281,5 +282,5 @@ export function validateAndSanitizeRemoteModelCatalogBundleV2(
 ): RemoteModelCatalogBundleV2 {
   return stripRemoteTransportOverrides(
     parseRemoteModelCatalogBundleV2(value),
-  ) as RemoteModelCatalogBundleV2;
+  ) as RemoteModelCatalogBundleV2; // SAFETY: only transport overrides are removed.
 }
