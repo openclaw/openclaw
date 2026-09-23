@@ -43,7 +43,6 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import {
   waitForSessionTranscriptIndexReconcile,
@@ -60,7 +59,6 @@ import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { getMediaDir } from "../media/store.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
-  getSessionWorkAdmissionRelease,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
@@ -294,13 +292,6 @@ function openDirectChatSession() {
   const storePath = path.join(sessionDir, "sessions.json");
   testState.sessionStorePath = storePath;
   return { sessionDir, storePath };
-}
-
-function getDirectChatSessionWorkRelease(sessionKey = "agent:main:main") {
-  return getSessionWorkAdmissionRelease({
-    scope: resolveSessionStorePathForScope({ sessionKey }, getRuntimeConfig()),
-    identities: [sessionKey],
-  });
 }
 
 async function resetDirectChatSession() {
@@ -710,8 +701,10 @@ describe("gateway server chat", () => {
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok, JSON.stringify(responses[0]?.error ?? null)).toBe(true);
       expect(responses[0]?.payload).toMatchObject({ status: "started" });
-      await getDirectChatSessionWorkRelease(sessionKey);
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
     } finally {
       testState.agentsConfig = undefined;
       await resetDirectChatSession();
@@ -2834,8 +2827,9 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
       dispatchRelease.resolve();
-      await getDirectChatSessionWorkRelease();
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      await waitForFast(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
     } finally {
       dispatchRelease.resolve();
       await resetDirectChatSession();
@@ -2844,18 +2838,6 @@ describe("gateway server chat", () => {
 
   test("chat.send discards prepared inbound media when a hook blocks the turn", async () => {
     openDirectChatSession();
-    const attachments = await import("./chat-attachments.js");
-    const discard = attachments.discardPreparedInboundMedia;
-    const discarded = createDeferred();
-    const cleanup = vi
-      .spyOn(attachments, "discardPreparedInboundMedia")
-      .mockImplementation((...args) => {
-        const pending = discard(...args);
-        if (args[0].length > 0) {
-          discarded.resolve(pending);
-        }
-        return pending;
-      });
     try {
       await writeStoredMainSession({
         modelProvider: "test-provider",
@@ -2867,8 +2849,12 @@ describe("gateway server chat", () => {
       // A before_agent_run block persists only the redacted reason — no media
       // markers — so dispatch must discard the prepared refs on settle.
       dispatchInboundMessageMock.mockImplementationOnce(async (params: unknown) => {
-        const replyOptions = (params as { replyOptions?: GetReplyOptions }).replyOptions;
-        replyOptions?.userTurnTranscriptRecorder?.markBlocked();
+        const recorder = (
+          params as {
+            replyOptions?: { userTurnTranscriptRecorder?: { markBlocked: () => void } };
+          }
+        ).replyOptions?.userTurnTranscriptRecorder;
+        recorder?.markBlocked();
       });
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       await callDirectChat("chat.send", {
@@ -2893,15 +2879,17 @@ describe("gateway server chat", () => {
             scopes: ["operator.write"],
           },
         } as never,
-        respond: captureChatResponse(responses),
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
         context,
       });
       expect(responses[0]?.ok, JSON.stringify(responses[0])).toBe(true);
-      await discarded.promise;
-      const remaining = await fs.readdir(inboundDir).catch(() => []);
-      expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);
+      await waitForFast(async () => {
+        const remaining = await fs.readdir(inboundDir).catch(() => []);
+        expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);
+      }, FAST_WAIT_OPTS);
     } finally {
-      cleanup.mockRestore();
       await resetDirectChatSession();
     }
   });
@@ -2949,7 +2937,9 @@ describe("gateway server chat", () => {
             scopes: ["operator.write"],
           },
         } as never,
-        respond: captureChatResponse(responses),
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
         context,
       });
       expect(responses).toEqual([
@@ -3649,8 +3639,7 @@ describe("gateway server chat", () => {
           hydrationSuppressed: true,
         }),
       ]);
-      await getDirectChatSessionWorkRelease();
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      await waitForFast(() => expect(context.removeChatRun).toHaveBeenCalledTimes(1));
     } finally {
       dispatchInboundMessageMock.mockReset();
       testState.agentConfig = undefined;
@@ -3754,8 +3743,7 @@ describe("gateway server chat", () => {
             workspaceDir: expect.any(String),
           }),
         ]);
-        await getDirectChatSessionWorkRelease();
-        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+        await waitForFast(() => expect(context.removeChatRun).toHaveBeenCalledTimes(1));
       } finally {
         dispatchInboundMessageMock.mockReset();
         testState.agentConfig = undefined;
@@ -3822,11 +3810,11 @@ describe("gateway server chat", () => {
         dispatchInboundMessageMock.mock.calls[0]?.[0] as { replyOptions?: GetReplyOptions }
       )?.replyOptions;
       expect(dispatchOptions?.suppressNextUserMessagePersistence).toBe(true);
-      const settled = getDirectChatSessionWorkRelease();
-      expect(settled).toBeDefined();
       dispatchRelease.resolve(undefined);
-      await settled;
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
     } finally {
       dispatchRelease.resolve(undefined);
       await resetDirectChatSession();
@@ -3854,8 +3842,10 @@ describe("gateway server chat", () => {
           ...params,
           respond: vi.fn() as RespondFn,
         });
-        await getDirectChatSessionWorkRelease();
-        expect(context.removeChatRun).toHaveBeenCalledTimes(removeCount + 1);
+        await waitForFast(
+          () => expect(context.removeChatRun).toHaveBeenCalledTimes(removeCount + 1),
+          FAST_WAIT_OPTS,
+        );
       };
 
       await send({
@@ -3992,8 +3982,10 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
       dispatchRelease.resolve(undefined);
-      await getDirectChatSessionWorkRelease();
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
     } finally {
       dispatchRelease.resolve(undefined);
       await resetDirectChatSession();
@@ -4035,8 +4027,10 @@ describe("gateway server chat", () => {
       ).toHaveLength(1);
 
       dispatchRelease.resolve(undefined);
-      await getDirectChatSessionWorkRelease();
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
     } finally {
       dispatchRelease.resolve(undefined);
       await resetDirectChatSession();
@@ -4212,15 +4206,18 @@ describe("gateway server chat", () => {
         },
       ]);
       if (retryable) {
-        await getDirectChatSessionWorkRelease();
-        expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1);
+        await waitForFast(
+          () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
+          FAST_WAIT_OPTS,
+        );
         expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-        const retryOptions = (
-          dispatchInboundMessageMock.mock.calls[0]?.[0] as
-            | { replyOptions?: GetReplyOptions }
-            | undefined
-        )?.replyOptions;
-        expect(retryOptions?.suppressNextUserMessagePersistence).toBe(true);
+        expect(
+          (
+            dispatchInboundMessageMock.mock.calls[0]?.[0] as
+              | { replyOptions?: GetReplyOptions }
+              | undefined
+          )?.replyOptions?.suppressNextUserMessagePersistence,
+        ).toBe(true);
       } else {
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       }
@@ -4575,8 +4572,10 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await getDirectChatSessionWorkRelease();
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expect(agentStarts).toHaveBeenCalledOnce();
       expect(recoveredAuthority).toMatchObject({ source: "local" });
@@ -4623,8 +4622,10 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await getDirectChatSessionWorkRelease();
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(3);
       expect(context.broadcast).toHaveBeenCalledTimes(1);
       expect(context.broadcast).toHaveBeenCalledWith(
@@ -4662,8 +4663,10 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await getDirectChatSessionWorkRelease();
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
       const failed = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
       expect(failed).toMatchObject({ abortedLastRun: false, status: "failed" });
       expect(failed?.restartRecoveryDeliveryRequestFingerprint).toEqual(
@@ -4707,8 +4710,10 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await getDirectChatSessionWorkRelease();
-      expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1);
+      await waitForFast(
+        () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expect(
         (
@@ -4810,8 +4815,10 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await getDirectChatSessionWorkRelease();
-      expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1);
+      await waitForFast(
+        () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(
         (
@@ -4875,8 +4882,10 @@ describe("gateway server chat", () => {
         status: "done",
       });
       expect(ackSnapshot.entry?.restartRecoveryDeliveryRunId).toBeUndefined();
-      await getDirectChatSessionWorkRelease();
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
     } finally {
       await resetDirectChatSession();
     }
@@ -5055,8 +5064,9 @@ describe("gateway server chat", () => {
 
       dispatchRelease.resolve();
       await Promise.all([first, duplicate, withSystemContext, withDifferentThinking]);
-      await getDirectChatSessionWorkRelease();
-      expect(context.removeChatRun).toHaveBeenCalledTimes(4);
+      await waitForFast(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(4);
+      }, FAST_WAIT_OPTS);
     } finally {
       dispatchRelease.resolve();
       await resetDirectChatSession();
@@ -5120,8 +5130,9 @@ describe("gateway server chat", () => {
         RawBody: "/reset examples",
       });
       expect(dispatchContext).not.toHaveProperty("CommandSource");
-      await getDirectChatSessionWorkRelease();
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      await waitForFast(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
     });
   });
 
@@ -5149,12 +5160,14 @@ describe("gateway server chat", () => {
         });
 
       await callSend("first", "first message", "idem-sequential-a");
-      await getDirectChatSessionWorkRelease();
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      await waitForFast(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
 
       await callSend("second", "second message", "idem-sequential-b");
-      await getDirectChatSessionWorkRelease();
-      expect(context.removeChatRun).toHaveBeenCalledTimes(2);
+      await waitForFast(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(2);
+      }, FAST_WAIT_OPTS);
 
       expect(responses).toEqual([
         {

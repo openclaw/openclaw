@@ -129,45 +129,48 @@ test.runIf(process.platform !== "win32")(
     const { dir: stateDir } = await createSessionStoreDir();
     testState.sessionStorePath = undefined;
     const aliasStateDir = `${stateDir}-alias`;
-    // The suite retains this alias until its projection reads settle.
     fsSync.symlinkSync(stateDir, aliasStateDir, "dir");
-    const realStore = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-    const aliasTemplate = path.join(
-      aliasStateDir,
-      "agents",
-      "{agentId}",
-      "sessions",
-      "sessions.json",
-    );
-    testState.sessionConfig = {
-      store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-    };
-    testState.agentsConfig = { list: [{ id: "main", default: true }] };
-    await writeSessionStore({
-      agentId: "main",
-      entries: {
-        "agent:main:main": { sessionId: "alias-main", updatedAt: 10 },
-      },
-      storePath: realStore,
-    });
-    testState.sessionConfig = { store: aliasTemplate };
-    const { clearRuntimeConfigSnapshot, getRuntimeConfig } = await getGatewayConfigModule();
-    clearRuntimeConfigSnapshot();
-    getRuntimeConfig();
-    const listed = await directSessionReq<{
-      path: string;
-      sessions: Array<{ key: string }>;
-    }>("sessions.list", {
-      agentId: "main",
-    });
+    try {
+      const realStore = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      const aliasTemplate = path.join(
+        aliasStateDir,
+        "agents",
+        "{agentId}",
+        "sessions",
+        "sessions.json",
+      );
+      testState.sessionConfig = {
+        store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+      };
+      testState.agentsConfig = { list: [{ id: "main", default: true }] };
+      await writeSessionStore({
+        agentId: "main",
+        entries: {
+          "agent:main:main": { sessionId: "alias-main", updatedAt: 10 },
+        },
+        storePath: realStore,
+      });
+      testState.sessionConfig = { store: aliasTemplate };
+      const { clearRuntimeConfigSnapshot, getRuntimeConfig } = await getGatewayConfigModule();
+      clearRuntimeConfigSnapshot();
+      getRuntimeConfig();
+      const listed = await directSessionReq<{
+        path: string;
+        sessions: Array<{ key: string }>;
+      }>("sessions.list", {
+        agentId: "main",
+      });
 
-    expect(listed).toMatchObject({
-      ok: true,
-      payload: {
-        path: resolveSqliteTargetFromSessionStorePath(realStore, { agentId: "main" }).path,
-        sessions: [expect.objectContaining({ key: "agent:main:main" })],
-      },
-    });
+      expect(listed).toMatchObject({
+        ok: true,
+        payload: {
+          path: resolveSqliteTargetFromSessionStorePath(realStore, { agentId: "main" }).path,
+          sessions: [expect.objectContaining({ key: "agent:main:main" })],
+        },
+      });
+    } finally {
+      fsSync.rmSync(aliasStateDir, { force: true });
+    }
   },
 );
 
