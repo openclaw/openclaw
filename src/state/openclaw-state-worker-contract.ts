@@ -123,6 +123,7 @@ export type OpenClawStateWorkerOperations = WorktreeRegistryReadOperations &
   TaskRegistryWorkerOperations &
   SkillUploadWorkerOperations &
   OpenClawStateLeaseLifecycleOperations & {
+    "worktrees.reapRunLeases": { input: { scopes: string[] }; output: void };
     "worktrees.releaseRunLease": {
       input: { worktreeId: string; token: string };
       output: void;
