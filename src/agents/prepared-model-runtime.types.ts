@@ -34,6 +34,8 @@ export type PreparedModelCatalogRefreshOptions = {
   refresh?: boolean;
   providerIds?: readonly string[];
   changedOnly?: boolean;
+  /** Extends foreground waiting for one caller; catalog access caps this at 12 seconds. */
+  foregroundWaitMs?: number;
 };
 
 export type PreparedNativeModelSelection = {

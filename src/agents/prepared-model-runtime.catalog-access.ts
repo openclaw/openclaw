@@ -1,4 +1,3 @@
-import { raceWithTimeout } from "@openclaw/retry";
 import pLimit from "p-limit";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
@@ -22,6 +21,10 @@ import {
   replacePreparedModelCatalogAuth,
 } from "./prepared-model-runtime.catalog-auth.js";
 import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
+import {
+  resolvePreparedModelCatalogForegroundWaitMs,
+  waitForPreparedModelCatalogForeground,
+} from "./prepared-model-runtime.catalog-foreground-wait.js";
 import { createPreparedModelCatalogProjection } from "./prepared-model-runtime.catalog-projection.js";
 import {
   preparedProviderCatalogCredentials,
@@ -58,7 +61,6 @@ import type {
 
 export const MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS = 1;
 const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS);
-const MODEL_CATALOG_FOREGROUND_WAIT_MS = 5_000;
 
 export async function createFullModelCatalogAccess(
   params: PreparedModelRuntimeCatalogAccessParams,
@@ -694,12 +696,11 @@ export async function createFullModelCatalogAccess(
       if (options?.refresh && params.inventoryOwner.provenance === "standalone") {
         return await acquireCatalog(options);
       }
-      return await raceWithTimeout(
-        acquireCatalog(options),
-        MODEL_CATALOG_FOREGROUND_WAIT_MS,
-        () => published.catalog ?? staticCatalog,
-        { ref: false },
-      );
+      return await waitForPreparedModelCatalogForeground({
+        acquisition: acquireCatalog(options),
+        waitMs: resolvePreparedModelCatalogForegroundWaitMs(options?.foregroundWaitMs),
+        fallback: () => published.catalog ?? staticCatalog,
+      });
     },
   };
 }
