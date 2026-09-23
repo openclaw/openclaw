@@ -91,10 +91,7 @@ function sessionLockOwnerMatches(
   }
   const previousOwner = normalizeOptionalString(previous.agentHarnessId)?.toLowerCase();
   const nextOwner = normalizeOptionalString(next.agentHarnessId)?.toLowerCase();
-  return (
-    previousOwner === nextOwner &&
-    normalizeOptionalAgentRuntimeId(previousOwner) === normalizeOptionalAgentRuntimeId(nextOwner)
-  );
+  return previousOwner === nextOwner;
 }
 
 function hasEquivalentRelocatedLockedEntry(params: {

@@ -7,9 +7,6 @@ export function applySessionStoreMigrations(store: Record<string, SessionEntry>)
   let changed = false;
   // Best-effort migration: message provider → channel naming.
   for (const entry of Object.values(store)) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
     const rec = asOptionalRecord(entry);
     if (!rec) {
       continue;

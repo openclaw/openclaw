@@ -18,34 +18,22 @@ function collectAuthoredEnvRefs(value: string): AuthoredEnvRef[] {
   }));
 }
 
-function hasEscapedEnvVarRef(value: string): boolean {
-  return collectAuthoredEnvRefs(value).some((ref) => ref.kind === "escaped");
+function containsAuthoredEnvTemplate(value: unknown, matches: (value: string) => boolean): boolean {
+  if (typeof value === "string") {
+    return matches(value);
+  }
+  const children = Array.isArray(value) ? value : isPlainObject(value) ? Object.values(value) : [];
+  return children.some((item) => containsAuthoredEnvTemplate(item, matches));
 }
 
 export function containsAuthoredUnescapedEnvTemplate(value: unknown): boolean {
-  if (typeof value === "string") {
-    return containsEnvVarReference(value);
-  }
-  if (Array.isArray(value)) {
-    return value.some((item) => containsAuthoredUnescapedEnvTemplate(item));
-  }
-  if (isPlainObject(value)) {
-    return Object.values(value).some((item) => containsAuthoredUnescapedEnvTemplate(item));
-  }
-  return false;
+  return containsAuthoredEnvTemplate(value, containsEnvVarReference);
 }
 
 export function containsAuthoredEscapedEnvTemplate(value: unknown): boolean {
-  if (typeof value === "string") {
-    return hasEscapedEnvVarRef(value);
-  }
-  if (Array.isArray(value)) {
-    return value.some((item) => containsAuthoredEscapedEnvTemplate(item));
-  }
-  if (isPlainObject(value)) {
-    return Object.values(value).some((item) => containsAuthoredEscapedEnvTemplate(item));
-  }
-  return false;
+  return containsAuthoredEnvTemplate(value, (text) =>
+    collectAuthoredEnvRefs(text).some((ref) => ref.kind === "escaped"),
+  );
 }
 
 function countAuthoredEnvRefsByPath(
