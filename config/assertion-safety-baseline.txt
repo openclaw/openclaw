@@ -868,7 +868,7 @@ extensions/openrouter/usage.ts	2
 extensions/openrouter/video-generation-provider.ts	1
 extensions/openrouter/video-model-catalog.ts	1
 extensions/openshell/src/backend.ts	2
-extensions/openshell/src/fs-bridge.ts	2
+extensions/openshell/src/fs-bridge.ts	1
 extensions/parallel/src/parallel-free-web-search-provider.runtime.ts	1
 extensions/parallel/src/parallel-search-normalize.ts	1
 extensions/parallel/src/parallel-web-search-provider.runtime.ts	2
@@ -2590,7 +2590,7 @@ src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry-private.ts	1
 src/gateway/node-registry.ts	2
 src/gateway/openai-agent-run-usage.ts	1
-src/gateway/openai-http.ts	20
+src/gateway/openai-http.ts	1
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/operator-scopes.ts	1
 src/gateway/plugin-activation-runtime-config.ts	2
@@ -2638,7 +2638,7 @@ src/gateway/server-methods/chat-transcript-persistence.ts	7
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	7
-src/gateway/server-methods/cron.ts	14
+src/gateway/server-methods/cron.ts	11
 src/gateway/server-methods/device-scope-upgrade.ts	2
 src/gateway/server-methods/devices.ts	4
 src/gateway/server-methods/doctor.ts	3
@@ -2661,7 +2661,6 @@ src/gateway/server-methods/plugin-host-hooks.ts	1
 src/gateway/server-methods/question.ts	2
 src/gateway/server-methods/restart-request.ts	8
 src/gateway/server-methods/session-catalog-terminal-start.ts	1
-src/gateway/server-methods/session-catalog.ts	3
 src/gateway/server-methods/session-create-initial-turn.ts	2
 src/gateway/server-methods/session-recovery-continuation.ts	1
 src/gateway/server-methods/sessions-abort.ts	3
@@ -2670,8 +2669,6 @@ src/gateway/server-methods/sessions-create.ts	1
 src/gateway/server-methods/sessions-messaging.ts	11
 src/gateway/server-methods/sessions-patch-engine.ts	1
 src/gateway/server-methods/sessions-read.ts	1
-src/gateway/server-methods/sessions-sharing.ts	1
-src/gateway/server-methods/sessions-suggestions.ts	1
 src/gateway/server-methods/skills-workspace-handler.ts	1
 src/gateway/server-methods/skills.ts	3
 src/gateway/server-methods/system-agent-chat-params.ts	2
@@ -2802,8 +2799,6 @@ src/infra/exec-approval-policy-snapshot.ts	2
 src/infra/exec-approval-reply.ts	2
 src/infra/exec-approvals-allowlist.ts	7
 src/infra/exec-approvals-config.ts	4
-src/infra/exec-approvals-effective.ts	3
-src/infra/exec-approvals-resolver.ts	2
 src/infra/exec-approvals-socket.ts	1
 src/infra/exec-approvals-store.ts	1
 src/infra/exec-argv-analysis.ts	1
@@ -2940,7 +2935,7 @@ src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1
 src/infra/voicewake-routing.ts	4
 src/infra/warning-filter.ts	4
-src/infra/windows-gateway-firewall-diagnostics.ts	3
+src/infra/windows-gateway-firewall-diagnostics.ts	2
 src/infra/windows-port-pids.ts	2
 src/infra/windows-powershell-spawn.ts	1
 src/infra/windows-shell-command.ts	1

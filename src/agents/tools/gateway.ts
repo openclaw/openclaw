@@ -60,6 +60,16 @@ export type GatewayCallOptions = {
   timeoutMs?: number;
 };
 
+/** Presentation hint from the admitted operator source; RPC admission remains authoritative. */
+export function readGatewayToolOperatorScopes(): readonly string[] | undefined {
+  const authority = getGatewayToolCallerIdentity()?.operatorAuthority;
+  if (!authority) {
+    return undefined;
+  }
+  authority.assertCurrent();
+  return [...authority.scopes];
+}
+
 type GatewayOverrideTarget = "local" | "remote";
 
 /** Reads common gateway options from tool parameters while preserving explicit token whitespace. */

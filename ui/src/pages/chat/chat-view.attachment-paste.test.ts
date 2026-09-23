@@ -82,11 +82,11 @@ describe("chat attachment reading", () => {
     "waits for an in-flight %s attachment before accepting an immediate send",
     async (entry) => {
       const readers: FileReader[] = [];
-      vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(
-        function (this: FileReader) {
-          readers.push(this);
-        },
-      );
+      vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
+        this: FileReader,
+      ) {
+        readers.push(this);
+      });
       const container = document.createElement("div");
       const file = new File(["attachment proof"], "proof.png", { type: "image/png" });
       const draft = "Send the attachment with this message";

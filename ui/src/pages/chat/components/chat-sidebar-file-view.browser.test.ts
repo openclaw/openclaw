@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { canReloadControlUiDocument } from "../../../app/document-reload-guard.ts";
-import { readFileDraft } from "./chat-file-drafts.ts";
+import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
@@ -47,8 +47,11 @@ type DetailPanel = HTMLElement & {
 };
 
 const mounted: HTMLElement[] = [];
+const files: FileSidebarContent[] = [];
 
 async function mountFile(content: FileSidebarContent, width?: number): Promise<DetailPanel> {
+  content.draftKey ??= crypto.randomUUID();
+  files.push(content);
   const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
   panel.content = content;
   if (width === undefined) {
@@ -82,6 +85,9 @@ function button(panel: DetailPanel, label: string): HTMLButtonElement {
 afterEach(() => {
   for (const panel of mounted.splice(0)) {
     panel.remove();
+  }
+  for (const file of files.splice(0)) {
+    setFileDraft(file, null);
   }
 });
 

@@ -475,7 +475,11 @@ export async function gotoPageWithNavigationGuard(
   let navigationFailed = false;
   let navigationError: unknown;
   try {
-    await opts.assertPageCurrent?.();
+    // Synchronous authority must not yield between its final fence and navigation.
+    const assertion = opts.assertPageCurrent?.();
+    if (assertion) {
+      await assertion;
+    }
     response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
   } catch (err) {
     navigationFailed = true;

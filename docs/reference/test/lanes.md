@@ -125,6 +125,10 @@ match only `failure-*/failure.public.json`; raw reports and screenshots remain
 private. Older frozen targets without the public summary produce no matching
 upload and never fall back to raw captures.
 
+The shared suite captures native test timeouts before draining routes and closing
+the owned browser context. Cleanup and the pending test body join the same capture,
+so a later closed-page error does not replace the original timeout evidence.
+
 The shared failure collector gives renderer evaluation and screenshot capture one
 five-second budget. If the renderer stalls, it records incomplete diagnostics and
 returns so the caller can rethrow the original failure. A late browser response
