@@ -521,6 +521,25 @@ races keep the candidate unchanged. Record repairs and superseded runs; any
 branch change requires a new complete parent. Omit only an explicitly
 unsupported frozen-target scenario, never a required behavior or package.
 
+### Frozen-target test omissions
+
+Use `plugin_prerelease_node_exclude_patterns_json` only for exact `src/plugins/`
+test paths in the Plugin Prerelease Node lane. Use
+`extension_test_exclude_patterns_json` for exact `extensions/` test paths in
+Plugin Prerelease extension shards. Normal CI does not own that sweep. Both
+default to `[]`; there is no implicit
+Codex omission. Pass JSON arrays at initial dispatch, retain the justification
+and owning fix, and report omitted coverage as not run.
+
+Preflight must discover every requested path in the selected frozen-target
+lane; nonexistent, out-of-lane, duplicate, basename, or glob inputs fail loudly.
+Trusted tooling applies exact exclusions to inline Vitest leaves while
+preserving candidate runtime preparation and restores original config bytes
+after the shard command. Do not substitute CLI `--exclude` or a new target-side
+environment variable: frozen inline projects may ignore them. Inputs remain in
+the immutable request, coverage/reuse identity, and final manifest; changing
+them requires a new request, never continuation.
+
 ## Watch
 
 Use the transition-only summary watcher instead of repeated raw polling:
