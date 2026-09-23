@@ -4659,15 +4659,18 @@ describe("operator lane waiver", () => {
   });
 
   it("keeps artifact gate failures blocking under a waiver", () => {
-    const built = plan({ dockerPreflightResult: "failure" });
     const result = classifyReleaseSnapshot({
-      children: [],
+      children: [failedCi()],
       laneWaiver: "ship",
-      localFailures: releasePlanGateFailures(built.gates),
+      localFailures: releasePlanGateFailures([
+        { name: "Qualify release npm artifacts", required: true, result: "failure" },
+      ]),
       ...policy,
     });
     expect(result.state).toBe("blocked_complete");
-    expect(result.blockers.length).toBeGreaterThan(0);
+    expect(result.blockers.map((blocker) => blocker.job)).toEqual([
+      "Qualify release npm artifacts",
+    ]);
   });
 
   it("binds the waiver into the sealed plan digest and verification", () => {

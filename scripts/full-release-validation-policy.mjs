@@ -1629,9 +1629,10 @@ function isAdvisoryChild(key, releaseProfile) {
 // that never gates npm publication (operator directive 2026-09-23).
 const ADVISORY_CI_JOB_PATTERN =
   /^(?:checks-windows|macos-node|macos-swift \(|checks-ui|ios-build \(|ios-screenshot|android)/u;
-const ADVISORY_CROSS_OS_JOB_PATTERN = /^cross_os_release_checks \/ (?:Linux|Windows|macOS) \/ /u;
-// Aggregators only restate their lanes: they are advisory when every other
-// failed lane in the child is advisory.
+// Aggregators only restate their lanes: the CI gate is advisory when every
+// other failed lane in the child is advisory; the release-checks verifiers
+// only under an operator lane waiver.
+const CI_GATE_JOB_PATTERN = /^openclaw\/ci-gate$/u;
 const DERIVATIVE_GATE_JOB_PATTERN =
   /^(?:openclaw\/ci-gate|Verify release checks|Run package acceptance \/ Verify package acceptance)$/u;
 const LANE_WAIVER_CHILD_KEYS = new Set([
@@ -1674,8 +1675,7 @@ function isLaneAdvisory({ childKey, jobName, releaseProfile, workflowRef, laneWa
   }
   if (
     isReleaseChecksChild(childKey) &&
-    (ADVISORY_CROSS_OS_JOB_PATTERN.test(jobName) ||
-      isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef }))
+    isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef })
   ) {
     return true;
   }
@@ -1692,7 +1692,7 @@ function isLaneAdvisory({ childKey, jobName, releaseProfile, workflowRef, laneWa
   return !REQUIRED_PROOF_JOB_PATTERNS.some((pattern) => pattern.test(jobName));
 }
 
-export function isReleaseJobAdvisory({
+function isReleaseJobAdvisory({
   childKey,
   jobName,
   releaseProfile,
@@ -1707,7 +1707,10 @@ export function isReleaseJobAdvisory({
     laneWaiver: normalizeReleaseLaneWaiver(laneWaiver),
     jobs,
   };
-  if (DERIVATIVE_GATE_JOB_PATTERN.test(jobName)) {
+  if (
+    CI_GATE_JOB_PATTERN.test(jobName) ||
+    (context.laneWaiver && DERIVATIVE_GATE_JOB_PATTERN.test(jobName))
+  ) {
     // A gate failing without any failed lane is its own finding and blocks.
     const lanes = jobs.filter(
       (job) => isFailedJob(job) && !DERIVATIVE_GATE_JOB_PATTERN.test(stringValue(job.name)),

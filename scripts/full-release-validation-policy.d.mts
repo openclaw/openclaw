@@ -117,14 +117,6 @@ export function validateReleaseLaneWaiverBinding(
   plan: ReleaseRecord | undefined,
   validationInputs?: ReleaseRecord,
 ): void;
-export function isReleaseJobAdvisory(input: {
-  childKey: string;
-  jobName: string;
-  releaseProfile: string;
-  workflowRef: string;
-  laneWaiver?: string;
-  jobs?: ReleaseRecord[];
-}): boolean;
 export function releaseJobAdvisoryReason(input: {
   childKey: string;
   jobName: string;
