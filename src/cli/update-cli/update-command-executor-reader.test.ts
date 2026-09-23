@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -39,18 +40,26 @@ beforeEach(() => {
   leasePreparations = [];
   vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
     const database = openDatabase(location, options);
-    if (location.includes("managed-update-handoffs.sqlite")) {
-      expect(fs.realpathSync(database.location()!)).toBe(fs.realpathSync(databasePath));
-      opened.push(database);
-      const prepare = database.prepare.bind(database);
-      database.prepare = (sql) => {
-        if (options?.readOnly && sql.startsWith('select "owner", "payload_json", "updated_at"')) {
-          leasePreparations.push(database);
-        }
-        return prepare(sql);
-      };
+    try {
+      if (location.includes("managed-update-handoffs.sqlite")) {
+        opened.push(database);
+        // SQLite reports namespaced Windows paths; compare their native targets.
+        expect(fs.realpathSync.native(database.location()!)).toBe(
+          fs.realpathSync.native(databasePath),
+        );
+        const prepare = database.prepare.bind(database);
+        database.prepare = (sql) => {
+          if (options?.readOnly && sql.startsWith('select "owner", "payload_json", "updated_at"')) {
+            leasePreparations.push(database);
+          }
+          return prepare(sql);
+        };
+      }
+      return database;
+    } catch (error) {
+      database.close();
+      throw error;
     }
-    return database;
   });
 });
 
@@ -129,6 +138,8 @@ describe("invocation-scoped update ownership reader", () => {
       const fence = await executor.enter(root);
       const retained = opened.filter((database) => database.isOpen);
       expect(retained).toHaveLength(1);
+      const [reader] = retained;
+      assert(reader);
       const admittedOpens = opened.length;
       const before = snapshot();
       for (let batch = 0; batch < 4; batch++) {
@@ -137,13 +148,13 @@ describe("invocation-scoped update ownership reader", () => {
         }
         // A retained connection must not retain an idle read transaction or lock.
         write((database) => database.exec("BEGIN EXCLUSIVE; COMMIT"));
-        expect(retained[0].isTransaction).toBe(false);
-        expect(retained[0].prepare("PRAGMA writable_schema").get()?.writable_schema).toBe(0);
+        expect(reader.isTransaction).toBe(false);
+        expect(reader.prepare("PRAGMA writable_schema").get()?.writable_schema).toBe(0);
       }
       expect(snapshot()).toEqual(before);
       expect(opened).toHaveLength(admittedOpens);
       // Fresh row reads share native preparation, not their result or authority.
-      const preparations = leasePreparations.filter((database) => database === retained[0]).length;
+      const preparations = leasePreparations.filter((database) => database === reader).length;
       expect(preparations).toBeGreaterThan(0);
       expect(preparations).toBeLessThanOrEqual(2);
     });
@@ -201,7 +212,7 @@ describe("invocation-scoped update ownership reader", () => {
             [
               process.execPath,
               "--import",
-              path.resolve("scripts/tsx.mjs"),
+              pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
               "--input-type=module",
               "--eval",
               program,
