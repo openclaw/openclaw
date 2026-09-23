@@ -393,7 +393,7 @@ function isNativeFailedRunNotice(message: AgentMessage): boolean {
   }
   return (
     message.customType === NATIVE_FAILED_RUN_CUSTOM_TYPE &&
-    message.display === true &&
+    message.display &&
     typeof message.content === "string" &&
     isRecord(message.details)
   );
