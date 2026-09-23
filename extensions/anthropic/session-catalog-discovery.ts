@@ -28,6 +28,7 @@ import {
 } from "./session-catalog-scan.js";
 import { collectTranscriptText } from "./session-catalog-transcript.js";
 import type {
+  CatalogRecord,
   ClaudeSessionCatalogError,
   ClaudeSessionCatalogSession,
 } from "./session-catalog-types.js";
@@ -96,10 +97,6 @@ function applyCatalogDiscovery(
     });
   }
 }
-
-export type CatalogRecord = ClaudeSessionCatalogSession & {
-  filePath: string;
-};
 
 type ClaudeSessionScanResult = {
   records: CatalogRecord[];

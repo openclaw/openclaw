@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readClaudeDesktopCustomGroups } from "./claude-desktop-groups.js";
 import { probeDesktopArchiveStatus } from "./session-catalog-desktop-probe.js";
+import type { DesktopSessionMetadata } from "./session-catalog-desktop.types.js";
 import {
   childDirectories,
   desktopSessionsDir,
@@ -28,7 +29,7 @@ export { MAX_STRING_LENGTH } from "./session-catalog-shared.js";
 const MAX_SESSION_PULL_REQUESTS = 20;
 const CLAUDE_DESKTOP_SCAN_TTL_MS = 60_000;
 
-type DesktopSessionMetadata = {
+type ParsedDesktopSessionMetadata = {
   sessionId?: string;
   cliSessionId: string;
   cwd?: string;
@@ -39,7 +40,6 @@ type DesktopSessionMetadata = {
   customGroup?: string;
   pullRequest?: SessionCatalogPullRequestSummary;
 };
-
 type DesktopPullRequestMetadata = {
   prNumber?: unknown;
   state?: unknown;
@@ -113,7 +113,7 @@ function compactString(value: unknown, maxLength: number): string | undefined {
     : Buffer.from(normalized, "utf16le").toString("utf16le");
 }
 
-function parseDesktopMetadata(raw: unknown): DesktopSessionMetadata | undefined {
+function parseDesktopMetadata(raw: unknown): ParsedDesktopSessionMetadata | undefined {
   if (!isRecord(raw)) {
     return undefined;
   }

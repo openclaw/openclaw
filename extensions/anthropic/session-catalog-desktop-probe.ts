@@ -7,7 +7,7 @@ import {
   isRecord,
   normalizeBoundedOptionalString as readBoundedString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { DesktopSessionMetadata } from "./session-catalog-desktop.js";
+import type { DesktopSessionMetadata } from "./session-catalog-desktop.types.js";
 import { MAX_STRING_LENGTH, parseBoundedJsonNumberToken } from "./session-catalog-shared.js";
 
 // A JSON string token's encoded form can cost up to six raw characters per

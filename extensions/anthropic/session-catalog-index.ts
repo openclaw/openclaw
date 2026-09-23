@@ -6,7 +6,6 @@ import {
   normalizeBoundedOptionalString as readBoundedString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { MAX_STRING_LENGTH } from "./session-catalog-desktop.js";
-import type { CatalogRecord } from "./session-catalog-discovery.js";
 import { probeRejectedSessionIndex } from "./session-catalog-index-probe.js";
 import {
   CLAUDE_CATALOG_IO_CONCURRENCY,
@@ -16,6 +15,7 @@ import {
   reserveCatalogJsonFile,
   safeSessionFileForScan,
 } from "./session-catalog-scan.js";
+import type { CatalogRecord } from "./session-catalog-types.js";
 
 type SessionIndexEntry = {
   sessionId?: unknown;

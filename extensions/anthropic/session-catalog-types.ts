@@ -21,6 +21,10 @@ export type ClaudeSessionCatalogSession = {
   archived: false;
 };
 
+export type CatalogRecord = ClaudeSessionCatalogSession & {
+  filePath: string;
+};
+
 export type ClaudeSessionCatalogError = {
   code: string;
   message: string;
