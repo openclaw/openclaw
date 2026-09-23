@@ -125,7 +125,6 @@ describe("models.list plugin metadata handoff", () => {
         questionTypes: ["boolean", "choice", "score"],
         maxQuestions: 32,
         maxInputTokens: 512,
-        maxTotalInputTokens: 2048,
         inputTokenScope: "state-plus-each-criterion",
         confidence: "provider-specific",
       };

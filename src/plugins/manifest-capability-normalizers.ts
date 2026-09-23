@@ -49,7 +49,6 @@ function normalizeDecisionCapabilities(value: unknown): DecisionProviderCapabili
     "maxChoiceAlternatives",
     "maxScoreLevels",
     "maxInputTokens",
-    "maxTotalInputTokens",
   ] as const) {
     const limit = value[key];
     if (typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0) {

@@ -121,7 +121,6 @@ loading the provider runtime or resolving credentials.
         "maxChoiceAlternatives": 64,
         "maxScoreLevels": 16,
         "maxInputTokens": 8192,
-        "maxTotalInputTokens": 16384,
         "inputTokenScope": "encoded-question",
         "requiresBooleanCriteria": true,
         "confidence": "provider-specific"
@@ -136,7 +135,7 @@ Each entry requires a provider ID, model ID, and display name. The selector uses
 saved unavailable selections remain visible for the operator to repair.
 
 `capabilities` is optional static metadata. It describes provider support for
-discovery, guidance, and explicitly opted-in estimated admission; it does not prove that credentials or the runtime are
+discovery and guidance; it does not prove that credentials or the runtime are
 ready, and its limits do not raise OpenClaw's host admission bounds.
 
 | Field                     | Required | Accepted value                                                             | Omission semantics                                                                                        |
@@ -146,19 +145,13 @@ ready, and its limits do not raise OpenClaw's host admission bounds.
 | `maxChoiceAlternatives`   | No       | Positive safe integer                                                      | No provider-specific Choice-alternative limit is advertised.                                              |
 | `maxScoreLevels`          | No       | Positive safe integer                                                      | No provider-specific Score-level limit is advertised.                                                     |
 | `maxInputTokens`          | No       | Positive safe integer                                                      | No provider-specific input-token limit is advertised.                                                     |
-| `maxTotalInputTokens`     | No       | Positive safe integer                                                      | No total-request token limit is advertised; unknown, not unlimited.                                       |
 | `inputTokenScope`         | No       | `encoded-question` or `state-plus-each-criterion`                          | The provider does not declare how `maxInputTokens` is accounted.                                          |
 | `requiresBooleanCriteria` | No       | Boolean                                                                    | No extra Boolean-criteria requirement is advertised.                                                      |
 | `confidence`              | No       | `provider-specific` or `none`                                              | No confidence-result semantic is advertised.                                                              |
 
-`encoded-question` means state plus one complete question, including instructions,
-all alternatives, and provider-added rubric overhead. `state-plus-each-criterion`
-means state plus question instructions and one criterion/label pair.
-`maxTotalInputTokens` independently limits the logical request: shared state once
-plus every complete question and encoding overhead, not the sum of repeated
-inference rows. Unknown limits never mean unlimited; the optional
-[estimated admission policy](/plugins/sdk-overview/capabilities#estimated-input-admission)
-requires both token limits and the accounting scope. `provider-specific` confidence
+`encoded-question` means the provider counts its encoded request, including
+provider-added rubric overhead. `state-plus-each-criterion` means the shared
+state is counted with each criterion evaluation. `provider-specific` confidence
 is a provider metric, not a calibrated probability that an answer is correct;
 `none` declares that the provider does not return confidence.
 

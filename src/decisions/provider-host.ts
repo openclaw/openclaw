@@ -15,10 +15,8 @@ import {
   logDecisionEvaluation,
   type DecisionEvaluationFacts,
 } from "./diagnostics.js";
-import { decisionInputBudgetIssue, estimateDecisionInput } from "./input-budget.js";
 import type {
   DecisionBatch,
-  DecisionInputIssue,
   DecisionOutcome,
   DecisionProviderV1,
   DecisionRuntimeV1,
@@ -72,14 +70,10 @@ export class DecisionProviderHost {
   private inputTokens = 0;
   private outputTokens = 0;
 
-  private readonly models: NonNullable<PluginRecord["decisionModels"]>;
-
   constructor(
     readonly provider: DecisionProviderV1,
     readonly record: PluginRecord,
-  ) {
-    this.models = structuredClone(record.decisionModels ?? []);
-  }
+  ) {}
 
   private generation(config: OpenClawConfig): Health {
     const secretRevision = getActiveSecretsRuntimeSnapshotRevisionState();
@@ -102,9 +96,9 @@ export class DecisionProviderHost {
     return this.health;
   }
 
-  unavailable(reason: UnavailableReason, inputIssue?: DecisionInputIssue): DecisionOutcome {
+  unavailable(reason: UnavailableReason): DecisionOutcome {
     this.reasons[reason] = (this.reasons[reason] ?? 0) + 1;
-    return { status: "unavailable", reason, ...(inputIssue ? { inputIssue } : {}) };
+    return { status: "unavailable", reason };
   }
 
   /** Close only capability admission before reversible native reload preparation. */
@@ -221,9 +215,6 @@ export class DecisionProviderHost {
     consumerId?: string,
   ): Promise<DecisionOutcome> {
     const started = performance.now();
-    const capabilities = this.models.find(
-      (entry) => entry.provider === this.provider.id && entry.id === model,
-    )?.capabilities;
     const facts: DecisionEvaluationFacts = { dispatched: false };
     let outcome: DecisionOutcome | undefined;
     try {
@@ -234,8 +225,6 @@ export class DecisionProviderHost {
         config,
         registry,
         facts,
-        started,
-        capabilities,
         consumerId,
       );
       return outcome;
@@ -244,7 +233,6 @@ export class DecisionProviderHost {
         options,
         providerId: this.provider.id,
         model,
-        capabilities,
         facts,
         started,
         outcome,
@@ -259,8 +247,6 @@ export class DecisionProviderHost {
     config: OpenClawConfig,
     registry: PluginRegistry,
     facts: DecisionEvaluationFacts,
-    started: number,
-    capabilities: import("../plugins/manifest-types.js").DecisionProviderCapabilities | undefined,
     consumerId?: string,
   ): Promise<DecisionOutcome> {
     options.signal.throwIfAborted();
@@ -274,15 +260,10 @@ export class DecisionProviderHost {
     if (this.retired || this.reloadPause || !instance?.acceptingCalls || instance.owner?.revoked) {
       return this.unavailable("retiring");
     }
-    if (options.inputBudgetPolicy || decisionDebugEnabled()) {
-      facts.estimate = estimateDecisionInput(submitted, capabilities?.inputTokenScope);
-      if (options.inputBudgetPolicy) {
-        const issue = decisionInputBudgetIssue(capabilities, facts.estimate);
-        if (issue) {
-          options.signal.throwIfAborted();
-          return this.unavailable("unsupported-input", issue);
-        }
-      }
+    if (decisionDebugEnabled()) {
+      // The runtime already admitted bounded, accessor-free JSON. Never retain its text.
+      facts.questionCount = Object.keys(submitted.questions).length;
+      facts.jsonInputBytes = Buffer.byteLength(JSON.stringify(submitted));
     }
     const health = this.generation(config);
     const readConfig = createRuntimeConfigReader(config);
@@ -301,12 +282,10 @@ export class DecisionProviderHost {
     }
     const controller = new AbortController();
     const signal = AbortSignal.any([options.signal, controller.signal]);
+    const started = performance.now();
     const budget = Math.min(options.timeoutMs, 30_000);
     const deadlineMonotonicMs = started + budget;
-    const timer = setTimeout(
-      () => controller.abort("decision-deadline"),
-      Math.max(0, deadlineMonotonicMs - performance.now()),
-    );
+    const timer = setTimeout(() => controller.abort("decision-deadline"), budget);
     let settle!: () => void;
     const done = new Promise<void>((resolve) => {
       settle = resolve;
@@ -346,10 +325,6 @@ export class DecisionProviderHost {
       let outcome;
       let questions: DecisionBatch["questions"];
       try {
-        const stopped = interrupted();
-        if (stopped) {
-          return stopped;
-        }
         // Preserve the offered questions even when the provider mutates its input.
         questions = structuredClone(submitted.questions);
         outcome = await instance.runInRegistry(registry, () => {
@@ -405,16 +380,12 @@ export class DecisionProviderHost {
         throw new DecisionContractError();
       }
       // Validate and publish the same primitives even if a provider envelope is executable.
-      const { reason, inputIssue, retryAfterMs } = outcome;
-      if (
-        !FAILURE_REASONS.has(reason) ||
-        (inputIssue !== undefined &&
-          (reason !== "unsupported-input" || inputIssue !== "provider-context-overflow"))
-      ) {
+      const { reason, retryAfterMs } = outcome;
+      if (!FAILURE_REASONS.has(reason)) {
         throw new DecisionContractError();
       }
       this.fail(health, reason, retryAfterMs);
-      return this.unavailable(reason, inputIssue);
+      return this.unavailable(reason);
     } catch (error) {
       options.signal.throwIfAborted();
       if (controller.signal.reason instanceof DecisionConsumerClosedError) {

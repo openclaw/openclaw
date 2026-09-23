@@ -52,7 +52,6 @@ export function createPluginRecord(params: {
   providerIds?: readonly string[];
   configSchema: boolean;
   contracts?: PluginManifestContracts;
-  decisionModels?: PluginRecord["decisionModels"];
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
   mcpServers?: Record<string, PluginManifestMcpServer>;
@@ -113,7 +112,6 @@ export function createPluginRecord(params: {
     configUiHints: undefined,
     configJsonSchema: undefined,
     contracts: params.contracts,
-    decisionModels: params.decisionModels,
     dashboard: params.dashboard,
     controlUi: params.controlUi,
     mcpServers: params.mcpServers,

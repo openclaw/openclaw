@@ -95,15 +95,7 @@ export type ProviderDecisionOutcome =
       readonly reason: ProviderFailureReason;
       /** Validated and bounded by host; does not cause an automatic retry. */
       readonly retryAfterMs?: number;
-      /** Only with unsupported-input; confirmed by the provider, not a host estimate. */
-      readonly inputIssue?: "provider-context-overflow";
     };
-
-/** Safe input-rejection detail; absent means other unsupported input. */
-export type DecisionInputIssue =
-  | "estimated-budget-exceeded"
-  | "budget-unknown"
-  | "provider-context-overflow";
 
 export type DecisionOutcome =
   | {
@@ -116,12 +108,7 @@ export type DecisionOutcome =
         readonly runtimeGeneration: string;
       };
     }
-  | {
-      readonly status: "unavailable";
-      readonly reason: UnavailableReason;
-      /** Present only for unsupported-input; never contains evidence or provider errors. */
-      readonly inputIssue?: DecisionInputIssue;
-    };
+  | { readonly status: "unavailable"; readonly reason: UnavailableReason };
 
 export interface DecisionProviderV1 {
   readonly id: string;
@@ -152,9 +139,6 @@ export interface DecisionRuntimeV1 {
     options: {
       /** Omit for the default role; agent-owned work supplies its owner agent. */
       readonly agentId?: string;
-      /** Opt-in automatic admission: requires both declared token limits and input scope.
-       * Omission preserves explicit evaluation without heuristic admission. */
-      readonly inputBudgetPolicy?: "require-declared";
       readonly purpose: string;
       readonly rubricVersion: string;
       readonly timeoutMs: number;

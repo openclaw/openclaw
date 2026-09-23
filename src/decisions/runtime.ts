@@ -54,8 +54,7 @@ export async function evaluateDecisionInRegistry(
     options.rubricVersion.length > 128 ||
     !Number.isFinite(options.timeoutMs) ||
     options.timeoutMs <= 0 ||
-    !(options.signal instanceof AbortSignal) ||
-    (options.inputBudgetPolicy !== undefined && options.inputBudgetPolicy !== "require-declared")
+    !(options.signal instanceof AbortSignal)
   ) {
     throw new DecisionContractError();
   }

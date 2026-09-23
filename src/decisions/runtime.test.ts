@@ -9,24 +9,22 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOperatorToolGatewayAuthority } from "../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
-import type {
-  DecisionBatch,
-  DecisionProviderV1,
-  DecisionRuntimeV1,
-  ProviderDecisionOutcome,
-} from "../plugin-sdk/decisions.js";
 import * as currentPluginMetadata from "../plugins/current-plugin-metadata-state.js";
 import { runPluginRegisterSyncInRegistry } from "../plugins/loader-module-runtime.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
-import type { DecisionProviderCapabilities } from "../plugins/manifest-types.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import * as diagnostics from "./diagnostics.js";
-import * as inputBudget from "./input-budget.js";
 import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
+import type {
+  DecisionBatch,
+  DecisionProviderV1,
+  DecisionRuntimeV1,
+  ProviderDecisionOutcome,
+} from "./types.js";
 import { validateDecisionBatch, validateDecisionResult } from "./validation.js";
 
 const batch: DecisionBatch = {
@@ -60,7 +58,6 @@ function registered(
   evaluate: DecisionProviderV1["evaluate"] = async () => answer,
   isReady?: () => boolean,
   providerId = "fixture",
-  capabilities?: DecisionProviderCapabilities,
 ) {
   const builder = createTestPluginRegistry();
   const record = createPluginRecord({
@@ -70,9 +67,6 @@ function registered(
     enabled: true,
     configSchema: false,
     contracts: { decisionProviders: [providerId.trim()] },
-    decisionModels: [
-      { provider: providerId.trim(), id: "fixture-v1", name: "Fixture", capabilities },
-    ],
   });
   const api = builder.createApi(record, { config });
   runPluginRegisterSyncInRegistry(
@@ -103,198 +97,69 @@ afterEach(() => {
 });
 
 describe("registered decision capability", () => {
-  const limits: DecisionProviderCapabilities = {
-    questionTypes: ["boolean", "choice", "score"],
-    maxInputTokens: 1000,
-    maxTotalInputTokens: 2000,
-    inputTokenScope: "encoded-question",
-  };
-  const admissionOptions = () => ({ ...options(), inputBudgetPolicy: "require-declared" as const });
-
-  it.each([
-    {
-      name: "per-input",
-      capabilities: { ...limits, maxInputTokens: 1 },
-      issue: "estimated-budget-exceeded",
-    },
-    {
-      name: "total",
-      capabilities: { ...limits, maxTotalInputTokens: 1 },
-      issue: "estimated-budget-exceeded",
-    },
-    { name: "all limits absent", capabilities: undefined, issue: "budget-unknown" },
-    {
-      name: "total absent",
-      capabilities: { ...limits, maxTotalInputTokens: undefined },
-      issue: "budget-unknown",
-    },
-    {
-      name: "per-input absent",
-      capabilities: { ...limits, maxInputTokens: undefined },
-      issue: "budget-unknown",
-    },
-    {
-      name: "scope absent",
-      capabilities: { ...limits, inputTokenScope: undefined },
-      issue: "budget-unknown",
-    },
-  ])(
-    "skips $name admission through the bound SDK without provider dispatch",
-    async ({ capabilities, issue }) => {
-      const call = vi.fn(async () => answer);
-      const ready = vi.fn(() => true);
-      const host = registered(call, ready, "fixture", capabilities);
-      setRuntimeConfigSnapshot(config);
-      expect(await host.api.runtime.decisions.evaluate(batch, admissionOptions())).toEqual({
-        status: "unavailable",
-        reason: "unsupported-input",
-        inputIssue: issue,
-      });
-      expect(call).not.toHaveBeenCalled();
-      expect(ready).not.toHaveBeenCalled();
-      // Existing explicit callers do not silently acquire this heuristic policy.
-      expect(await host.api.runtime.decisions.evaluate(batch, options())).toMatchObject({
-        status: "ok",
-      });
-      expect(call).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("admits known budgets without changing input, using the selected agent's exact model", async () => {
-    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    const host = registered(call, undefined, "fixture", limits);
-    setRuntimeConfigSnapshot({
-      agents: {
-        defaults: { decisionModel: "fixture/unknown" },
-        entries: { chosen: { decisionModel: "fixture/fixture-v1" } },
-      },
-    });
-    expect(await host.api.runtime.decisions.evaluate(batch, admissionOptions())).toMatchObject({
-      inputIssue: "budget-unknown",
-    });
-    expect(call).not.toHaveBeenCalled();
-    expect(
-      await host.api.runtime.decisions.evaluate(batch, {
-        ...admissionOptions(),
-        agentId: "chosen",
-      }),
-    ).toMatchObject({ status: "ok" });
-    expect(call).toHaveBeenCalledOnce();
-    expect(call.mock.calls[0]?.[0]).toEqual(batch);
-  });
-
-  it("preserves confirmed overflow as safe unsupported input without retries or circuit poisoning", async () => {
+  it("keeps ordinary input rejection recoverable without retries or circuit poisoning", async () => {
     const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => ({
       status: "unavailable",
       reason: "unsupported-input",
-      inputIssue: "provider-context-overflow",
-      retryAfterMs: 60000,
+      retryAfterMs: 60_000,
     }));
-    const host = registered(call, undefined, "fixture", limits);
-    setRuntimeConfigSnapshot(config);
-    for (let attempt = 0; attempt < 4; attempt++) {
-      expect(await host.api.runtime.decisions.evaluate(batch, admissionOptions())).toEqual({
-        status: "unavailable",
-        reason: "unsupported-input",
-        inputIssue: "provider-context-overflow",
-      });
-      expect(call).toHaveBeenCalledTimes(attempt + 1);
-    }
-    call.mockResolvedValueOnce(answer);
-    expect(await host.api.runtime.decisions.evaluate(batch, admissionOptions())).toMatchObject({
-      status: "ok",
-    });
-    expect(host.registry.decisionProviders[0]?.host.inspect(config).callable).toBe(true);
-  });
-
-  it("uses the validated success snapshot for usage and returned answers", async () => {
-    let reads = 0;
-    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () =>
-      Object.defineProperty({ status: "ok", result: answer.result }, "result", {
-        get: () =>
-          ++reads === 1 ? answer.result : { usage: { inputTokens: "private-provider-body" } },
-      }),
-    );
-    const host = registered(call, undefined, "fixture", limits);
-    expect(await host.run(admissionOptions())).toMatchObject({
-      status: "ok",
-      result: answer.result,
-    });
-    expect(reads).toBe(1);
-    expect(host.registry.decisionProviders[0]?.host.inspect(config).usage).toEqual({
-      inputTokens: 25,
-      outputTokens: 4,
-    });
-  });
-
-  it("publishes only the failure facts it validated, never a later accessor value", async () => {
-    let reads = 0;
-    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () =>
-      Object.defineProperty({ status: "unavailable", reason: "unsupported-input" }, "inputIssue", {
-        get: () => (++reads <= 2 ? "provider-context-overflow" : "private-provider-body"),
-      }),
-    );
-    const host = registered(call, undefined, "fixture", limits);
-    expect(await host.run(admissionOptions())).toEqual({
-      status: "unavailable",
-      reason: "unsupported-input",
-      inputIssue: "provider-context-overflow",
-    });
-    expect(reads).toBe(1);
-  });
-
-  it("rejects malformed provider input detail rather than treating programming errors as fallback", async () => {
-    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => ({
-      status: "unavailable",
-      reason: "transport",
-      inputIssue: "provider-context-overflow",
-    }));
-    const host = registered(call, undefined, "fixture", limits);
-    await expect(host.run(admissionOptions())).rejects.toThrow("Invalid decision contract");
-  });
-
-  it("does no optional estimation with debug off, and guards hostile batches before estimation", async () => {
-    const debug = vi.spyOn(diagnostics, "decisionDebugEnabled").mockReturnValue(false);
-    const estimate = vi.spyOn(inputBudget, "estimateDecisionInput");
-    onTestFinished(() => {
-      debug.mockRestore();
-      estimate.mockRestore();
-    });
-    const call = vi.fn(async () => answer);
-    const host = registered(call, undefined, "fixture", limits);
-    expect(await host.run()).toMatchObject({ status: "ok" });
-    expect(estimate).not.toHaveBeenCalled();
-    const large = { ...batch, state: "x".repeat(1_048_577) };
-    expect(
-      await evaluateDecisionInRegistry(large, admissionOptions(), host.registry, config),
-    ).toEqual({ status: "unavailable", reason: "unsupported-input" });
-    expect(estimate).not.toHaveBeenCalled();
-    const getter = vi.fn(() => "private");
-    const hostile = {
-      ...batch,
-      state: Object.defineProperty({}, "payload", { enumerable: true, get: getter }),
-    };
-    await expect(
-      evaluateDecisionInRegistry(hostile, admissionOptions(), host.registry, config),
-    ).rejects.toThrow("Invalid decision contract");
-    expect(getter).not.toHaveBeenCalled();
-    expect(estimate).not.toHaveBeenCalled();
-    expect(call).toHaveBeenCalledOnce();
-  });
-
-  it("keeps cancellation and closed bound authority terminal even when input would be skipped", async () => {
-    const call = vi.fn(async () => answer);
     const host = registered(call);
     setRuntimeConfigSnapshot(config);
     const runtime = host.api.runtime.decisions;
-    const controller = new AbortController();
-    controller.abort(new Error("caller cancelled"));
-    await expect(
-      runtime.evaluate(batch, { ...admissionOptions(), signal: controller.signal }),
-    ).rejects.toThrow("caller cancelled");
-    await getPluginInstance(host.record)?.dispose();
-    await expect(runtime.evaluate(batch, admissionOptions())).rejects.toThrow();
-    expect(call).not.toHaveBeenCalled();
+    const baseline = ["normal-tool"];
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      const outcome = await runtime.evaluate(batch, options());
+      expect(outcome).toEqual({ status: "unavailable", reason: "unsupported-input" });
+      const retained = outcome.status === "unavailable" ? baseline : [];
+      expect(retained).toBe(baseline);
+      expect(call).toHaveBeenCalledTimes(attempt);
+    }
+    call.mockResolvedValueOnce(answer);
+    expect(await runtime.evaluate(batch, options())).toMatchObject({ status: "ok" });
+    expect(call).toHaveBeenCalledTimes(5);
+    expect(host.registry.decisionProviders[0]?.host.inspect(config).callable).toBe(true);
+  });
+
+  it("does no extra input serialization with DEBUG disabled", async () => {
+    const debug = vi.spyOn(diagnostics, "decisionDebugEnabled").mockReturnValue(false);
+    const stringify = vi.spyOn(JSON, "stringify");
+    onTestFinished(() => {
+      debug.mockRestore();
+      stringify.mockRestore();
+    });
+    const host = registered();
+    expect(await host.run()).toMatchObject({ status: "ok" });
+    // The preexisting host JSON resource guard serializes once; diagnostics add none.
+    expect(
+      stringify.mock.calls.filter(
+        ([value]) =>
+          value &&
+          typeof value === "object" &&
+          Object.hasOwn(value, "state") &&
+          Object.hasOwn(value, "questions"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("reuses the validated provider snapshots for safe usage, diagnostics and outcomes", async () => {
+    let resultReads = 0;
+    let reasonReads = 0;
+    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () =>
+      Object.defineProperty({ status: "ok", result: answer.result }, "result", {
+        get: () =>
+          ++resultReads === 1 ? answer.result : { usage: { inputTokens: "private-provider-body" } },
+      }),
+    );
+    const host = registered(call);
+    expect(await host.run()).toMatchObject({ status: "ok", result: answer.result });
+    expect(resultReads).toBe(1);
+    call.mockImplementationOnce(async () =>
+      Object.defineProperty({ status: "unavailable", reason: "unsupported-input" }, "reason", {
+        get: () => (++reasonReads === 1 ? "unsupported-input" : "private-provider-body"),
+      }),
+    );
+    expect(await host.run()).toEqual({ status: "unavailable", reason: "unsupported-input" });
+    expect(reasonReads).toBe(1);
   });
 
   it("requires a current Gateway binding for scoped operator decisions", async () => {
@@ -356,7 +221,7 @@ describe("registered decision capability", () => {
           manifestPlugins: metadata,
         }),
       });
-      const invoke = () => host.api.runtime.decisions.evaluate(batch, admissionOptions());
+      const invoke = () => host.api.runtime.decisions.evaluate(batch, options());
       await expect(
         source === "agent-tool"
           ? withGatewayToolCallerIdentity(
