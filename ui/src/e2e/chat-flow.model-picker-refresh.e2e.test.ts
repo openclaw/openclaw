@@ -67,7 +67,7 @@ suite.define(() => {
         .toBe(true);
       expect(await picker.getAttribute("open")).not.toBeNull();
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -219,7 +219,7 @@ suite.define(() => {
       await page.locator("[data-models-login-search]").waitFor({ state: "visible" });
       await screenshot(page, "10-models-connection-navigation.png");
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -280,7 +280,7 @@ suite.define(() => {
       await picker.locator('[data-chat-model-select="true"]').click();
       await screenshot(page, "04-pin-cleared.png");
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -340,7 +340,7 @@ suite.define(() => {
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       await screenshot(page, "02-picker-after-background-apply.png");
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -427,7 +427,7 @@ suite.define(() => {
       });
       await expect.poll(() => picker.getAttribute("open")).toBe(null);
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 });
