@@ -56,6 +56,7 @@ import { rebalanceMeasuredHybridJobs } from "./ci-measured-compact-packing.mts";
 import {
   COMPACT_EMBEDDED_BASE_GROUP_NAME,
   canSplitWholeConfigGroup,
+  listScopedOwnerTestFiles,
   listWholeConfigFiles,
   listWholeConfigSplitFiles,
 } from "./ci-node-test-inventory.mts";

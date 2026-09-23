@@ -21,7 +21,7 @@ import { isStripeEligibleTestFile, listTrackedTestFiles } from "./list-test-file
 
 export const COMPACT_EMBEDDED_BASE_GROUP_NAME = "agentic-agents-embedded-base";
 
-function listScopedOwnerTestFiles(owner: {
+export function listScopedOwnerTestFiles(owner: {
   root: string;
   include: string[];
   exclude: string[];
