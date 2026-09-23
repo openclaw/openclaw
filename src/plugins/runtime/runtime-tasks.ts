@@ -141,11 +141,7 @@ function createBoundTaskFlowsRuntime(params: {
       return undefined;
     }
     const tasks = listTasksForFlowId(flow.flowId);
-    return mapTaskFlowDetail({
-      flow,
-      tasks,
-      summary: getFlowTaskSummary(flow.flowId),
-    });
+    return mapTaskFlowDetail({ flow, tasks });
   };
 
   return {

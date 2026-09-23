@@ -6,7 +6,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import { withDisposableOpenClawStateReads } from "../state/openclaw-state-db-readonly.js";
+import {
+  withArtifactPreservingStateReads,
+  withDisposableOpenClawStateReads,
+} from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -89,6 +92,32 @@ it.each(["cached", "fresh"] as const)(
     }
   },
 );
+
+it("prepares and retires an artifact registry snapshot without main-thread SQL", async () => {
+  const { root, env, databasePath } = fixture();
+  const record = await seed(env, root);
+  await closeOpenClawStateDatabaseAsync();
+  const sourceBytes = fs.readFileSync(databasePath);
+  const calls = watchNativeSql();
+  const startedAt = performance.now();
+  const read = async () => {
+    expect(await listFleetCells(env)).toEqual([record]);
+    expect(await getFleetCell(env, record.tenantId)).toEqual(record);
+  };
+  try {
+    await withArtifactPreservingStateReads(read);
+    const mainThreadSqlCalls = calls.reduce((total, call) => total + call.mock.calls.length, 0);
+    console.info("fleet snapshot lifecycle", {
+      mode: "artifact",
+      mainThreadSqlCalls,
+      elapsedMs: Math.round(performance.now() - startedAt),
+    });
+    expect(mainThreadSqlCalls).toBe(0);
+  } finally {
+    vi.restoreAllMocks();
+  }
+  expect(fs.readFileSync(databasePath)).toEqual(sourceBytes);
+});
 
 it("reads current committed registry rows while a cached native iterator retains older rows", async () => {
   expect(isMainThread).toBe(true);

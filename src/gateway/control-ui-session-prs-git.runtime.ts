@@ -2,13 +2,21 @@ import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { runGit } from "../agents/worktrees/git.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
-import { gitOutput, resolveBranchLanding } from "./control-ui-session-prs-landing.js";
+import {
+  gitOutput,
+  readCheckoutHead,
+  resolveBranchLanding,
+} from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
 export async function readCheckoutGitContext(
   root: string,
 ): Promise<GitReadOperations["checkout.context"]["output"]> {
-  const branch = await gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  const head = readCheckoutHead(root);
+  const branch =
+    head?.branch === null
+      ? "HEAD"
+      : (head?.branch ?? (await gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"])));
   if (!branch) {
     return null;
   }

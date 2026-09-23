@@ -12,7 +12,7 @@ import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.j
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "../agents/agent-tools.abort.js";
 import { finalizeAgentTools } from "../agents/agent-tools.finalize.js";
-import { isApplyPatchAllowedForModel } from "../agents/apply-patch-model-policy.js";
+import { isApplyPatchAllowedForModel } from "../agents/apply-patch-policy.js";
 import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
 import { createCoreCodingTools } from "../agents/core-coding-tools.js";
 import { createEmbeddedAgentResourceLoader } from "../agents/embedded-agent-runner/resource-loader.js";
@@ -40,7 +40,6 @@ import { createWorkerComputerTool } from "./computer-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 import {
   createWorkerTranscriptRuntime,
-  toAgentMessage,
   toWorkerInferenceContext,
 } from "./embedded-agent-transcript.runtime.js";
 import type { WorkerBrowserLaunchDescriptor, WorkerLaunchPlan } from "./launch-descriptor.js";
@@ -185,10 +184,10 @@ async function runWorkerEmbeddedTurnWithResources(
 
   const baseSessionManager = SessionManager.inMemory(params.cwd);
   for (const message of params.initialMessages ?? []) {
-    baseSessionManager.appendMessage(toAgentMessage(message));
+    baseSessionManager.appendMessage(structuredClone(message));
   }
 
-  const transcriptRuntime = createWorkerTranscriptRuntime(params.transcript);
+  const transcriptRuntime = createWorkerTranscriptRuntime(params.transcript, params.signal);
   const sessionManager = guardSessionManager(baseSessionManager, {
     suppressNextUserMessagePersistence: params.suppressPromptTranscript,
     onMessagePersisted: transcriptRuntime.onMessagePersisted,
@@ -252,6 +251,7 @@ async function runWorkerEmbeddedTurnWithResources(
         modelId: params.modelRef.model,
       }),
     applyPatchWorkspaceOnly: permissionToolPolicy?.applyPatchWorkspaceOnly ?? true,
+    applyPatchContainmentSource: permissionToolPolicy ? "session" : "worker",
     execDefaults: {
       bypassHostApprovalFloors:
         permissionToolPolicy?.bypassHostApprovalFloors && execSecurity === "full",

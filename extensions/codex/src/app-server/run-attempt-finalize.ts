@@ -27,6 +27,7 @@ import {
   shouldKeepCodexSharedAbortOpen,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
+import { settleReplyMedia } from "./run-attempt-reply-media.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import {
   clearCodexBindingAfterInvalidImagePayload,
@@ -444,9 +445,7 @@ export async function finalizeCodexAttempt(
           degradedSettlement,
         ]);
       }
-      if (runAbortController.signal.aborted) {
-        await state.abortCleanup;
-      }
+      await settleReplyMedia(activeTurn, result, turnRuntime, runAbortController.signal);
     } finally {
       // Retire this exact write before releasing the run. A queued mirror cannot
       // borrow a later session writer after its settlement deadline has elapsed.

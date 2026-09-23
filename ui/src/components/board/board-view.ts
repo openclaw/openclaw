@@ -682,12 +682,15 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     if (activeTab) {
       this.visitedTabs.add(activeTabId);
     }
-    // Keep iframe documents connected: moving cached DOM off-document reloads them.
-    const retainedWidgets = snapshot.widgets.filter((widget) => this.visitedTabs.has(widget.tabId));
+    // Moving a mounted widget to an unvisited tab must not reload its document.
+    const retainedWidgets = snapshot.widgets.filter(
+      (widget) => this.visitedTabs.has(widget.tabId) || this.stableCellOrder.has(widget.name),
+    );
     const fullWidth = widgets.length === 1 && widgets[0]?.sizeW === BOARD_GRID_COLUMNS;
     const page =
       fullWidth &&
-      (widgets[0]?.pluginKind === "session:website" ||
+      (widgets[0]?.name === this.pageWidgetName ||
+        widgets[0]?.pluginKind === "session:website" ||
         widgets[0]?.pluginKind === "browser:dashboard");
     return html`
       <section

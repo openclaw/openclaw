@@ -205,20 +205,20 @@ export async function applyMessageSendingHook(params: {
       return {
         cancelled: false,
         contentRewritten: true,
-        payload: {
+        payload: copyReplyPayloadMetadata(params.payload, {
           ...params.payload,
           spokenText,
-        },
+        }),
         payloadSummary: {
           ...params.payloadSummary,
           hookContent: spokenText,
         },
       };
     }
-    const payload = {
+    const payload = copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
       text: sendingResult.content,
-    };
+    });
     return {
       cancelled: false,
       contentRewritten: true,

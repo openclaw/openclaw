@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   captureGatewayToolCallerAssertion,
@@ -15,6 +15,8 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import type { buildGatewayCronService } from "./server-cron.js";
 
@@ -56,7 +58,9 @@ export function registerGatewayCronContextTests({
   runCronIsolatedAgentTurnMock,
   requestHeartbeatAndWaitMock,
 }: GatewayCronContextTestHarness) {
+  const createBroker = useSpawnBrokerTestFixture(afterEach);
   it("owns timer execution and settlement after its creator context closes", async () => {
+    const broker = await createBroker();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-21T01:00:00.000Z"));
     const cfg = createCronConfig("server-cron-scheduled-gateway-context");
@@ -77,6 +81,7 @@ export function registerGatewayCronContextTests({
     let observedClient: unknown = "never-ran";
     let observedCreator: unknown = "never-ran";
     let observedWork: unknown = "never-ran";
+    let observedBroker: unknown = "never-ran";
     const settled = createDeferred();
     let settlementContext: unknown = "never-settled";
     let assertScheduledCaller: ReturnType<typeof captureGatewayToolCallerAssertion>;
@@ -85,13 +90,16 @@ export function registerGatewayCronContextTests({
       observed = getInProcessGatewayToolContext();
       observedClient = getPluginRuntimeGatewayRequestScope()?.client;
       observedCreator = creatorContext.getStore();
+      observedBroker = getSpawnBroker();
       observedWork = await trackAsyncWork(() => "completed").catch((error: unknown) => error);
       assertScheduledCaller = captureGatewayToolCallerAssertion();
       ran.resolve();
       return { status: "ok", text: "done" } as never;
     });
 
-    const state = createCronService(cfg, { resolveGatewayContext: () => gatewayContext });
+    const state = runWithSpawnBroker(broker, () =>
+      createCronService(cfg, { resolveGatewayContext: () => gatewayContext }),
+    );
     try {
       await state.cron.start();
       await addAgentTurnJob(state, "scheduled-isolated", "run it", {
@@ -147,6 +155,7 @@ export function registerGatewayCronContextTests({
       expect(settlementContext).toBe(gatewayContext);
       expect(observed).toBe(gatewayContext);
       expect(observedClient).toBeUndefined();
+      expect(observedBroker).toBe(broker);
       expect(() => assertScheduledCaller?.("chat.history")).not.toThrow();
       expect(() => creatorScope.assertCurrent?.("chat.history")).toThrow(
         "agent tool caller authority is no longer active",

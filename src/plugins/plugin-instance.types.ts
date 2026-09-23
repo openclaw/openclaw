@@ -16,7 +16,11 @@ export type PluginInstanceAdmission = {
 };
 
 /** Known disposal faults are reported outcomes, never new-call admission failures. */
-export type PluginInstanceDisposalResult = { errors: readonly unknown[] };
+export type PluginInstanceDisposalResult = {
+  errors: readonly unknown[];
+  /** Errors seen only in host cleanup, eligible for its named-hook reporting. */
+  hostCleanupErrors?: readonly unknown[];
+};
 
 /** A host-owned logical consumer retains only its exact instance's admitted operations. */
 export type PluginInstanceConsumer = {
@@ -58,7 +62,7 @@ export type PluginModuleLoaderRecovery = {
 export interface PluginModuleLoaderOwner extends PluginInstanceResource, PluginInstanceAdmission {
   controlPlaneInitialized: boolean;
   sourceDigest?: string;
-  onModuleDispose(cleanup: () => Promise<void>): void;
+  onModuleDispose(cleanup: () => void | Promise<void>): void;
   bindModuleLoader(
     load: (source: string) => unknown,
     hasSource?: (source: string) => boolean,

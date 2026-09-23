@@ -1,4 +1,3 @@
-// Matrix plugin module implements create client behavior.
 import fs from "node:fs";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";

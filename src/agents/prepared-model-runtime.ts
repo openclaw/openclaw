@@ -20,12 +20,13 @@ import {
   capturePreparedModelRuntimeLifetime,
   closePreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimeClose,
+  createPreparedModelRuntimeReplacement,
+  retirePreparedModelRuntimeGeneration,
 } from "./prepared-model-runtime.lifecycle.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
   advancePreparedModelRuntimeOwnerConfig,
-  createPreparedModelRuntimeReplacement,
   hasSameLifecycleInput,
   normalizeOptionalDir,
   normalizePreparedModelRuntimeInput,
@@ -62,7 +63,10 @@ import {
   updateOwnersForScopedRefresh,
 } from "./prepared-model-runtime.refresh-scope.js";
 import { closeEphemeralPreparedModelRuntimeResources } from "./prepared-model-runtime.resources.js";
-import { PreparedModelRuntimeOwnerRetention } from "./prepared-model-runtime.retention.js";
+import {
+  acquireRetainedAgentRuntimeCleanupRegistries,
+  PreparedModelRuntimeOwnerRetention,
+} from "./prepared-model-runtime.retention.js";
 import { setPreparedModelRuntimeStartupStatus } from "./prepared-model-runtime.startup-status.js";
 import { PreparedModelRuntimeStartup } from "./prepared-model-runtime.startup.js";
 import type {
@@ -134,6 +138,7 @@ async function closeModelRuntime(error: Error): Promise<void> {
   void closeEphemeralPreparedModelRuntimeResources().catch(() => {});
   const closingOwners = [...owners.values()];
   owners.clear();
+  closingOwners.forEach(retirePreparedModelRuntimeGeneration);
   retainedDirectRunOwners.clear(owners);
   retainedGatewayRunOwners.clear(owners);
   gatewayLifecycleActive = false;
@@ -189,6 +194,14 @@ export async function acquirePreparedModelRuntimeSnapshot(
     rawInput,
     preparedModelRuntimeLeaseContext,
     retainPublishedModelRuntimeOwner,
+  );
+}
+
+/** Retains existing execution owners, including switched-away models, without loading plugins. */
+export async function acquireAgentRuntimeCleanupRegistries(agentDir: string) {
+  return await acquireRetainedAgentRuntimeCleanupRegistries(
+    normalizeOptionalDir(agentDir),
+    preparedModelRuntimeLeaseContext,
   );
 }
 
@@ -377,7 +390,6 @@ const preparedModelRuntimeLeaseContext = {
   getBuildTimeoutMs: () => modelRuntimeBuildTimeoutMs,
   getGatewayLifecycleActive: () => gatewayLifecycleActive,
   getPendingReplacement: getBlockingReplacement,
-  prepareSnapshot: prepareModelRuntimeSnapshot,
 };
 
 /** Acquires a run generation from configured facts; full catalog discovery is explicit. */
@@ -646,20 +658,20 @@ export function refreshPreparedModelRuntimeSnapshots(
       }
       throw refreshError;
     });
-  return startup ? startup.wait(publication) : publication;
+  return publicationQueue.complete(publication, isPublicationCurrent, options, startup);
 }
 
 async function drainPendingAuthMutations(commit?: () => void): Promise<void> {
   await authPublication.drain({
     owners,
-    publish: async (entries, includeCredentialProviders) =>
+    publish: async (ownersToPublish, includeCredentialProviders) =>
       await publishPreparedModelRuntimeOwnerBatch({
-        entries,
+        ownersToPublish,
         owners,
         agentBuildCompletions,
         buildTimeoutMs: modelRuntimeBuildTimeoutMs,
         ...(includeCredentialProviders ? { includeCredentialProviders: true } : {}),
-        reusePluginGenerations: true,
+        selectPluginGeneration: (owner) => owner.pluginGeneration,
       }),
     publishOwners: (publishedOwners) => replyDispatchPublication.replace(publishedOwners),
     commit,

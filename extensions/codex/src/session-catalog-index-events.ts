@@ -24,6 +24,7 @@ type CodexCatalogIndexEventOwner = {
   updateSettings(id: string, settings: CodexCatalogSettings, source: CodexCatalogSource): void;
   upsert(thread: CodexThread): Promise<void>;
   reserveTurnStartOrder(): number;
+  requestNativeRefresh(): void;
   refresh(id: string, readThread: ReadThread, sourceOrder: number | undefined): Promise<boolean>;
   archive(id: string): void;
   remove(id: string): void;
@@ -32,6 +33,7 @@ type CodexCatalogIndexEventOwner = {
 
 type PendingRefresh = {
   readThread: ReadThread;
+  source: CodexCatalogSource;
   dirty: boolean;
   sourceOrder: number | undefined;
   promise: Promise<void>;
@@ -134,6 +136,7 @@ export class CodexCatalogIndexEvents {
       this.enqueueRefresh(
         id,
         readThread,
+        source,
         event.method === "turn/started" ? this.owner.reserveTurnStartOrder() : undefined,
       );
     }
@@ -150,11 +153,14 @@ export class CodexCatalogIndexEvents {
   private enqueueRefresh(
     id: string,
     readThread: ReadThread,
+    source: CodexCatalogSource,
     sourceOrder: number | undefined,
   ): void {
+    this.owner.requestNativeRefresh();
     const existing = this.pending.get(id);
     if (existing) {
       existing.readThread = readThread;
+      existing.source = source;
       existing.dirty = true;
       existing.sourceOrder = sourceOrder ?? existing.sourceOrder;
       return;
@@ -164,6 +170,7 @@ export class CodexCatalogIndexEvents {
     }
     const pending: PendingRefresh = {
       readThread,
+      source,
       dirty: true,
       sourceOrder,
       promise: Promise.resolve(),
@@ -174,7 +181,11 @@ export class CodexCatalogIndexEvents {
         while (!this.closed && pending.dirty) {
           pending.dirty = false;
           const observedSourceOrder = pending.sourceOrder;
+          const observedSource = pending.source;
           try {
+            if (observedSource.closed) {
+              throw new Error("Codex catalog observation source closed before its metadata read");
+            }
             const published = await this.owner.refresh(id, pending.readThread, observedSourceOrder);
             if (published && pending.sourceOrder === observedSourceOrder) {
               pending.sourceOrder = undefined;
@@ -182,7 +193,20 @@ export class CodexCatalogIndexEvents {
               pending.dirty = true;
             }
           } catch (error) {
-            this.owner.report(error);
+            if (observedSource.closed) {
+              // A replacement notification may already own the coalesced follow-up.
+              if (pending.source === observedSource) {
+                pending.dirty = false;
+              }
+              this.owner.report(
+                new Error(
+                  "Codex catalog observation interrupted by client closure; metadata refresh deferred to the current catalog owner",
+                  { cause: error },
+                ),
+              );
+            } else {
+              this.owner.report(error);
+            }
           }
         }
       } finally {

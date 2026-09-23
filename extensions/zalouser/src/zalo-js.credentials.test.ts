@@ -5,6 +5,7 @@ import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type {
+  OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -116,7 +117,7 @@ describe("zalouser credential persistence", () => {
     const runtime = createPluginRuntimeMock();
     beforeCredentialApply = undefined;
     runtime.state.openKeyedStore = <T>(
-      options: OpenKeyedStoreOptions,
+      options: OpenAsyncKeyedStoreOptions,
     ): PluginStateKeyedStore<T> => {
       const store = createPluginStateKeyedStoreForTests<T>("zalouser", options);
       return {
@@ -137,7 +138,7 @@ describe("zalouser credential persistence", () => {
     "preserves credential refresh and logout on %s stores",
     async (mode) => {
       if (mode === "legacy") {
-        getZalouserRuntime().state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) => ({
+        getZalouserRuntime().state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => ({
           ...createPluginStateKeyedStoreForTests<T>("zalouser", options),
           observe: undefined,
           compareAndApply: undefined,

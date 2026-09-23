@@ -44,6 +44,7 @@ it("holds cached in-flight recovery capacity until agent.wait observes completio
       capacity,
       gatewayRuntime: runtime,
       onSettled,
+      beginDispatch: () => true,
       shouldContinue: () => true,
     }),
   ).resolves.toMatchObject({ kind: "started" });
@@ -81,6 +82,7 @@ it("does not add terminal probes when no capacity lease was acquired", async () 
       },
     },
     onSettled,
+    beginDispatch: () => true,
     shouldContinue: () => true,
   });
   expect(dispatch).toHaveBeenCalledOnce();
@@ -135,6 +137,7 @@ it.each([
       capacity,
       gatewayRuntime: runtime,
       onSettled,
+      beginDispatch: () => true,
       shouldContinue: () => true,
     });
     await vi.waitFor(() => expect(onSettled).toHaveBeenCalledOnce());

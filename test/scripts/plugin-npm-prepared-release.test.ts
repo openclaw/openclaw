@@ -501,7 +501,7 @@ describe("prepared npm registry readback", () => {
     const params = {
       packageName: name,
       version,
-      publishTag: "beta",
+      publishTags: ["beta"],
       route: "npm-oidc",
       tarballPath,
       allowMissing: true,
@@ -571,7 +571,7 @@ describe("prepared npm registry readback", () => {
             tarballReads += 1;
             return new Response(bytes);
           }
-          if (++registryReads <= 6) {
+          if (++registryReads <= 18) {
             return missing === "package"
               ? new Response(null, { status: 404 })
               : Response.json({ ...packument, versions: {} });
@@ -580,7 +580,7 @@ describe("prepared npm registry readback", () => {
         },
       });
       const verified = expect(result).resolves.toEqual({ alreadyPublished: true });
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(180_000);
       await verified;
       expect(tarballReads).toBe(1);
     },

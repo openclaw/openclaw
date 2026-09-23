@@ -1,4 +1,3 @@
-// Imessage plugin module implements reaction system event behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 

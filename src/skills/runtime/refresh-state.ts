@@ -7,7 +7,14 @@ import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.j
 // Skill refresh state types describe change notifications emitted by runtime reloads.
 type SkillsChangeEvent = {
   workspaceDir?: string;
-  reason: "watch" | "watch-targets" | "manual" | "remote-node" | "config-change" | "workshop";
+  reason:
+    | "watch"
+    | "watch-targets"
+    | "watch-unavailable"
+    | "manual"
+    | "remote-node"
+    | "config-change"
+    | "workshop";
   changedPath?: string;
 };
 
@@ -195,7 +202,12 @@ export function bumpSkillsSnapshotVersion(params?: {
     reason: params?.reason ?? "manual",
     changedPath: params?.changedPath,
   };
-  const semanticChange = event.reason === "config-change" || event.reason === "remote-node";
+  // Availability is an owner fact even when the last content fingerprint is
+  // unchanged; remote subscribers need it to reconcile later preparations.
+  const semanticChange =
+    event.reason === "config-change" ||
+    event.reason === "remote-node" ||
+    event.reason === "watch-unavailable";
   sourceClock = bumpVersion(sourceClock);
   if (!params?.workspaceDir) {
     globalSourceVersion = sourceClock;

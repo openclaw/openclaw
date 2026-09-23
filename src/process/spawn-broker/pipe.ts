@@ -24,6 +24,27 @@ export function holdPipe(socket: Socket): void {
 
 /** Stop the sender's libuv reader before Node detaches the socket for IPC. */
 export function holdPipeForTransfer(socket: Socket): void {
+  stopPipeReads(socket);
+  holdPipe(socket);
+}
+
+/** Restore native stdin's write-only direction after Node's duplex IPC handoff. */
+export function restoreStdinPipe(socket: Socket): void {
+  const state: unknown = Reflect.get(socket, "_readableState");
+  if (
+    !state ||
+    typeof state !== "object" ||
+    ["ended", "endEmitted", "reading"].some((flag) => typeof Reflect.get(state, flag) !== "boolean")
+  ) {
+    throw new SpawnBrokerError("Spawn broker requires a Node readable state for stdin");
+  }
+  stopPipeReads(socket);
+  // IPC enables reads on every Socket. Match Duplex's readable:false state so
+  // an unused stdin read cannot turn early child closure into ECONNRESET.
+  Object.assign(state, { readable: false, ended: true, endEmitted: true, reading: false });
+}
+
+function stopPipeReads(socket: Socket): void {
   const handle: unknown = Reflect.get(socket, "_handle");
   if (
     !handle ||
@@ -35,14 +56,13 @@ export function holdPipeForTransfer(socket: Socket): void {
   ) {
     throw new SpawnBrokerError("Spawn broker requires a transferable Node pipe handle");
   }
-  // Node's keepOpen:false IPC sets onread to a no-op until handle acknowledgement.
-  // Ordinary Socket.pause() does not stop libuv, so that window would discard bytes.
-  // This private Node dependency is confined here and fails explicitly if it changes.
+  // keepOpen:false drops sender read callbacks; received stdin must never read.
+  // Socket.pause() alone does not stop libuv. Keep this checked Node dependency
+  // confined here so unsupported handles fail before publication.
   if (handle.readStop() !== 0) {
     throw new SpawnBrokerError("Spawn broker could not stop pipe reads");
   }
   handle.reading = false;
-  holdPipe(socket);
 }
 
 /** Called after send's callback, when keepOpen:false has detached the native handle. */

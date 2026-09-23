@@ -26,10 +26,10 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 - The UI connects to the Gateway WebSocket and uses the `chat.history`, `chat.send`, `chat.inject`, and `chat.message.get` RPC methods.
 - Control UI opens a chat with a small recent-history page through `chat.startup`. Short chat links resolve their session in that same request. Short-reference startup also subscribes the connection to authorized session events before reading history, so updates arriving before the chat pane mounts are not missed. Scroll upward to load older messages. A restored Home pane waits for the selected chat to finish loading, while explicitly opening Home loads it immediately.
 - `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`. History pages skip hidden and tool-only transcript entries while filling the requested visible-message window from the existing indexed transcript. API clients can send a per-request `maxChars` to override the default limit for one call.
-- Paginated `chat.history` and `chat.startup` requests also accept a `maxBytes` page target, capped by the Gateway's response limit. The Control UI requests a 512 KiB target for older pages, including automatic viewport filling and prefetch. One readable message can exceed the target so a small page does not hide its content. Complete imported snapshots retain their existing budget because they do not support back-scroll pagination.
+- Paginated `chat.history` and `chat.startup` requests also accept a `maxBytes` page target, capped by the Gateway's response limit. The Control UI keeps the initial tail small, then requests up to 1,000 older messages using the Gateway's response limit to reduce repeated reads and backscroll waits. One readable message can exceed the target so a small page does not hide its content. Complete imported snapshots retain their existing budget because they do not support back-scroll pagination.
 - When a visible assistant message was truncated in `chat.history`, the Control UI automatically fetches the full display-normalized entry through `chat.message.get`. That fetch does not increase the default history payload. The preview remains visible while it loads. Recovered content replaces it inline. `chat.message.get` uses the same transcript branch and display rules as `chat.history`. Unlike `chat.history`, it targets one entry by `messageId`. It returns an honest unavailable reason when the full content can no longer be returned.
 - `chat.history` follows the active transcript branch for append-only session files, so abandoned rewrite branches and superseded prompt copies are not rendered in WebChat.
-- Compaction entries render as a "Compacted history" divider. The divider explains that the compacted transcript is preserved as a checkpoint. It also carries an action to open session checkpoints (branch or restore, when permissions allow).
+- Compaction entries render as a history divider showing the context reduction when token measurements are available. Ordinary conversation history and Fork remain available; compaction does not create a separate checkpoint browsing or restoration surface.
 - Control UI remembers the backing Gateway `sessionId` returned by `chat.history`. It includes that id on follow-up `chat.send` calls. Reconnects and page refreshes therefore continue the same stored conversation, unless the user starts or resets a session.
 - Foreground sends also include the displayed branch's leaf from the rendered history as `expectedLeafEntryId`. If another client switched branches first, Control UI parks the message for review and refreshes the transcript instead of posting it to the new branch. Reconnect and restored-outbox replays intentionally omit this precondition after reconciling current history.
 - When you change a chat setting and immediately send, Control UI shows **Applying chat settings** until that change and its session refresh finish. Later background session refreshes do not extend this wait. Opening a pane without changing a setting does not create a settings wait.
@@ -55,7 +55,8 @@ waits in durable pending-input custody, including during workspace preparation.
 An optional `messageSeq` comes only from a committed transcript receipt. Clients
 must not predict it from history length or treat `status: "started"` as persistence.
 The Control UI replaces its provisional source with accepted custody, then with
-the canonical row. Its renderer keeps a loaded local preview in the same image
+the canonical row. Accepted inputs stay below saved conversation history until
+they are committed to the transcript. Its renderer keeps a loaded local preview in the same image
 element during this handoff while canonical media metadata and image bytes load.
 Authoritative text, media replacements, and removals still win. Unavailable or
 access-denied media shows a visible reason.
@@ -97,7 +98,7 @@ Delivery is best-effort. The Inbox and replay bookkeeping survive Gateway restar
 
 - The Control UI `/agents` Tools panel has an "Available Right Now" view backed by `tools.effective(sessionKey=...)`. That view is a server-derived, read-only projection of the current session's tool inventory. It includes core, plugin, channel-owned, and already-discovered MCP server tools.
 - A separate config-editing view (backed by `tools.catalog`) covers profiles, per-agent overrides, and catalog semantics.
-- Runtime availability is session-scoped. Switching sessions on the same agent can change the "Available Right Now" list. The panel shows a notice when configured MCP servers have not been connected or changed since the last discovery. It does not silently start MCP transports from the read path.
+- Runtime availability is session-scoped. Switching sessions on the same agent can change the "Available Right Now" list. Resetting a session refreshes its inventory too. The panel shows a notice when configured MCP servers have not been connected or changed since the last discovery. It does not silently start MCP transports from the read path.
 - The config editor does not imply runtime availability. Effective access still follows policy precedence (`allow`/`deny`, per-agent and provider/channel overrides).
 
 ## Remote use

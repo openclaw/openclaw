@@ -280,12 +280,41 @@ function findMoveRowBySession(db: DatabaseSync, sessionId: string): MoveRow | un
   );
 }
 
-export function readWorkerPlacementMove(
+function readWorkerPlacementMove(
   db: DatabaseSync,
   sessionId: string,
 ): WorkerPlacementMoveIntent | undefined {
   const row = findMoveRowBySession(db, sessionId);
   return row ? fromRow(row) : undefined;
+}
+
+/** Display reads tolerate the shipped additive columns without mutating their source. */
+export function readWorkerPlacementMovesReadOnly(
+  db: DatabaseSync,
+  sessionIds: readonly string[],
+): ReadonlyMap<string, WorkerPlacementMoveIntent> {
+  const results = new Map<string, WorkerPlacementMoveIntent>();
+  if (!tableExists(db, "worker_session_placement_moves")) {
+    return results;
+  }
+  for (let offset = 0; offset < sessionIds.length; offset += 250) {
+    for (const row of executeSqliteQuerySync(
+      db,
+      moveQuery(db)
+        .selectFrom("worker_session_placement_moves")
+        .selectAll()
+        .where("session_id", "in", sessionIds.slice(offset, offset + 250)),
+    ).rows) {
+      const intent = fromRow({
+        ...row,
+        target_machine_class: row.target_machine_class ?? null,
+        target_os: row.target_os ?? null,
+        abandon_source: row.abandon_source ?? null,
+      });
+      results.set(intent.sessionId, intent);
+    }
+  }
+  return results;
 }
 
 function findMoveRowByOperation(db: DatabaseSync, operationId: string): MoveRow | undefined {

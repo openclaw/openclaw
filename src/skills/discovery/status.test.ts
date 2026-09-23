@@ -7,15 +7,37 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { readLocalSkillCardContentSync } from "../lifecycle/clawhub.js";
+import { readLocalSkillCardContentSync } from "../lifecycle/clawhub-status.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
-import { buildWorkspaceSkillStatus } from "./status.js";
+import { buildWorkspaceSkillReadiness, buildWorkspaceSkillStatus } from "./status.js";
 
 type SkillStatus = ReturnType<typeof buildWorkspaceSkillStatus>["skills"][number];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("buildWorkspaceSkillStatus", () => {
+  it("selects dependency recipes using the workspace host platform and binaries", () => {
+    const hostPlatform = process.platform === "darwin" ? "linux" : "darwin";
+    const entry = createEntry("host-installer", {
+      metadata: {
+        os: [hostPlatform],
+        install: [
+          { id: "gateway-only", kind: "node", package: "wrong-package", os: [process.platform] },
+          { id: "brew", kind: "brew", formula: "host-package", os: [hostPlatform] },
+          { id: "node", kind: "node", package: "host-package", os: [hostPlatform] },
+        ],
+      },
+    });
+    const status = (bins: string[]) =>
+      buildWorkspaceSkillStatus("/tmp/host-installer", {
+        entries: [entry],
+        files: [],
+        runtime: { platform: hostPlatform, bins },
+        config: { skills: { install: { preferBrew: true } } },
+      }).skills[0];
+    expect(status(["brew"])?.install.map((item) => item.id)).toEqual(["brew"]);
+    expect(status([])?.install.map((item) => item.id)).toEqual(["node"]);
+  });
   it("refreshes dependency eligibility and installer preference after a binary is installed", async () => {
     const workspaceDir = tempDirs.make("openclaw-skill-status-");
     const entries = ["first", "second"].map((name) =>
@@ -33,6 +55,11 @@ describe("buildWorkspaceSkillStatus", () => {
     await withEnvAsync({ PATH: workspaceDir, PATHEXT: ".CMD" }, async () => {
       const options = { entries, config: { skills: { install: { preferBrew: true } } } };
       const before = buildWorkspaceSkillStatus(workspaceDir, options);
+      expect(buildWorkspaceSkillReadiness(workspaceDir, options)).toEqual({
+        workspaceDir,
+        eligible: 0,
+        missing: 2,
+      });
       for (const skill of before.skills) {
         expect(skill.eligible).toBe(false);
         expect(skill.missing.bins).toEqual(["brew"]);
@@ -44,6 +71,11 @@ describe("buildWorkspaceSkillStatus", () => {
         { mode: 0o755 },
       );
       const after = buildWorkspaceSkillStatus(workspaceDir, options);
+      expect(buildWorkspaceSkillReadiness(workspaceDir, options)).toEqual({
+        workspaceDir,
+        eligible: 2,
+        missing: 0,
+      });
       for (const skill of after.skills) {
         expect(skill.eligible).toBe(true);
         expect(skill.missing.bins).toEqual([]);

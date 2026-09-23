@@ -1,6 +1,7 @@
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
 import {
   normalizeOptionalDir,
   normalizePreparedModelRuntimeInput,
@@ -227,10 +228,7 @@ export class PreparedModelRuntimeAuthPublicationOwner {
   async drain(params: {
     owners: Map<string, PreparedModelRuntimeOwner>;
     publish: (
-      entries: Array<{
-        owner: PreparedModelRuntimeOwner;
-        input: PreparedModelRuntimeOwner["input"];
-      }>,
+      owners: PreparedModelRuntimeOwner[],
       includeCredentialProviders: boolean,
     ) => Promise<void>;
     publishOwners: (owners: readonly PreparedModelRuntimeOwner[]) => void;
@@ -251,12 +249,12 @@ export class PreparedModelRuntimeAuthPublicationOwner {
     while (this.#events.length > 0) {
       const components = partitionAuthMutationOwners(this.#events.splice(0));
       for (const componentOwners of components) {
-        const entries = componentOwners.flatMap((owner) =>
-          params.owners.get(ownerKey(owner.input)) === owner ? [{ owner, input: owner.input }] : [],
+        const owners = componentOwners.filter(
+          (owner) => params.owners.get(ownerKey(owner.input)) === owner,
         );
         try {
-          if (entries.length > 0) {
-            await params.publish(entries, this.#transaction?.profileSetChanged === true);
+          if (owners.length > 0) {
+            await params.publish(owners, this.#transaction?.profileSetChanged === true);
           }
           const transaction = this.#transaction;
           if (transaction) {
@@ -348,6 +346,7 @@ export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
     }
     invalidatedOwners.push(owner);
     owner.generation += 1;
+    retirePreparedModelRuntimeGeneration(owner);
     owner.needsRefresh = true;
     owner.refreshError = staleError;
     if (normalizedEvent.profileSetChanged) {
@@ -372,7 +371,12 @@ export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
     const input = normalizePreparedModelRuntimeInput({ ...owner.input, inheritedAuthDir });
     prepareModelRuntimeOwner(input, "configured", owner.catalogMode, owner);
     owners.delete(previousKey);
-    owners.set(ownerKey(input), owner);
+    const key = ownerKey(input);
+    const previous = owners.get(key);
+    owners.set(key, owner);
+    if (previous && previous !== owner) {
+      retirePreparedModelRuntimeGeneration(previous);
+    }
   }
   return { invalidatedOwners, invalidatedConfiguredAgentIds };
 }

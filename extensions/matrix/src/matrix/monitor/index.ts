@@ -7,7 +7,10 @@ import {
   waitUntilAbort,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
-import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import {
+  resolvePromptHistoryLimit,
+  resolveOptionalIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
@@ -146,10 +149,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let needsRoomAliasesForConfig = false;
   const initialAllowFrom = (accountConfig.dm?.allowFrom ?? []).map(String);
   const initialGroupAllowFrom = (accountConfig.groupAllowFrom ?? []).map(String);
-  const configuredBotUserIds = resolveConfiguredMatrixBotUserIds({
-    cfg,
-    accountId: effectiveAccountId,
-  });
 
   const {
     allowFrom,
@@ -187,6 +186,17 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   };
 
   const auth = await resolveMatrixAuth({ cfg, accountId: effectiveAccountId });
+  if (opts.abortSignal?.aborted) {
+    return;
+  }
+  const configuredBotUserIds = await resolveConfiguredMatrixBotUserIds({
+    cfg,
+    accountId: effectiveAccountId,
+    abortSignal: opts.abortSignal,
+  });
+  if (opts.abortSignal?.aborted) {
+    return;
+  }
   const resolvedInitialSyncLimit =
     resolveOptionalIntegerOption(opts.initialSyncLimit, { min: 0 }) ?? auth.initialSyncLimit;
   const authWithLimit =
@@ -265,7 +275,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const globalGroupChatHistoryLimit = (
     cfg.messages as { groupChat?: { historyLimit?: number } } | undefined
   )?.groupChat?.historyLimit;
-  const historyLimit = Math.max(0, accountConfig.historyLimit ?? globalGroupChatHistoryLimit ?? 0);
+  const historyLimit = resolvePromptHistoryLimit(
+    accountConfig.historyLimit ?? globalGroupChatHistoryLimit,
+    0,
+  );
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const streaming = resolveMatrixStreamingMode(accountConfig.streaming);

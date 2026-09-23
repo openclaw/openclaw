@@ -37,6 +37,15 @@ With config hot reload enabled, changes to `logging.level`, `logging.file`, and
 long-lived channel loggers. Queued records finish writing to their original file.
 Explicit logger-level overrides, such as Baileys verbosity, remain in effect.
 
+Subsystem file logs omit call-site metadata (`_meta.path`) for `trace`, `debug`,
+`info`, and `warn` records, including `raw()` lines, to avoid capturing and parsing
+a stack on every routine message. `error` and `fatal` records retain it. All levels
+retain call-site metadata while diagnostics are enabled and an internal log-record
+consumer is subscribed, preserving [OTLP code locations](/gateway/opentelemetry/privacy-and-trace-context).
+This follows diagnostic enablement and subscriptions on the next record, including
+for existing subsystem loggers. Log messages, structured fields, and error stacks
+supplied by callers are unchanged.
+
 Talk, realtime voice, and managed-room code paths use the shared file logger for bounded lifecycle records intended for operational debugging and OTLP log export. Transcript text, audio payloads, turn ids, call ids, and provider item ids are never copied into the log record.
 
 Discord realtime voice keeps session lifecycle transitions at `info`; audio chunks
@@ -300,6 +309,14 @@ If a CPU counter read fails, all CPU fields are omitted for that request;
 its result and elapsed diagnostics are preserved. Existing activation and the
 one-second warning threshold are unchanged, so missing slow records do not account
 for CPU consumed by faster requests.
+
+Catalog lists additionally expose fixed request-stage observations through the
+existing diagnostic event stream and [Prometheus exporter](/gateway/prometheus#catalog-list-stages).
+These include initial/final projection readiness, provider or coalesced waits,
+and synchronous planning/final-delivery thread CPU. Unlike slow logs, these
+observations include requests below one second when an interested trusted
+consumer is active. They do not change warning thresholds, startup-phase history,
+request behavior or diagnostic collection settings.
 
 ### WS log style
 

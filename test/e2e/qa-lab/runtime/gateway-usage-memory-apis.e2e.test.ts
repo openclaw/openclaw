@@ -22,7 +22,7 @@ import {
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
 import { refreshCostUsageCacheForAgent } from "../../../../src/infra/session-cost-usage-aggregation.js";
-import { readSessionCostUsageRollupRows } from "../../../../src/infra/session-cost-usage-cache.sqlite.js";
+import { readSessionCostUsageRollupRows } from "../../../../src/infra/session-cost-usage-cache.test-support.js";
 import type { CostUsageSummary } from "../../../../src/infra/session-cost-usage.js";
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { SessionsUsageResult } from "../../../../src/shared/usage-types.js";

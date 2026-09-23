@@ -400,6 +400,9 @@ suite.define(() => {
                   buffer: Buffer.from(fileContents),
                 });
                 await pane.locator(".chat-attachment-thumb", { hasText: fileName }).waitFor();
+                await expect
+                  .poll(() => pane.getByRole("button", { name: "Send message" }).isEnabled())
+                  .toBe(true);
               }
             }
             await page.keyboard.down("Enter");
@@ -547,7 +550,7 @@ suite.define(() => {
       await composer.waitFor();
 
       await gateway.setOnline(false);
-      await page.locator('.agent-chat__composer-underlaps[data-tone="warn"]').waitFor();
+      await page.locator('.agent-chat__composer-status[data-tone="info"]').waitFor();
       await composer.fill(text);
       await page.locator(".agent-chat__file-input").setInputFiles({
         name: "offline.txt",

@@ -50,12 +50,18 @@ describe("summarizeTranscripts", () => {
         source: { providerId: "manual-transcript" },
         startedAt: "2026-07-17T10:00:00.000Z",
       },
-      utterances: [{ text: "We decided to ship the CLI.", speaker: { label: "Sam" } }],
+      utterances: [
+        { text: "context:" },
+        { text: "###" },
+        { text: "Transcribe the audio." },
+        { text: "We decided to ship the CLI.", speaker: { label: "Sam" } },
+      ],
     });
 
     expect(summary.title).toBe("Design review");
     expect(summary.transcript).toEqual(["Sam: We decided to ship the CLI."]);
     expect(summary.decisions).toEqual(["Sam: We decided to ship the CLI."]);
+    expect(summary.overview).toBe("We decided to ship the CLI.");
   });
 
   it("lists participants once in first-appearance order after the overview", () => {

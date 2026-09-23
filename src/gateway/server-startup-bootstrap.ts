@@ -21,6 +21,7 @@ import {
 } from "../config/resolution-facts.js";
 import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
+import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
@@ -33,7 +34,7 @@ import { isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
-import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
+import { setGatewayRestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -189,7 +190,7 @@ export async function prepareGatewayServerBootstrap(input: {
     key: "OPENCLAW_RAW_STREAM_PATH",
     description: "raw stream log path override",
   });
-  if (!minimalTestGateway) {
+  if (!minimalTestGateway && !opts.updateCanary) {
     await startupTrace.measure("runtime.agent-cli", () => prepareGatewayAgentCliShim());
   }
   const startupConfigModulePromise = startupTrace.measure(
@@ -279,20 +280,22 @@ export async function prepareGatewayServerBootstrap(input: {
   );
   const cfgAtStart = authBootstrap.cfg;
   startupTrace.setConfig(cfgAtStart);
-  try {
-    const cleanup = await startupTrace.measure("agents.github-profile-cleanup", async () => {
-      const { cleanupRetiredManagedGitHubProfiles } =
-        await import("../agents/github-tool-profile-cleanup.js");
-      return await cleanupRetiredManagedGitHubProfiles({
-        config: cfgAtStart,
-        env: process.env,
+  if (!opts.updateCanary) {
+    try {
+      const cleanup = await startupTrace.measure("agents.github-profile-cleanup", async () => {
+        const { cleanupRetiredManagedGitHubProfiles } =
+          await import("../agents/github-tool-profile-cleanup.js");
+        return await cleanupRetiredManagedGitHubProfiles({
+          config: cfgAtStart,
+          env: process.env,
+        });
       });
-    });
-    for (const warning of cleanup.warnings) {
-      log.warn(`managed GitHub profile cleanup: ${warning}`);
+      for (const warning of cleanup.warnings) {
+        log.warn(`managed GitHub profile cleanup: ${warning}`);
+      }
+    } catch (error) {
+      log.warn(`managed GitHub profile cleanup failed: ${formatErrorMessage(error)}`);
     }
-  } catch (error) {
-    log.warn(`managed GitHub profile cleanup failed: ${formatErrorMessage(error)}`);
   }
   if (authBootstrap.generatedToken) {
     log.warn(formatRuntimeGatewayAuthTokenWarning());
@@ -346,7 +349,7 @@ export async function prepareGatewayServerBootstrap(input: {
     ? mergeGatewayAuthConfig(resolvedStartupAuthOverride, { token: authBootstrap.generatedToken })
     : resolvedStartupAuthOverride;
   setDiagnosticsEnabledForProcess(isDiagnosticsEnabled(cfgAtStart));
-  setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
+  setGatewayRestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
   const activeTaskCount = { get: () => 0 };
   setPreRestartDeferralCheck(
     () =>
@@ -464,26 +467,32 @@ export async function prepareGatewayServerBootstrap(input: {
     ),
     preserveExistingOwnership: true,
   });
-  const workerEnvironmentStartup = minimalTestGateway
-    ? undefined
-    : await startupTrace.measure("worker-environments.store-import", async () => {
-        const workerModule = await loadWorkerEnvironmentStartupModule();
-        return await workerModule.loadGatewayWorkerEnvironmentStartupState();
-      });
+  const workerEnvironmentStartup =
+    minimalTestGateway || opts.updateCanary
+      ? undefined
+      : await startupTrace.measure("worker-environments.store-import", async () => {
+          const workerModule = await loadWorkerEnvironmentStartupModule();
+          return await workerModule.loadGatewayWorkerEnvironmentStartupState();
+        });
   const { prepareGatewayPluginBootstrap, runGatewayStartupMaintenance } =
     await startupTrace.measure("plugins.bootstrap-imports", loadStartupPluginsModule);
   const pluginGatewayContext: {
     current: import("./server-methods/types.js").GatewayRequestContext | undefined;
   } = { current: undefined };
   const resolvePluginGatewayContext = () => pluginGatewayContext.current;
-  await startupTrace.measure("startup.maintenance", () =>
-    runGatewayStartupMaintenance({
-      cfgAtStart,
-      startupRuntimeConfig,
-      minimalTestGateway,
-      log,
-    }),
-  );
+  if (opts.updateCanary) {
+    log.warn("candidate gateway: session catalogs and maintenance deferred until activation");
+  } else {
+    await startupTrace.measure("startup.maintenance", () =>
+      runGatewayStartupMaintenance({
+        cfgAtStart,
+        startupRuntimeConfig,
+        minimalTestGateway,
+        log,
+      }),
+    );
+  }
+  publishSystemEventStoreConfig(cfgAtStart);
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
     prepareGatewayPluginBootstrap({
       cfgAtStart,

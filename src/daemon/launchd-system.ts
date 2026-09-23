@@ -13,7 +13,10 @@ import {
   type LaunchctlResult,
 } from "./launchd-exec.js";
 import { decodeLaunchdPlistMetadata } from "./launchd-plist.js";
-import type { ServiceInspectionReason } from "./service-inspection-error.js";
+import {
+  ServiceOwnershipRefusalError,
+  type ServiceInspectionReason,
+} from "./service-inspection-error.js";
 
 const SYSTEM_LAUNCH_DAEMON_DIR = "/Library/LaunchDaemons";
 
@@ -82,16 +85,74 @@ if [ -z "$openclaw_system_launchd_conflict" ]; then
           if [ ! -r "$openclaw_system_launchd_plist" ]; then
             continue
           fi
-          if openclaw_system_launchd_plist_label=$(/usr/bin/plutil -extract Label raw -o - -- "$openclaw_system_launchd_plist" 2>&1); then
+          # Preserve exact string labels, including trailing newlines, on both parser paths.
+          # plutil documents exit 1 for parse failure. Signals/execution errors cannot
+          # establish a missing Label, even if a later lint accepts the same plist.
+          if openclaw_system_launchd_plist_label=$(/usr/bin/plutil -extract Label raw -expect string -n -o - -- "$openclaw_system_launchd_plist" 2>&1; openclaw_system_launchd_parse_status=$?; printf '.'; exit "$openclaw_system_launchd_parse_status"); then
+            openclaw_system_launchd_plist_label=\${openclaw_system_launchd_plist_label%.}
             if [ "$openclaw_system_launchd_plist_label" != "$openclaw_system_launchd_label" ]; then
               continue
             fi
             openclaw_system_launchd_conflict="$openclaw_system_launchd_plist"
             openclaw_system_launchd_detail="installed same-label system LaunchDaemon plist $openclaw_system_launchd_plist"
             break
-          elif /usr/bin/plutil -lint -- "$openclaw_system_launchd_plist" >/dev/null 2>&1; then
+          elif [ "$?" -eq 1 ] && /usr/bin/plutil -lint -- "$openclaw_system_launchd_plist" >/dev/null 2>&1; then
             continue
           else
+            # Endpoint protection can deny plutil while allowing a real read. The system
+            # Perl reader survives package swaps and classifies errno, not diagnostic text.
+            openclaw_system_launchd_snapshot=$(/usr/bin/mktemp "\${TMPDIR:-/tmp}/openclaw-launchd-plist.XXXXXX")
+            if [ -n "$openclaw_system_launchd_snapshot" ]; then
+              /usr/bin/perl -e '
+use strict;
+use Fcntl qw(O_RDONLY O_NONBLOCK);
+use Errno qw(EACCES EPERM ENOENT ENOTDIR);
+sub read_failed {
+  my $code = 0 + $!;
+  exit(($code == EACCES || $code == EPERM) ? 77 :
+       ($code == ENOENT || $code == ENOTDIR) ? 66 : 74);
+}
+$SIG{ALRM} = sub { exit 74; };
+alarm 5;
+sysopen(my $file, $ARGV[0], O_RDONLY | O_NONBLOCK) or read_failed();
+-f $file or exit 74;
+# Inherited PERL_UNICODE must not turn binary plist input into a UTF-8 handle.
+binmode $file;
+binmode STDOUT;
+my $total = 0;
+while (1) {
+  my $count = sysread($file, my $bytes, 65536);
+  defined($count) or read_failed();
+  last if !$count;
+  $total += $count;
+  $total <= 1048576 or exit 75;
+  print STDOUT $bytes or exit 74;
+}
+close($file) or read_failed();
+close(STDOUT) or exit 74;
+' "$openclaw_system_launchd_plist" >"$openclaw_system_launchd_snapshot" 2>/dev/null
+              openclaw_system_launchd_read_status=$?
+              if [ "$openclaw_system_launchd_read_status" -eq 77 ] || [ "$openclaw_system_launchd_read_status" -eq 66 ]; then
+                /bin/rm -f "$openclaw_system_launchd_snapshot"
+                continue
+              elif [ "$openclaw_system_launchd_read_status" -eq 0 ]; then
+                # The sentinel preserves label newlines through command substitution.
+                if openclaw_system_launchd_plist_label=$(/usr/bin/plutil -extract Label raw -expect string -n -o - -- - <"$openclaw_system_launchd_snapshot" 2>/dev/null; openclaw_system_launchd_parse_status=$?; printf '.'; exit "$openclaw_system_launchd_parse_status"); then
+                  openclaw_system_launchd_plist_label=\${openclaw_system_launchd_plist_label%.}
+                  /bin/rm -f "$openclaw_system_launchd_snapshot"
+                  if [ "$openclaw_system_launchd_plist_label" != "$openclaw_system_launchd_label" ]; then
+                    continue
+                  fi
+                  openclaw_system_launchd_conflict="$openclaw_system_launchd_plist"
+                  openclaw_system_launchd_detail="installed same-label system LaunchDaemon plist $openclaw_system_launchd_plist"
+                  break
+                elif [ "$?" -eq 1 ] && /usr/bin/plutil -lint -- - <"$openclaw_system_launchd_snapshot" >/dev/null 2>&1; then
+                  /bin/rm -f "$openclaw_system_launchd_snapshot"
+                  continue
+                fi
+              fi
+              /bin/rm -f "$openclaw_system_launchd_snapshot"
+            fi
             openclaw_system_launchd_conflict="$openclaw_system_launchd_plist"
             openclaw_system_launchd_detail="could not inspect system LaunchDaemon plist $openclaw_system_launchd_plist: $openclaw_system_launchd_plist_label"
             break
@@ -252,11 +313,11 @@ function formatSystemLaunchDaemonOwnershipError(ownership: SystemLaunchDaemonCon
   ].join("\n");
 }
 
-class SystemLaunchDaemonOwnershipError extends Error {
+class SystemLaunchDaemonOwnershipError extends ServiceOwnershipRefusalError {
   readonly code = "SYSTEM_LAUNCH_DAEMON_OWNERSHIP";
 
   constructor(readonly ownership: SystemLaunchDaemonConflict) {
-    super(formatSystemLaunchDaemonOwnershipError(ownership));
+    super("launchd-system-owned", formatSystemLaunchDaemonOwnershipError(ownership));
     this.name = "SystemLaunchDaemonOwnershipError";
   }
 }

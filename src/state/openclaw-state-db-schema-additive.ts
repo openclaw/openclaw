@@ -26,6 +26,7 @@ import {
   tableHasColumn,
   tableHasColumns,
 } from "./openclaw-state-db-schema-helpers.js";
+import { repairLegacyTaskIdentifiers } from "./openclaw-state-db-task-identifiers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const repositoryWorkspacePendingSchemas = new WeakSet<DatabaseSync>();
@@ -378,6 +379,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
   if (repairHistoricalRows) {
     repairLegacySubagentSuspensionReasons(db);
     repairLegacySubagentExecutionPayloads(db);
+    repairLegacyTaskIdentifiers(db);
     repairLegacySubagentTaskBindings(db);
     repairLegacySubagentRetainedResults(db);
   }

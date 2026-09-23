@@ -74,6 +74,15 @@ const PLUGIN_OWNED_FS_SAFE_IMPORTS: Record<
   string,
   Record<string, { values: readonly string[]; types?: readonly string[] }>
 > = {
+  "extensions/llama-cpp/src/llama-server-install.ts": {
+    "@openclaw/fs-safe/durability": { values: ["sha256File"] },
+  },
+  "extensions/migrate-claude/skills.ts": {
+    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
+  },
+  "extensions/signal/src/install-signal-cli.ts": {
+    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
+  },
   "extensions/openshell/src/backend.ts": {
     "@openclaw/fs-safe/atomic": {
       values: ["movePathWithCopyFallback"],

@@ -1,4 +1,3 @@
-// Matrix plugin module implements transport behavior.
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
@@ -13,6 +12,14 @@ import {
   type SsrFPolicy,
   type PinnedDispatcherPolicy,
 } from "./transport-runtime-api.js";
+
+// The SDK retries every fetch error except AbortError, including stale host authority.
+class MatrixSdkAuthorityError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : "Matrix request authority expired", { cause });
+    this.name = "AbortError";
+  }
+}
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -289,10 +296,15 @@ async function fetchWithMatrixGuardedRedirects(params: {
         }
         // The durable callback must precede I/O, but it is not proof of I/O.
         // Roll back its queue marker if the final fence rejects the first fetch.
-        throw new PlatformMessageNotDispatchedError(
+        const rejected = new PlatformMessageNotDispatchedError(
           error instanceof Error ? error.message : "Matrix request rejected before dispatch",
           { cause: error },
         );
+        if (error instanceof MatrixSdkAuthorityError) {
+          // Retain proven-unsent custody while stopping the SDK's network backoff.
+          rejected.name = "AbortError";
+        }
+        throw rejected;
       }
       if (error instanceof PlatformMessageNotDispatchedError) {
         // A later redirect fence describes only that hop, not the earlier request.
@@ -324,7 +336,16 @@ export function createMatrixGuardedFetch(params: {
   beforeRequest?: (resource: RequestInfo | URL, init?: RequestInit) => Promise<void> | undefined;
 }): typeof fetch {
   return (async (resource: RequestInfo | URL, init?: RequestInit) => {
-    const assertCurrent = params.captureRequestAuthority?.() ?? captureChannelReadAuthority();
+    const authority = params.captureRequestAuthority?.() ?? captureChannelReadAuthority();
+    const assertCurrent = authority
+      ? () => {
+          try {
+            authority();
+          } catch (error) {
+            throw new MatrixSdkAuthorityError(error);
+          }
+        }
+      : undefined;
     const assertSendCurrent = params.captureSendCurrentness?.(resource, init);
     assertCurrent?.();
     const url = withoutMatrixStateAfterSyncParam(toFetchUrl(resource));

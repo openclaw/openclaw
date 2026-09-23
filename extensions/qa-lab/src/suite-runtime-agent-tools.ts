@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements suite runtime agent tools behavior.
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";

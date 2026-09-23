@@ -10,7 +10,7 @@
   flex-direction: row;
 }
 
-/* The committed transcript opts new prompts and replies in once. Animate the
+/* The committed transcript opts new prompts in once. Animate the
    bubble only, not the virtual row positioning or measured layout dimensions. */
 @keyframes chat-message-enter {
   from {
@@ -265,16 +265,31 @@
   overflow-wrap: anywhere;
 }
 
+.chat-group-footer--send-status .chat-group-footer__meta {
+  flex-wrap: wrap;
+}
+
 .chat-send-status {
   display: inline-flex;
   order: 2;
   align-items: center;
-  gap: 4px;
-  color: var(--danger);
+  flex-wrap: wrap;
+  gap: 0.5em;
+  min-width: 0;
+  color: var(--text);
   font-size: 12px;
   line-height: 1.2;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   pointer-events: auto;
+}
+
+/* Keep each separator with its following label when recovery rows wrap. */
+.chat-send-status__part {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  min-width: 0;
 }
 
 .chat-author-avatar {
@@ -416,9 +431,8 @@
   stroke-linejoin: round;
 }
 
-.chat-send-status[data-send-state="unconfirmed"],
-.chat-send-status[data-send-state="waiting-reconnect"] {
-  color: var(--warn);
+.chat-send-status__part > [aria-hidden="true"] {
+  color: var(--muted);
 }
 
 .chat-group-footer .chat-send-status__action {
@@ -427,14 +441,17 @@
   min-height: 0;
   padding: 0;
   border-radius: 0;
-  color: inherit;
+  color: var(--link);
   font: inherit;
   opacity: 1 !important;
   pointer-events: auto;
 }
 
+.chat-group-footer .chat-send-status__discard {
+  color: var(--muted);
+}
+
 .chat-group-footer .chat-send-status__action:hover {
-  color: inherit;
   text-decoration: underline;
 }
 
@@ -448,7 +465,6 @@
   letter-spacing: 0;
   user-select: none;
 }
-
 .chat-divider__rule {
   display: flex;
   align-items: center;
@@ -506,31 +522,6 @@
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
-}
-
-.chat-divider__details-separator {
-  color: var(--muted);
-}
-
-.chat-divider__action {
-  padding: 0;
-  border: 0;
-  border-bottom: 1px solid currentColor;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  line-height: inherit;
-  white-space: nowrap;
-  cursor: var(--cursor-action);
-}
-
-.chat-divider__action:hover {
-  color: var(--muted-strong);
-}
-
-.chat-divider__action:focus-visible {
-  outline: 1px solid var(--muted-strong);
-  outline-offset: 3px;
 }
 
 .chat-notice {
@@ -630,18 +621,20 @@ img.chat-avatar.user {
 /* Keep the image and its fallback in one stable grid item. display: contents
    can lose the avatar column when Lit reconciles an attributed message. */
 .chat-avatar-slot {
+  position: relative;
   display: grid;
 }
 
-.chat-avatar-slot > :not(img) {
+.chat-avatar-slot > :not(img, .identity-avatar__hat) {
   display: none;
 }
 
-.chat-avatar-slot.is-fallback > img.chat-avatar {
+.chat-avatar-slot.is-fallback > img.chat-avatar,
+.chat-avatar-slot.is-fallback > .identity-avatar__hat {
   display: none;
 }
 
-.chat-avatar-slot.is-fallback > :not(img) {
+.chat-avatar-slot.is-fallback > :not(img, .identity-avatar__hat) {
   display: grid;
 }
 
@@ -748,22 +741,6 @@ img.chat-avatar {
 .chat-group.user .chat-duplicate-count {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: color-mix(in srgb, var(--text) 80%, var(--primary) 20%);
-}
-
-.chat-reply-attribution {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-  margin-bottom: var(--space-1);
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.chat-reply-attribution__icon,
-.chat-reply-attribution__icon svg {
-  width: 14px;
-  height: 14px;
 }
 
 @media (hover: none),
@@ -1088,7 +1065,7 @@ img.chat-avatar {
 
 .chat-group.user
   :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
-  > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
+  > :is(.chat-text, .chat-message-disclosure) {
   width: fit-content;
   max-width: 100%;
   padding: 10px 14px;
@@ -1099,7 +1076,7 @@ img.chat-avatar {
 :where(:root[data-theme-mode="light"])
   .chat-group.user
   :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
-  > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
+  > :is(.chat-text, .chat-message-disclosure) {
   color: var(--text-strong);
 }
 
@@ -1307,12 +1284,9 @@ img.chat-avatar {
   .chat-thread
     .chat-group.assistant:not(.chat-group--forwarded)
     .chat-bubble:not(.chat-bubble--tool-shell)
-    :is(
-      .chat-assistant-attachments,
-      .chat-message-images,
-      openclaw-chat-async-question,
-      openclaw-chat-clawhub-card
-    ):not(.chat-assistant-attachments *) {
+    :is(.chat-assistant-attachments, .chat-message-images, openclaw-chat-clawhub-card):not(
+      .chat-assistant-attachments *
+    ) {
     max-width: 90%;
   }
 

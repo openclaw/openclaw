@@ -21,7 +21,6 @@ import {
   type ContextEngineRuntimeSettings,
   type ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
-import type { CapturedCompactionCheckpointSnapshot } from "../../gateway/session-compaction-checkpoints.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -34,11 +33,6 @@ import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js"
 import type { CompactionRequestConstraints } from "../sessions/compaction/request-budget.js";
 import { SessionManager } from "../sessions/index.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
-import {
-  captureCompactionCheckpointSnapshotAsync,
-  cleanupCompactionCheckpointSnapshot,
-  persistCompactionCheckpoint,
-} from "./compaction-checkpoint.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
 import {
   compactContextEngineWithSafetyTimeout,
@@ -137,12 +131,12 @@ function mergeSecondaryNativeHarnessCompactionDetails(params: {
 function enqueueCompactionInLanes<T>(
   params: Pick<
     CompactEmbeddedAgentSessionParams,
-    "sessionKey" | "sessionId" | "lane" | "enqueue" | "abortSignal"
+    "sessionKey" | "sessionId" | "spawnedBy" | "lane" | "enqueue" | "abortSignal"
   >,
   run: () => Promise<T>,
 ): Promise<T> {
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
-  const globalLane = resolveGlobalLane(params.lane);
+  const globalLane = resolveGlobalLane(params.lane, params);
   const enqueueGlobal =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
   const options = { abortSignal: params.abortSignal };
@@ -264,8 +258,6 @@ export async function executeQueuedContextEngineCompaction(input: {
         throw error;
       }
     };
-    let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null | undefined;
-    let checkpointSnapshotRetained = false;
     try {
       if (params.abortSignal?.aborted) {
         return createQueuedCompactionAbortedResult();
@@ -276,13 +268,6 @@ export async function executeQueuedContextEngineCompaction(input: {
       // Fire before_compaction / after_compaction hooks here so plugin subscribers
       // are notified regardless of which engine is active.
       const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
-      checkpointSnapshot = engineOwnsCompaction
-        ? await captureCompactionCheckpointSnapshotAsync({
-            sessionFile: params.sessionFile,
-            sessionManager: SessionManager.open(runtimeTarget),
-            sessionTarget: runtimeTarget,
-          })
-        : null;
       assertActive();
       const hookRunner = engineOwnsCompaction
         ? asCompactionHookRunner(getGlobalHookRunner())
@@ -483,35 +468,17 @@ export async function executeQueuedContextEngineCompaction(input: {
       const postCompactionSessionTarget = successor.sessionTarget;
       let secondaryNativeHarnessCompaction: EmbeddedAgentCompactResult | undefined;
       try {
-        if (result.ok && result.compacted && canContinue()) {
-          const checkpointContext = createTranscriptWriteContext(
-            postCompactionSessionTarget,
-            expected,
-            params.abortSignal,
-          );
-          checkpointSnapshotRetained = await withOwnedSessionTranscriptWrites(
-            checkpointContext,
-            () =>
-              persistCompactionCheckpoint({
-                trigger: params.trigger,
-                snapshot: checkpointSnapshot,
-                summary: result.result?.summary,
-                firstKeptEntryId: result.result?.firstKeptEntryId,
-                tokensBefore: result.result?.tokensBefore,
-                tokensAfter: result.result?.tokensAfter,
-                sessionTarget: postCompactionSessionTarget,
-              }),
-          );
-        }
         if (result.ok && result.compacted && canContinue() && contextEngine.maintain) {
           const rewriteContext = createTranscriptWriteContext(
             postCompactionSessionTarget,
             expected,
             params.abortSignal,
           );
-          const sessionManager = SessionManager.open(
+          const sessionManager = await SessionManager.openAsync(
             postCompactionSessionTarget,
             resolvedWorkspaceDir,
+            undefined,
+            params.abortSignal,
           );
           const maintenance = runContextEngineMaintenance({
             contextEngine,
@@ -529,7 +496,7 @@ export async function executeQueuedContextEngineCompaction(input: {
             withSessionManagerRewriteLock: async (operation) =>
               await withOwnedSessionTranscriptWrites(rewriteContext, async () => {
                 rewriteContext.assertCommitAllowed();
-                sessionManager.reloadPersistedTranscript();
+                await sessionManager.reloadPersistedTranscriptAsync(params.abortSignal);
                 rewriteContext.assertCommitAllowed();
                 return await operation();
               }),
@@ -678,9 +645,6 @@ export async function executeQueuedContextEngineCompaction(input: {
       };
     } finally {
       closed = true;
-      if (!checkpointSnapshotRetained) {
-        await cleanupCompactionCheckpointSnapshot(checkpointSnapshot);
-      }
     }
   });
 }

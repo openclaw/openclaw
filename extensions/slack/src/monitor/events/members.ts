@@ -1,4 +1,3 @@
-// Slack plugin module implements members behavior.
 import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

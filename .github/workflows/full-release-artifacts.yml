@@ -67,6 +67,12 @@ jobs:
           ref: ${{ github.sha }}
           sparse-checkout: scripts
           persist-credentials: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       - id: request
         name: Bind exact active validation parent
         env:
@@ -92,10 +98,6 @@ jobs:
       preflight_phase: ${{ inputs.preflight_phase }}
       npm_dist_tag: ${{ inputs.npm_dist_tag }}
       release_candidate_branch: ${{ inputs.release_candidate_branch }}
-      # Blacksmith 32vcpu runners have been dropping this producer's source
-      # check ~20 minutes into `pnpm check` (three release parents in a row on
-      # 2026-09-18); hosted runners finish it reliably.
-      use_github_hosted_runners: true
 
   candidate:
     name: Prepare validation candidate
@@ -133,6 +135,12 @@ jobs:
           ref: ${{ github.sha }}
           sparse-checkout: scripts
           persist-credentials: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       - id: receipt
         name: Record immutable artifact outputs
         env:

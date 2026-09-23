@@ -33,12 +33,6 @@ import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import {
-  containsSecretSentinel,
-  resolveSecretSentinel,
-  SECRET_SENTINEL_PATTERN,
-  swapSecretSentinelsInText,
-} from "../secrets/sentinel.js";
-import {
   ProviderHttpError,
   readResponseTextLimited,
   summarizeProviderTransportError,
@@ -53,6 +47,7 @@ import {
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
 import { getProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
+import { swapSecretSentinelsForEgress } from "./provider-transport-secret-egress.js";
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
 const SLOW_MODEL_FETCH_MS = 1_000;
@@ -74,17 +69,9 @@ const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
 function hasReadableSseData(block: string): boolean {
-  const dataLines = block
+  return block
     .split(/\r\n|\n|\r/)
-    .filter((line) => line === "data" || line.startsWith("data:"))
-    .map((line) => {
-      if (line === "data") {
-        return "";
-      }
-      const value = line.slice("data:".length);
-      return value.startsWith(" ") ? value.slice(1) : value;
-    });
-  return dataLines.length > 0 && dataLines.join("\n").trim().length > 0;
+    .some((line) => line.startsWith("data:") && line.slice("data:".length).trim().length > 0);
 }
 
 function findSseEventBoundary(buffer: string): { index: number; length: number } | undefined {
@@ -725,63 +712,6 @@ function withModelProviderNetworkRemediation(
       `models.providers.${params.providerId}.request.allowPrivateNetwork=true only for an ` +
       `operator-controlled endpoint. Original block: ${error.message}`,
   );
-}
-
-function headersContainSecretSentinel(headers: HeadersInit | undefined): boolean {
-  if (!headers) {
-    return false;
-  }
-  for (const value of new Headers(headers).values()) {
-    if (containsSecretSentinel(value)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function swapSecretSentinelsInUrl(url: string): { text: string; unknown: string[] } {
-  if (!containsSecretSentinel(url)) {
-    return { text: url, unknown: [] };
-  }
-  const unknown = new Set<string>();
-  const text = url.replace(new RegExp(SECRET_SENTINEL_PATTERN.source, "g"), (sentinel) => {
-    const value = resolveSecretSentinel(sentinel);
-    if (value === undefined) {
-      unknown.add(sentinel);
-      return sentinel;
-    }
-    // Sentinels are URL-safe placeholders. Encode the real bytes so query/path structure is stable.
-    return encodeURIComponent(value);
-  });
-  return { text, unknown: [...unknown] };
-}
-
-function swapSecretSentinelsForEgress(params: { url: string; headers?: HeadersInit }): {
-  url: string;
-  headers?: Headers;
-} {
-  if (!containsSecretSentinel(params.url) && !headersContainSecretSentinel(params.headers)) {
-    return { url: params.url };
-  }
-  const urlSwap = swapSecretSentinelsInUrl(params.url);
-  const headers = params.headers ? new Headers(params.headers) : undefined;
-  const unknown = new Set(urlSwap.unknown);
-  if (headers) {
-    for (const [name, value] of headers.entries()) {
-      const swapped = swapSecretSentinelsInText(value);
-      headers.set(name, swapped.text);
-      for (const sentinel of swapped.unknown) {
-        unknown.add(sentinel);
-      }
-    }
-  }
-  const unresolved = unknown.values().next().value;
-  if (unresolved) {
-    throw new Error(
-      `Secret sentinel ${unresolved} is not registered in this process; refusing to send request`,
-    );
-  }
-  return { url: urlSwap.text, ...(headers ? { headers } : {}) };
 }
 
 export function buildGuardedModelFetch(

@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
+  ProviderHttpError,
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
@@ -154,8 +155,10 @@ async function runParallelSearch(params: {
         // otherwise rewrite the name first and hide the shape from the
         // structured matcher), then the canonical tool-payload redactor applies
         // the operator's logging.redactPatterns on top of the built-in defaults.
-        throw new Error(
+        params.signal?.throwIfAborted();
+        throw new ProviderHttpError(
           `Parallel API error (${res.status}): ${redactToolPayloadText(redactSensitiveText(detail || res.statusText, { mode: "tools" }))}`,
+          { status: res.status },
         );
       }
       return await readProviderJsonResponse<ParallelSearchResponse>(res, "Parallel API", {

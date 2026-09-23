@@ -56,9 +56,15 @@ describe("worker task artifact lifetime", () => {
       vi.resetModules();
       cleanup.mockReset();
       let artifactsCleaned = false;
+      const cleanupOrder: string[] = [];
       cleanup.mockImplementation(async () => {
         await Promise.resolve();
         artifactsCleaned = true;
+        cleanupOrder.push("temporary-directory");
+      });
+      const releaseResources = vi.fn(async () => {
+        await Promise.resolve();
+        cleanupOrder.push("resources");
       });
       const { WorkerTaskPool: MockedWorkerTaskPool } = await import("./worker-task-pool.js");
       const consumed = vi.fn();
@@ -78,7 +84,11 @@ describe("worker task artifact lifetime", () => {
         maxWorkers: 1,
         maxPendingTasks: 1,
         onRetirementFailure,
-        prepareWorker: () => ({ options: {}, temporaryDirectory: "/fixture/worker-scratch" }),
+        prepareWorker: () => ({
+          options: {},
+          temporaryDirectory: "/fixture/worker-scratch",
+          releaseResources,
+        }),
       });
       try {
         const task = pool.run(1, phase === "idle" ? {} : { onInputConsumed: consumed });
@@ -125,6 +135,7 @@ describe("worker task artifact lifetime", () => {
         expect(observedCustody).toEqual([[0, 0]]);
         expect(created).toBe(1);
         expect(cleanup).not.toHaveBeenCalled();
+        expect(releaseResources).not.toHaveBeenCalled();
         expect(taskSettled).toBe(true);
         expect(consumed).not.toHaveBeenCalled();
 
@@ -135,6 +146,8 @@ describe("worker task artifact lifetime", () => {
         expect(created).toBe(1);
         expect(cleanup).toHaveBeenCalledExactlyOnceWith("/fixture/worker-scratch", "Worker task");
         expect(artifactsCleaned).toBe(true);
+        expect(releaseResources).toHaveBeenCalledOnce();
+        expect(cleanupOrder).toEqual(["temporary-directory", "resources"]);
         expect(consumed).toHaveBeenCalledTimes(phase === "idle" ? 0 : 1);
       } finally {
         await pool.close().catch(() => undefined);
@@ -307,6 +320,9 @@ describe("worker task artifact lifetime", () => {
       },
     });
     try {
+      await expect(
+        context.run("request", () => pool.run({ label: "warm" }, {})),
+      ).resolves.toMatchObject({ label: "warm" });
       const controller = new AbortController();
       const counters = new SharedArrayBuffer(8);
       const active = context.run("request", () =>

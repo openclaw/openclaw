@@ -11,6 +11,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import {
   discoverUpdateStateSchemaInspectionInProcess,
   readUpdateStateSchemaVersions,
@@ -77,6 +78,7 @@ it.each(
       candidateRoot: path.join(fixture, "package"),
       config: {},
     };
+    const stagingRoot = mode === "snapshot" ? input.targetStateDir : path.join(cache, "openclaw");
     const admitted =
       mode === "snapshot" ? await inventoryUpdateCandidateStateWorker(input) : undefined;
     if (scenario.readError && mode === "snapshot") {
@@ -101,14 +103,14 @@ it.each(
       import path from "node:path";
       const removeSync = fs.rmSync;
       const removeAsync = fs.promises.rm;
-      const cache = ${JSON.stringify(cache)};
+      const stagingRoot = ${JSON.stringify(stagingRoot)};
       const attemptsPath = ${JSON.stringify(attemptsPath)};
       const fault = ${JSON.stringify(scenario.cleanup)};
       let attempts = 0;
       const prepareRemoval = (location) => {
         const snapshot = String(location);
         const directory = path.dirname(snapshot);
-        if (path.dirname(directory) !== path.join(cache, "openclaw") ||
+        if (path.dirname(directory) !== stagingRoot ||
             path.basename(snapshot) !== "database.sqlite") {
           return undefined;
         }
@@ -171,7 +173,9 @@ it.each(
             failed: boolean;
           },
       );
-    const retained = await fs.readdir(path.join(cache, "openclaw"));
+    const retained = (await fs.readdir(stagingRoot)).filter((name) =>
+      name.startsWith("openclaw-sqlite-readonly-"),
+    );
     console.log(
       JSON.stringify({
         ...scenario,
@@ -524,4 +528,99 @@ setInterval(() => {}, 60_000);
       }
     }
   },
+);
+
+it.each(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
+  "settles the actual rehearsal backup child before removing scratch on %s",
+  async (failure) => {
+    const stateDir = path.join(root, "backup-failure");
+    const source = path.join(stateDir, "state", "openclaw.sqlite");
+    await createDatabase(
+      source,
+      "CREATE TABLE witness(value TEXT); INSERT INTO witness VALUES ('committed');",
+    );
+    const ready = path.join(root, "backup-ready.json");
+    const preload = path.join(root, "backup-fault.cjs");
+    await fs.writeFile(
+      preload,
+      `
+      const fs = require("node:fs"), sqlite = require("node:sqlite");
+      if (${JSON.stringify(failure)} !== "cooperative-cancel") process.on("SIGTERM", () => {});
+      sqlite.backup = async function(source, destination) {
+        fs.writeFileSync(destination, "partial private backup");
+        fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ pid: process.pid, destination }));
+        if (${JSON.stringify(failure)} === "disk-full") {
+          throw Object.assign(new Error("synthetic destination full"), { code: "ERR_SQLITE_ERROR", errcode: 13 });
+        }
+        setInterval(() => {}, 1000);
+        await new Promise(() => {});
+      };
+    `,
+    );
+    const now = Date.now.bind(Date);
+    let elapsed = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    const controller = new AbortController();
+    const operation = prepareUpdateCandidateStateSnapshot({
+      config: {},
+      stateDir,
+      candidateRoot: root,
+      env: { TMPDIR: root },
+      workerEnv: () => ({
+        ...process.env,
+        NODE_OPTIONS: `--require ${JSON.stringify(preload)}`,
+        XDG_CACHE_HOME: path.join(root, "unowned-cache"),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      }),
+      signal: controller.signal,
+    });
+    const outcome = operation.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await expect
+        .poll(async () => fs.readFile(ready, "utf8").catch(() => ""), { timeout: 10_000 })
+        .not.toBe("");
+      const child = JSON.parse(await fs.readFile(ready, "utf8")) as {
+        pid: number;
+        destination: string;
+      };
+      const scratch = path.dirname(path.dirname(child.destination));
+      // SQLite can publish an extended-length Windows path for the same scratch parent.
+      expect(path.toNamespacedPath(path.dirname(scratch))).toBe(path.toNamespacedPath(root));
+      expect(path.basename(scratch)).toMatch(/^openclaw-update-canary-/);
+      if (failure === "cancel" || failure === "cooperative-cancel") {
+        controller.abort(new Error("cancel rehearsal proof"));
+      } else if (failure === "deadline") {
+        elapsed = 600_000;
+      }
+      const result = await outcome;
+      expect(result).toMatchObject({ error: expect.any(Error) });
+      if ("error" in result) {
+        expect(String(result.error)).toContain(
+          failure === "cancel" || failure === "cooperative-cancel"
+            ? "cancel rehearsal proof"
+            : failure === "deadline"
+              ? "made no progress"
+              : "synthetic destination full",
+        );
+      }
+      await waitForDead(child.pid, 5_000);
+      // Both cooperative and forced termination confirm this owned process tree is gone.
+      await expect(fs.stat(scratch)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readdir(root)).not.toContain("unowned-cache");
+      const db = openNodeSqliteDatabase(source, { readOnly: true });
+      try {
+        expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+        expect(db.prepare("SELECT value FROM witness").get()).toEqual({ value: "committed" });
+      } finally {
+        db.close();
+      }
+    } finally {
+      controller.abort();
+      await outcome;
+    }
+  },
+  20_000,
 );

@@ -1,15 +1,30 @@
+import { symlink } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { emitAcpLifecycleStart } from "../agents/command/attempt-execution.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
+import { getTaskExecutionObservation } from "./task-execution-observation.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
-import { runTaskRegistryWorkerMutation } from "./task-registry-state.js";
-import { findTaskByRunId, getTaskById } from "./task-registry.js";
-import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
+import { listTaskRecordPage } from "./task-registry-query.js";
+import {
+  readTaskRegistryRevision,
+  reloadTaskRegistryFromStoreAsync,
+  runTaskRegistryWorkerMutation,
+  tasks,
+} from "./task-registry-state.js";
+import { findTaskByRunId, getTaskById, markTaskTerminalById } from "./task-registry.js";
+import {
+  configureTaskRegistryRuntime,
+  getTaskRegistryStore,
+  onTaskRegistryChange,
+} from "./task-registry.store.js";
 import { createTaskFixture } from "./task-registry.test-support.js";
+import { bindTaskRunOwner } from "./task-run-owner.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -22,6 +37,167 @@ afterEach(() => {
 });
 
 describe("task registry agent events", () => {
+  it.each([
+    { phase: "end", executionSettled: false },
+    { phase: "error", executionSettled: false },
+    { phase: "end", executionSettled: true },
+    { phase: "error", executionSettled: true },
+  ])(
+    "leaves task settlement to its owner after $phase (execution settled: $executionSettled)",
+    async ({ phase, executionSettled }) => {
+      await withOpenClawTestState({ layout: "state-only" }, async () => {
+        const runId = `live-task-${phase}`;
+        const task = createTaskFixture("cli", {
+          runId,
+          childSessionKey: "agent:main:main",
+          task: "Work still unwinding",
+        });
+        const release = bindTaskRunOwner(task, async () => ({
+          ok: false,
+          error: "Cancellation was not requested.",
+        }));
+        const execution = () => getTaskExecutionObservation(task).state;
+        try {
+          emitAgentEvent({
+            runId,
+            sessionKey: "agent:main:main",
+            stream: "lifecycle",
+            data: {
+              phase,
+              status: "cancelled",
+              aborted: true,
+              stopReason: "rpc",
+              endedAt: Date.now(),
+              ...(executionSettled ? { executionSettled } : {}),
+            },
+          });
+          expect(getTaskById(task.taskId)).toMatchObject({ status: "running" });
+          expect(getTaskById(task.taskId)?.endedAt).toBeUndefined();
+          expect(execution()).toBe(executionSettled ? "finished" : "unknown");
+          if (executionSettled) {
+            emitAgentEvent({
+              runId,
+              stream: "lifecycle",
+              data: { phase: "start", startedAt: Date.now() },
+            });
+            expect(execution()).toBe("running");
+            emitAgentEvent({ runId, stream: "execution", data: { state: "unknown" } });
+            expect(execution()).toBe("unknown");
+          }
+          markTaskTerminalById({ taskId: task.taskId, status: "cancelled", endedAt: Date.now() });
+          expect(getTaskById(task.taskId)?.status).toBe("cancelled");
+        } finally {
+          release();
+        }
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "persists an ACP producer timestamp across lifecycle projection and SQLite reload",
+      runId: "run-reused-lifecycle",
+      task: "Reuse a persisted task row",
+      initialStatus: "queued" as const,
+      lastEventAt: 1_000,
+      lifecycleStartedAt: 2_000,
+      terminalStartedAt: undefined,
+      endedAt: 2_500,
+      expectedStartedAt: 2_000,
+    },
+    {
+      name: "persists an accepted zero lifecycle start timestamp over stale state",
+      runId: "run-zero-lifecycle",
+      task: "Replace a stale task timestamp",
+      initialStatus: "queued" as const,
+      lastEventAt: undefined,
+      lifecycleStartedAt: 0,
+      terminalStartedAt: undefined,
+      endedAt: 500,
+      expectedStartedAt: 0,
+    },
+    {
+      name: "preserves an earlier nonzero producer timestamp across queued lifecycle writes",
+      runId: "run-earlier-lifecycle",
+      task: "Normalize the accepted producer timestamp",
+      initialStatus: "queued" as const,
+      lastEventAt: undefined,
+      lifecycleStartedAt: 500,
+      terminalStartedAt: undefined,
+      endedAt: 1_500,
+      expectedStartedAt: 500,
+    },
+    {
+      name: "ignores a non-finite lifecycle timestamp during durable terminal projection",
+      runId: "run-non-finite-terminal",
+      task: "Keep the accepted producer timestamp",
+      initialStatus: undefined,
+      lastEventAt: undefined,
+      lifecycleStartedAt: undefined,
+      terminalStartedAt: Number.NaN,
+      endedAt: 1_500,
+      expectedStartedAt: 1_000,
+    },
+  ])(
+    "$name",
+    async ({
+      runId,
+      task,
+      initialStatus,
+      lastEventAt,
+      lifecycleStartedAt,
+      terminalStartedAt,
+      endedAt,
+      expectedStartedAt,
+    }) => {
+      await withOpenClawTestState({ layout: "state-only" }, async () => {
+        resetTaskRegistryForTests({ persist: false });
+        const created = createTaskFixture("acp", {
+          requesterSessionKey: "agent:main:main",
+          runId,
+          task,
+          notifyPolicy: "silent",
+          startedAt: 1_000,
+          ...(initialStatus === undefined ? {} : { status: initialStatus }),
+          ...(lastEventAt === undefined ? {} : { lastEventAt }),
+        });
+
+        const published = createDeferred();
+        const stop = onTaskRegistryChange(() => {
+          if (tasks.get(created.taskId)?.status === "succeeded") {
+            published.resolve();
+          }
+        });
+        try {
+          if (lifecycleStartedAt !== undefined) {
+            emitAcpLifecycleStart({ runId, startedAt: lifecycleStartedAt });
+          }
+          emitAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: {
+              phase: "end",
+              endedAt,
+              ...(terminalStartedAt === undefined ? {} : { startedAt: terminalStartedAt }),
+            },
+          });
+
+          await published.promise;
+        } finally {
+          stop();
+        }
+
+        resetTaskRegistryForTests({ persist: false });
+        await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+        expect(getTaskById(created.taskId)).toMatchObject({
+          status: "succeeded",
+          startedAt: expectedStartedAt,
+          endedAt,
+        });
+      });
+    },
+  );
+
   it("keeps unscoped agent events out of SQLite", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-task-unscoped-events-" },
@@ -88,14 +264,22 @@ describe("task registry agent events", () => {
         },
         async () => store.loadSnapshot(),
       );
+      const published = createDeferred();
+      const stop = onTaskRegistryChange(() => {
+        if (tasks.get(task.taskId)?.status === "succeeded") {
+          published.resolve();
+        }
+      });
       try {
         emitAgentEvent({
           runId: rebound.runId,
           stream: "lifecycle",
           data: { phase: "end" },
         });
+        await published.promise;
         expect(store.loadSnapshot().tasks.get(task.taskId)?.status).toBe("succeeded");
       } finally {
+        stop();
         release.resolve();
         await pending;
       }
@@ -170,7 +354,7 @@ describe("task registry agent events", () => {
 
           dateNow.mockReturnValue(initialLastEventAt + 60_000);
           emitCandidate(text.trimEnd());
-          expect(upsert).toHaveBeenCalledOnce();
+          await vi.waitFor(() => expect(upsert).toHaveBeenCalledOnce());
           expect(findTaskByRunId(runId)?.lastEventAt).toBe(initialLastEventAt + 60_000);
           upsert.mockClear();
           emit("assistant", { text: "Still editing" });
@@ -178,7 +362,7 @@ describe("task registry agent events", () => {
           expect(getTaskActivitySnapshot(task.taskId)?.lastActivity).toBe("Still editing");
 
           emit("error", { error: "Observed diagnostic failure" });
-          expect(upsert).toHaveBeenCalledOnce();
+          await vi.waitFor(() => expect(upsert).toHaveBeenCalledOnce());
           expect(findTaskByRunId(runId)?.error).toBe("Observed diagnostic failure");
           upsert.mockClear();
           emit("tool", {
@@ -187,7 +371,7 @@ describe("task registry agent events", () => {
             toolCallId: "write-1",
             args: { path: "src/example.ts", content: "one\ntwo" },
           });
-          expect(upsert).toHaveBeenCalledOnce();
+          await vi.waitFor(() => expect(upsert).toHaveBeenCalledOnce());
           expect(findTaskByRunId(runId)).toMatchObject({
             toolUseCount: 1,
             lastToolName: "write",
@@ -207,7 +391,7 @@ describe("task registry agent events", () => {
           });
           expect(upsert).not.toHaveBeenCalled();
           emit("lifecycle", { phase: "end", endedAt: initialLastEventAt + 60_000 });
-          expect(upsert).toHaveBeenCalledOnce();
+          await vi.waitFor(() => expect(upsert).toHaveBeenCalledOnce());
           expect(findTaskByRunId(runId)?.status).toBe("succeeded");
         } finally {
           dateNow.mockRestore();
@@ -215,4 +399,47 @@ describe("task registry agent events", () => {
       });
     },
   );
+});
+
+describe("task registry database lifecycle", () => {
+  it.each([false, true])("invalidates only its admitted database (alias: %s)", async (alias) => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      configureTaskRegistryRuntime({ store: createInMemoryTaskRegistryStore() });
+      const task = createTaskFixture("cli", {
+        task: "Keep the selected page current",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+      const owner = openOpenClawStateDatabase();
+      const unrelated = openOpenClawStateDatabase({ path: state.statePath("identity.sqlite") });
+      try {
+        if (alias) {
+          const aliasRoot = state.path("alias");
+          await symlink(state.stateDir, aliasRoot, "junction");
+          process.env.OPENCLAW_STATE_DIR = aliasRoot;
+        }
+        await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+        const page = await listTaskRecordPage({ offset: 0, limit: 1 });
+        expect(page.ok).toBe(true);
+        if (!page.ok) {
+          throw new Error(page.error);
+        }
+        expect(page.value.tasks.map((record) => record.taskId)).toEqual([task.taskId]);
+        const revision = page.value.revision;
+        await closeOpenClawStateDatabaseByPathAsync(unrelated.path);
+        expect(readTaskRegistryRevision()).toBe(revision);
+        expect(page.value.isCurrent()).toBe(true);
+        expect(
+          await listTaskRecordPage({ offset: 0, limit: 1, expectedRevision: revision }),
+        ).toMatchObject({ ok: true, value: { revision } });
+
+        await closeOpenClawStateDatabaseByPathAsync(owner.path);
+        expect(readTaskRegistryRevision()).toBeGreaterThan(revision);
+        expect(page.value.isCurrent()).toBe(false);
+      } finally {
+        process.env.OPENCLAW_STATE_DIR = state.stateDir;
+      }
+    });
+  });
 });

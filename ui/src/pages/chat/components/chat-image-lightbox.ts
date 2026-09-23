@@ -57,9 +57,12 @@ export function renderChatImageLightbox(
     <openclaw-image-lightbox
       .mediaKind=${item.kind ?? "image"}
       .gallery=${item.gallery}
+      .loadFullResolution=${item.loadFullResolution}
       src=${item.src}
       .originalSrc=${item.originalSrc ?? ""}
       .imageTitle=${item.title}
+      .imageWidth=${item.width}
+      .imageHeight=${item.height}
       @image-lightbox-close=${onClose}
     ></openclaw-image-lightbox>
   `;

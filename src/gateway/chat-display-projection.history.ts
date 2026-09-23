@@ -414,7 +414,7 @@ function openclawAssistantModel(message: Record<string, unknown>): string | unde
     : undefined;
 }
 
-export function displayTextForDuplicateCheck(message: Record<string, unknown>): string | undefined {
+function displayTextForDuplicateCheck(message: Record<string, unknown>): string | undefined {
   const text = extractProjectedText(message.content ?? message.text).trim();
   return text ? text : undefined;
 }

@@ -1,6 +1,14 @@
 // Legacy config migration validation tests cover schema validation after doctor migrations.
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
+import { prepareLegacyConfigMigrationRuntime } from "./legacy-config-migrate.test-support.js";
+
+let restoreMigrationRuntime: (() => void) | undefined;
+
+beforeAll(async () => {
+  restoreMigrationRuntime = await prepareLegacyConfigMigrationRuntime();
+});
+afterAll(() => restoreMigrationRuntime?.());
 
 describe("legacy config migrate validation", () => {
   it.each([0, 1000.9, 7_200_000])("preserves restored MCP idle TTL %s", (sessionIdleTtlMs) => {

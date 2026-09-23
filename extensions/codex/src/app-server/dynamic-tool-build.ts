@@ -60,6 +60,8 @@ import {
   createGatewayExecProjection,
   createGatewayProcessProjection,
   createNodeExecAliasDynamicTool,
+  createSandboxExecProjection,
+  createSandboxProcessProjection,
   isCodexDynamicToolExcluded,
   type NodeExecAvailabilityRef,
 } from "./shell-dynamic-tools.js";
@@ -791,38 +793,14 @@ function addSandboxShellDynamicToolsIfAvailable(
   const processTool = allTools.find(
     (tool) => normalizeCodexDynamicToolName(tool.name) === "process",
   );
-  if (!execTool || !processTool) {
+  if (!execTool) {
     return filteredTools;
   }
-  const sandboxExecTool: OpenClawDynamicTool = {
-    ...execTool,
-    name: "sandbox_exec",
-    description:
-      "Run a shell command through OpenClaw's configured sandbox backend for this session. Use when OpenClaw sandboxing is active or when a command must execute in the sandbox backend, such as an SSH-backed sandbox or Docker container-path bind layout. Use Codex's native shell only when no OpenClaw sandbox is active and native Code Mode is available.",
-    execute: async (toolCallId, args, signal, onUpdate) => {
-      const result = await execTool.execute(toolCallId, args, signal, onUpdate);
-      return {
-        ...result,
-        content: result.content.map((item) =>
-          item.type === "text"
-            ? Object.assign({}, item, {
-                text: item.text.replace(
-                  "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
-                  "Use sandbox_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
-                ),
-              })
-            : item,
-        ),
-      };
-    },
-  };
-  const sandboxProcessTool: OpenClawDynamicTool = {
-    ...processTool,
-    name: "sandbox_process",
-    description:
-      "Manage background shell sessions through OpenClaw's configured sandbox backend for this session: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for sandbox follow-up; use Codex's native shell session handling only when no OpenClaw sandbox is active and native Code Mode is available.",
-  };
-  return [...filteredTools, sandboxExecTool, sandboxProcessTool];
+  const sandboxTools = [...filteredTools, createSandboxExecProjection(execTool)];
+  // Core exec already disables backgrounding when process is filtered out.
+  return processTool
+    ? [...sandboxTools, createSandboxProcessProjection(processTool)]
+    : sandboxTools;
 }
 function isSandboxShellDynamicToolExcluded(config: CodexPluginConfig): boolean {
   return isCodexDynamicToolExcluded(config, ["exec", "sandbox_exec", "process", "sandbox_process"]);

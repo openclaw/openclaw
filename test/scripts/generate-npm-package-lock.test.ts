@@ -54,6 +54,23 @@ describe("generate-npm-package-lock", () => {
     expect(normalized.peerDependencies).toEqual({});
   });
 
+  it("omits package platform constraints from the portable lock-generation manifest", () => {
+    const normalized = packageJsonForNpmLock(
+      {
+        os: ["darwin"],
+        cpu: ["arm64"],
+        libc: ["glibc"],
+        dependencies: { chalk: "5.6.2" },
+      },
+      {},
+    );
+
+    expect(normalized).not.toHaveProperty("os");
+    expect(normalized).not.toHaveProperty("cpu");
+    expect(normalized).not.toHaveProperty("libc");
+    expect(normalized.dependencies).toEqual({ chalk: "5.6.2" });
+  });
+
   it("runs npm package-lock generation through cmd.exe for Windows npm shims", () => {
     const execPath = "C:\\nodejs\\node.exe";
     const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");

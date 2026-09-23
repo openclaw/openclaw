@@ -1,9 +1,7 @@
 import type { SubagentEndReason } from "../../../context-engine/types.js";
-import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-/** Persisted execution, completion, delivery, and attachment state for child runs. */
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
-import type { AgentRunSessionTarget } from "../../run-session-target.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { SubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
@@ -26,6 +24,10 @@ export type SubagentCompletionRequest = {
   startedAt?: number;
   suppressSessionEffects?: boolean;
   recoverInterrupted?: true;
+  /** Revalidates orphan ownership after waiting for the terminal completion lock. */
+  isRecoveryCurrent?: () => boolean;
+  /** Child effects may be fenced while the recorded result still owes requester delivery. */
+  isChildSessionEffectsCurrent?: () => boolean;
   completionSnapshot?: { resultText: string | null; capturedAt: number };
   terminalReply?: AgentRunTerminalReplySnapshot;
 };
@@ -59,7 +61,7 @@ export type SubagentRestartRecoveryReceipt = {
 type SubagentExecutionState = SubagentRunReadRecord["execution"] & {
   /** Gateway lifecycle that owns child-session effects for this run. */
   lifecycleGeneration?: string;
-  /** Durable dispatch receipt for one interrupted-session snapshot. */
+  /** Persisted pre-cutover launch receipt; reconciled without automatic replay. */
   restartRecovery?: SubagentRestartRecoveryReceipt;
   /** Sticky terminal policy: this run must never mutate its child session again. */
   suppressSessionEffects?: true;
@@ -116,6 +118,8 @@ export type RequesterSettleWakeState = {
   afterRequesterYield?: true;
   /** Monotonic process generation protecting a newer yield from stale completion. */
   rearmGeneration?: number;
+  /** Reference to the conversation receipt for this presentation, not completion credit. */
+  progressOperationId?: string;
   /** Number of times this batch has been deferred due to unsettled descendants. */
   deferralCount?: number;
   lastError?: string | null;
@@ -143,9 +147,8 @@ type SubagentKillIntent = {
   suppressTaskDelivery?: boolean;
 };
 
+/** Persisted execution, completion, delivery, and attachment state for child runs. */
 export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "collectorCompletion"> & {
-  /** Detached task owner; steer/restart changes runId but continues the same task. */
-  taskRunId?: string;
   /** Exact requester attempt for cancellation, independent of completion messaging. */
   requesterTurnRunId?: string;
   /** Durable proof that this requester attempt invoked sessions_yield. */
@@ -168,8 +171,6 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   suppressAnnounceReason?: "steer-restart" | "killed";
   /** Sticky owner while restart recovery replays this exact terminal run. */
   terminalOwner?: "interrupted-recovery";
-  /** Durable requester notice debt, independent of restart execution ownership. */
-  resumptionNotice?: { idempotencyKey: string };
   /** Present only while a current-version killed run awaits bounded reconciliation. */
   killReconciliation?: SubagentKillReconciliationState;
   /** Durable operator cancellation ownership before runtime side effects complete. */
@@ -234,44 +235,16 @@ export type SubagentRunMaintenanceRecord = Pick<
   delivery?: Pick<SubagentCompletionDeliveryState, "status" | "suspendedAt">;
 };
 
-export type RegisterSubagentRunParams = {
-  runId: string;
-  requesterTurnRunId?: string;
-  childSessionKey: string;
-  controllerSessionKey?: string;
-  requesterSessionKey: string;
-  requesterOrigin?: DeliveryContext;
-  progressOrigin?: SubagentProgressOrigin;
-  requesterDisplayKey: string;
-  task: string;
-  taskName?: string;
-  agentId?: string;
-  requesterAgentId?: string;
-  cleanup: "delete" | "keep";
-  label?: string;
-  model?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  runTimeoutSeconds?: number;
-  expectsCompletionMessage?: boolean;
-  completionTarget?: "parent";
-  completionRequesterSessionId?: string;
-  spawnMode?: "run" | "session";
-  attachmentId?: string;
-  attachmentsDir?: string;
-  attachmentsRootDir?: string;
-  retainAttachmentsOnKeep?: boolean;
-  collect?: boolean;
-  swarmRequesterSessionKey?: string;
-  swarmLaunchIdempotencyKey?: string;
-  swarmLaunchReplayKey?: string;
-  swarmLaunchRequestFingerprint?: string;
-  groupId?: string;
-  outputSchema?: Record<string, unknown>;
-  queuedLaunch?: SwarmQueuedLaunch;
-  queued?: boolean;
-  /** Required when direct dispatch suppresses Gateway tracking. Out-of-process launches keep
-      Gateway's existing best-effort CLI policy; other callers create a best-effort row here. */
-  taskRowOwnership?: "required" | "gateway_best_effort";
-  gatewayContextResolver?: GatewayContextResolver;
+export type SubagentRegistrationScope = {
+  readonly waitForClaim: () => Promise<void> | undefined;
+  readonly canLaunch: () => boolean;
+  readonly canCleanupSession: () => boolean;
+  readonly canAcceptLaunch: () => boolean;
+  readonly canRetireReservation: () => boolean;
+  readonly settleFailedLaunch: (error: string) => Promise<void>;
+};
+
+export type RegisterSubagentRunOptions = {
+  assertCurrent?: () => void;
+  retainOwnership?: (scope: SubagentRegistrationScope) => void;
 };

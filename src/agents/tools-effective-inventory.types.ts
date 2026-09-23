@@ -54,6 +54,7 @@ export type ResolveEffectiveToolInventoryParams = {
   cfg: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  sessionId?: string;
   workspaceDir?: string;
   agentDir?: string;
   messageProvider?: string;

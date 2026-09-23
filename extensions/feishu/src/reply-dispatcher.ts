@@ -1,4 +1,3 @@
-// Feishu plugin module implements reply dispatcher behavior.
 import { formatReasoningMessage, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {

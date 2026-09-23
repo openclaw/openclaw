@@ -234,10 +234,12 @@ describe("createIngressEffectOnce", () => {
       effect: "visible-ack",
       run: waiterRun,
     });
+    const outcomes = Promise.all([
+      expect(first).rejects.toThrow("Failed to open the plugin state database"),
+      expect(waiter).rejects.toThrow("Failed to open the plugin state database"),
+    ]);
     finish();
-
-    await expect(first).rejects.toThrow("Failed to open the plugin state database");
-    await expect(waiter).rejects.toThrow("Failed to open the plugin state database");
+    await outcomes;
     expect(onDiskError).toHaveBeenCalledOnce();
     expect(run).toHaveBeenCalledOnce();
     expect(waiterRun).not.toHaveBeenCalled();
@@ -278,10 +280,12 @@ describe("createIngressEffectOnce", () => {
       effect: "visible-ack",
       run: waiterRun,
     });
+    const outcomes = Promise.all([
+      expect(first).rejects.toThrow("Failed to open the plugin state database"),
+      expect(waiter).rejects.toThrow("Failed to open the plugin state database"),
+    ]);
     finish();
-
-    await expect(first).rejects.toThrow("Failed to open the plugin state database");
-    await expect(waiter).rejects.toThrow("Failed to open the plugin state database");
+    await outcomes;
     expect(onDiskError).toHaveBeenCalledOnce();
     expect(run).toHaveBeenCalledOnce();
     expect(waiterRun).not.toHaveBeenCalled();

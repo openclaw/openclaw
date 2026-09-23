@@ -25,7 +25,7 @@ async function settleProjection(projection: SessionRowProjection) {
 }
 
 describe("health and status resident session summaries", () => {
-  it("counts a shared physical store once while retaining per-agent windows", async () => {
+  it("counts a shared physical store once while retaining bounded per-agent windows", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
       const storePath = path.join(stateDir, "shared-sessions.sqlite");
       const cfg: OpenClawConfig = {
@@ -36,16 +36,20 @@ describe("health and status resident session summaries", () => {
         },
         session: { store: storePath },
       };
-      const sessionKeys = ["agent:main:primary", "agent:worker:primary"];
+      const agentIds = ["main", "worker"];
+      const suffixes = Array.from({ length: 12 }, (_, index) => String(index).padStart(2, "0"));
+      const sessionKeys = agentIds.flatMap((id) =>
+        suffixes.map((suffix) => `agent:${id}:${suffix}`),
+      );
       const backfill = observeSessionRowBackfill(sessionKeys);
-      for (const [agentId, updatedAt] of [
-        ["main", 10],
-        ["worker", 20],
-      ] as const) {
-        await upsertSessionEntryCore(
-          { agentId, sessionKey: `agent:${agentId}:primary`, storePath },
-          { sessionId: `${agentId}-primary`, updatedAt },
-        );
+      for (const agentId of agentIds) {
+        for (const suffix of suffixes.toReversed()) {
+          const key = `agent:${agentId}:${suffix}`;
+          replaceSessionEntrySync(
+            { agentId, sessionKey: key, storePath },
+            { sessionId: key, updatedAt: agentId === "worker" ? 20 : 10 },
+          );
+        }
       }
       const projection = await createSessionRowProjection({ cfg });
       try {
@@ -56,25 +60,59 @@ describe("health and status resident session summaries", () => {
         const reads = (["all", "get", "iterate"] as const).map((method) =>
           vi.spyOn(StatementSync.prototype, method),
         );
-        const agents = [{ id: "main" }, { id: "worker" }];
-
-        const status = await readStatusSessionStores(cfg, agents, 10, projection);
+        const agents = agentIds.map((id) => ({ id }));
+        for (const limit of [-2.5, 0, 0.5, 5, 5.7, 10, Infinity, Number.NaN]) {
+          const status = await readStatusSessionStores(cfg, agents, limit, projection);
+          expect(status.paths).toHaveLength(1);
+          expect(status.count).toBe(24);
+          expect(status.recent.map((row) => row.sessionKey)).toEqual(
+            [...sessionKeys.slice(12), ...sessionKeys.slice(0, 12)].slice(0, limit),
+          );
+          expect(status.byAgent.map((agent) => [agent.agent.id, agent.count])).toEqual([
+            ["main", 12],
+            ["worker", 12],
+          ]);
+          for (const agent of status.byAgent) {
+            expect(agent.recent.map((row) => row.sessionKey)).toEqual(
+              suffixes.slice(0, limit).map((suffix) => `agent:${agent.agent.id}:${suffix}`),
+            );
+          }
+        }
+        for (const limit of [0, 5]) {
+          const subset = await readStatusSessionStores(
+            cfg,
+            [{ id: "main" }, { id: "empty" }, { id: "main" }],
+            limit,
+            projection,
+          );
+          expect(subset.count).toBe(24);
+          expect(subset.recent.map((row) => row.sessionKey)).toEqual(
+            sessionKeys.slice(12, 12 + limit),
+          );
+          expect(
+            subset.byAgent.map(({ agent, count, recent }) => [
+              agent.id,
+              count,
+              recent.map((row) => row.sessionKey),
+            ]),
+          ).toEqual([
+            ["main", 12, sessionKeys.slice(0, limit)],
+            ["empty", 0, []],
+            ["main", 12, sessionKeys.slice(0, limit)],
+          ]);
+        }
         const health = await buildHealthAgentSummaries(
           cfg,
           resolveHealthAgentOrder(cfg),
           projection,
         );
-
-        expect(status.paths).toHaveLength(1);
-        expect(status.count).toBe(2);
-        expect(status.byAgent.map((agent) => [agent.agent.id, agent.count])).toEqual([
-          ["main", 1],
-          ["worker", 1],
-        ]);
-        expect(health.map((agent) => [agent.agentId, agent.sessions.count])).toEqual([
-          ["main", 1],
-          ["worker", 1],
-        ]);
+        expect(health.map((agent) => agent.agentId)).toEqual(agentIds);
+        for (const agent of health) {
+          expect(agent.sessions.count).toBe(12);
+          expect(agent.sessions.recent.map((row) => row.key)).toEqual(
+            suffixes.slice(0, 5).map((suffix) => `agent:${agent.agentId}:${suffix}`),
+          );
+        }
         expect(prepares).not.toHaveBeenCalled();
         for (const read of reads) {
           expect(read).not.toHaveBeenCalled();

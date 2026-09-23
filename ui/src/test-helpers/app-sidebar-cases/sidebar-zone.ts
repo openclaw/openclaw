@@ -47,7 +47,7 @@ async function mountZone() {
 }
 
 function pluginNavigation(
-  context: import("../../app/context.ts").ApplicationContext<import("../../app-routes.ts").RouteId>,
+  context: import("../../app/context.ts").ApplicationContext,
   sidebar: SidebarLifecycleState,
   ids: string[],
   defaultVisible = false,
@@ -226,7 +226,7 @@ describe("AppSidebar interleaved zone", () => {
     await sidebar.updateComplete;
 
     const labels = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-zone-entry")].map((entry) =>
-      entry.textContent?.trim(),
+      entry.querySelector(".nav-item__text, .sidebar-recent-session__name")?.textContent?.trim(),
     );
     expect(labels).toEqual(["Usage", "Alpha", "Plugins"]);
     expect(sidebar.querySelector('[data-session-section="pinned"]')).toBeNull();

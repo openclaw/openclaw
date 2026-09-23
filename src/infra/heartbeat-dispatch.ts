@@ -95,7 +95,7 @@ export function createHeartbeatDispatch(
 }
 
 const FIRST_HEARTBEAT_ALERT_PREAMBLE =
-  'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Set agents.defaults.heartbeat.target: "none" to keep these internal.';
+  'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Run `openclaw config set agents.defaults.heartbeat.target "none"` to keep these internal.';
 const MAX_HEARTBEAT_TARGET_AWARENESS_CHARS = 1_000;
 
 function prepareHeartbeatTargetAwareness(params: {
@@ -269,10 +269,13 @@ async function prepareHeartbeatDispatchReply(
       }
     }
   }
-  // Unselected payloads never acquire delivery custody. Their exact prepared
+  // Quiet and unselected payloads never acquire delivery custody. Their exact prepared
   // intents may retire; queued or unknown recovery ownership is untouched.
   for (const reply of replies) {
-    if (reply !== selected && outcome.kind !== "failure") {
+    if (
+      (execution !== "failed" && response?.notify === false) ||
+      (reply !== selected && outcome.kind !== "failure")
+    ) {
       await suppressPendingFinalDelivery(reply, { preserveActivity: true });
     }
   }

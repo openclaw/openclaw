@@ -1,5 +1,7 @@
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveAccountEntry, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { hasImplicitDefaultSlackAccount } from "./accounts.js";
 import {
   normalizeSlackRouteBindingConfig,
   resolveSlackConversationBindingRoute,
@@ -22,7 +24,17 @@ export function inspectSlackConversationRouteOwner(params: {
     context?: { teamId?: string };
   };
 }) {
-  const installationKind = getSlackInstallationKind(params.accountId);
+  const accountId = normalizeAccountId(params.accountId);
+  const accountConfig = resolveAccountEntry(params.cfg.channels?.slack?.accounts, accountId);
+  if (
+    params.cfg.channels?.slack?.enabled === false ||
+    accountConfig?.enabled === false ||
+    (!accountConfig &&
+      (accountId !== DEFAULT_ACCOUNT_ID || !hasImplicitDefaultSlackAccount(params.cfg)))
+  ) {
+    return null;
+  }
+  const installationKind = getSlackInstallationKind(accountId);
   const direct = params.conversation.kind === "direct";
   const target = parseSlackTarget(params.conversation.peerId, {
     defaultKind: direct ? "user" : "channel",
@@ -63,7 +75,7 @@ export function inspectSlackConversationRouteOwner(params: {
   const route = resolveAgentRoute({
     cfg: normalizeSlackRouteBindingConfig(params.cfg),
     channel: "slack",
-    accountId: params.accountId,
+    accountId,
     teamId,
     peer: {
       kind: params.conversation.kind,
@@ -81,7 +93,7 @@ export function inspectSlackConversationRouteOwner(params: {
   const bindingRoute = resolveSlackConversationBindingRoute({
     cfg: params.cfg,
     route,
-    accountId: params.accountId,
+    accountId,
     baseConversationId,
     runtimeBindingThreadId: params.conversation.threadId,
     bindingsEnabled: !enterpriseRoute,

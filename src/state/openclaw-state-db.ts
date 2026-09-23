@@ -12,6 +12,7 @@ import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import {
   StateSchemaMutationConflictError,
   withStateSchemaFence,
@@ -21,6 +22,7 @@ import {
   observeOpenClawDatabaseMaintenanceResource,
 } from "./openclaw-state-db-async-lifecycle.js";
 import {
+  closeOpenClawStateDatabaseByPathAsync,
   openClawStateDatabaseCache as stateDbCache,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
@@ -144,13 +146,14 @@ export function repairOpenClawStateDatabaseReadabilityForDoctor(
   );
 }
 
-/** Automatic preparation shares runtime schema convergence; historical repair stays with Doctor. */
-export function repairOpenClawStateDatabaseSchemaIfNeeded(
+/** Prepare schema and retire resources only when the admitted operation actually repairs it. */
+export async function prepareOpenClawStateDatabaseSchema(
   options: OpenClawStateDatabaseOptions = {},
-): {
+  mode: "automatic" | "doctor-preparation" | "doctor" = "automatic",
+): Promise<{
   changes: string[];
   warnings: string[];
-} {
+}> {
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
   assertOpenClawStateSchemaRepairAllowed(pathname);
@@ -158,22 +161,48 @@ export function repairOpenClawStateDatabaseSchemaIfNeeded(
     return { changes: [], warnings: [] };
   }
 
-  return runWithOpenClawStateWriteAccess(
-    { databasePath: pathname, env },
-    "state schema repair preflight/repair",
-    () =>
-      needsOpenClawStateDatabaseSchemaRepair(pathname)
-        ? withStateSchemaFence({ databasePath: pathname }, () =>
-            repairStateSchema(pathname, env, "automatic"),
-          )
-        : { changes: [], warnings: [] },
-  );
+  const scope = mode === "automatic" ? "automatic" : "doctor";
+  let repairStarted = false;
+  try {
+    return runWithOpenClawStateWriteAccess(
+      {
+        databasePath: pathname,
+        env,
+        ...(scope === "doctor"
+          ? { openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission }
+          : {}),
+      },
+      "state schema repair preflight/repair",
+      () => {
+        let needsRepair = mode === "doctor";
+        if (mode === "doctor-preparation") {
+          try {
+            assertOpenClawStateDatabaseFreshOpenAllowed(options);
+          } catch {
+            // The full repair must clear quarantine before dependent readers can proceed.
+            needsRepair = true;
+          }
+        }
+        return needsRepair || needsOpenClawStateDatabaseSchemaRepair(pathname, scope)
+          ? withStateSchemaFence({ databasePath: pathname }, () => {
+              repairStarted = true;
+              return repairStateSchema(pathname, env, scope);
+            })
+          : { changes: [], warnings: [] };
+      },
+    );
+  } finally {
+    // Readiness checks borrow the live generation; only admitted repair retires it.
+    if (repairStarted) {
+      await closeOpenClawStateDatabaseByPathAsync(pathname);
+    }
+  }
 }
 
 /** Bootstrap fresh/native-only state canonically before startup checkpoint access. */
 export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
   callback: (db: DatabaseSync) => T,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { atomic?: boolean } = {},
 ): T {
   return withOpenClawStateStartupCheckpointConnection(callback, options, ensureSchema);
 }
@@ -222,9 +251,10 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
     path: pathname,
     walMaintenance: {
       checkpoint: () => false,
+      reclaimFreePages: createSqliteWalReclamationResult,
       // Cleanup can fail transiently after the database closes. Keep the
       // close contract retryable until one call finishes both responsibilities.
-      close: connection.close,
+      close: () => connection.close(),
     },
   };
 }
@@ -246,6 +276,7 @@ function openOpenClawStateDatabaseWithBusyTimeout(
       env,
     });
     observeOpenClawDatabaseMaintenanceResource(options.database.db);
+    stateDbCache.touchStateDatabase(options.database);
     return options.database;
   }
   const pathname = resolveDatabasePath(options);
@@ -408,6 +439,7 @@ export function runWithOpenClawStateBusyTimeout<T>(
       normalizedTimeoutMs,
       () => {
         observeOpenClawDatabaseMaintenanceResource(existing.db);
+        stateDbCache.touchStateDatabase(existing);
         return operation(existing);
       },
       { lockFailureReporting: "suppress" },

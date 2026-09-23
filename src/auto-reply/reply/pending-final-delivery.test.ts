@@ -57,6 +57,11 @@ describe("resolvePendingFinalDeliveryCompletion", () => {
 });
 
 describe("sanitizePendingFinalDeliveryText", () => {
+  it("preserves indented code in pending final text", () => {
+    const text = "    const value = 1;\n    use(value);";
+    expect(sanitizePendingFinalDeliveryText(text)).toBe(text);
+  });
+
   it("strips internal metadata from durable pending delivery text", () => {
     const text = [
       "Visible reply",

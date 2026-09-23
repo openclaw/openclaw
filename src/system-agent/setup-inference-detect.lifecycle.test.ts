@@ -104,7 +104,6 @@ it.each([false, true])(
           const work = detectSetupInference(
             {
               detectInferenceBackends: async () => [],
-              probeLocalCommand: async (command) => ({ command, found: false }),
             },
             "main",
           );

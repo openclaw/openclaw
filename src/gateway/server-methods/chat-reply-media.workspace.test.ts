@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getMediaDir, saveMediaBuffer } from "../../media/store.js";
@@ -10,9 +12,11 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { loadSessionEntry } from "../session-utils.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { buildAssistantReplyContent } from "./chat-assistant-content.js";
 import {
+  captureWebchatReplyMediaScope,
   getWebchatReplyMediaLocalRoots,
   normalizeWebchatReplyMediaPathsForDisplay,
 } from "./chat-reply-media.js";
@@ -34,6 +38,7 @@ describe("WebChat reply media workspace ownership", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await drainGlobalSingletonLifecycleState();
     await testState.cleanup();
   });
@@ -70,6 +75,89 @@ describe("WebChat reply media workspace ownership", () => {
   function dataImageUrl(): string {
     return `data:image/png;base64,${PNG_BYTES.toString("base64")}`;
   }
+
+  it.each([
+    ["staging", "permission"],
+    ["staging", "workspace"],
+    ["staging", "placement"],
+    ["trusted-audio", "permission"],
+    ["trusted-audio", "workspace"],
+    ["trusted-audio", "placement"],
+  ] as const)("stops %s before file content I/O when %s changes", async (flow, change) => {
+    const { cfg } = createMediaTestContext({ allowRead: true });
+    cfg.tools = { ...cfg.tools, fs: { workspaceOnly: true } };
+    const selected = testState.statePath("worktrees", "selected");
+    const source = path.join(
+      change === "permission" ? testState.statePath("workspace") : selected,
+      flow === "staging" ? "chart.png" : "speech.mp3",
+    );
+    await fs.mkdir(selected, { recursive: true });
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.writeFile(source, flow === "staging" ? PNG_BYTES : Buffer.from([0xff, 0xfb, 0x90, 0]));
+    const target = {
+      sessionKey: TEST_SESSION_KEY,
+      sessionId: "changing-media-policy",
+      agentId: "main",
+      storePath: loadSessionEntry(TEST_SESSION_KEY, { agentId: "main" }).storePath,
+    };
+    const entry: SessionEntry = {
+      sessionId: target.sessionId,
+      lifecycleRevision: "initial",
+      permissionMode: "full",
+      sessionRoot: selected,
+      updatedAt: 1,
+    };
+    await replaceSessionEntry(target, entry);
+    const scope = captureWebchatReplyMediaScope({
+      cfg,
+      agentId: "main",
+      sessionKey: TEST_SESSION_KEY,
+      sessionLoadOptions: { agentId: "main" },
+    });
+    const opened = createDeferred();
+    const release = createDeferred();
+    const readCounts: Array<() => number> = [];
+    const nativeOpen = fs.open;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await nativeOpen(...args);
+      if (String(args[0]) === source) {
+        const read = vi.spyOn(handle, "read");
+        readCounts.push(() => read.mock.calls.length);
+        opened.resolve();
+        await release.promise;
+      }
+      return handle;
+    });
+    const payload = { mediaUrls: [source], trustedLocalMedia: flow === "trusted-audio" };
+    const delivery =
+      flow === "staging"
+        ? normalizeWebchatReplyMediaPathsForDisplay({ ...scope, payloads: [payload] })
+        : buildAssistantReplyContent({
+            sessionKey: TEST_SESSION_KEY,
+            agentId: "main",
+            payloads: [payload],
+            managedMediaLocalRoots: getWebchatReplyMediaLocalRoots(scope),
+            assertCurrent: scope.assertCurrent,
+          });
+    const rejected = expect(delivery).rejects.toThrow("Session media access changed");
+    try {
+      await opened.promise;
+      await replaceSessionEntry(target, {
+        ...entry,
+        ...(change === "permission" ? { permissionMode: "workspace" } : {}),
+        ...(change === "workspace" ? { sessionRoot: testState.statePath("other") } : {}),
+        ...(change === "placement" ? { execNode: "remote-test-node" } : {}),
+      });
+    } finally {
+      release.resolve();
+    }
+    await rejected;
+    expect(readCounts.length).toBeGreaterThan(0);
+    expect(readCounts.reduce((total, count) => total + count(), 0)).toBe(0);
+    expect(await fs.readFile(source)).toEqual(
+      flow === "staging" ? PNG_BYTES : Buffer.from([0xff, 0xfb, 0x90, 0]),
+    );
+  });
 
   it.each(["inherited", "exec-node", "repository", "cloud", "sibling"] as const)(
     "respects the %s workspace ownership when staging local attachments",

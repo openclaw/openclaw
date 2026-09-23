@@ -1,11 +1,10 @@
 import { performance } from "node:perf_hooks";
-import { Duplex, PassThrough } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { closeOwnedStdioProcess } from "../owned-stdio.js";
 import * as childAdapter from "./adapters/child.js";
-import { createStubChild, firstMockArg } from "./adapters/child.test-support.js";
+import { firstMockArg } from "./adapters/child.test-support.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import { runWithProcessCleanupBudget } from "./cleanup-budget.js";
 import {
@@ -15,6 +14,7 @@ import {
 import {
   createRelayFixture,
   createServiceChildRelayAdapter,
+  createWritableRelayChild,
 } from "./service-child-relay-host.test-support.js";
 import { createProcessSupervisor } from "./supervisor.js";
 
@@ -51,29 +51,12 @@ async function createRelay(platform: "linux" | "darwin" | "win32", retainLineage
   );
 }
 
-function createWritableRelayChild() {
-  const stub = createStubChild();
-  const control = new Duplex({
-    autoDestroy: false,
-    read() {},
-    write(_chunk, _encoding, callback) {
-      callback();
-    },
-  });
-  const lineage = new PassThrough();
-  Object.defineProperty(stub.child, "stdio", {
-    value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control, lineage],
-    configurable: true,
-  });
-  mocks.spawn.mockReturnValue(stub.child);
-  return { ...stub, control, lineage };
-}
-
 it.each(["before", "after"] as const)(
   "checks launch policy %s relay start dispatch",
   async (timing) => {
     platformMock = mockProcessPlatform("linux");
     const stub = createWritableRelayChild();
+    mocks.spawn.mockReturnValue(stub.child);
     let allowed = true;
     mocks.spawn.mockImplementation(() => {
       if (timing === "before") {
@@ -130,6 +113,7 @@ it.each([
 ])("reports cleanup uncertainty when $name", async ({ deferredStart }) => {
   platformMock = mockProcessPlatform("linux");
   const stub = createWritableRelayChild();
+  mocks.spawn.mockReturnValue(stub.child);
   const startCallbacks: Array<(error: Error | null) => void> = [];
   if (deferredStart) {
     stub.sendMock.mockImplementation((_message, ...args) => {
@@ -174,6 +158,7 @@ it.each(["linux", "win32"] as const)(
   async (platform) => {
     platformMock = mockProcessPlatform(platform);
     const stub = createWritableRelayChild();
+    mocks.spawn.mockReturnValue(stub.child);
     const supervisor = createProcessSupervisor();
     const scopeKey = "scope:rejected-construction";
     const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });

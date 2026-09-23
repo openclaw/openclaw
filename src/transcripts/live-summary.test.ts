@@ -6,7 +6,7 @@ import type { MeetingSessionRecord } from "../meeting-bot/session-types.js";
 import { createMeetingDurableTranscriptBridge } from "../meeting-bot/transcripts-bridge.runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -30,8 +30,21 @@ const fiveMinutes = 5 * 60_000;
 const pendingCompletions = new Set<() => void>();
 function holdCompletion() {
   const pending = createDeferred<ReturnType<typeof modelNotes>>();
+  const entered = createDeferred();
+  complete.mockImplementationOnce(() => {
+    entered.resolve();
+    return pending.promise;
+  });
   pendingCompletions.add(() => pending.resolve(modelNotes()));
-  return pending;
+  return { ...pending, entered: entered.promise };
+}
+function trackSummaryUpdates() {
+  return vi.spyOn(gatewayWorkAdmission, "runWithGatewayDetachedWorkAdmission");
+}
+async function settleSummaryUpdates(updates: ReturnType<typeof trackSummaryUpdates>) {
+  await Promise.all(updates.mock.results.map(({ value }) => value));
+  // The capture owner rearms its timer in the continuation after detached work settles.
+  await vi.advanceTimersByTimeAsync(0);
 }
 const cfg = { agents: { defaults: { utilityModel: "test/utility", model: "test/primary" } } };
 const modelNotes = () => ({
@@ -67,6 +80,7 @@ afterEach(async () => {
 });
 
 async function capture(stateDir = tempDirs.make("transcript-live-notes-")) {
+  const updates = trackSummaryUpdates();
   const ctx = {
     stateDir,
     config: cfg,
@@ -75,10 +89,11 @@ async function capture(stateDir = tempDirs.make("transcript-live-notes-")) {
   };
   const store = createTranscriptsStore(ctx);
   let source!: TranscriptStartRequest;
-  const stop = vi.fn(async ({ sessionId }: { sessionId: string }) => ({
-    ok: true as const,
-    sessionId,
-  }));
+  const stopStarted = createDeferred();
+  const stop = vi.fn(async ({ sessionId }: { sessionId: string }) => {
+    stopStarted.resolve();
+    return { ok: true as const, sessionId };
+  });
   const registry = createEmptyPluginRegistry();
   registry.transcriptSourceProviders.push({
     pluginId: "notes",
@@ -97,7 +112,7 @@ async function capture(stateDir = tempDirs.make("transcript-live-notes-")) {
   await withPluginRuntimeRegistryScope(registry, () =>
     startTranscripts({ ctx, store, rawParams: { providerId: "notes", sessionId: "meeting" } }),
   );
-  return { ctx, store, source, registry, stop };
+  return { ctx, store, source, registry, stop, stopStarted: stopStarted.promise, updates };
 }
 
 async function saved(fixture: Awaited<ReturnType<typeof capture>>) {
@@ -116,6 +131,7 @@ describe("live meeting summaries", () => {
     };
     await fixture.store.writeSummary(final, stopped);
     await vi.advanceTimersByTimeAsync(fiveMinutes);
+    await settleSummaryUpdates(fixture.updates);
     const tool = createTranscriptsTool(fixture.ctx);
     await withPluginRuntimeRegistryScope(fixture.registry, () =>
       tool.execute("manual", { action: "summarize", sessionId: "meeting" }),
@@ -135,9 +151,8 @@ describe("live meeting summaries", () => {
     const fixture = await capture(stateDir);
     await fixture.source.onUtterance({ text: "Recovered capture" });
     await vi.advanceTimersByTimeAsync(fiveMinutes);
-    await vi.waitFor(async () =>
-      expect(await saved(fixture)).toMatchObject({ source: "model", utteranceCount: 1 }),
-    );
+    await settleSummaryUpdates(fixture.updates);
+    expect(await saved(fixture)).toMatchObject({ source: "model", utteranceCount: 1 });
     expect(complete).toHaveBeenCalledOnce();
   });
 
@@ -156,7 +171,8 @@ describe("live meeting summaries", () => {
     const stopped = withPluginRuntimeRegistryScope(fixture.registry, () =>
       tool.execute("stop", { action: "stop", sessionId: "meeting" }),
     );
-    await vi.waitFor(() => expect(fixture.stop).toHaveBeenCalledOnce());
+    await fixture.stopStarted;
+    expect(fixture.stop).toHaveBeenCalledOnce();
     expect(complete).not.toHaveBeenCalled();
     read.resolve(snapshot);
     await stopped;
@@ -170,44 +186,43 @@ describe("live meeting summaries", () => {
     await caller.drain();
     await fixture.source.onUtterance({ text: "Speech after the start request finished" });
     await vi.advanceTimersByTimeAsync(fiveMinutes);
-    await vi.waitFor(async () =>
-      expect(await saved(fixture)).toMatchObject({ source: "model", utteranceCount: 1 }),
-    );
+    await settleSummaryUpdates(fixture.updates);
+    expect(await saved(fixture)).toMatchObject({ source: "model", utteranceCount: 1 });
     expect(fixture.ctx.logger.warn).not.toHaveBeenCalled();
   });
   it("publishes a captured speech prefix during continued speech and skips unchanged intervals", async () => {
     const fixture = await capture();
     await vi.advanceTimersByTimeAsync(fiveMinutes);
+    await settleSummaryUpdates(fixture.updates);
     expect(complete).not.toHaveBeenCalled();
     await fixture.source.onUtterance({ text: "First decision" });
     await vi.advanceTimersByTimeAsync(fiveMinutes - 1);
     expect(complete).not.toHaveBeenCalled();
     const pending = holdCompletion();
-    complete.mockReturnValueOnce(pending.promise);
     await vi.advanceTimersByTimeAsync(1);
-    await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
+    await pending.entered;
+    expect(complete).toHaveBeenCalledOnce();
     await fixture.source.onUtterance({ text: "Later decision" });
     pending.resolve(modelNotes());
-    await vi.waitFor(async () =>
-      expect(await saved(fixture)).toMatchObject({
-        source: "model",
-        utteranceCount: 1,
-        transcript: ["First decision"],
-      }),
-    );
+    await settleSummaryUpdates(fixture.updates);
+    expect(await saved(fixture)).toMatchObject({
+      source: "model",
+      utteranceCount: 1,
+      transcript: ["First decision"],
+    });
     expect(complete.mock.calls[0]![0]).toMatchObject({
       provider: "test",
       model: "utility",
       agentId: "main",
     });
     await vi.advanceTimersByTimeAsync(fiveMinutes);
-    await vi.waitFor(async () =>
-      expect(await saved(fixture)).toMatchObject({
-        utteranceCount: 2,
-        transcript: ["First decision", "Later decision"],
-      }),
-    );
+    await settleSummaryUpdates(fixture.updates);
+    expect(await saved(fixture)).toMatchObject({
+      utteranceCount: 2,
+      transcript: ["First decision", "Later decision"],
+    });
     await vi.advanceTimersByTimeAsync(fiveMinutes);
+    await settleSummaryUpdates(fixture.updates);
     expect(complete).toHaveBeenCalledTimes(2);
   });
 
@@ -215,15 +230,21 @@ describe("live meeting summaries", () => {
     const fixture = await capture();
     await fixture.source.onUtterance({ text: "Before summary" });
     const pending = holdCompletion();
-    complete.mockReturnValueOnce(pending.promise);
     await vi.advanceTimersByTimeAsync(fiveMinutes);
-    await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
+    await pending.entered;
+    expect(complete).toHaveBeenCalledOnce();
     await fixture.source.onUtterance({ text: "Final speech" });
     const tool = createTranscriptsTool(fixture.ctx);
+    const aborted = new Promise<void>((resolve) => {
+      complete.mock.calls[0]![0].abortSignal.addEventListener("abort", () => resolve(), {
+        once: true,
+      });
+    });
     const stopped = withPluginRuntimeRegistryScope(fixture.registry, () =>
       tool.execute("stop", { action: "stop", sessionId: "meeting" }),
     );
-    await vi.waitFor(() => expect(complete.mock.calls[0]![0].abortSignal.aborted).toBe(true));
+    await aborted;
+    expect(complete.mock.calls[0]![0].abortSignal.aborted).toBe(true);
     expect(complete).toHaveBeenCalledOnce();
     expect(fixture.stop).toHaveBeenCalledOnce();
     expect(await saved(fixture)).toBeUndefined();
@@ -236,13 +257,66 @@ describe("live meeting summaries", () => {
     expect(complete).toHaveBeenCalledTimes(2);
   });
 
+  it("retains an accepted append failure while terminal summary shutdown is pending", async () => {
+    const fixture = await capture();
+    await fixture.source.onUtterance({ text: "Saved speech" });
+    const pending = holdCompletion();
+    await vi.advanceTimersByTimeAsync(fiveMinutes);
+    await pending.entered;
+    const appendEntered = createDeferred();
+    const releaseAppend = createDeferred();
+    const appendFailure = new Error("Accepted speech could not be saved");
+    vi.spyOn(fixture.store, "appendUtteranceForSession").mockImplementationOnce(async () => {
+      appendEntered.resolve();
+      await releaseAppend.promise;
+      throw appendFailure;
+    });
+    const accepted = Promise.resolve(fixture.source.onUtterance({ text: "Rejected speech" }));
+    const acceptedOutcome = accepted.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await appendEntered.promise;
+    let terminalSettled = false;
+    const terminalOutcome = Promise.resolve(fixture.source.onStatus?.({ active: false })).then(
+      () => {
+        terminalSettled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        terminalSettled = true;
+        return error;
+      },
+    );
+    try {
+      expect(complete.mock.calls[0]![0].abortSignal.aborted).toBe(true);
+      releaseAppend.resolve();
+      expect(await acceptedOutcome).toBe(appendFailure);
+      expect(terminalSettled).toBe(false);
+    } finally {
+      releaseAppend.resolve();
+      pending.resolve(modelNotes());
+      await Promise.all([acceptedOutcome, terminalOutcome]);
+    }
+    expect(await terminalOutcome).toBe(appendFailure);
+    expect((await fixture.store.readSession("meeting"))?.stoppedAt).toBeUndefined();
+    expect(await saved(fixture)).toBeUndefined();
+    const tool = createTranscriptsTool(fixture.ctx);
+    await withPluginRuntimeRegistryScope(fixture.registry, () =>
+      tool.execute("retry-stop", { action: "stop", sessionId: "meeting" }),
+    );
+    expect(fixture.stop).not.toHaveBeenCalled();
+    expect(await saved(fixture)).toMatchObject({ transcript: ["Saved speech"] });
+    expect(activeSessions.size).toBe(0);
+  });
+
   it("serializes manual summaries with periodic inference and preserves a newer external write", async () => {
     const fixture = await capture();
     await fixture.source.onUtterance({ text: "Opening speech" });
     const pending = holdCompletion();
-    complete.mockReturnValueOnce(pending.promise);
     await vi.advanceTimersByTimeAsync(fiveMinutes);
-    await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
+    await pending.entered;
+    expect(complete).toHaveBeenCalledOnce();
     const external = {
       ...summarizeTranscripts({
         session: fixture.source.session,
@@ -252,19 +326,20 @@ describe("live meeting summaries", () => {
     };
     await fixture.store.writeSummary(external, fixture.source.session);
     pending.resolve(modelNotes());
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await settleSummaryUpdates(fixture.updates);
+    expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
     expect((await saved(fixture))?.overview).toBe("Operator-edited notes");
     await vi.advanceTimersByTimeAsync(fiveMinutes);
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await settleSummaryUpdates(fixture.updates);
+    expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
     expect(complete).toHaveBeenCalledOnce();
     expect((await saved(fixture))?.overview).toBe("Operator-edited notes");
 
     const next = holdCompletion();
-    complete.mockReturnValueOnce(next.promise);
     await fixture.source.onUtterance({ text: "New speech" });
     await vi.advanceTimersByTimeAsync(fiveMinutes);
-    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+    await next.entered;
+    expect(complete).toHaveBeenCalledTimes(2);
     const tool = createTranscriptsTool(fixture.ctx);
     const manual = withPluginRuntimeRegistryScope(fixture.registry, () =>
       tool.execute("manual", { action: "summarize", sessionId: "meeting" }),
@@ -277,7 +352,33 @@ describe("live meeting summaries", () => {
     expect(complete).toHaveBeenCalledTimes(3);
     expect(await saved(fixture)).toMatchObject({ utteranceCount: 3 });
     await vi.advanceTimersByTimeAsync(fiveMinutes);
+    await settleSummaryUpdates(fixture.updates);
     expect(complete).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps prior notes without warning when session metadata changes during inference", async () => {
+    const fixture = await capture();
+    const utterance = { text: "Speech before the title changed" };
+    await fixture.source.onUtterance(utterance);
+    const previous = {
+      ...summarizeTranscripts({ session: fixture.source.session, utterances: [utterance] }),
+      overview: "Retained earlier notes",
+    };
+    await fixture.store.writeSummary(previous, fixture.source.session);
+    const pending = holdCompletion();
+    await vi.advanceTimersByTimeAsync(fiveMinutes);
+    await pending.entered;
+    try {
+      await fixture.store.writeSession({
+        ...fixture.source.session,
+        title: "Title changed while inference was pending",
+      });
+    } finally {
+      pending.resolve(modelNotes());
+      await settleSummaryUpdates(fixture.updates);
+    }
+    expect(await saved(fixture)).toEqual(previous);
+    expect(fixture.ctx.logger.warn).not.toHaveBeenCalled();
   });
 
   it("uses total speech sequence after the bounded summary window is full", async () => {
@@ -286,20 +387,22 @@ describe("live meeting summaries", () => {
       await fixture.source.onUtterance({ text: `Speech ${index}` });
     }
     await vi.advanceTimersByTimeAsync(fiveMinutes);
-    await vi.waitFor(async () => expect((await saved(fixture))?.utteranceCount).toBe(2_000));
+    await settleSummaryUpdates(fixture.updates);
+    expect((await saved(fixture))?.utteranceCount).toBe(2_000);
     await fixture.source.onUtterance({ text: "Newest speech" });
     await vi.advanceTimersByTimeAsync(fiveMinutes);
-    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
-    await vi.waitFor(async () =>
-      expect((await saved(fixture))?.transcript.at(-1)).toBe("Newest speech"),
-    );
+    await settleSummaryUpdates(fixture.updates);
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect((await saved(fixture))?.transcript.at(-1)).toBe("Newest speech");
     await vi.advanceTimersByTimeAsync(fiveMinutes);
+    await settleSummaryUpdates(fixture.updates);
     expect(complete).toHaveBeenCalledTimes(2);
   });
 
   it.each([false, true])(
     "shares utility summaries and finalization with browser meeting capture (restored: %s)",
     async (restored) => {
+      const updates = trackSummaryUpdates();
       const stateDir = tempDirs.make("browser-live-notes-");
       const store = createTranscriptsStore({ stateDir, logger: console });
       const session: MeetingSessionRecord<"chrome", "agent"> = {
@@ -352,11 +455,10 @@ describe("live meeting summaries", () => {
           ]);
         }
         await vi.advanceTimersByTimeAsync(fiveMinutes);
-        await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
+        await settleSummaryUpdates(updates);
+        expect(complete).toHaveBeenCalledOnce();
         expect(complete.mock.calls[0]![0]).toMatchObject({ model: "utility", agentId: "research" });
-        await vi.waitFor(async () =>
-          expect((await store.readSummary(descriptor.session)).summary?.source).toBe("model"),
-        );
+        expect((await store.readSummary(descriptor.session)).summary?.source).toBe("model");
         if (restored) {
           expect((await store.readSummary(descriptor.session)).summary?.transcript).toEqual([
             "Earlier speech already summarized",

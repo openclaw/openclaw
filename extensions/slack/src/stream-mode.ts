@@ -1,4 +1,3 @@
-// Slack plugin module implements stream mode behavior.
 import {
   resolveSlackNativeStreaming,
   resolveSlackStreamingMode,

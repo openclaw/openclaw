@@ -1,4 +1,5 @@
 import pLimit from "p-limit";
+import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   runWithGatewayDetachedWorkContinuation,
@@ -10,6 +11,7 @@ import {
   ensureDeliveryState,
   getDeliveryLastError,
 } from "./subagent-delivery-state.js";
+import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import {
   finalizeResumedAnnounceGiveUp,
   resumeAncestorCleanup,
@@ -24,6 +26,7 @@ import type {
 } from "./subagent-registry-lifecycle-context.js";
 import { refreshFrozenResultFromSession } from "./subagent-registry-lifecycle-delivery.js";
 import {
+  cancelRequesterSettleWake,
   completeCleanupBookkeeping,
   scheduleRequesterSettleWake,
 } from "./subagent-registry-lifecycle-wake.js";
@@ -56,6 +59,7 @@ export class SubagentLifecycleController {
   >();
   private readonly terminalCompletionLocks = new Map<string, Promise<void>>();
   private readonly terminalGenerations = new WeakMap<SubagentRunRecord, number>();
+  private readonly terminalSessionEffects = new WeakMap<SubagentRunRecord, () => boolean>();
   private readonly cleanupGenerations = new WeakMap<SubagentRunRecord, number>();
   private readonly progressEndedEntries = new WeakSet<SubagentRunRecord>();
   private readonly cleanupFailureCounts = new WeakMap<SubagentRunRecord, number>();
@@ -71,6 +75,19 @@ export class SubagentLifecycleController {
       (candidate) => candidate.runId !== entry.runId,
     );
     return latest !== null && compareSubagentRunGeneration(latest, entry) > 0;
+  }
+
+  bindTerminalSessionEffects(entry: SubagentRunRecord, isCurrent?: () => boolean): void {
+    if (isCurrent) {
+      this.terminalSessionEffects.set(entry, isCurrent);
+    }
+  }
+
+  shouldSuppressSessionEffects(entry: SubagentRunRecord): boolean {
+    return (
+      shouldSuppressSubagentRecoverySessionEffects(entry) ||
+      this.terminalSessionEffects.get(entry)?.() === false
+    );
   }
 
   async acquireTerminalCompletionLock(runId: string): Promise<() => void> {
@@ -315,6 +332,9 @@ export class SubagentLifecycleController {
     scheduleRequesterSettleWake(this, runId, entry);
   };
 
+  cancelRequesterSettleWake = (entry: SubagentRunRecord, assertCurrent: () => void) =>
+    cancelRequesterSettleWake(this, entry, assertCurrent);
+
   settleRequesterTurnAfterSessionSpawns = (
     args: {
       requesterSessionKey: string;
@@ -322,6 +342,7 @@ export class SubagentLifecycleController {
       requesterTurnRunId: string;
       requesterYielded: boolean;
       acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
+      progressPresentation?: ProgressContinuationState;
     },
     source: "live" | "restore" = "live",
   ) =>

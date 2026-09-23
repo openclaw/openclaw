@@ -1,7 +1,5 @@
 // Qa Lab tests cover scenario catalog plugin behavior.
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { resolveQaRepoPath } from "./repo-path.js";
@@ -20,13 +18,11 @@ import {
   requireFlowScenario,
 } from "./scenario-catalog.test-utils.js";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
-import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
 
 describe("qa scenario catalog", () => {
   const twoPartCoverageIdPattern = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9-]*$/;
   const agentRuntime = "agent-runtime";
   const browserUi = "control-ui";
-  const cli = "cli";
   const codex = "openai";
   const memory = "session-memory";
   const otel = "observability";
@@ -194,7 +190,7 @@ describe("qa scenario catalog", () => {
 
   it("keeps the audited parallel script allowlist exact", () => {
     const expected =
-      "active-talk-agent-run-status agent-run-identity-inspection channel-health-monitor-lifecycle diagnostic-events-boundary gateway-smoke gateway-ssh-tunnels gateway-stability-runtime gateway-support-export gateway-tls-pinning gateway-websocket-protocol-contracts logging-file-boundary mcp-gateway-connect-startup-retry mcp-plugin-tools-call otel-generation-config-watcher qa-otel-smoke remote-log-tailing subagent-lineage-inspection tui-command-surfaces-pty tui-editor-input-pty tui-gateway-boundary-pty tui-local-runtime-recovery-pty tui-pty-evidence-producer-contract tui-streaming-tool-cards-pty voice-call-cli-rpc-agent-tool".split(
+      "active-talk-agent-run-status agent-run-identity-inspection channel-health-monitor-lifecycle cli-status-health-snapshots diagnostic-events-boundary gateway-smoke gateway-ssh-tunnels gateway-stability-runtime gateway-support-export gateway-tls-pinning gateway-websocket-protocol-contracts logging-file-boundary mcp-gateway-connect-startup-retry mcp-plugin-tools-call otel-generation-config-watcher qa-otel-smoke remote-log-tailing subagent-lineage-inspection tui-command-surfaces-pty tui-editor-input-pty tui-gateway-boundary-pty tui-local-runtime-recovery-pty tui-pty-evidence-producer-contract tui-streaming-tool-cards-pty voice-call-cli-rpc-agent-tool".split(
         " ",
       );
     const marked = readQaScenarioPack().scenarios.filter(
@@ -651,66 +647,6 @@ describe("qa scenario catalog", () => {
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
       "preserves searchable sanitized tool-call traces",
     ]);
-  });
-
-  it("loads the opt-in update.run package self-upgrade script proof", () => {
-    const scenario = readQaScenarioById("update-run-package-self-upgrade");
-
-    expect(scenario.coverage?.primary).toEqual([
-      `${cli}.update-status-and-rpc`,
-      "gateway.update-and-setup-apis",
-    ]);
-    expect(scenario.coverage?.secondary).toEqual([`${cli}.managed-gateway-restart`]);
-    expect(scenario.execution.kind).toBe("script");
-    if (scenario.execution.kind !== "script") {
-      throw new Error(`expected script execution, got ${scenario.execution.kind}`);
-    }
-    expect(scenario.execution.path).toBe(
-      "test/e2e/qa-lab/runtime/update-run-package-self-upgrade.ts",
-    );
-    expect(scenario.execution.allowBlockedEvidence).toBe(true);
-    expect(scenario.execution.timeoutMs).toBe(3_600_000);
-    expect(scenario.execution.args).toEqual(["--artifact-base", "${outputDir}"]);
-    expect(scenario.execution.flow).toBeUndefined();
-  });
-
-  it("keeps the update.run producer blocked without destructive opt-in", async () => {
-    const outputDir = await fs.promises.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-update-run-blocked-"),
-    );
-    try {
-      const result = await runQaTestFileScenarios({
-        repoRoot: process.cwd(),
-        outputDir,
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        scenarios: [readQaScenarioById("update-run-package-self-upgrade")],
-        env: {
-          OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF: "0",
-          OPENCLAW_QA_REF: "blocked-evidence-test",
-        },
-      });
-
-      expect(result.results[0]).toMatchObject({
-        status: "blocked",
-        producerEvidence: {
-          entries: [
-            {
-              test: { id: "update-run-package-self-upgrade" },
-              result: {
-                status: "blocked",
-                failure: {
-                  reason:
-                    "blocked destructive package self-upgrade; set OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 to run",
-                },
-              },
-            },
-          ],
-        },
-      });
-    } finally {
-      await fs.promises.rm(outputDir, { recursive: true, force: true });
-    }
   });
 
   it("separates Codex install, package compatibility, and drift diagnostics evidence", () => {

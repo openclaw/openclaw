@@ -85,11 +85,15 @@ public enum GatewayBoundedDataError: Error, Equatable, Sendable {
     case responseTooLarge(maximumBytes: Int)
 }
 
-protocol GatewayTLSFailureProviding: AnyObject {
+// periphery:ignore - Native session adapters expose typed TLS repair evidence to GatewayChannel.
+public protocol GatewayTLSFailureProviding: AnyObject {
+    // periphery:ignore - The shared channel consumes this through the optional provider seam.
     func consumeLastTLSFailure() -> GatewayTLSValidationFailure?
 }
 
-protocol GatewayDeviceTokenRetryTrustProviding: AnyObject {
+// periphery:ignore - Native session adapters declare whether their TLS path permits token retry.
+public protocol GatewayDeviceTokenRetryTrustProviding: AnyObject {
+    // periphery:ignore - The shared channel consumes this through the optional provider seam.
     var allowsDeviceTokenRetryAuth: Bool { get }
 }
 
@@ -177,7 +181,10 @@ public enum GatewayTLSServerTrust {
         params: GatewayTLSParams,
         expectedFingerprint: String?) -> GatewayTLSServerTrustEvaluation
     {
-        let systemTrustOk = SecTrustEvaluateWithError(trust, nil)
+        let hostnamePolicy = SecPolicyCreateSSL(true, host as CFString)
+        let systemTrustOk =
+            SecTrustSetPolicies(trust, hostnamePolicy) == errSecSuccess &&
+            SecTrustEvaluateWithError(trust, nil)
         let fingerprint = certificateFingerprint(trust)
         let expected = expectedFingerprint.map(normalizeFingerprint)
         let failure: (GatewayTLSValidationFailureKind, String?, String?) -> GatewayTLSServerTrustEvaluation
@@ -803,6 +810,28 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         let failure = self.lastTLSFailure
         self.lastTLSFailure = nil
         return failure
+    }
+
+    // periphery:ignore - External TLS transports delegate trust ownership to this session.
+    /// Approve the certificate from an externally hosted TLS stream before it sends HTTP headers.
+    /// The existing pin owner also supplies typed repair evidence and first-use persistence.
+    public func validateServerTrust(_ trust: SecTrust, for url: URL) -> Bool {
+        guard let authority = GatewayTLSAuthority(url: url), authority.scheme == "wss" else { return false }
+        switch GatewayTLSServerTrust.evaluate(
+            trust: trust,
+            host: authority.host,
+            port: authority.port,
+            params: self.params,
+            expectedFingerprint: self.currentEnforcedFingerprint())
+        {
+        case let .accept(fingerprint, enforcePin):
+            self.recordTLSAcceptance(fingerprint, enforcePin: enforcePin)
+            return true
+        case let .reject(failure, enforcedFingerprint):
+            if let enforcedFingerprint { self.recordTLSPinExpectation(enforcedFingerprint) }
+            self.recordTLSFailure(failure)
+            return false
+        }
     }
 
     private func recordTLSFailure(_ failure: GatewayTLSValidationFailure) {

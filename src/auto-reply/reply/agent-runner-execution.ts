@@ -1,22 +1,14 @@
 /** Agent-runner execution loop, fallback handling, and user-facing failure mapping. */
 import crypto from "node:crypto";
-import {
-  hasNonEmptyString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import type { ChatRunStartupPhase } from "../../../packages/gateway-protocol/src/index.js";
 import type {
   AdmittedRunContext,
   PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import { peekSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import {
-  classifyFailoverReason,
-  isContextOverflowError,
-} from "../../agents/embedded-agent-helpers.js";
-import type { EmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
+import { classifyFailoverReason } from "../../agents/embedded-agent-helpers.js";
 import {
   createDeferredEmbeddedRunLifecycleManager,
   type DeferredEmbeddedRunLifecycleManager,
@@ -27,6 +19,7 @@ import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-context.js";
+import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -45,7 +38,10 @@ import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { progressCardRefreshRunProjection } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
+import type { ReplyPayload } from "../types.js";
 import {
   clearRecoveredAutoFallbackPrimaryProbeSelection,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
@@ -57,25 +53,29 @@ import type {
   AgentTurnExecutionResult,
   AgentTurnInternalResult,
   AgentTurnParams,
+  InternalFollowupRun,
   RuntimeFallbackAttempt,
 } from "./agent-runner-execution.types.js";
 import {
   buildTerminalAgentRunFailureReplyPayload,
   markAgentRunFailureReplyPayload,
-  resolveExternalRunFailureTextForConversation,
 } from "./agent-runner-failure-reply.js";
 import {
   executeAgentFallbackCycle,
   type AgentFallbackCycleState,
 } from "./agent-runner-fallback-cycle.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
-import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
+import {
+  createAgentTurnTimingTracker,
+  resolveRunStartupPhase,
+} from "./agent-runner-turn-timing.js";
 import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
-import type { DirectBlockDelivery } from "./reply-delivery.js";
+import { resolveFollowupAbortSignal } from "./queue/types.js";
+import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
@@ -84,38 +84,6 @@ import {
   retainReplyOperationUntilComplete,
 } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
-
-type InternalFollowupRun = FollowupRun & {
-  /** Keep admission state out of the public plugin-facing FollowupRun contract. */
-  currentTurnImagesPrepared?: true;
-  mediaImageLayout?: CurrentTurnImages["mediaImageLayout"];
-};
-
-function resolveRunStartupPhase(
-  phase: EmbeddedAgentExecutionPhase,
-): ChatRunStartupPhase | undefined {
-  switch (phase) {
-    case "runner_entered":
-    case "workspace":
-    case "runtime_plugins":
-      return "preparing_workspace";
-    case "before_agent_reply":
-    case "model_resolution":
-    case "auth":
-    case "context_engine":
-    case "attempt_dispatch":
-    case "context_assembled":
-      return "preparing_context";
-    case "turn_accepted":
-    case "process_spawned":
-    case "model_call_started":
-      return "starting_model";
-    case "tool_execution_started":
-    case "assistant_output_started":
-      return undefined;
-  }
-  return undefined;
-}
 
 async function executeAgentTurnInternalLoop(
   params: AgentTurnParams,
@@ -184,6 +152,7 @@ async function executeAgentTurnInternalLoop(
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
       isControlUiVisible: shouldSurfaceToControlUi,
+      ...progressCardRefreshRunProjection(params.followupRun.run.inputProvenance),
       completionSource: params.completionSource,
     });
   }
@@ -398,6 +367,8 @@ async function executeAgentTurnInternalLoop(
         shouldSurfaceToControlUi,
         timing: agentTurnTiming,
         modelPatch,
+        resolveVisibleReplyDelivery: () =>
+          resolveReplyFailureVisibility(params.resolveVisibleReplyDelivery, directBlockDeliveries),
       });
       if (action.kind === "aborted") {
         return action;
@@ -425,28 +396,6 @@ async function executeAgentTurnInternalLoop(
     }
   }
 
-  // If the run completed but with an embedded context overflow error that
-  // wasn't recovered from (e.g. compaction reset already attempted), surface
-  // the error to the user instead of silently returning an empty response.
-  // See #26905: Slack DM sessions silently swallowed messages when context
-  // overflow errors were returned as embedded error payloads.
-  const finalEmbeddedError = runResult?.meta?.error;
-  const hasPayloadText = runResult?.payloads?.some((p) => normalizeOptionalString(p.text));
-  if (finalEmbeddedError && !hasPayloadText) {
-    const errorMsg = finalEmbeddedError.message ?? "";
-    if (isContextOverflowError(errorMsg)) {
-      params.replyOperation?.fail("run_failed", finalEmbeddedError);
-      return {
-        kind: "final",
-        resolved: { provider: fallbackProvider, model: fallbackModel },
-        payload: markAgentRunFailureReplyPayload({
-          text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
-        }),
-        postCompactionModelFailure: fallbackCycleState.postCompactionModelAttempted || undefined,
-      };
-    }
-  }
-
   // Surface rate limit and overload errors that occur mid-turn (after tool
   // calls) instead of silently returning an empty response. See #36142.
   // Only applies when the assistant produced no valid (non-error) reply text,
@@ -466,7 +415,7 @@ async function executeAgentTurnInternalLoop(
       (p) => !p.isError && !p.isReasoning && hasOutboundReplyContent(p, { trimText: true }),
     );
     if (!hasNonErrorContent) {
-      const metaErrorMsg = finalEmbeddedError?.message ?? "";
+      const metaErrorMsg = runResult.meta?.error?.message ?? "";
       const rawErrorPayloadText =
         runResult.payloads?.find(
           (p) => p.isError && hasNonEmptyString(p.text) && !p.text.startsWith("⚠️"),
@@ -480,12 +429,7 @@ async function executeAgentTurnInternalLoop(
       if (formattedErrorCandidate) {
         runResult.payloads = [
           markAgentRunFailureReplyPayload({
-            text: resolveExternalRunFailureTextForConversation({
-              text: formattedErrorCandidate,
-              sessionCtx: params.sessionCtx,
-              isGenericRunnerFailure: false,
-              cfg: params.followupRun.run.config,
-            }),
+            text: formattedErrorCandidate,
             isError: true,
           }),
         ];
@@ -496,14 +440,21 @@ async function executeAgentTurnInternalLoop(
     ? false
     : (modelPatch.captureFallbackFailure(fallbackAttempts) ?? false);
   await modelPatch.finish(!terminalRunFailed && !patchedModelNeedsRevert);
-  const terminalFailurePayload = terminalRunFailed
-    ? buildTerminalAgentRunFailureReplyPayload({
-        isHeartbeat: params.isHeartbeat,
-        visibleReplyDelivered: (await params.resolveVisibleReplyDelivery?.()) === true,
-        sessionCtx: params.sessionCtx,
-        cfg: params.followupRun.run.config,
-      })
-    : undefined;
+  let terminalFailurePayload: ReplyPayload | undefined;
+  if (terminalRunFailed) {
+    const replyExpectation = resolveReplyExpectation(params.followupRun.run);
+    terminalFailurePayload = buildTerminalAgentRunFailureReplyPayload({
+      isHeartbeat: params.isHeartbeat,
+      replyExpectation,
+      visibleReplyDelivered:
+        replyExpectation === "optional"
+          ? await resolveReplyFailureVisibility(
+              params.resolveVisibleReplyDelivery,
+              directBlockDeliveries,
+            )
+          : false,
+    });
+  }
 
   return {
     kind: "completed",
@@ -544,7 +495,12 @@ async function executeAgentTurnInternal(
     agentId: params.followupRun.run.agentId,
     ingressKind: "channel",
     boundary: "auto-reply.agent-runner",
+    operatorAuthority: params.followupRun.operatorAuthority,
     evidence: params.followupRun.channelAdmissionEvidence,
+    assertSourceCurrent:
+      params.followupRun.run.senderIsOwner === true
+        ? captureCommandOwnerAssertion(params.followupRun.run)
+        : undefined,
     onAdmitted: (context) => {
       bindGatewayContextResolver(context, gatewayContextResolver);
       admittedRunContext.current = context;
@@ -557,7 +513,10 @@ async function executeAgentTurnInternal(
     sessionId: params.followupRun.run.sessionId,
     sessionKey: params.sessionKey,
     sessionFile: params.followupRun.run.sessionFile,
-    abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+    abortSignal: resolveFollowupAbortSignal({
+      abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+      operatorAuthority: params.followupRun.operatorAuthority,
+    }),
   });
   try {
     return await executeAgentTurnInternalLoop(

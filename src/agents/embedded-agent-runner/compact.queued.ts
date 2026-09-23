@@ -22,7 +22,10 @@ import type {
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
-import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import {
+  runOutsidePluginRuntimeGenerationScope,
+  withPluginRuntimeGenerationScope,
+} from "../../plugins/runtime/generation-scope.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
@@ -231,6 +234,7 @@ export async function compactEmbeddedAgentSession(
       sessionKey: runtimeTarget.sessionKey,
       sessionTarget: runtimeTarget,
       sessionFile: runtimeTarget.sessionKey,
+      spawnedBy: normalizeOptionalString(params.spawnedBy) ?? entry?.spawnedBy,
       contextEngineAgentId,
     };
     if (resolvedParams.trigger !== "manual") {
@@ -364,36 +368,40 @@ async function compactEmbeddedAgentSessionPrepared(
     return nativeCliResult;
   }
   assertQueuedCompactionPreparationActive(params, host);
-  const lease = await acquireAgentRunPreparedModelRuntime(
-    {
-      config: params.config ?? {},
-      agentId: agentIds.sessionAgentId,
-      agentDir,
-      workspaceDir: resolvedWorkspaceDir,
-      ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-    },
-    {
-      abortSignal: params.abortSignal,
-      deriveRuntimePluginSelections: ({ config, metadataSnapshot }) => {
-        const selected = resolveCompactionRuntimeSelection({
-          ...requestedSelection,
-          config: projectCodexHostTranscriptBytePreflightConfig(
-            config,
-            Boolean(host.transcriptBytePreflightHarness),
-          ),
-          manifestPlugins: metadataSnapshot,
-          allowPluginNormalization: false,
-        });
-        return [
-          {
-            provider: selected.provider,
-            modelId: selected.modelId,
-            runtime: selected.selectedHarnessRuntime,
-            agentId: agentIds.sessionAgentId,
-          },
-        ];
+  // Compaction admits new work even when an engine restores a predecessor context.
+  // Keep caller authority, but select metadata from the committed inventory.
+  const lease = await runOutsidePluginRuntimeGenerationScope(() =>
+    acquireAgentRunPreparedModelRuntime(
+      {
+        config: params.config ?? {},
+        agentId: agentIds.sessionAgentId,
+        agentDir,
+        workspaceDir: resolvedWorkspaceDir,
+        ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
       },
-    },
+      {
+        abortSignal: params.abortSignal,
+        deriveRuntimePluginSelections: ({ config, metadataSnapshot }) => {
+          const selected = resolveCompactionRuntimeSelection({
+            ...requestedSelection,
+            config: projectCodexHostTranscriptBytePreflightConfig(
+              config,
+              Boolean(host.transcriptBytePreflightHarness),
+            ),
+            manifestPlugins: metadataSnapshot,
+            allowPluginNormalization: false,
+          });
+          return [
+            {
+              provider: selected.provider,
+              modelId: selected.modelId,
+              runtime: selected.selectedHarnessRuntime,
+              agentId: agentIds.sessionAgentId,
+            },
+          ];
+        },
+      },
+    ),
   );
   const factoryResources = owner.adoptLease(lease);
   // Admission can replace config and agent storage while preserving the requested workspace.
@@ -485,6 +493,7 @@ async function compactResolvedContextEngine(
   });
   assertQueuedCompactionPreparationActive(params, host);
   const { resolution: modelResolution } = await resolveTieredModel({
+    abortSignal: params.abortSignal,
     provider: ceRuntimeProvider,
     modelId: ceModelId,
     agentDir,
@@ -545,6 +554,7 @@ async function compactResolvedContextEngine(
       providerUsesProfileScopedModelMetadata && Boolean(runtimeAuthPlan.selectedAuthMode),
     resolveModel: async ({ config, authProfileId, authProfileMode }) => {
       const resolved = await resolveModelAsync(ceRuntimeProvider, ceModelId, agentDir, config, {
+        abortSignal: params.abortSignal,
         authStorage,
         modelRegistry,
         preparedModelRuntime,

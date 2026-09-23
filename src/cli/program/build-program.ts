@@ -7,7 +7,9 @@ import { OpenClawCommand } from "./openclaw-command.js";
 import { registerPreActionHooks } from "./preaction.js";
 import { setProgramContext } from "./program-context.js";
 
-export function buildProgram(prepared?: Pick<ProgramContext, "doctorDatabasePreflight">) {
+export function buildProgram(
+  prepared?: Pick<ProgramContext, "doctorDatabasePreflight" | "runtimeRecoveryEnv">,
+) {
   const program = new OpenClawCommand();
   program.enablePositionalOptions();
   // Preserve Commander-computed exit codes while still aborting parse flow.

@@ -8,6 +8,7 @@ import { sha256File } from "../infra/directory-durability.js";
 import { isErrno } from "../infra/errors.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { isWithinDir } from "../infra/path-safety.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseControlUiAssetManifest } from "./control-ui-asset-manifest-parse.js";
 import {
   CONTROL_UI_ASSET_MANIFEST_FILENAME,
@@ -22,6 +23,7 @@ const CONTROL_UI_GENERATION_PATTERN = /^[a-f0-9]{64}$/u;
 const CONTROL_UI_STAGING_PATTERN = /^\.staging-[0-9]+-[a-f0-9-]+$/u;
 const CONTROL_UI_STAGING_MAX_AGE_MS = 60 * 60 * 1000;
 const CONTROL_UI_MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
+const log = createSubsystemLogger("gateway/control-ui-assets");
 
 type RetainedGeneration = {
   assetPaths: ReadonlySet<string>;
@@ -375,7 +377,43 @@ async function pruneRetainedGenerations(params: {
     ) {
       continue;
     }
-    await fs.rm(target, { recursive: true, force: true });
+    // Claim into a fresh container: the victim's old mtime must not make our
+    // in-progress deletion eligible for another preparer's stale staging sweep.
+    const staging = path.join(params.cacheDir, `.staging-${process.pid}-${randomUUID()}`);
+    let owned = false;
+    let claimed = false;
+    try {
+      await fs.mkdir(staging, { mode: 0o700 });
+      owned = true;
+      params.signal?.throwIfAborted();
+      await fs.rename(target, path.join(staging, name));
+      claimed = true;
+      await fs.rm(staging, { recursive: true, force: true });
+      log.debug("Control UI asset pruning completed", { directory: target, outcome: "pruned" });
+    } catch (error) {
+      params.signal?.throwIfAborted();
+      const gone =
+        !claimed &&
+        (await fs.lstat(target).then(
+          () => false,
+          (cause: unknown) => isErrno(cause) && cause.code === "ENOENT",
+        ));
+      log[gone ? "debug" : "warn"]("Control UI asset pruning outcome", {
+        directory: target,
+        outcome: gone ? "already-pruned" : "deferred",
+        error: String(error),
+      });
+    } finally {
+      if (owned && !claimed) {
+        await fs.rm(staging, { recursive: true, force: true }).catch((error: unknown) => {
+          log.warn("Control UI asset pruning cleanup deferred", {
+            directory: staging,
+            outcome: "deferred",
+            error: String(error),
+          });
+        });
+      }
+    }
   }
   const survivors: RetainedGeneration[] = [];
   for (const generation of inventory.generations) {

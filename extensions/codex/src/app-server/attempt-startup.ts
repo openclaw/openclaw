@@ -161,6 +161,7 @@ export async function startCodexAttemptThread(params: {
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
   nativeHookRelayGeneration?: string;
   nativeHookRelayRequired?: boolean;
+  nativeModelAdmission?: Parameters<typeof startOrResumeThread>[0]["nativeModelAdmission"];
   bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
   /** Static configured MCP is present on the dynamic surface, so native MCP stays absent. */
   configuredMcpDynamicSurface?: boolean;
@@ -410,6 +411,9 @@ export async function startCodexAttemptThread(params: {
                     // retain run cancellation after this function returns.
                     signal: AbortSignal.any([params.signal, startupAbandonController.signal]),
                     onExecutionDisconnect: params.onExecutionDisconnect,
+                    requireProcessAuthority: Boolean(
+                      attemptParams.hostCapabilities.retainSourceAuthority,
+                    ),
                   })
                 : undefined;
               startupSandboxEnvironmentAcquired = Boolean(startupSandboxEnvironment);
@@ -490,6 +494,7 @@ export async function startCodexAttemptThread(params: {
                 buildFinalConfigPatch: params.buildFinalConfigPatch,
                 nativeHookRelayGeneration: params.nativeHookRelayGeneration,
                 nativeHookRelayRequired: params.nativeHookRelayRequired,
+                nativeModelAdmission: params.nativeModelAdmission,
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
                 nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,

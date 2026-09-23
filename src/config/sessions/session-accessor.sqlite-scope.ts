@@ -6,6 +6,7 @@ import { isMainThread, threadId } from "node:worker_threads";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { withSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
 import { getChildLogger } from "../../logging/logger.js";
 import {
   isIncognitoSessionKey,
@@ -36,12 +37,15 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptWriteScope,
   SqliteSessionArtifactPreparationDiagnostics,
-  SqliteSessionArchivePruningDiagnostics,
   SqliteSessionDatabaseAdmissionDiagnostics,
   SqliteSessionWriteDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import {
+  prepareSqliteTargetFromSessionStorePath,
+  resolveSqliteTargetFromSessionStorePath,
+  type ResolvedSqliteStoreTarget,
+} from "./session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -92,7 +96,7 @@ export type ResolvedTranscriptScope = ResolvedSqliteScope & {
   sessionId: string;
 };
 
-type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
+export type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
   sessionId: string;
 };
 
@@ -188,34 +192,6 @@ function artifactPreparationLogFields(diagnostics: SqliteSessionArtifactPreparat
   };
 }
 
-function archivePruningLogFields(diagnostics: SqliteSessionArchivePruningDiagnostics) {
-  const milliseconds = (value: number | undefined) =>
-    value === undefined ? undefined : Math.round(value);
-  return {
-    trigger: diagnostics.trigger,
-    admissionMs: milliseconds(diagnostics.admissionMs),
-    cachedAdmissions: diagnostics.cachedAdmissions,
-    asyncAdmissions: diagnostics.asyncAdmissions,
-    checkpointCalls: diagnostics.checkpointCalls,
-    checkpointIncomplete: diagnostics.checkpointIncomplete,
-    checkpointMs: milliseconds(diagnostics.checkpointMs),
-    checkpointMaxMs: milliseconds(diagnostics.checkpointMaxMs),
-    vacuumMs: milliseconds(diagnostics.vacuumMs),
-    vacuumPasses: diagnostics.vacuumPasses,
-    vacuumPagesRequested: diagnostics.vacuumPagesRequested,
-    queryMs: milliseconds(diagnostics.queryMs),
-    rowDeletionMs: milliseconds(diagnostics.rowDeletionMs),
-    fileRemovalMs: milliseconds(diagnostics.fileRemovalMs),
-    removedFiles: diagnostics.removedFiles,
-    missingFiles: diagnostics.missingFiles,
-    failedRemovals: diagnostics.failedRemovals,
-    measurementMs: milliseconds(diagnostics.measurementMs),
-    measurements: diagnostics.measurements,
-    legacyInventoryMs: milliseconds(diagnostics.legacyInventoryMs),
-    completed: diagnostics.completed === true,
-  };
-}
-
 export async function runExclusiveSqliteSessionWrite<T>(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   fn: () => Promise<T>,
@@ -224,9 +200,32 @@ export async function runExclusiveSqliteSessionWrite<T>(
   writer: "foreground" | "worker" = "foreground",
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
+  const timing: StoreWriterTiming = {};
+  return observeSqliteSessionWrite(
+    scope,
+    () =>
+      writer === "worker"
+        ? runOpenClawAgentWorkerWrite(databaseOptions, fn, timing)
+        : runOpenClawAgentWriteAdmission(databaseOptions, fn, false, timing),
+    operation,
+    diagnostics,
+    writer,
+    timing,
+  );
+}
+
+/** Observe multi-unit maintenance without retaining foreground admission between units. */
+async function observeSqliteSessionWrite<T>(
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+  fn: () => Promise<T>,
+  operation: SqliteSessionWriteOperation,
+  diagnostics?: SqliteSessionWriteDiagnostics,
+  writer: "foreground" | "worker" = "foreground",
+  timing: StoreWriterTiming = {},
+): Promise<T> {
+  const databaseOptions = toDatabaseOptions(scope);
   const storePath = resolveOpenClawAgentSqlitePath(databaseOptions);
   const startedAt = performance.now();
-  const timing: StoreWriterTiming = {};
   const timingFields = (completedAt: number) => ({
     pid: process.pid,
     threadId,
@@ -238,9 +237,6 @@ export async function runExclusiveSqliteSessionWrite<T>(
       : {}),
     ...(diagnostics?.artifactPreparation
       ? { artifactPreparation: artifactPreparationLogFields(diagnostics.artifactPreparation) }
-      : {}),
-    ...(diagnostics?.archivePruning
-      ? { archivePruning: archivePruningLogFields(diagnostics.archivePruning) }
       : {}),
     elapsedMs: Math.round(completedAt - startedAt),
     ...(timing.startedAt !== undefined && timing.finishedAt !== undefined
@@ -264,10 +260,13 @@ export async function runExclusiveSqliteSessionWrite<T>(
   });
   let completedAt = startedAt;
   let outcome: "ok" | "error" = "ok";
+  const owned = () =>
+    withSqliteReaderOwner(
+      { operation, ownerKind: isMainThread ? "main" : "worker", actorId: threadId },
+      fn,
+    );
   try {
-    const result = await (writer === "worker"
-      ? runOpenClawAgentWorkerWrite(databaseOptions, fn, timing)
-      : runOpenClawAgentWriteAdmission(databaseOptions, fn, false, timing));
+    const result = await owned();
     completedAt = performance.now();
     if (completedAt - startedAt >= SQLITE_SESSION_SLOW_WRITE_MS) {
       getChildLogger({ subsystem: "session-sqlite" }).warn(
@@ -300,10 +299,7 @@ type SqliteScopeInput = Pick<
   "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
 >;
 
-function resolveSqliteDatabaseScope(
-  scope: SqliteScopeInput,
-  targetCache?: SessionSqliteTargetResolutionCache,
-) {
+function resolveSqliteDatabaseScopeIdentity(scope: SqliteScopeInput) {
   const parsedAgentId = parseAgentSessionKey(scope.sessionKey)?.agentId;
   const scopedAgentId = scope.agentId ? normalizeAgentId(scope.agentId) : parsedAgentId;
   const incognitoAgentId = isIncognitoSessionKey(scope.sessionKey)
@@ -313,17 +309,28 @@ function resolveSqliteDatabaseScope(
     ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: incognitoAgentId, env: scope.env })
     : scope.storePath;
   const effectiveAgentId = incognitoAgentId ?? scopedAgentId;
-  const storeTarget = effectiveStorePath
-    ? resolveCachedSqliteStoreTarget(
-        {
-          agentId: effectiveAgentId,
-          defaultAgentId: scope.defaultAgentId,
-          env: scope.env,
-          storePath: effectiveStorePath,
-        },
-        targetCache,
-      )
-    : undefined;
+  return { effectiveAgentId, effectiveStorePath };
+}
+
+function resolveSqliteDatabaseScope(
+  scope: SqliteScopeInput,
+  targetCache?: SessionSqliteTargetResolutionCache,
+  preparedStoreTarget?: ResolvedSqliteStoreTarget,
+) {
+  const { effectiveAgentId, effectiveStorePath } = resolveSqliteDatabaseScopeIdentity(scope);
+  const storeTarget =
+    preparedStoreTarget ??
+    (effectiveStorePath
+      ? resolveCachedSqliteStoreTarget(
+          {
+            agentId: effectiveAgentId,
+            defaultAgentId: scope.defaultAgentId,
+            env: scope.env,
+            storePath: effectiveStorePath,
+          },
+          targetCache,
+        )
+      : undefined);
   const agentId = resolveSqliteAgentId({
     scopedAgentId: effectiveAgentId,
     sessionKey: scope.sessionKey,
@@ -361,11 +368,13 @@ export function resolveSqliteScope(
 export function resolveSqliteReadScope(
   scope: SqliteScopeInput,
   targetCache?: SessionSqliteTargetResolutionCache,
+  preparedStoreTarget?: ResolvedSqliteStoreTarget,
 ): ResolvedSqliteReadScope {
   const sessionKey = scope.sessionKey ? normalizeSqliteSessionKey(scope.sessionKey) : undefined;
   const { agentId, ...database } = resolveSqliteDatabaseScope(
     { ...scope, sessionKey },
     targetCache,
+    preparedStoreTarget,
   );
   if (!agentId) {
     throw new Error("Cannot resolve SQLite transcript read scope without an agent id");
@@ -486,6 +495,36 @@ export function resolveSqliteTranscriptReadScope(
   return {
     ...resolveSqliteReadScope(scope, targetCache),
     sessionId: scope.sessionId,
+  };
+}
+
+/** Prepare file ownership once; the history resource and its kernel consume this same scope. */
+export async function prepareSqliteTranscriptReadScope(
+  scope: SessionTranscriptReadScope,
+  signal?: AbortSignal,
+): Promise<ResolvedTranscriptReadScope> {
+  const readScope = {
+    ...scope,
+    sessionKey: scope.sessionKey ? normalizeSqliteSessionKey(scope.sessionKey) : undefined,
+  };
+  if (isIncognitoSessionKey(readScope.sessionKey)) {
+    return resolveSqliteTranscriptReadScope(readScope);
+  }
+  const { effectiveAgentId, effectiveStorePath } = resolveSqliteDatabaseScopeIdentity(readScope);
+  const target = effectiveStorePath
+    ? await prepareSqliteTargetFromSessionStorePath(
+        effectiveStorePath,
+        {
+          agentId: effectiveAgentId,
+          defaultAgentId: readScope.defaultAgentId,
+          env: readScope.env,
+        },
+        signal,
+      )
+    : undefined;
+  return {
+    ...resolveSqliteReadScope(readScope, undefined, target),
+    sessionId: readScope.sessionId,
   };
 }
 

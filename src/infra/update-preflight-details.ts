@@ -1,5 +1,3 @@
-import type { UpdateFailureFact } from "./update-failure-facts.js";
-
 // Public descriptions are fixed text: registry responses and local paths stay local.
 export const UPDATE_PREFLIGHT_DETAILS = {
   "installation-unclassified":
@@ -14,8 +12,6 @@ export const UPDATE_PREFLIGHT_DETAILS = {
     "The target does not declare valid database schema support. Use a compatible artifact or retry openclaw update --tag <published-version> before initializing this profile.",
   "target-git-metadata":
     "The Git target manifest or revision could not be inspected. Check Git remote access and the selected ref, then retry openclaw update; a dry-run does not fetch missing objects.",
-  "target-git-inspection-missing":
-    "The new Git checkout has no inspected target. Retry through openclaw update --channel dev so target checks run before publishing the checkout.",
 } as const;
 
 export function updatePreflightDetailMessage(code: string): string | undefined {
@@ -25,7 +21,7 @@ export function updatePreflightDetailMessage(code: string): string | undefined {
 export function createUpdatePreflightFailure(
   code: keyof typeof UPDATE_PREFLIGHT_DETAILS,
   detail?: string,
-): { message: string; failureFacts: UpdateFailureFact[] } {
+) {
   const message = UPDATE_PREFLIGHT_DETAILS[code];
   return {
     message: detail ? `${message}\n${detail}` : message,

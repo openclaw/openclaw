@@ -1,25 +1,13 @@
-import { parseReleaseVersion } from "./lib/release-version.mjs";
+import { evaluateReleaseBootstrapGate } from "./lib/release-publish-gates.mts";
 
 const SHA = /^[a-f0-9]{40}$/u;
 const PACKAGE = /^@openclaw\/[a-z0-9][a-z0-9._-]*$/u;
 
 export function createStablePluginNpmBootstrapApproval(input) {
-  const version = typeof input.releaseTag === "string" ? input.releaseTag.slice(1) : "";
-  const parsed = parseReleaseVersion(version);
   const stableSoakWaiver = typeof input.stableSoakWaiver === "string" ? input.stableSoakWaiver : "";
-  if (
-    input.releaseTag !== `v${version}` ||
-    parsed?.channel !== "stable" ||
-    parsed.patch >= 33 ||
-    input.publishTag !== "latest" ||
-    !(
-      ["stable", "full"].includes(input.releaseProfile) ||
-      (input.releaseProfile === "beta" && stableSoakWaiver.trim())
-    )
-  ) {
-    throw new Error(
-      "Stable npm bootstrap requires a regular stable tag, latest, and stable/full validation or beta validation with an operator soak waiver.",
-    );
+  const eligibility = evaluateReleaseBootstrapGate(input);
+  if (eligibility.status === "FAIL") {
+    throw new Error(eligibility.message);
   }
   if (
     input.repository !== "openclaw/openclaw" ||

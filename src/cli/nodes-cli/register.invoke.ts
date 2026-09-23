@@ -1,10 +1,10 @@
 // Generic node.invoke command with shell-exec commands intentionally blocked.
+import { randomUUID } from "node:crypto";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runNodesCommand } from "./cli-utils.js";
 import {
@@ -53,13 +53,16 @@ export function registerNodesInvokeCommands(nodes: Command) {
             opts.invokeTimeout,
             "--invoke-timeout",
           );
+          if (opts.idempotencyKey === "") {
+            throw new Error("--idempotency-key must not be empty.");
+          }
           const nodeId = await resolveCliNodeId(opts, nodeQuery);
 
           const invokeParams: Record<string, unknown> = {
             nodeId,
             command,
             params,
-            idempotencyKey: opts.idempotencyKey ?? randomIdempotencyKey(),
+            idempotencyKey: opts.idempotencyKey ?? randomUUID(),
           };
           if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
             invokeParams.timeoutMs = timeoutMs;

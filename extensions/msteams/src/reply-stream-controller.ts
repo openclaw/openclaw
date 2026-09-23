@@ -1,4 +1,3 @@
-// Msteams plugin module implements reply stream controller behavior.
 import {
   type AgentPlanStep,
   createChannelProgressDraftCompositor,

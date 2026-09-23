@@ -1,7 +1,5 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { toQaError } from "../errors.js";
 import {
@@ -21,6 +19,11 @@ import {
   shellQuote,
 } from "./crabbox-runtime.js";
 import { renderMantisCrabboxReport, type MantisCrabboxReportSummary } from "./report.js";
+import {
+  createSlackDesktopArtifactOwner,
+  type MantisApprovalCheckpointArtifacts,
+  type SlackDesktopRemoteMetadata,
+} from "./slack-desktop-smoke.artifacts.js";
 
 export type MantisSlackDesktopSmokeOptions = {
   alternateModel?: string;
@@ -84,29 +87,6 @@ type MantisSlackDesktopSmokeSummary = MantisCrabboxReportSummary & {
   slackUrl?: string;
   timings: MantisPhaseTimings;
   warning?: string;
-};
-
-type SlackDesktopRemoteMetadata = {
-  gatewayAlive?: boolean;
-  gatewayPid?: string;
-  hydrateMode?: string;
-  openedUrl?: string;
-  qaExitCode?: number;
-};
-
-type MantisApprovalCheckpointState = "pending" | "resolved";
-
-type MantisApprovalCheckpointScreenshot = {
-  ackPath: string;
-  checkpointPath: string;
-  scenarioId: string;
-  screenshotPath: string;
-  state: MantisApprovalCheckpointState;
-};
-
-type MantisApprovalCheckpointArtifacts = {
-  directoryPath: string;
-  screenshots: MantisApprovalCheckpointScreenshot[];
 };
 
 const DEFAULT_PROVIDER = "hetzner";
@@ -206,185 +186,6 @@ function resolveScenarioIds(params: {
   return scenarioIds;
 }
 
-async function assertNonEmptyFile(filePath: string, label: string) {
-  let stats;
-  try {
-    stats = await fs.stat(filePath);
-  } catch (error) {
-    throw new Error(`${label} is missing: ${filePath}`, { cause: error });
-  }
-  if (!stats.isFile() || stats.size <= 0) {
-    throw new Error(`${label} is empty: ${filePath}`);
-  }
-}
-
-async function readJsonObject(filePath: string, label: string): Promise<Record<string, unknown>> {
-  await assertNonEmptyFile(filePath, label);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
-  } catch (error) {
-    throw new Error(`${label} is not valid JSON: ${filePath}`, { cause: error });
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`${label} must be a JSON object: ${filePath}`);
-  }
-  return parsed as Record<string, unknown>;
-}
-
-function assertApprovalCheckpointBaseJson(params: {
-  filePath: string;
-  label: string;
-  record: Record<string, unknown>;
-  scenarioId: string;
-  state: MantisApprovalCheckpointState;
-}) {
-  if (params.record.version !== 1) {
-    throw new Error(`${params.label} has unexpected version in ${params.filePath}`);
-  }
-  if (params.record.scenarioId !== params.scenarioId) {
-    throw new Error(`${params.label} has unexpected scenarioId in ${params.filePath}`);
-  }
-  if (params.record.state !== params.state) {
-    throw new Error(`${params.label} has unexpected state in ${params.filePath}`);
-  }
-}
-
-function assertApprovalCheckpointJson(params: {
-  filePath: string;
-  label: string;
-  record: Record<string, unknown>;
-  scenarioId: string;
-  state: MantisApprovalCheckpointState;
-}) {
-  assertApprovalCheckpointBaseJson(params);
-  const message = params.record.message;
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    throw new Error(`${params.label} is missing Slack message evidence in ${params.filePath}`);
-  }
-  const candidate = message as Record<string, unknown>;
-  if (typeof candidate.text !== "string") {
-    throw new Error(`${params.label} message evidence is missing text in ${params.filePath}`);
-  }
-  if (
-    !Array.isArray(candidate.blockText) ||
-    !candidate.blockText.every((entry) => typeof entry === "string")
-  ) {
-    throw new Error(`${params.label} message evidence is missing blockText in ${params.filePath}`);
-  }
-  if (
-    !Array.isArray(candidate.actionLabels) ||
-    !candidate.actionLabels.every((entry) => typeof entry === "string")
-  ) {
-    throw new Error(
-      `${params.label} message evidence is missing actionLabels in ${params.filePath}`,
-    );
-  }
-  if (typeof candidate.hasNativeActions !== "boolean") {
-    throw new Error(
-      `${params.label} message evidence is missing hasNativeActions in ${params.filePath}`,
-    );
-  }
-  if (params.state === "pending" && candidate.actionLabels.length === 0) {
-    throw new Error(
-      `${params.label} pending message evidence has no native action labels in ${params.filePath}`,
-    );
-  }
-}
-
-function assertApprovalCheckpointAckJson(params: {
-  filePath: string;
-  label: string;
-  record: Record<string, unknown>;
-  scenarioId: string;
-  screenshotPath: string;
-  state: MantisApprovalCheckpointState;
-}) {
-  assertApprovalCheckpointBaseJson(params);
-  if (typeof params.record.screenshotPath !== "string" || !params.record.screenshotPath.trim()) {
-    throw new Error(`${params.label} is missing screenshotPath in ${params.filePath}`);
-  }
-  if (path.basename(params.record.screenshotPath) !== path.basename(params.screenshotPath)) {
-    throw new Error(`${params.label} screenshotPath does not match ${params.screenshotPath}`);
-  }
-}
-
-async function collectApprovalCheckpointArtifacts(params: {
-  enabled: boolean;
-  outputDir: string;
-  scenarioIds: readonly string[];
-}): Promise<MantisApprovalCheckpointArtifacts | undefined> {
-  if (!params.enabled) {
-    return undefined;
-  }
-  const directoryPath = path.join(params.outputDir, "approval-checkpoints");
-  const screenshots: MantisApprovalCheckpointScreenshot[] = [];
-  for (const scenarioId of params.scenarioIds) {
-    for (const state of ["pending", "resolved"] as const) {
-      const checkpointPath = path.join(directoryPath, `${scenarioId}.${state}.json`);
-      const ackPath = path.join(directoryPath, `${scenarioId}.${state}.ack.json`);
-      const screenshotPath = path.join(directoryPath, `${scenarioId}-${state}.png`);
-      const checkpointLabel = `Approval checkpoint ${scenarioId}.${state}`;
-      const ackLabel = `Approval checkpoint ack ${scenarioId}.${state}`;
-      assertApprovalCheckpointJson({
-        filePath: checkpointPath,
-        label: checkpointLabel,
-        record: await readJsonObject(checkpointPath, checkpointLabel),
-        scenarioId,
-        state,
-      });
-      assertApprovalCheckpointAckJson({
-        filePath: ackPath,
-        label: ackLabel,
-        record: await readJsonObject(ackPath, ackLabel),
-        scenarioId,
-        screenshotPath,
-        state,
-      });
-      await assertNonEmptyFile(
-        screenshotPath,
-        `Approval checkpoint screenshot ${scenarioId}.${state}`,
-      );
-      screenshots.push({
-        ackPath,
-        checkpointPath,
-        scenarioId,
-        screenshotPath,
-        state,
-      });
-    }
-  }
-  return {
-    directoryPath,
-    screenshots,
-  };
-}
-
-async function readRemoteMetadata(
-  outputDir: string,
-): Promise<SlackDesktopRemoteMetadata | undefined> {
-  const metadataPath = path.join(outputDir, "remote-metadata.json");
-  if (!(await pathExists(metadataPath))) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(await fs.readFile(metadataPath, "utf8")) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return undefined;
-    }
-    const candidate = parsed as Record<string, unknown>;
-    return {
-      gatewayAlive:
-        typeof candidate.gatewayAlive === "boolean" ? candidate.gatewayAlive : undefined,
-      gatewayPid: typeof candidate.gatewayPid === "string" ? candidate.gatewayPid : undefined,
-      hydrateMode: typeof candidate.hydrateMode === "string" ? candidate.hydrateMode : undefined,
-      openedUrl: typeof candidate.openedUrl === "string" ? candidate.openedUrl : undefined,
-      qaExitCode: typeof candidate.qaExitCode === "number" ? candidate.qaExitCode : undefined,
-    };
-  } catch {
-    return undefined;
-  }
-}
 function buildCrabboxEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const next = {
     ...env,
@@ -1263,9 +1064,14 @@ export async function runMantisSlackDesktopSmoke(
   const runner = opts.commandRunner ?? defaultCommandRunner;
   const explicitLeaseId = trimToValue(opts.leaseId) ?? trimToValue(env[CRABBOX_LEASE_ID_ENV]);
   const keepLease = opts.keepLease ?? (gatewaySetup || isTruthyOptIn(env[CRABBOX_KEEP_ENV]));
+  const artifacts = await createSlackDesktopArtifactOwner({
+    outputDir,
+    approvalCheckpoints,
+    scenarioIds,
+  });
   const remoteOutputDir = `/tmp/openclaw-mantis-slack-desktop-${startedAt
     .toISOString()
-    .replace(/[^0-9A-Za-z]/gu, "-")}`;
+    .replace(/[^0-9A-Za-z]/gu, "-")}-${artifacts.runId}`;
   let credentialLease: SlackGatewayCredentialLease | undefined;
   let leaseHeartbeat: SlackGatewayCredentialHeartbeat | undefined;
   const session = createMantisCrabboxSession({
@@ -1353,19 +1159,19 @@ export async function runMantisSlackDesktopSmoke(
         cwd: repoRoot,
         env,
         inspect: inspected,
-        outputDir,
+        outputDir: artifacts.stagingDir,
         remoteOutputDir,
         runner,
       }),
     );
     screenshotPath = path.join(outputDir, "slack-desktop-smoke.png");
     videoPath = path.join(outputDir, "slack-desktop-smoke.mp4");
-    if (!(await pathExists(videoPath))) {
+    if (!(await artifacts.hasVideo())) {
       videoPath = undefined;
     }
-    remoteMetadata = await readRemoteMetadata(outputDir);
+    remoteMetadata = await artifacts.readMetadata();
     slackQaDir = path.join(outputDir, "slack-qa");
-    await assertNonEmptyFile(screenshotPath, "Slack desktop screenshot");
+    await artifacts.assertScreenshot();
     const gatewaySetupCompleted =
       gatewaySetup && remoteMetadata?.qaExitCode === 0 && remoteMetadata.gatewayAlive === true;
     const slackQaCompleted = !gatewaySetup && remoteMetadata?.qaExitCode === 0;
@@ -1388,11 +1194,7 @@ export async function runMantisSlackDesktopSmoke(
           : `Slack QA exited with code ${remoteMetadata.qaExitCode}.`;
       throw new Error(`${detail} See slack-desktop-command.log for details.`);
     }
-    approvalCheckpointArtifacts = await collectApprovalCheckpointArtifacts({
-      enabled: approvalCheckpoints,
-      outputDir,
-      scenarioIds,
-    });
+    approvalCheckpointArtifacts = await artifacts.collectCheckpoints();
     summary = {
       artifacts: {
         approvalCheckpoints: approvalCheckpointArtifacts,
@@ -1444,7 +1246,6 @@ export async function runMantisSlackDesktopSmoke(
       status: "fail",
       timings: timer.snapshot(),
     };
-    await fs.writeFile(path.join(outputDir, "error.txt"), `${summary.error}\n`, "utf8");
     return {
       outputDir,
       reportPath,
@@ -1455,11 +1256,15 @@ export async function runMantisSlackDesktopSmoke(
     };
   } finally {
     try {
+      try {
+        await artifacts.publish();
+      } finally {
+        await artifacts.cleanup();
+      }
       if (summary) {
         summary.finishedAt = new Date().toISOString();
         summary.timings = timer.snapshot();
-        await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
-        await fs.writeFile(reportPath, renderReport(summary), "utf8");
+        await artifacts.writeSummary(summary, renderReport(summary), summary.error);
       }
     } finally {
       try {

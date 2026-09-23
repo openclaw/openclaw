@@ -8,12 +8,8 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
-import {
-  hasInterSessionUserProvenance,
-  isCompletionReportInputProvenance,
-} from "../../sessions/input-provenance.js";
 import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.js";
-import { isAnnounceRunId } from "../announce-idempotency.js";
+import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";
 import {
   getTranscriptMessageRole as getMessageRole,
   isTerminalSilentAssistantMessage,
@@ -27,41 +23,26 @@ import {
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 
-export function hasOnlyAnnounceRecoveryRuns(entry: SessionEntry): boolean {
-  const runs = entry.restartRecoveryRuns;
-  return Boolean(runs?.length && runs.every((run) => isAnnounceRunId(run.runId)));
-}
-
-export function hasCompletionReportUserTail(messages: readonly unknown[]): boolean {
-  const message = messages.findLast((candidate) => getMessageRole(candidate) === "user");
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const userMessage = message as { role?: unknown; provenance?: unknown };
-  return (
-    hasInterSessionUserProvenance(userMessage) &&
-    isCompletionReportInputProvenance(userMessage.provenance)
-  );
-}
-
-export async function reconcileInterruptedCompletionReport(
+export async function reconcileInvalidHarnessCompletion(
   params: MainSessionRecoveryStoreTarget & {
     entry: SessionEntry;
-    source: "announce_runs" | "transcript";
   },
 ): Promise<{ outcome: "reconciled" } | { outcome: "changed"; entry: SessionEntry | null }> {
   let didReconcile = false;
   const current = await updateSessionEntry(
     params,
     (entry) => {
-      const hasRecoveryRuns = Boolean(entry.restartRecoveryRuns?.length);
-      const stillMatchesSource =
-        params.source === "announce_runs" ? hasOnlyAnnounceRecoveryRuns(entry) : !hasRecoveryRuns;
+      const claim = entry.restartRecoveryHarnessCompletion;
       if (
         entry.sessionId !== params.entry.sessionId ||
         entry.status !== "running" ||
         entry.abortedLastRun !== true ||
-        !stillMatchesSource
+        !claim ||
+        claim.taskId !== params.entry.restartRecoveryHarnessCompletion?.taskId ||
+        entry.restartRecoveryDeliveryRunId !== params.entry.restartRecoveryDeliveryRunId ||
+        entry.restartRecoveryDeliverySourceRunId !==
+          params.entry.restartRecoveryDeliverySourceRunId ||
+        getOwedHarnessCompletionTask(claim, entry)
       ) {
         return null;
       }
@@ -85,7 +66,7 @@ export async function reconcileInterruptedCompletionReport(
   );
   if (didReconcile) {
     mainSessionRecoveryLog.info(
-      `reconciled interrupted completion report to non-running: ${params.sessionKey}`,
+      `retired invalid harness completion recovery: ${params.sessionKey}`,
     );
     return { outcome: "reconciled" };
   }

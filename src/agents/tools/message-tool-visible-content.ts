@@ -303,7 +303,7 @@ export function hasSanitizedSendPayloadContent(params: Record<string, unknown>):
   }
   const mediaUrls = readStringArrayParam(params, "mediaUrls");
   const attachmentMedia = readStructuredAttachmentMediaParam(params.attachments);
-  return hasReplyPayloadContent({
+  const hasPayload = hasReplyPayloadContent({
     text,
     mediaUrl:
       readFirstStringParam(params, ["media", "mediaUrl", "path", "filePath", "fileUrl"]) ||
@@ -313,6 +313,8 @@ export function hasSanitizedSendPayloadContent(params: Record<string, unknown>):
     interactive: params.interactive,
     location: params.location,
   });
+  // Inline buffers are staged by the outbound media owner after sanitization.
+  return hasPayload || Boolean(readToolStringParam(params, "buffer"));
 }
 
 export function sanitizeMessageToolVisiblePayload(

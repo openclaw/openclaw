@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import {
@@ -18,6 +19,7 @@ import {
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import {
   type ChatModelCatalogState,
+  renderChatModelCatalogRefresh,
   renderChatModelCatalogState,
 } from "./chat-model-catalog-state.ts";
 import {
@@ -36,6 +38,7 @@ import {
   pickerMenu,
   resetModelSearch,
   syncChatModelSearch,
+  toggleModelProviderGroup,
   updateModelSearch,
 } from "./chat-model-picker-search.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
@@ -162,7 +165,12 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       return;
     }
     void params
-      .onModelSelect(entry.commitValue, params.sessionKey, entry.runtimeOverride ?? null)
+      .onModelSelect(
+        entry.commitValue,
+        params.sessionKey,
+        entry.runtimeOverride ??
+          (entry.isDefault || entry.agentRuntime !== undefined ? null : undefined),
+      )
       .finally(() => params.onRequestUpdate?.());
     params.onRequestUpdate?.();
   };
@@ -332,6 +340,11 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                 updateModelSearch(event.currentTarget as HTMLInputElement)}
                               @keydown=${handleModelSearchKeydown}
                             />
+                            ${
+                              params.modelOptions.length > 0
+                                ? renderChatModelCatalogRefresh(params.modelCatalogState)
+                                : nothing
+                            }
                           </div>
                         `
                       : nothing
@@ -365,6 +378,10 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                 const authLabel = showAuth
                                   ? [auth.label, auth.detail].filter(Boolean).join(" · ")
                                   : undefined;
+                                const route = resolveModelRuntimeRoute(provider);
+                                const routeDetail = route
+                                  ? t(`chat.modelControls.routes.${route}.detail`)
+                                  : undefined;
                                 return html`
                                   <section
                                     class="chat-controls__provider-model-group"
@@ -376,12 +393,32 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                     <div
                                       class="chat-controls__provider-heading"
                                       data-chat-model-provider=${provider}
-                                      title=${authLabel ?? nothing}
+                                      title=${[routeDetail, authLabel].filter(Boolean).join(" · ") || nothing}
                                     >
-                                      ${renderChatModelProviderIcon(provider)}
-                                      <span class="chat-controls__provider-label"
-                                        >${providerDisplayLabel(provider)}</span
+                                      <button
+                                        class="chat-controls__provider-toggle"
+                                        type="button"
+                                        data-chat-model-group-toggle
+                                        data-chat-model-provider-toggle
+                                        aria-expanded="false"
+                                        aria-label=${`${t("chat.modelControls.providerModels", {
+                                          provider: providerDisplayLabel(provider),
+                                        })} (${options.length})`}
+                                        aria-description=${routeDetail ?? nothing}
+                                        ?disabled=${params.disabled}
+                                        @click=${toggleModelProviderGroup}
                                       >
+                                        ${renderChatModelProviderIcon(provider)}
+                                        <span class="chat-controls__provider-label"
+                                          >${providerDisplayLabel(provider)}</span
+                                        >
+                                        <span>${options.length}</span>
+                                        <span
+                                          class="chat-controls__inline-select-chevron"
+                                          aria-hidden="true"
+                                          >${icons.chevronDown}</span
+                                        >
+                                      </button>
                                       ${showAuth ? html`<span class="chat-controls__auth-meta" data-auth-kind=${auth.kind}><span aria-hidden="true">${auth.kind === "subscription" ? icons.circleUser : auth.kind === "api" ? icons.key : icons.alertTriangle}</span><span class="chat-controls__auth-meta-label">${authLabel}</span></span>` : nothing}
                                       ${
                                         params.onModelSetup
@@ -508,6 +545,13 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
             params.modelSelectionLocked && params.accountSection
               ? html`<div class="chat-controls__model-options">
                   ${params.accountSection.render(0)}
+                </div>`
+              : nothing
+          }
+          ${
+            params.modelCatalogState?.modelSelectionPolicy?.restricted
+              ? html`<div class="chat-controls__model-catalog-state" data-chat-model-policy>
+                  ${t("chat.modelControls.restrictedModelsHelp")}
                 </div>`
               : nothing
           }

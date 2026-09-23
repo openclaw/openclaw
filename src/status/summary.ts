@@ -27,6 +27,7 @@ import {
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import type { SessionRowProjection } from "../gateway/session-row-projection.js";
+import { getGatewayInstallationReplacement } from "../gateway/stale-install.js";
 import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
 import { resolveHeartbeatSummariesForAgents } from "../infra/heartbeat-summary-projection.js";
 import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
@@ -47,7 +48,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { readOpenClawStateWalHealth } from "../state/openclaw-state-db-cache.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { buildStatusCliProjection } from "./cli-projection.js";
 import {
@@ -386,10 +387,10 @@ export async function getStatusSummary(
         )
     : null;
   const agentList = listGatewayAgentsBasic(cfg);
-  // One roster-facts batch spans enrollment and the per-agent owner-route
-  // lookup below: outside it every resolveAgentConfig re-walks the roster and
+  // One roster-facts batch spans enrollment and the per-agent route inputs:
+  // outside it every resolveAgentConfig re-walks the roster and
   // a large fleet stalls the loop for the whole projection (#137570).
-  const heartbeatAgents: HeartbeatStatus[] = withAgentRosterFactsBatch(cfg, () => {
+  const heartbeatInputs = withAgentRosterFactsBatch(cfg, () => {
     const heartbeatSummaries = resolveHeartbeatSummariesForAgents(
       cfg,
       agentList.agents.map((agent) => agent.id),
@@ -397,6 +398,7 @@ export async function getStatusSummary(
     return agentList.agents.map((agent, index) => {
       const summary = expectDefined(heartbeatSummaries[index], "heartbeat summary");
       let waitingForRoute = false;
+      let ownerRoute: Parameters<typeof hasResolvableHeartbeatOwnerRoute>[0] | undefined;
       if (
         summary.enabled &&
         !agent.admissionRefusal &&
@@ -415,29 +417,39 @@ export async function getStatusSummary(
           sessionKey: heartbeatSession.sessionKey,
         })?.entry;
         const route = deliveryContextFromSession(entry);
-        // Owner status uses the runner's synchronous stage-1 decision.
-        waitingForRoute =
-          summary.target === "last"
-            ? !(route?.channel && route.to)
-            : !hasResolvableHeartbeatOwnerRoute({
-                cfg,
-                agentId: agent.id,
-                entry,
-                heartbeat: {
-                  ...cfg.agents?.defaults?.heartbeat,
-                  ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
-                },
-              });
+        if (summary.target === "last") {
+          waitingForRoute = !(route?.channel && route.to);
+        } else {
+          ownerRoute = {
+            cfg,
+            agentId: agent.id,
+            entry,
+            heartbeat: {
+              ...cfg.agents?.defaults?.heartbeat,
+              ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
+            },
+          };
+        }
       }
       return {
-        agentId: agent.id,
-        enabled: summary.enabled && !agent.admissionRefusal,
-        every: summary.every,
-        everyMs: summary.everyMs,
-        waitingForRoute,
-      } satisfies HeartbeatStatus;
+        status: {
+          agentId: agent.id,
+          enabled: summary.enabled && !agent.admissionRefusal,
+          every: summary.every,
+          everyMs: summary.everyMs,
+          waitingForRoute,
+        } satisfies HeartbeatStatus,
+        ownerRoute,
+      };
     });
   });
+  const heartbeatAgents: HeartbeatStatus[] = [];
+  for (const { status, ownerRoute } of heartbeatInputs) {
+    if (ownerRoute) {
+      status.waitingForRoute = !(await hasResolvableHeartbeatOwnerRoute(ownerRoute));
+    }
+    heartbeatAgents.push(status);
+  }
   const channelSummary = needsChannelPlugins
     ? await channelSummaryModuleLoader.load().then(({ buildChannelSummary }) =>
         buildChannelSummary(cfg, {
@@ -537,7 +549,8 @@ export async function getStatusSummary(
     queuedSystemEvents,
     startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
     startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
-    secretEgressProxy: getSecretEgressCertificateStatus(),
+    installationReplacementWarning: getGatewayInstallationReplacement()?.message,
+    secretEgressProxy: await getSecretEgressCertificateStatus(),
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
       ({ ownerKind, ownerId, state, degradationState, paths: ownerPaths, reason }) => {
         const redactedReason: string = redactSecretDegradationReason(reason);

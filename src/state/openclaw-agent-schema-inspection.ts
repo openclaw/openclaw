@@ -21,8 +21,13 @@ import {
   assertCanonicalAgentPersistenceVersion,
   assertOpenClawAgentCurrentRuntimeSchema,
   readExistingAgentSchemaMeta,
+  hasPendingCurrentVersionAgentDatabaseMigration,
 } from "./openclaw-agent-db-schema-helpers.js";
 import type { OpenClawAgentSchemaPreflightResult } from "./openclaw-database-preflight.types.js";
+import {
+  canReuseOpenClawAgentIntegrityVerification,
+  type readOpenClawAgentIntegrityVerification,
+} from "./openclaw-quarantine-store.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
 export type AgentSchemaInspectionInput = {
@@ -32,10 +37,13 @@ export type AgentSchemaInspectionInput = {
   verifyCurrentSchemaShape?: boolean;
   inspectOwnership?: boolean;
   requireStartupMigrationReadiness?: boolean;
+  startupIntegrityStateDir?: string;
+  startupIntegrityVerification?: ReturnType<typeof readOpenClawAgentIntegrityVerification>;
 };
 
 export type AgentSchemaInspection = {
   version: number;
+  integrityGateOutcome?: "cached" | "healthy";
   writerAppVersion?: string;
   reason?: string;
   failure?: Error;
@@ -72,7 +80,19 @@ export function inspectAgentDatabaseSchema(
       inspection.agentSchemaMeta = readExistingAgentSchemaMeta(database);
     }
     if (input.requireStartupMigrationReadiness) {
-      assertSqliteIntegrity(database, input.pathname);
+      if (
+        !canReuseOpenClawAgentIntegrityVerification(
+          input.pathname,
+          input.startupIntegrityVerification,
+          version !== input.supportedVersion ||
+            hasPendingCurrentVersionAgentDatabaseMigration(database),
+        )
+      ) {
+        assertSqliteIntegrity(database, input.pathname);
+        inspection.integrityGateOutcome = "healthy";
+      } else {
+        inspection.integrityGateOutcome = "cached";
+      }
       assertCanonicalAgentPersistenceVersion(database, input.pathname, version);
     }
     const agentId =

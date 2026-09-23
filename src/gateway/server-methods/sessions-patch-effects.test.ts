@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { disableCronJobsBoundToSessions } from "../../cron/job-session-bindings.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureSessionGroupRegistered } from "../session-groups.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { publishSessionPatchEffects } from "./sessions-patch-effects.js";
@@ -42,10 +43,28 @@ describe("committed category patch effects", () => {
     };
   }
 
+  it.each([true, false])(
+    "joins category registration before publishing inserted=%s",
+    async (inserted) => {
+      const registration = createDeferredCore<boolean>();
+      vi.mocked(ensureSessionGroupRegistered).mockReturnValueOnce(registration.promise);
+      const publishing = publishSessionPatchEffects(params());
+      try {
+        expect(emitSessionsChanged).toHaveBeenCalledOnce();
+        expect(disableCronJobsBoundToSessions).not.toHaveBeenCalled();
+      } finally {
+        registration.resolve(inserted);
+        await publishing;
+      }
+      expect(
+        vi.mocked(emitSessionsChanged).mock.calls.filter(([, event]) => event.reason === "groups"),
+      ).toHaveLength(inserted ? 1 : 0);
+      expect(disableCronJobsBoundToSessions).toHaveBeenCalledOnce();
+    },
+  );
+
   it("preserves the committed patch and remaining effects when catalog registration fails", async () => {
-    vi.mocked(ensureSessionGroupRegistered).mockImplementationOnce(() => {
-      throw new Error("catalog unavailable");
-    });
+    vi.mocked(ensureSessionGroupRegistered).mockRejectedValueOnce(new Error("catalog unavailable"));
     const patch = params();
 
     await expect(publishSessionPatchEffects(patch)).resolves.toBeUndefined();
@@ -67,7 +86,7 @@ describe("committed category patch effects", () => {
     expect(disableCronJobsBoundToSessions).toHaveBeenCalledOnce();
 
     // A repeated assignment still invokes the catalog owner and publishes recovery.
-    vi.mocked(ensureSessionGroupRegistered).mockReturnValueOnce(true);
+    vi.mocked(ensureSessionGroupRegistered).mockResolvedValueOnce(true);
     await publishSessionPatchEffects(patch);
     expect(ensureSessionGroupRegistered).toHaveBeenCalledTimes(2);
     expect(
@@ -76,7 +95,7 @@ describe("committed category patch effects", () => {
   });
 
   it("does not publish a catalog change when the group already exists", async () => {
-    vi.mocked(ensureSessionGroupRegistered).mockReturnValue(false);
+    vi.mocked(ensureSessionGroupRegistered).mockResolvedValue(false);
     await publishSessionPatchEffects(params());
     expect(emitSessionsChanged).toHaveBeenCalledOnce();
   });

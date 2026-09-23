@@ -1,4 +1,3 @@
-// Discord plugin module implements rest behavior.
 import { inspect } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";

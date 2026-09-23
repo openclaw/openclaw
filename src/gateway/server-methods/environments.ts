@@ -29,12 +29,15 @@ import {
 } from "../node-command-policy.js";
 import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
 import { readNodeSessionWithheldCommands, type NodeSession } from "../node-registry.js";
+import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
 import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
-import type { WorkerEnvironmentState } from "../worker-environments/state.js";
 import { formatForLog } from "../ws-log.js";
 import { respondDesktopLaunch, respondDesktopObserve } from "./environments.desktop.js";
+import { environmentsSessionExecHandlers } from "./environments.session-exec.js";
+import { environmentsSessionHandlers } from "./environments.session.js";
 import { respondUnavailableOnThrow } from "./response.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -47,19 +50,6 @@ const GATEWAY_ENVIRONMENT: EnvironmentSummary = {
   sessionHost: true,
   trust: "persistent",
   capabilities: ["agent.run", "sessions", "tools", "workspace"],
-};
-const WORKER_STATUS: Record<WorkerEnvironmentState, EnvironmentSummary["status"]> = {
-  requested: "starting",
-  provisioning: "starting",
-  bootstrapping: "starting",
-  ready: "available",
-  attached: "available",
-  idle: "available",
-  draining: "stopping",
-  destroying: "stopping",
-  destroyed: "unavailable",
-  failed: "error",
-  orphaned: "error",
 };
 function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): string[] {
   return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
@@ -129,45 +119,11 @@ function summarizeNodeEnvironment(
     ...(node.issues?.length ? { issues: [...node.issues] } : {}),
   };
 }
-/** Projects a durable worker row without exposing its SSH credential reference. */
-export function summarizeWorkerEnvironment(
-  record: WorkerEnvironmentServiceRecord,
-  now = Date.now(),
-): EnvironmentSummary {
-  return {
-    id: record.environmentId,
-    type: "worker",
-    status: WORKER_STATUS[record.state],
-    ...(record.sharedHost === null
-      ? {}
-      : { trust: record.sharedHost ? "persistent" : "disposable" }),
-    ...(record.desktopAvailable ? { desktop: true } : {}),
-    ...(record.preparation
-      ? { preparation: { purpose: record.preparation.purpose, key: record.preparation.key } }
-      : {}),
-    worker: {
-      profileId: record.profileId,
-      providerId: record.providerId,
-      ...(record.leaseId ? { leaseId: record.leaseId } : {}),
-      state: record.state,
-      ageMs: Math.max(0, Math.trunc(now - record.createdAtMs)),
-      ...(record.state === "idle" && record.idleSinceAtMs !== null
-        ? { idleMs: Math.max(0, Math.trunc(now - record.idleSinceAtMs)) }
-        : {}),
-      attachedSessionIds: uniqueSortedStrings(record.attachedSessionIds),
-      tunnelStatus: record.tunnelStatus,
-      ...((record.state === "failed" || record.state === "orphaned") && record.error
-        ? { error: record.error }
-        : {}),
-      ...(record.desktopAvailable ? { desktop: true } : {}),
-      ...(record.desktopApps.length > 0 ? { desktopApps: [...record.desktopApps] } : {}),
-    },
-  };
-}
 export async function listGatewayEnvironments(
   context: GatewayRequestContext,
   workers = listWorkerEnvironments(context),
   runtimeId?: string,
+  includeDesktopSetup = false,
 ): Promise<EnvironmentSummary[]> {
   const devices = await listDevicePairing();
   const nodes = projectNodePairing(devices.paired);
@@ -188,11 +144,14 @@ export async function listGatewayEnvironments(
   const connectedNodes = context.nodeRegistry.listConnectedForPairingStates(
     projectPairedDeviceNodeBindings(visibleDevices),
   );
-  const runtimeState = collectNodeCatalogRuntimeState(context.nodeRegistry, connectedNodes);
+  const placement = runtimeId ? resolveWorkerPlacementCapabilities(runtimeId) : undefined;
+  const runtimeState = collectNodeCatalogRuntimeState(
+    context.nodeRegistry,
+    connectedNodes,
+    placement?.executionMode === "worker-turn",
+  );
   const connectedNodesById = new Map(connectedNodes.map((node) => [node.nodeId, node]));
-  const requiredCommands = runtimeId
-    ? (resolveWorkerPlacementCapabilities(runtimeId).devicePlacement?.requiredNodeCommands ?? [])
-    : [];
+  const requiredCommands = placement?.devicePlacement?.requiredNodeCommands ?? [];
   const catalog = createKnownNodeCatalog({
     pairedDevices: visibleDevices,
     pairedNodes: nodes.paired.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
@@ -200,10 +159,17 @@ export async function listGatewayEnvironments(
     ...runtimeState,
   });
   const config = context.getRuntimeConfig();
-  const gateway =
+  let gateway: EnvironmentSummary =
     config.desktop?.host?.enabled === true
       ? { ...GATEWAY_ENVIRONMENT, desktop: true }
       : GATEWAY_ENVIRONMENT;
+  if (includeDesktopSetup && config.desktop?.host?.enabled !== true) {
+    const { inspectHostDesktopSetup } = await import("../desktop/host-source.js");
+    gateway = {
+      ...gateway,
+      desktopSetup: await inspectHostDesktopSetup({ config: config.desktop?.host }),
+    };
+  }
   return [
     gateway,
     ...listKnownNodes(catalog).map((node) =>
@@ -239,9 +205,11 @@ async function listWorkerProfilesWithMachines(context: GatewayRequestContext) {
           context.workerEnvironmentService?.supportsExecutionMode(summary.id, mode) === true,
       );
       const executionMode = executionModes[0];
+      const providerDisplayId = context.workerEnvironmentService?.readProviderDisplayId(summary.id);
       const resolvedSummary = Object.assign(
         summary,
         executionMode ? { executionMode, executionModes } : {},
+        providerDisplayId ? { providerDisplayId } : {},
       );
       try {
         const [options, operatingSystems] = await Promise.all([
@@ -284,6 +252,8 @@ async function respondWorkerMutation(
 }
 
 export const environmentsHandlers: GatewayRequestHandlers = {
+  ...environmentsSessionHandlers,
+  ...environmentsSessionExecHandlers,
   "environments.list": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateEnvironmentsListParams, "environments.list", respond)) {
       return;
@@ -304,7 +274,12 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       let environments: EnvironmentSummary[] = [];
       if (params.projection !== "profiles") {
         const workers = listWorkerEnvironments(context);
-        environments = await listGatewayEnvironments(context, workers, params.runtimeId);
+        environments = await listGatewayEnvironments(
+          context,
+          workers,
+          params.runtimeId,
+          params.includeDesktopSetup,
+        );
         const summarizedAtMs = Date.now();
         environments.push(
           ...workers.map((record) => summarizeWorkerEnvironment(record, summarizedAtMs)),
@@ -368,7 +343,8 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       "worker environment creation failed",
     );
   },
-  "environments.prepare": async ({ params, respond, context, hasCurrentClientAuthority }) => {
+  "environments.prepare": async (options) => {
+    const { params, respond, context } = options;
     if (
       !assertValidParams(params, validateEnvironmentsPrepareParams, "environments.prepare", respond)
     ) {
@@ -384,15 +360,8 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      respond(
-        true,
-        await service.prepare(params, () => {
-          if (hasCurrentClientAuthority?.() === false) {
-            throw new Error("Worker preparation caller authority was revoked");
-          }
-        }),
-        undefined,
-      );
+      const authority = readGatewayRequestMutationAuthority(options);
+      respond(true, await service.prepare(params, authority.assertCurrent), undefined);
     } catch (error) {
       const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
       const invalid =

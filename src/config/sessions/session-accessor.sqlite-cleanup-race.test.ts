@@ -1,6 +1,7 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -814,6 +815,14 @@ describe("SQLite lifecycle cleanup races", () => {
       );
     };
 
+    const publishedRemovals: string[] = [];
+    onTestFinished(
+      onSessionIdentityMutation((mutation) => {
+        if (mutation.kind === "delete") {
+          publishedRemovals.push(...mutation.previous.sessionKeys);
+        }
+      }),
+    );
     const result = await applySessionEntryLifecycleMutation({
       storePath,
       maintenanceOverride: {
@@ -824,6 +833,8 @@ describe("SQLite lifecycle cleanup races", () => {
     });
 
     expect(batchSizes).toEqual([64, 2]);
+    expect(publishedRemovals).not.toContain(racedKey);
+    expect(publishedRemovals).toHaveLength(64);
     expect(result).toMatchObject({
       beforeCount: entryCount,
       afterCount: 2,

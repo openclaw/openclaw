@@ -20,6 +20,7 @@ import {
   getSharedCodexAppServerClientState,
   hasActiveSharedCodexAppServerWork,
 } from "./app-server/shared-client-lifecycle.js";
+import { findCodexAppServerSpawnError } from "./app-server/spawn-error.js";
 import {
   createCodexCatalogRequestSnapshot,
   createCodexSessionCatalogControlFromRequests,
@@ -73,11 +74,17 @@ export function createCodexSessionCatalogControl(params: {
   const sourceBackoff = new CodexCatalogSourceBackoff(now);
   const noConfig: OpenClawConfig = {};
   const getPluginConfig = () => params.getPluginConfig();
+  const resolveRuntimeOptions: typeof params.resolveRuntimeOptions = (options) => {
+    const runtime = params.resolveRuntimeOptions(options);
+    return runtime.start.transport === "stdio" && runtime.start.commandSource === "managed"
+      ? { ...runtime, start: { ...runtime.start, managedCommandOrder: "package-only" } }
+      : runtime;
+  };
   const homeResolver = createCodexCatalogHomeResolver({
     config: params.config ?? {},
     getRuntimeConfig: params.getRuntimeConfig,
     getPluginConfig: params.getPluginConfig,
-    resolveRuntimeOptions: params.resolveRuntimeOptions,
+    resolveRuntimeOptions,
     ...(params.env ? { env: params.env } : {}),
   });
   const requestOptionsByConfig = new WeakMap<
@@ -129,8 +136,7 @@ export function createCodexSessionCatalogControl(params: {
       void retireIndexes();
     }
     const epoch = residentEpoch;
-    const runtime =
-      source?.appServer ?? params.resolveRuntimeOptions({ pluginConfig: getPluginConfig() });
+    const runtime = source?.appServer ?? resolveRuntimeOptions({ pluginConfig: getPluginConfig() });
     const requestOptions = resolveRequestOptions(runtime.start, agentId, source);
     const key = source?.sourceHomeId ?? agentId ?? "";
     let home = directHomes.get(key);
@@ -179,7 +185,7 @@ export function createCodexSessionCatalogControl(params: {
             )
           : undefined);
       let nativeAttempt: ReturnType<CodexCatalogSourceBackoff["begin"]> | undefined;
-      const readNativePage = async <T extends { nextCursor?: string }>(
+      const readNativePage = async <T>(
         query: CodexThreadListParams,
         remainingRows: number,
         project: (
@@ -237,17 +243,9 @@ export function createCodexSessionCatalogControl(params: {
           const page = await project(response, diagnostics);
           foreground?.assertActive();
           outcome = "resolved";
-          if (!foreground && !page.nextCursor) {
-            attempt.resolved();
-            nativeAttempt = undefined;
-          }
           return page;
         } catch (error) {
           observation?.rejected();
-          if (!foreground) {
-            attempt.rejected(error);
-            nativeAttempt = undefined;
-          }
           throw error;
         } finally {
           observation?.close();
@@ -260,6 +258,22 @@ export function createCodexSessionCatalogControl(params: {
         runBackground: (run) => runBackground(run),
         localSessionsRoot: root,
         state: params.openResidentState?.(homeId),
+        runNativeWalk: async (run) => {
+          try {
+            const result = await run();
+            if (nativeAttempt?.allowed) {
+              nativeAttempt.resolved();
+            }
+            return result;
+          } catch (error) {
+            if (nativeAttempt?.allowed) {
+              nativeAttempt.rejected(error);
+            }
+            throw error;
+          } finally {
+            nativeAttempt = undefined;
+          }
+        },
         assertCurrent: () => {
           source?.assertCurrent();
           if (closed || params.getRuntimeConfig() !== config || residentEpoch !== epoch) {
@@ -347,7 +361,7 @@ export function createCodexSessionCatalogControl(params: {
     catalogRows?: number,
   ): CodexSessionCatalogRequestSnapshot => {
     const pluginConfig = getPluginConfig();
-    const runtime = source?.appServer ?? params.resolveRuntimeOptions({ pluginConfig });
+    const runtime = source?.appServer ?? resolveRuntimeOptions({ pluginConfig });
     const requestOptions = resolveRequestOptions(runtime.start, agentId, source);
     return createCodexCatalogRequestSnapshot(
       runtime.requestTimeoutMs,
@@ -389,7 +403,7 @@ export function createCodexSessionCatalogControl(params: {
       run,
     ) => {
       const pluginConfig = getPluginConfig();
-      const runtime = source?.appServer ?? params.resolveRuntimeOptions({ pluginConfig });
+      const runtime = source?.appServer ?? resolveRuntimeOptions({ pluginConfig });
       const {
         agentDir,
         config: runtimeConfig,
@@ -527,9 +541,11 @@ export function createCodexSessionCatalogControl(params: {
             }
             void forRequest(agentId, source)
               .initialize()
-              .catch((error: unknown) =>
-                embeddedAgentLog.warn("Codex catalog hydration failed", { error }),
-              );
+              .catch((error: unknown) => {
+                if (!findCodexAppServerSpawnError(error)) {
+                  embeddedAgentLog.warn("Codex catalog hydration failed", { error });
+                }
+              });
           }
         }
       } finally {
@@ -547,9 +563,11 @@ export function createCodexSessionCatalogControl(params: {
     async forNode(agentId) {
       const source = await homeResolver.forNode(agentId);
       return {
+        assertCurrent: () => source.assertCurrent(),
         control: forRequest(source.agentId, source),
         sourceHomeId: source.sourceHomeId,
         codexHome: source.codexHome,
+        transport: source.appServer.start.transport,
       };
     },
   };

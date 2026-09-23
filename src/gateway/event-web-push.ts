@@ -16,7 +16,6 @@ import {
 import {
   hasBoundWebPushSubscriptions,
   prepareWebPushNotificationSender,
-  withBoundWebPushSubscriptions,
   type BoundWebPushSubscription,
 } from "../infra/push-web.js";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
@@ -30,6 +29,7 @@ import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
 import {
   listCurrentWebPushTargets,
+  withCurrentWebPushAuthority,
   webPushTargetClient,
   type CurrentWebPushTarget,
 } from "./web-push-authority.js";
@@ -169,9 +169,9 @@ export function createEventWebPushDelivery(params: {
         return;
       }
       const sender = await prepareWebPushNotificationSender(params.stateDir);
-      const groupedResults = await withBoundWebPushSubscriptions(
+      const groupedResults = await withCurrentWebPushAuthority(
         params.stateDir,
-        (subscriptions) => {
+        (subscriptions, pairedDevices) => {
           const cfg = params.getRuntimeConfig();
           const recipientProfileId = mention && resolveUserProfileId(mention.recipientProfileId);
           if (mention && !recipientProfileId) {
@@ -207,7 +207,7 @@ export function createEventWebPushDelivery(params: {
                 ? [READ_SCOPE, QUESTIONS_SCOPE]
                 : [READ_SCOPE],
             ...(mention ? { visibilityScopes: [ADMIN_SCOPE] } : {}),
-            stateDir: params.stateDir,
+            pairedDevices,
           });
           const agentLabel = normalizeWebPushDisplayLabel(agentId);
           const groups = new Map<

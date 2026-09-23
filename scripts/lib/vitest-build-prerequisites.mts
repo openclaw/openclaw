@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { startupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { runManagedCommand } from "./managed-child-process.mts";
 import { resolveRepoRoot } from "./repo-root.mjs";
@@ -26,13 +27,22 @@ export type VitestRuntimeTestSelection = {
 // while unrelated workers may still be importing its public plugin facades.
 const runtimeConsumers = [
   {
+    file: "src/gateway/server-methods/agent.visitor-access.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-methods-isolated.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "src/gateway",
+  },
+  {
     file: "src/gateway/setup-inference.first-signin.integration.test.ts",
     configs: [
       "test/vitest/vitest.gateway-database-workers.config.ts",
       "test/vitest/vitest.gateway.config.ts",
     ],
     mode: "runtime",
-    dir: "src/gateway",
+    dir: "",
   },
   {
     file: "src/plugins/loader.test.ts",
@@ -51,6 +61,7 @@ const runtimeConsumers = [
   })),
   ...[
     "extensions/deepinfra/provider.contract.test.ts",
+    "extensions/file-transfer/src/workspace-service.test.ts",
     "extensions/google-meet/src/transports/chrome-startup.test.ts",
   ].map((file) => ({
     file,
@@ -110,8 +121,10 @@ const runtimeConsumers = [
   ...[
     "src/agents/agent-command-local.test.ts",
     "src/agents/simple-completion-runtime.plugin-scope.test.ts",
+    "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.integration.test.ts",
     "src/agents/runtime-plugins.context-engine.integration.test.ts",
+    "src/agents/tool-surface-plan.provider-catalog.integration.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.agents-core.config.ts", "test/vitest/vitest.agents.config.ts"],
@@ -127,7 +140,7 @@ const runtimeConsumers = [
   {
     file: "test/plugins/codex-model-catalog.gateway.test.ts",
     configs: [
-      "test/vitest/vitest.gateway-methods.config.ts",
+      "test/vitest/vitest.gateway-database-workers.config.ts",
       "test/vitest/vitest.gateway.config.ts",
     ],
     mode: "runtime",
@@ -140,7 +153,7 @@ const runtimeConsumers = [
       "test/vitest/vitest.gateway.config.ts",
     ],
     mode: "runtime",
-    dir: "src/gateway",
+    dir: "",
   },
   {
     file: "src/gateway/server-methods/models-list.worker-recovery.integration.test.ts",
@@ -151,14 +164,12 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "",
   },
-  ...["src/config/config-startup-corpus.test.ts", "src/config/state-startup-corpus.test.ts"].map(
-    (file) => ({
-      file,
-      configs: ["test/vitest/vitest.runtime-config.config.ts"],
-      mode: "runtime" as const,
-      dir: "src",
-    }),
-  ),
+  ...startupCorpusTestFiles.map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.runtime-config.config.ts"],
+    mode: "runtime" as const,
+    dir: "src",
+  })),
   {
     file: "test/agent-exec-code-mode.live.test.ts",
     configs: ["test/vitest/vitest.live.config.ts"],
@@ -195,6 +206,12 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "extensions",
   })),
+  {
+    file: "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",
+    configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+    mode: "runtime",
+    dir: "extensions",
+  },
   ...[
     "src/cli/acp-cli-exit.process.test.ts",
     "src/cli/update-dry-run-state.process.test.ts",
@@ -212,6 +229,7 @@ const runtimeConsumers = [
   ...[
     "src/infra/update-candidate-canary.integration.test.ts",
     "src/infra/update-managed-service-handoff-lifecycle.test.ts",
+    "src/plugin-state/plugin-state-store.authority.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.infra.config.ts"],
@@ -251,8 +269,10 @@ const runtimeConsumers = [
   ...[
     "src/gateway/server.chat-cli-auth.test.ts",
     "src/gateway/server.chat-recovered-output.test.ts",
+    "src/gateway/server.chat.canonical-publication.test.ts",
     "src/gateway/server.cli-watchdog.test.ts",
     "src/gateway/server.codex-failure-recovery.test.ts",
+    "src/gateway/server.message-buffer-caption.test.ts",
     "src/gateway/server.xai-fallback.test.ts",
   ].map((file) => ({
     file,
@@ -264,6 +284,7 @@ const runtimeConsumers = [
     dir: "",
   })),
   ...[
+    "src/gateway/server.acp-native-model.product.test.ts",
     "src/gateway/server-sidecar-retention.test.ts",
     "src/gateway/server.config-patch.test.ts",
   ].map((file) => ({
@@ -289,6 +310,8 @@ const runtimeConsumers = [
     "src/gateway/gateway-cron-process-identity.windows.test.ts",
     "src/gateway/gateway-route-model-reuse.test.ts",
     "src/gateway/gateway-ssh-upload-signal.test.ts",
+    "src/gateway/github-publication-requester-aliases.test.ts",
+    "src/gateway/github-publication-requester.test.ts",
   ].map((file) => ({
     file,
     configs: [
@@ -296,7 +319,7 @@ const runtimeConsumers = [
       "test/vitest/vitest.gateway.config.ts",
     ],
     mode: "runtime" as const,
-    dir: "src/gateway",
+    dir: "",
   })),
 ] as const;
 
@@ -388,7 +411,7 @@ export async function prepareVitestRuntime(
   });
 }
 
-export function isE2eBuildSkipped(env: NodeJS.ProcessEnv) {
+function isE2eBuildSkipped(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_E2E_SKIP_BUILD === "1" || env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1";
 }
 

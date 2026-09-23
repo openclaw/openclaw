@@ -12,9 +12,11 @@ import {
   withCommandSenderAuthority,
 } from "../../auto-reply/command-sender-authority.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.types.js";
+import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
+import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
-import type { GatewayClient } from "./shared-types.js";
+import type { GatewayClient, GatewayRequestOptions } from "./shared-types.js";
 
 export function isGatewayClientProfilePending(client: GatewayClient | null): boolean {
   return Boolean(client?.authenticatedGitHubIdentitySync && !client.authenticatedUserProfile);
@@ -29,6 +31,35 @@ export function authenticatedProfileUnavailableError(
     retryAfterMs,
     details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
   });
+}
+
+export async function authorizeAuthenticatedProfileForMethod(params: {
+  client: GatewayRequestOptions["client"];
+  requiresProfile: () => boolean;
+  sessionScope?: SessionOperatorScope;
+}): Promise<ErrorShape | null> {
+  const requiresSessionProfile = params.sessionScope !== undefined;
+  const sessionProfileError = () => {
+    const actor = resolveGatewayOperatorRoleActor(params.client);
+    return requiresSessionProfile && (actor?.kind !== "operator" || !actor.profileId.trim())
+      ? errorShape(ErrorCodes.FORBIDDEN, "Session-scoped access requires a verified user profile.")
+      : null;
+  };
+  const sync = params.client?.authenticatedGitHubIdentitySync;
+  if (!sync || params.client?.authenticatedUserProfile?.profileId.trim()) {
+    return sessionProfileError();
+  }
+  if (!requiresSessionProfile && !params.requiresProfile()) {
+    return null;
+  }
+  try {
+    await sync();
+  } catch {
+    return authenticatedProfileUnavailableError();
+  }
+  return params.client?.authenticatedUserProfile?.profileId.trim()
+    ? sessionProfileError()
+    : authenticatedProfileUnavailableError();
 }
 
 export function gatewayClientSenderFields(client: GatewayClient | null): {

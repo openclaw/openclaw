@@ -1,8 +1,11 @@
+import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback.types.js";
+import type { SessionManager } from "../../agents/sessions/session-manager.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 
 export type ModelFallbackParams = {
@@ -96,3 +99,51 @@ export function createMemoryRunEntryMockImplementation(deps: {
     };
   };
 }
+
+export type EmbeddedAgentParams = {
+  preparedRunAdmission?: PreparedAgentRunAdmission;
+  sessionManager?: SessionManager;
+  provider?: string;
+  model?: string;
+  thinkLevel?: string;
+  agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
+  authProfileId?: unknown;
+  authProfileIdSource?: unknown;
+  prompt?: string;
+  transcriptPrompt?: string;
+  memoryFlushWritePath?: string;
+  silentExpected?: boolean;
+  allowEmptyAssistantReplyAsSilent?: boolean;
+  terminalReplyExpectation?: "required" | "optional";
+  extraSystemPrompt?: string;
+  bootstrapPromptWarningSignaturesSeen?: string[];
+  bootstrapPromptWarningSignature?: string;
+  abortSignal?: AbortSignal;
+  isFinalFallbackAttempt?: boolean;
+  onAgentEvent?: (evt: {
+    stream: string;
+    data: { completed?: boolean; isError?: boolean; name?: string; phase?: string };
+  }) => void;
+};
+
+export type CompactEmbeddedAgentSessionParams = {
+  agentId?: string;
+  agentHarnessId?: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  contextTokenBudget?: number;
+  sessionKey?: string;
+  sandboxSessionKey?: string;
+  currentTokenCount?: number;
+  cwd?: string;
+  force?: boolean;
+  forcePreflight?: boolean;
+  modelSelectionLocked?: boolean;
+  preflightRequired?: boolean;
+  preflightCompactionTrigger?: string;
+  sessionEntry?: SessionEntry;
+  sessionFile?: string;
+  sessionId?: string;
+  trigger?: string;
+};

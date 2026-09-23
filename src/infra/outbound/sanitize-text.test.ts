@@ -5,6 +5,10 @@ import {
   escapeInternalRuntimeContextDelimiters,
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
 } from "../../agents/internal-runtime-context.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
 import { stripInternalRuntimeScaffoldingFromPayload } from "./deliver-payload.js";
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 import { sanitizeForPlainText } from "./sanitize-text.js";
@@ -384,11 +388,15 @@ describe("stripInternalRuntimeScaffolding", () => {
     if (nullPrototype) {
       Object.setPrototypeOf(channelData, null);
     }
-    const payload = { text: "hello", channelData };
+    const metadata = { precedingInputAnswer: true } as const;
+    const payload = setReplyPayloadMetadata({ text: "hello", channelData }, metadata);
 
     const result = stripInternalRuntimeScaffoldingFromPayload(payload);
 
     expect(reads).toBe(1);
+    expect(getReplyPayloadMetadata(result)).toEqual(metadata);
+    expect(getReplyPayloadMetadata(payload)).toEqual(metadata);
+    expect(getReplyPayloadMetadata(result.channelData!)).toBeUndefined();
     expect(result.channelData?.label).toBe("visible");
     expect(result.channelData?.sibling).toBe(sibling);
     expect(result.channelData?.items).toBe(items);

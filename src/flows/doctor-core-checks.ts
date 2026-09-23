@@ -27,7 +27,6 @@ import {
 import {
   collectCodexRuntimeCompatibilityWarnings,
   collectDisabledCodexPluginRouteIssues,
-  resolveKnownModelRefMigrationTarget,
 } from "../commands/doctor/shared/codex-route-warnings.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -39,16 +38,18 @@ import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
+import { createAcpAgentModelCheck } from "./doctor-acp-agent-model-check.js";
 import { finalConfigValidationCheck } from "./doctor-config-validation-check.js";
 import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
+import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import {
   collectRuntimeToolSchemaFindingsWithRuntime,
   createRuntimeToolSchemaCheck,
 } from "./doctor-tool-schema-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
-import { copyHealthCheck } from "./health-check-adapter.js";
+import { copyHealthCheck, securityAuditFindingToHealthFinding } from "./health-check-adapter.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type {
   HealthCheck,
@@ -148,7 +149,7 @@ async function collectLocalAudioAccelerationFindingsWithRuntime(): Promise<
 async function collectGatewayHealthFindingsWithRuntime(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
-  const runtime = await loadDoctorCoreChecksRuntimeModule();
+  const runtime = await import("../commands/doctor-gateway-health.js");
   return runtime.collectGatewayHealthFindings(ctx);
 }
 
@@ -590,76 +591,6 @@ function createProviderCatalogProjectionCheck(deps: CoreHealthCheckDeps): Health
   };
 }
 
-function createModelReferenceCheck(): HealthCheck {
-  return {
-    id: "core/doctor/model-references",
-    kind: "core",
-    description: "Configured model references have installed or configured provider owners.",
-    source: "doctor",
-    async detect(ctx) {
-      const { inspectConfiguredModelReferences } =
-        await import("../commands/models/model-reference-validation.js");
-      return inspectConfiguredModelReferences({
-        cfg: ctx.cfg,
-        env: ctx.env,
-        workspaceDir: ctx.cwd,
-      }).flatMap((inspection): HealthFinding[] => {
-        const migrationTarget = resolveKnownModelRefMigrationTarget(ctx.cfg, inspection.ref);
-        const migrationFinding = migrationTarget
-          ? {
-              message: `Configured model "${inspection.ref}" is a legacy reference. Doctor can migrate it to "${migrationTarget}".`,
-              requirement: `canonical model reference "${migrationTarget}"`,
-              fixHint: `Run \`openclaw doctor --fix\` to migrate this model reference to "${migrationTarget}".`,
-            }
-          : undefined;
-        if (inspection.status === "unknown-provider") {
-          return [
-            {
-              checkId: "core/doctor/model-references",
-              severity: "warning",
-              source: "doctor",
-              target: inspection.ref,
-              ...(migrationFinding ?? {
-                message: `Configured model "${inspection.ref}" uses unknown provider "${inspection.provider}". No installed plugin manifest or models.providers entry declares it.`,
-                requirement: "an installed plugin manifest or models.providers configuration",
-                fixHint:
-                  "Install a plugin that declares this provider, configure it under models.providers, or remove the model reference.",
-              }),
-            },
-          ];
-        }
-        // A provider that ships no catalog rows cannot confirm or deny a model
-        // id offline; the generic advisory would be unactionable there, so only
-        // a legacy-reference migration is still worth reporting.
-        if (inspection.status === "uncatalogued-provider" && !migrationFinding) {
-          return [];
-        }
-        if (
-          (inspection.status === "unknown-model" ||
-            inspection.status === "uncatalogued-provider") &&
-          inspection.active
-        ) {
-          return [
-            {
-              checkId: "core/doctor/model-references",
-              severity: "info",
-              source: "doctor",
-              target: inspection.ref,
-              ...(migrationFinding ?? {
-                message: `Configured model "${inspection.ref}" uses a known provider but is not in the local model catalog. It may be newly released or self-hosted.`,
-                requirement: "a provider-supported model id",
-                fixHint:
-                  "Verify the model id with the provider, or rerun with --severity-min info after refreshing the local catalog.",
-              }),
-            },
-          ];
-        }
-        return [];
-      });
-    },
-  };
-}
-
 function normalizeDoctorNoteLine(line: string): string {
   return line.replace(/^- /, "").trim();
 }
@@ -775,19 +706,6 @@ function createSecurityCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
       const findings = await deps.collectSecurityWarnings(ctx.cfg, ctx.env);
       return findings.map(securityAuditFindingToHealthFinding);
     },
-  };
-}
-
-export function securityAuditFindingToHealthFinding(finding: SecurityAuditFinding): HealthFinding {
-  const detailLines = finding.detail.split("\n");
-  const firstDetail = detailLines.shift() ?? "";
-  const fixHint = [...detailLines, ...(finding.remediation?.split("\n") ?? [])].join("\n");
-  return {
-    checkId: "core/doctor/security",
-    severity:
-      finding.severity === "critical" ? "error" : finding.severity === "warn" ? "warning" : "info",
-    message: `${finding.title}${firstDetail ? `: ${firstDetail}` : ""}`,
-    ...(fixHint ? { fixHint } : {}),
   };
 }
 
@@ -1353,6 +1271,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Doct
     hooksModelCheck,
     bootstrapSizeCheck,
     createModelReferenceCheck(),
+    createAcpAgentModelCheck(),
     createProviderCatalogProjectionCheck(deps),
     {
       id: "core/doctor/local-audio-acceleration",

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { describe, expect, it, vi } from "vitest";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import {
   withRetentionFixture,
@@ -44,6 +44,7 @@ describe("Control UI retention cancellation", () => {
       let published = false;
       const closed = new Set<string>();
       const pruned = new Set<string>();
+      const pruning = new Map<string, string>();
       const cancel = () => {
         controller.abort();
       };
@@ -126,8 +127,14 @@ describe("Control UI retention cancellation", () => {
           cancel();
         }
       });
-      const renames = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      const renames: string[] = [];
+      vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
         await original.rename(...args);
+        if (stale.includes(String(args[0]))) {
+          pruning.set(path.dirname(String(args[1])), String(args[0]));
+          return;
+        }
+        renames.push(String(args[1]));
         published = true;
         if (boundary === "rename-issued") {
           cancel();
@@ -143,8 +150,8 @@ describe("Control UI retention cancellation", () => {
       });
       vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
         await original.rm(...args);
-        const directory = args[0];
-        if (typeof directory === "string" && stale.includes(directory)) {
+        const directory = pruning.get(String(args[0]));
+        if (directory) {
           pruned.add(directory);
           if (boundary === "prune-issued") {
             cancel();
@@ -154,24 +161,24 @@ describe("Control UI retention cancellation", () => {
       if (boundary === "before-start") {
         cancel();
       }
-      const nativeConfig = getFsSafeNativeConfig();
+      const nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
       try {
         if (boundary === "retained-read") {
           // Inject a deterministic abort during hashing through the supported JS backend.
-          configureFsSafeNative({ mode: "off" });
+          setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
         }
         await expect(owner.prepare({ signal: controller.signal })).rejects.toMatchObject({
           name: "AbortError",
         });
       } finally {
-        configureFsSafeNative(nativeConfig);
+        nativeModeEnv.restore();
       }
       expect(controller.signal.aborted).toBe(true);
       expect(readsAfterAbort).toBe(0);
       expect(writesAfterAbort).toBe(0);
       expect(published).toBe(["rename-issued", "prune-issued", "projection"].includes(boundary));
       expect(pruned.size).toBe(boundary === "projection" ? 2 : boundary === "prune-issued" ? 1 : 0);
-      expect(renames).toHaveBeenCalledTimes(published ? 1 : 0);
+      expect(renames).toHaveLength(published ? 1 : 0);
       expect(refreshes).toHaveBeenCalledTimes(
         ["prune-issued", "projection"].includes(boundary) ? 1 : 0,
       );

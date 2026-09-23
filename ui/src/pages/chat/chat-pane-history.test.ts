@@ -5,7 +5,6 @@ import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { nativeHistoryMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import "./chat-pane.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
@@ -286,7 +285,6 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
-      maxBytes: 512 * 1024,
       offset: 2,
     });
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
@@ -561,7 +559,6 @@ describe("chat pane native history pagination", () => {
       expect(request).toHaveBeenCalledWith("chat.history", {
         sessionKey: state.sessionKey,
         limit: 1000,
-        maxBytes: 512 * 1024,
         offset: 2,
       });
       expect(observedRootMargin).toBe("1200px 0px 0px");
@@ -581,7 +578,6 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
-      maxBytes: 512 * 1024,
       offset: 4,
     });
     await vi.waitFor(() => expect(pane.stagedOlderPage).not.toBeNull());
@@ -599,7 +595,6 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenNthCalledWith(3, "chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
-      maxBytes: 512 * 1024,
       offset: 6,
     });
   });
@@ -647,7 +642,6 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenLastCalledWith("chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
-      maxBytes: 512 * 1024,
       offset: 5,
     });
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([31, 32, 5, 6, 7, 8]);
@@ -805,61 +799,6 @@ describe("chat pane native history pagination", () => {
     }
   });
 
-  it("keeps multiple projected messages from the same transcript sequence", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client });
-    const projected = [
-      {
-        ...nativeHistoryMessage(1, "Same routed send"),
-        openclawMessageToolMirror: { toolName: "message", toolCallId: "call-a" },
-      },
-      {
-        ...nativeHistoryMessage(1, "Same routed send"),
-        openclawMessageToolMirror: { toolName: "message", toolCallId: "call-b" },
-      },
-    ];
-
-    expect(pane.prependUniqueNativeMessages(projected, [nativeHistoryMessage(2)])).toEqual([
-      ...projected,
-      nativeHistoryMessage(2),
-    ]);
-    expect(pane.prependUniqueNativeMessages(projected, projected)).toEqual(projected);
-    expect(
-      pane.prependUniqueNativeMessages(projected, [projected[1], nativeHistoryMessage(2)]),
-    ).toEqual([projected[0], projected[1], nativeHistoryMessage(2)]);
-  });
-
-  it("deduplicates byte-different live-event and history projections of one transcript row", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client });
-    const liveEventProjection = {
-      role: "assistant",
-      content: [{ type: "text", text: "One stored reply" }],
-      __openclaw: {
-        id: "assistant-message-42",
-        idempotencyKey: "run-42",
-        seq: 42,
-      },
-    };
-    const historyProjection = {
-      role: "assistant",
-      content: [{ type: "text", text: "One stored reply" }],
-      __openclaw: {
-        id: "assistant-message-42",
-        idempotencyKey: "run-42",
-        recordTimestampMs: 1_786_000_000_000,
-        seq: 42,
-      },
-    };
-
-    expect(nativeHistoryMessageIdentity(liveEventProjection)).toBe(
-      nativeHistoryMessageIdentity(historyProjection),
-    );
-    expect(pane.prependUniqueNativeMessages([historyProjection], [liveEventProjection])).toEqual([
-      liveEventProjection,
-    ]);
-  });
-
   it("deduplicates projected catalog transcript records by catalog message id", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client });
@@ -896,7 +835,6 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
-      maxBytes: 512 * 1024,
       offset: 2,
     });
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
@@ -957,7 +895,6 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenNthCalledWith(1, "chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
-      maxBytes: 512 * 1024,
       offset: 2,
     });
     expect(request).toHaveBeenNthCalledWith(

@@ -436,11 +436,9 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   }
   const { checkGatewayHealth, probeGatewayMemoryStatus } =
     await import("../commands/doctor-gateway-health.js");
-  const timeoutMs = ctx.options.nonInteractive === true ? 3000 : 10_000;
   const { healthOk, authenticated, status } = await checkGatewayHealth({
     runtime: ctx.runtime,
     cfg: ctx.cfg,
-    timeoutMs,
   });
   ctx.gatewayHealthSkipped = false;
   ctx.healthOk = healthOk;
@@ -449,7 +447,6 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   ctx.gatewayMemoryProbe = authenticated
     ? await probeGatewayMemoryStatus({
         cfg: ctx.cfg,
-        timeoutMs,
       })
     : { checked: false, ready: false, skipped: healthOk };
 }
@@ -482,7 +479,12 @@ export async function resolveDoctorContributionHealthChecks(): Promise<
   const checks: DoctorHealthCheck[] = [];
   for (const contribution of resolveDoctorHealthContributions()) {
     if (contribution.healthChecks.length > 0) {
-      checks.push(...contribution.healthChecks.map(normalizeHealthCheck));
+      checks.push(
+        ...contribution.healthChecks.map((check) => ({
+          ...normalizeHealthCheck(check),
+          updateWork: contribution.updateWork,
+        })),
+      );
       continue;
     }
     for (const id of contribution.healthCheckIds) {
@@ -492,7 +494,7 @@ export async function resolveDoctorContributionHealthChecks(): Promise<
           `doctor contribution ${contribution.id} references unknown core health check ${id}`,
         );
       }
-      checks.push(check);
+      checks.push({ ...check, updateWork: contribution.updateWork });
     }
   }
   return checks;

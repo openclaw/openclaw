@@ -108,7 +108,7 @@ function renderStatusPreview(remainingTasks: readonly TaskSummary[]): TemplateRe
 /** Post-turn status row in the chat thread: once the agent turn settles while
  * background tasks keep running, the running work stays visible next to a
  * free composer. Hover previews the latest tasks; the link opens the tasks
- * rail (noop when already open). */
+ * list, including when that panel already shows a task detail. */
 export function renderBackgroundTasksStatusRow(
   backgroundTasks: BackgroundTasksProps | undefined,
 ): TemplateResult | typeof nothing {
@@ -135,11 +135,6 @@ export function renderBackgroundTasksStatusRow(
     status.count === 1
       ? t("chat.backgroundTasks.statusRunningOne")
       : t("chat.backgroundTasks.statusRunningMany", { count: String(status.count) });
-  const openRail = () => {
-    if (backgroundTasks.collapsed) {
-      backgroundTasks.onToggleCollapsed();
-    }
-  };
   // Keep the live announcement separate from the tooltip: rich preview
   // content must not enter the polite region, while the popup must anchor to
   // the link itself or its center drifts with the indicator and elapsed time.
@@ -148,7 +143,13 @@ export function renderBackgroundTasksStatusRow(
       <span class="chat-tasks-status__dot" aria-hidden="true"></span>
       <span class="sr-only" role="status">${label}</span>
       <openclaw-tooltip class="chat-tasks-status__preview">
-        <button class="chat-tasks-status__link" type="button" @click=${openRail}>${label}</button>
+        <button
+          class="chat-tasks-status__link"
+          type="button"
+          @click=${backgroundTasks.onOpenTaskList}
+        >
+          ${label}
+        </button>
         ${renderStatusPreview(remainingTasks)}
       </openclaw-tooltip>
       ${

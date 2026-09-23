@@ -1,4 +1,3 @@
-// Line plugin module implements bot access behavior.
 export { firstDefined } from "openclaw/plugin-sdk/allow-from";
 
 export type NormalizedAllowFrom = {

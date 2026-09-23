@@ -65,6 +65,16 @@ fences are unrelated to this rule. Stable outbound message IDs use the shared
 outbound-echo registry from `openclaw/plugin-sdk/channel-outbound` instead of a
 channel-local TTL cache.
 
+Persistent replay guards await SQLite reads, comparisons, writes, and legacy-file
+migration in the shared state worker. Competing records are compared again in the
+write transaction; clearing memory or forgetting a key fences older asynchronous
+cache fills. Await commits and deletions before acknowledging adoption or finishing
+cleanup. Error hooks retain their existing policy: a throwing hook rejects the
+operation, while a nonthrowing hook permits the guard's memory fallback. Worker
+failures never switch persistence to synchronous SQLite. Multi-key commits and
+deletions settle every accepted write before returning an error, so rollback and
+shutdown cannot race a still-running sibling mutation.
+
 ### Transport classes and retention
 
 Classify a transport by the recovery guarantee at its receive boundary:

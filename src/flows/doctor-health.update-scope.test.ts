@@ -42,7 +42,7 @@ vi.mock("../commands/doctor-bootstrap-size.js", () => ({
     obs.events.push("bootstrap-size-advice");
   },
 }));
-vi.mock("../gateway/control-ui-github-api.js", () => ({
+vi.mock("../gateway/github-public-api.js", () => ({
   hasConfiguredGitHubApiCredential: () => {
     obs.events.push("github-credential-advice");
     return false;

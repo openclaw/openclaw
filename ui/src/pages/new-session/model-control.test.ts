@@ -241,83 +241,6 @@ describe("new-session model runtime", () => {
     ).toBeNull();
   });
 
-  it.each([
-    { inherited: true, checked: "true", toggleValue: "off", next: false },
-    { inherited: false, checked: "false", toggleValue: "on", next: true },
-    { inherited: "auto", checked: "true", toggleValue: "off", next: false },
-  ] as const)(
-    "renders the current composer toggle for inherited Fast Mode $inherited",
-    async ({ inherited, checked, toggleValue, next }) => {
-      const { context } = contextWith([
-        {
-          id: "gpt-5.6-luna",
-          name: "GPT-5.6 Luna",
-          provider: "openai",
-          reasoning: true,
-          effectiveFastMode: inherited,
-        },
-      ]);
-      const control = new NewSessionModelControl(() => undefined);
-      control.load(context, "main", true);
-
-      await vi.waitFor(() => {
-        const container = renderControl(control, context);
-        const toggle = container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]");
-        expect(
-          container.querySelector(".chat-controls__fast-mode-title")?.textContent?.trim(),
-        ).toBe("Fast mode");
-        expect(toggle?.classList.contains("chat-controls__speed-toggle")).toBe(true);
-        expect(toggle?.dataset.chatSpeedToggle).toBe(toggleValue);
-        expect(toggle?.getAttribute("aria-checked")).toBe(checked);
-      });
-
-      renderControl(control, context)
-        .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")
-        ?.click();
-      expect(control.fastMode).toBe(next);
-    },
-  );
-
-  it("clears Fast Mode when switching to a provider without a wire mapping", async () => {
-    const { context } = contextWith([
-      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true },
-      {
-        id: "llama-4",
-        name: "Llama 4",
-        provider: "ollama",
-        thinkingLevels: [
-          { id: "low", label: "Low" },
-          { id: "high", label: "High" },
-        ],
-      },
-    ]);
-    const control = new NewSessionModelControl(() => undefined);
-    control.load(context, "main", true);
-
-    await vi.waitFor(() =>
-      expect(
-        renderControl(control, context).querySelector('[data-chat-model-option="ollama/llama-4"]'),
-      ).not.toBeNull(),
-    );
-    renderControl(control, context)
-      .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")
-      ?.click();
-    expect(control.fastMode).toBe(true);
-
-    renderControl(control, context)
-      .querySelector<HTMLButtonElement>('[data-chat-model-option="ollama/llama-4"]')
-      ?.click();
-
-    expect(control.selected).toBe("ollama/llama-4");
-    expect(control.fastMode).toBeUndefined();
-    const unsupportedToggle = renderControl(control, context).querySelector<HTMLButtonElement>(
-      "[data-chat-speed-toggle]",
-    );
-    expect(unsupportedToggle?.disabled).toBe(true);
-    expect(unsupportedToggle?.getAttribute("aria-checked")).toBe("false");
-    expect(unsupportedToggle?.dataset.chatSpeedToggle).toBe("");
-  });
-
   it("does not mark ordinary catalog loading as preference restoration", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
@@ -330,11 +253,20 @@ describe("new-session model runtime", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
   });
 
-  it("shows the known default immediately without inventing catalog choices", async () => {
+  it("waits for a catalog receipt before presenting the configured default", async () => {
     const pending = deferred<{ models: ModelCatalogEntry[] }>();
     const { context, request } = contextWith([]);
     request.mockReturnValueOnce(pending.promise);
-    const control = new NewSessionModelControl(() => undefined);
+    const ready = deferred();
+    const control = new NewSessionModelControl(() => {
+      if (
+        renderControl(control, context).querySelector(
+          '[data-chat-model-option="openai/gpt-5.6-luna"]',
+        )
+      ) {
+        ready.resolve();
+      }
+    });
 
     control.load(context, "main", true);
 
@@ -347,18 +279,26 @@ describe("new-session model runtime", () => {
       ".skeleton.chat-controls__model-trigger-skeleton",
     );
     expect(loadingModelTrigger).not.toBeNull();
-    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("false");
+    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("true");
     expect(loadingModelTrigger?.classList.contains("chat-controls__model-trigger--loading")).toBe(
-      false,
+      true,
     );
-    expect(loadingModelTrigger?.getAttribute("aria-label")).toContain("gpt-5.6-luna");
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toContain("Loading models…");
+    expect(container.textContent).not.toContain("gpt-5.6-luna");
     expect(loadingModelTrigger?.getAttribute("aria-disabled")).toBe("false");
-    expect(loadingSkeleton).toBeNull();
+    expect(loadingSkeleton).not.toBeNull();
     expect(loadingModelTrigger?.textContent).not.toContain("Loading models");
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
     expect(control.modelForSubmission()).toBe("");
     expect(control.modelSelectionBlockedReason({ id: "main" })).toBeUndefined();
-    pending.resolve({ models: [] });
+    pending.resolve({ models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }] });
+    await ready.promise;
+    const settled = renderControl(control, context);
+    expect(settled.querySelector('[data-chat-model-option="openai/gpt-5.6-luna"]')).not.toBeNull();
+    expect(settled.querySelector("[data-chat-model-select]")?.getAttribute("aria-busy")).toBe(
+      "false",
+    );
+    control.reset();
   });
 
   it("waits for selected-agent defaults after chat metadata resolves", async () => {

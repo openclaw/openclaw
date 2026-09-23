@@ -27,6 +27,7 @@ import {
   detectGlobalInstallManagerForRoot,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
+import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
@@ -39,7 +40,7 @@ import type {
   UpdateRunResult,
   UpdateStepProgress,
   UpdateStepResult,
-} from "../../infra/update-runner.js";
+} from "../../infra/update-runner-types.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
@@ -56,6 +57,9 @@ export type UpdateCommandOptions = {
   sourceUpdate?: { root: string };
   /** In-process reporting only, after the update owner settles. Never serialized. */
   onResult?: (result: UpdateRunResult) => void;
+  /** Captured before dotenv; only inherited selectors may choose a Node executable. */
+  runtimeRecoveryEnv?: NodeJS.ProcessEnv;
+  /** In-process executor only; workers must reacquire authority, never deserialize this. */
   /** Legacy live context is unsupported; its presence is refusal-only. */
   recovery?: unknown;
   reapplyLocalOverrides?: boolean;
@@ -65,6 +69,10 @@ export type UpdateCommandOptions = {
     defaultStepTimeoutMs?: number;
     activationTimeoutMs?: number;
     env: NodeJS.ProcessEnv;
+    /** Completion routing only; mutation authority remains with the live executor. */
+    completionOwner?: "gateway-restart";
+    /** The handoff helper acknowledged the foreground Gateway's closure. */
+    gatewayRestartRequired?: true;
     /** Prepared before replacement; never load the old authority graph after activation. */
     requesterAuthority?: UpdateRequesterAuthority;
     /** Live local executor only. A child must independently acquire its owner. */
@@ -97,6 +105,7 @@ export type UpdateFinalizeOptions = {
 };
 
 export type UpdateWizardOptions = {
+  runtimeRecoveryEnv?: NodeJS.ProcessEnv;
   acceptCapabilities?: boolean;
   timeout?: string;
 };
@@ -269,10 +278,11 @@ export async function runUpdateStep(params: {
   name: string;
   argv: string[];
   cwd?: string;
-  timeoutMs: number;
+  timeoutMs?: number;
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
   runCommand?: Parameters<typeof runStep>[0]["runCommand"];
+  results?: UpdateStepResult[];
 }): Promise<UpdateStepResult> {
   return await runStep({
     ...params,
@@ -292,6 +302,7 @@ type StagedGitCheckout = (
   root: string,
   publish: () => Promise<string>,
   targetRoot: string,
+  storageRoot: string,
 ) => Promise<void>;
 
 async function cloneGitCheckoutTransactionally(params: {
@@ -308,13 +319,54 @@ async function cloneGitCheckoutTransactionally(params: {
   const targetDir = preserveDir
     ? await fs.realpath(params.dir)
     : path.join(canonicalParentDir, path.basename(params.dir));
+  const targetIdentity = preserveDir ? await fs.lstat(targetDir, { bigint: true }) : undefined;
   const stagingParent = preserveDir ? targetDir : canonicalParentDir;
-  const stagingDir = await fs.mkdtemp(path.join(stagingParent, ".openclaw-clone-"));
+  // Publication moves only the repository; candidate builds keep their paths
+  // until runtime promotion and cleanup finish on this same filesystem.
+  const storageRoot = await fs.mkdtemp(path.join(stagingParent, ".openclaw-clone-"));
+  const storageIdentity = await fs.lstat(storageRoot, { bigint: true });
+  const stagingDir = path.join(storageRoot, "repository");
+  await fs.mkdir(stagingDir).catch(async (error: unknown) => {
+    try {
+      if (await ownsDirectory(storageRoot, storageIdentity)) {
+        await fs.rmdir(storageRoot);
+      }
+    } catch {
+      // Retain nonempty or replaced storage; cleanup must not hide the allocation error.
+    }
+    throw error;
+  });
+  const stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
   let cleanupStaging = true;
+  let published = false;
+  let result: UpdateStepResult | undefined;
+
+  async function ownsDirectory(
+    directory: string,
+    identity: typeof storageIdentity,
+    allowMissing = false,
+  ) {
+    try {
+      const current = await fs.lstat(directory, { bigint: true });
+      // Unknown Windows identities cannot authorize publication or recursive cleanup.
+      return (
+        current.isDirectory() &&
+        current.ino !== 0n &&
+        (process.platform !== "win32" || current.dev !== 0n) &&
+        current.ino === identity.ino &&
+        current.dev === identity.dev
+      );
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return allowMissing;
+      }
+      throw error;
+    }
+  }
 
   try {
-    const result = await runUpdateStep({
-      name: "git clone",
+    result = await runUpdateStep({
+      name: "git-clone",
       argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, UPSTREAM_REPOSITORY_URL, stagingDir],
       env: params.env,
       timeoutMs: params.timeoutMs,
@@ -325,6 +377,15 @@ async function cloneGitCheckoutTransactionally(params: {
     }
 
     const publish = async (): Promise<string> => {
+      if (
+        !(await ownsDirectory(storageRoot, storageIdentity)) ||
+        !(await ownsDirectory(stagingDir, stagingIdentity)) ||
+        (targetIdentity && !(await ownsDirectory(targetDir, targetIdentity)))
+      ) {
+        throw new Error(
+          `The clone destination or staging directory changed before publication: ${targetDir}. The replacement was left unchanged; choose an empty OPENCLAW_GIT_DIR and retry.`,
+        );
+      }
       if (!preserveDir) {
         try {
           await fs.lstat(targetDir);
@@ -333,6 +394,7 @@ async function cloneGitCheckoutTransactionally(params: {
             throw error;
           }
           await fs.rename(stagingDir, targetDir);
+          published = true;
           return targetDir;
         }
       }
@@ -343,7 +405,7 @@ async function cloneGitCheckoutTransactionally(params: {
         );
       }
 
-      const expectedEntries = preserveDir ? [path.basename(stagingDir)] : [];
+      const expectedEntries = preserveDir ? [path.basename(storageRoot)] : [];
       const destinationEntries = await fs.readdir(targetDir);
       if (destinationEntries.toSorted().join("\0") !== expectedEntries.toSorted().join("\0")) {
         throw new Error(
@@ -382,17 +444,38 @@ async function cloneGitCheckoutTransactionally(params: {
         }
         throw publishError.value;
       }
+      published = true;
       return targetDir;
     };
     if (params.useStagedCheckout) {
-      await params.useStagedCheckout(stagingDir, publish, targetDir);
+      await params.useStagedCheckout(stagingDir, publish, targetDir, storageRoot);
     } else {
       await publish();
     }
     return { checkoutDir: targetDir, step: result };
   } finally {
+    // The container does not confer ownership of a replaced repository child.
+    // Only completed publication permits that child to be absent at cleanup.
     if (cleanupStaging) {
-      await fs.rm(stagingDir, { recursive: true, force: true });
+      // Cleanup must not replace a completed publication or the callback's original error.
+      await cleanupUpdateTemporaryDirectory({
+        directory: storageRoot,
+        root: targetDir,
+        name: "git-clone-staging-cleanup",
+        canRemove: async () =>
+          (await ownsDirectory(storageRoot, storageIdentity)) &&
+          (await ownsDirectory(stagingDir, stagingIdentity, published)),
+        onWarning: (warning) => {
+          if (result && warning.advisory) {
+            result.warnings = [...(result.warnings ?? []), warning.advisory.message];
+          }
+          try {
+            params.progress?.onStepComplete?.({ ...warning, index: 0, total: 0 });
+          } catch {
+            // Ledger callbacks can throw; cleanup diagnostics cannot replace the operation outcome.
+          }
+        },
+      });
     }
   }
 }

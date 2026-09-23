@@ -5,6 +5,7 @@ import { isBrowserPanelSurfaceAvailable } from "../../app/panel-availability.ts"
 import {
   refreshPendingQuestionsWithRetry,
   setQuestionPromptClient,
+  type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
@@ -19,6 +20,7 @@ import {
   isUiSelectedGlobalSessionKey,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
+  uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import {
@@ -29,6 +31,7 @@ import { syncSelectedSessionMessageSubscription } from "./chat-history-subscript
 import { applyChatAgentsList, resumePendingChatHistoryLoad } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import { resolvePlacementComposer } from "./chat-pane-placement.ts";
+import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
 import {
   applySelectedSessionProjection,
   dismissChatError,
@@ -36,8 +39,9 @@ import {
 } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
-import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
+import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   refreshChatModelAuthStatus,
   refreshPageChat,
@@ -47,6 +51,7 @@ import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
+import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import {
   reconcileChatRunAfterSessionStatePublication,
   reconcileChatRunLifecycle,
@@ -60,9 +65,14 @@ import { maybeResetToolStream } from "./stream-reconciliation.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
+  private sessionPresentationKey: string | undefined;
   private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
   private outboxRecoveryReady = false;
   private sidebarLayoutSource?: { client: ApplicationGatewaySnapshot["client"]; ready: boolean };
+  private questionProjection: { prompts: QuestionPrompt[]; revisions: number[] } = {
+    prompts: [],
+    revisions: [],
+  };
   // Capability identity matters because a replacement restarts its canonical revision at zero.
   private canonicalSessionList?: {
     sessions: ApplicationContext["sessions"];
@@ -90,6 +100,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   }
 
   override disconnectedCallback() {
+    this.sessionPresentationKey = undefined;
     this.continueInTerminalDialog = null;
     this.gatewayConnectionLifecycle?.dispose();
     this.gatewayConnectionLifecycle = undefined;
@@ -188,6 +199,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       state.sessionsResult = stateValue.result;
       state.sessionsResultAgentId = stateValue.agentId;
     }
+    this.projectObservedSessionRow();
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
     this.refreshSwarmRoster();
@@ -242,12 +254,18 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     const reconciledLocalCompletion = reconcileChatRunAfterSessionStatePublication(state);
     this.reconcileWaitingApprovalSnapshot();
     if (reconciledLocalCompletion) {
-      void retryReconnectableQueuedChatSends(state);
+      void resumeStoredChatOutboxes(state);
       return;
     }
-    if (this.presented) {
-      // Share the event handler's frame; synchronous roster publication must
-      // not force a transcript redraw for every incoming session update.
+    const presentation = chatSessionPresentationKey(
+      state,
+      stateValue,
+      selectedSession,
+      this.context.overlays?.snapshot?.approvalQueue,
+    );
+    const presentationChanged = presentation !== this.sessionPresentationKey;
+    this.sessionPresentationKey = presentation;
+    if (this.presented && presentationChanged) {
       requestChatPageUpdate(state, "animation-frame");
     }
     // First canonical idle and changed run/branch identity can release a queue.
@@ -272,6 +290,40 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       return false;
     }
     return reconcileWaitingApprovalsFromSnapshot(state, queue);
+  }
+
+  protected projectConversationAttention(state: ChatPageHost, agentId: string, visible: boolean) {
+    const matchesConversation = (request: {
+      sessionKey?: string | null;
+      agentId?: string | null;
+    }) =>
+      uiConversationMatches(state, state.sessionKey, request.sessionKey, request.agentId, agentId);
+    const questions = visible ? this.questionPrompts.filter(matchesConversation) : [];
+    // Question records mutate in place; their revisions own transcript-cache invalidation.
+    if (
+      questions.length !== this.questionProjection.prompts.length ||
+      questions.some(
+        (prompt, index) =>
+          prompt !== this.questionProjection.prompts[index] ||
+          prompt.revision !== this.questionProjection.revisions[index],
+      )
+    ) {
+      this.questionProjection = {
+        prompts: questions,
+        revisions: questions.map((prompt) => prompt.revision),
+      };
+    }
+    return {
+      gatewayQuestionPrompts: this.questionProjection.prompts,
+      // Session replay already owns the parent's presentation scope for delegated approvals.
+      inlineApproval: visible
+        ? (state.chatSessionApprovalQueue?.[0] ??
+          this.context.overlays?.snapshot?.approvalQueue?.find((approval) =>
+            matchesConversation(approval.request),
+          ) ??
+          null)
+        : null,
+    };
   }
 
   protected applyApplicationConfig(config: ApplicationContext["config"]["current"]) {
@@ -358,9 +410,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       state.assistantIdentityRequestVersion += 1;
       retireChatMetadataRequests(state);
       this.taskSuggestionsRequestVersion += 1;
-      this.setTaskSuggestions([]);
-      this.taskSuggestionBusyIds.clear();
-      this.taskSuggestionOperations.clear();
       this.resetSessionSuggestions();
       this.clearTypingActors();
       this.sessionDiscussionStates.clear();
@@ -397,6 +446,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         isUiSelectedGlobalSessionKey(state, state.sessionKey))
     ) {
       retireChatModelSelectionOwnership(state);
+      resetTaskDetail(state);
       this.swarmHydrator?.dispose();
       this.swarmHydrator = null;
     }
@@ -410,6 +460,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.hello = snapshot.hello;
     state.selfUser = snapshot.selfUser ?? null;
     state.assistantAgentId = assistantAgentId;
+    this.reconcileTaskSuggestionConnection(sourceChanged);
+    this.synchronizeSessionObservation();
     if (wasConnected && !state.connected) {
       // Only the connected->disconnected transition may reshape loading state;
       // repeated disconnected snapshots must stay no-ops for pane ownership.
@@ -590,7 +642,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     // Hello precedes recovery readiness. Wake parked outboxes on that publication;
     // the shared admission check still holds any recovered initial turn.
     if (resumeOutboxes && !catalogRouteKey) {
-      void retryReconnectableQueuedChatSends(state);
+      void resumeStoredChatOutboxes(state);
     }
     this.reconcileWaitingApprovalSnapshot();
     state.requestUpdate?.();

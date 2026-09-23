@@ -6,6 +6,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { nodeFilePath } from "../test-utils/node-file-path.js";
+import { publishBootstrapFile } from "./workspace-bootstrap-publish.js";
 import * as workspace from "./workspace.js";
 
 const {
@@ -123,9 +124,7 @@ describe("bootstrap publication atomicity", () => {
       await fs.chmod(tempDir, 0o555);
 
       try {
-        await expect(workspace.publishBootstrapFile(agentsPath, "replacement\n")).resolves.toBe(
-          false,
-        );
+        await expect(publishBootstrapFile(agentsPath, "replacement\n")).resolves.toBe(false);
         expect(await fs.readlink(agentsPath)).toBe("missing.md");
         expect(await fs.readdir(tempDir)).toEqual([DEFAULT_AGENTS_FILENAME]);
       } finally {
@@ -154,7 +153,7 @@ describe("bootstrap publication atomicity", () => {
     const contents = ["FIRST-COMPLETE\n", "SECOND-COMPLETE\n"];
 
     const created = await Promise.all(
-      contents.map(async (content) => await workspace.publishBootstrapFile(agentsPath, content)),
+      contents.map(async (content) => await publishBootstrapFile(agentsPath, content)),
     );
 
     expect(created.filter(Boolean)).toHaveLength(1);
@@ -174,7 +173,7 @@ describe("bootstrap publication atomicity", () => {
     });
 
     try {
-      await workspace.publishBootstrapFile(agentsPath, "COMPLETE\n");
+      await publishBootstrapFile(agentsPath, "COMPLETE\n");
       if (!concurrentRead) {
         throw new Error("concurrent reader was not started");
       }
@@ -200,9 +199,9 @@ describe("bootstrap publication atomicity", () => {
     });
 
     try {
-      const error = await workspace
-        .publishBootstrapFile(agentsPath, "complete\n")
-        .catch((caught: unknown) => caught);
+      const error = await publishBootstrapFile(agentsPath, "complete\n").catch(
+        (caught: unknown) => caught,
+      );
       expect(error).toBeInstanceOf(AggregateError);
       expect((error as AggregateError).errors).toMatchObject([
         { code: "ENOSPC" },
@@ -227,7 +226,7 @@ describe("bootstrap publication atomicity", () => {
     });
 
     try {
-      await expect(workspace.publishBootstrapFile(agentsPath, "complete\n")).rejects.toThrow(
+      await expect(publishBootstrapFile(agentsPath, "complete\n")).rejects.toThrow(
         /filesystem does not support atomic bootstrap publication/u,
       );
       await expectPathMissing(agentsPath);

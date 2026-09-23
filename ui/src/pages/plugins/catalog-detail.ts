@@ -1,25 +1,32 @@
+import "./install-action.ts";
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../components/icons.ts";
-import { imageWithFallback } from "../../components/image-with-fallback.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import { renderSettingsPage } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
+import type { PluginDiscoveryDetailResult, PluginInstallRequest } from "../../lib/plugins/index.ts";
+import { renderArtTile } from "./consent-dialog.ts";
 import "../../styles/sidebar-markdown.css";
 import { renderPluginDetailShell } from "./detail-shell.ts";
+import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
   renderPluginMetadata,
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.ts";
+import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.ts";
 
 export type PluginCatalogDetailProps = {
   onAskPlugin?: () => void;
+  busy?: boolean;
+  installProgress?: PluginInstallProgress;
+  message?: PluginRowMessage;
+  onContinueInstall?: (request: PluginInstallRequest) => void;
   skillsSection?: TemplateResult;
   connected: boolean;
   result: PluginDiscoveryDetailResult | null;
@@ -51,7 +58,11 @@ export function renderPluginReadme(readme: string | undefined): TemplateResult {
 
 function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogDetailProps) {
   const { plugin, detail } = result;
+  const installing = Boolean(
+    props.installProgress && props.installProgress.finishedAt === undefined,
+  );
   const packageIcon = plugin.catalog.imageUrl ? props.iconUrls[plugin.catalog.imageUrl] : undefined;
+  const authorIcon = detail.author?.imageUrl ? props.iconUrls[detail.author.imageUrl] : undefined;
   return renderPluginDetailShell({
     id: "plugin-catalog-detail",
     name: plugin.catalog.name,
@@ -59,30 +70,38 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
     backHref: props.backHref,
     backLabel: t("tabs.plugins"),
     onBack: props.onBack,
-    icon: html`${imageWithFallback(packageIcon, (url, onError) => (url ? html`<img src=${url} alt="" @error=${onError} />` : icons.box))}`,
+    icon: renderArtTile(
+      plugin.id,
+      plugin.catalog.name,
+      packageIcon,
+      undefined,
+      "plugins-tile",
+      authorIcon,
+    ),
     titleAction: html`${
-      plugin.local.action === "install"
+      plugin.local.action === "install" || installing
         ? renderReasonedDisabledControl(
             props.installBlockedReason,
-            html`<button
-              type="button"
-              class="btn primary oc-action oc-action-primary plugin-catalog-detail__install"
-              ?disabled=${!props.installBlockedReason && !props.canInstall}
-              aria-disabled=${!props.canInstall ? "true" : nothing}
-              @click=${() => {
-                if (props.canInstall) {
-                  props.onInstall();
-                }
-              }}
-            >
-              ${t("pluginsPage.install")}
-            </button>`,
+            html`<openclaw-plugin-install-action
+              .buttonClass=${"btn oc-action plugin-catalog-detail__install"}
+              .primary=${true}
+              .disabled=${!props.canInstall}
+              .busy=${Boolean(props.busy)}
+              .progress=${props.installProgress}
+              .onInstall=${props.onInstall}
+            ></openclaw-plugin-install-action>`,
           )
         : nothing
-    }${renderPluginAskAction(props.onAskPlugin)}`,
+    }${renderPluginAskAction(props.onAskPlugin, plugin.local.action !== "install" && !installing)}`,
     identity: renderPluginPublisher(result),
     sidebar: renderPluginMetadata(result),
-    panel: html`${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), detail.skills, icons.book)}
+    panel: html`${renderPluginRowMessage(props.message, { busy: props.busy, onContinue: props.canInstall ? props.onContinueInstall : undefined })}
+    ${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), detail.skills, icons.bookOpenText)}
+    ${renderPluginCapabilitySection(
+      t("pluginsPage.detailTools"),
+      (detail.contracts?.tools ?? []).map((name) => ({ name })),
+      icons.wrench,
+    )}
     ${renderPluginCapabilitySection(
       t("pluginsPage.detailMcpServers"),
       detail.mcpServers.map((name) => ({ name })),
@@ -123,6 +142,9 @@ export function renderPluginCatalogDetail(props: PluginCatalogDetailProps): Temp
                   <div class="plugin-catalog-detail__loading-card skeleton"></div>
                   <div class="plugin-catalog-detail__loading-card skeleton"></div>
                 </div>
+                <aside class="plugin-catalog-detail__sidebar">
+                  ${renderPluginMetadata(undefined, undefined, undefined, true)}
+                </aside>
               </div>
             </section>`,
     { wide: true, carapace: true },

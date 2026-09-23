@@ -11,6 +11,7 @@ const pendingPluginApproval = {
     kind: "plugin" as const,
     title: "Run Codex execution on node",
     description: "Allows node account access",
+    detail: "Command: pnpm test\nWorking directory: /workspace",
     severity: "critical" as const,
     pluginId: "codex",
     toolName: null,
@@ -39,6 +40,7 @@ describe("session approval projection", () => {
         id: "plugin:approval-1",
         kind: "plugin",
         pluginTitle: "Run Codex execution on node",
+        pluginDetail: pendingPluginApproval.presentation.detail,
         sourceSessionKey: "agent:main:cloud-child",
         request: expect.objectContaining({ sessionKey: "agent:main:host" }),
       }),
@@ -77,6 +79,7 @@ describe("session approval projection", () => {
       expect.objectContaining({
         id: "plugin:approval-1",
         sourceSessionKey: "agent:main:cloud-child",
+        pluginDetail: pendingPluginApproval.presentation.detail,
         request: expect.objectContaining({ sessionKey: "agent:main:host" }),
       }),
     ]);

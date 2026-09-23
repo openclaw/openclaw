@@ -8,6 +8,7 @@ import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
+  defaultControlUiFeatureMethods,
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
@@ -37,6 +38,28 @@ describeControlUiE2e("Control UI chat file links", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("preserves domain/path text in user messages", async () => {
+    const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
+    try {
+      const page = await context.newPage();
+      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+      const text = "Please check the portal.example/service.test reference.";
+      const gateway = await installMockGateway(page, {
+        historyMessages: [{ role: "user", content: [{ type: "text", text }], timestamp: 1 }],
+      });
+      await page.goto(`${server.baseUrl}chat`);
+      const bubble = page.locator(".chat-bubble").filter({ hasText: "Please check" });
+      await bubble.waitFor({ state: "visible" });
+      // Capture the original wrong-label state too, before asserting the fixed behavior.
+      await bubble.screenshot({ path: path.join(artifactDir, "domain-path-message.png") });
+      expect(await bubble.textContent()).toContain(text);
+      expect(await bubble.locator("a[data-file-path]").count()).toBe(0);
+      expect(await gateway.getRequests("sessions.files.get")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
   });
 
   it.each(["file", "task", "close", "list"] as const)(
@@ -376,7 +399,7 @@ describeControlUiE2e("Control UI chat file links", () => {
     }
   });
 
-  it("reveals the selected file from chat in the workspace root after filtering", async () => {
+  it("reveals and saves the selected file without losing Files search or focus", async () => {
     const context = await browser.newContext({
       recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
       viewport: { height: 900, width: 1280 },
@@ -384,7 +407,32 @@ describeControlUiE2e("Control UI chat file links", () => {
     const page = await context.newPage();
     page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
     try {
+      const initialText = "# Project\n\nNested workspace notes.\n";
+      const initialSize = Buffer.byteLength(initialText, "utf8");
+      const savedText = "# Project\n\nSaved workspace notes — café 雪 🦞.\n";
+      const savedSize = Buffer.byteLength(savedText, "utf8");
+      const listing = {
+        root: "/workspace",
+        sessionKey: "agent:main:main",
+        gitCheckout: true,
+        files: [
+          {
+            kind: "modified",
+            name: "README.md",
+            path: "README.md",
+            workspacePath: "packages/app/README.md",
+            size: initialSize,
+          },
+        ],
+        browser: {
+          entries: [
+            { kind: "file", name: "README.md", path: "packages/app/README.md", size: initialSize },
+          ],
+          path: "",
+        },
+      };
       const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "sessions.files.set", "sessions.diff"],
         historyMessages: [
           {
             role: "assistant",
@@ -400,8 +448,9 @@ describeControlUiE2e("Control UI chat file links", () => {
                 response: {
                   root: "/workspace",
                   file: {
-                    content: "# Project\n\nNested workspace notes.\n",
-                    kind: "read",
+                    content: initialText,
+                    hash: "before-hash",
+                    kind: "modified",
                     missing: false,
                     name: "README.md",
                     path: "README.md",
@@ -414,8 +463,9 @@ describeControlUiE2e("Control UI chat file links", () => {
                 response: {
                   root: "/workspace",
                   file: {
-                    content: "# Project\n\nNested workspace notes.\n",
-                    kind: "read",
+                    content: initialText,
+                    hash: "before-hash",
+                    kind: "modified",
                     missing: false,
                     name: "README.md",
                     path: "packages/app/README.md",
@@ -425,35 +475,27 @@ describeControlUiE2e("Control UI chat file links", () => {
               },
             ],
           },
-          "sessions.files.list": {
-            root: "/workspace",
+          "sessions.files.list": listing,
+          "sessions.files.set": {
             sessionKey: "agent:main:main",
-            files: [
-              {
-                kind: "read",
-                name: "README.md",
-                path: "README.md",
-                workspacePath: "packages/app/README.md",
-              },
-            ],
-            browser: {
-              entries: [
-                {
-                  kind: "file",
-                  name: "README.md",
-                  path: "packages/app/README.md",
-                  size: 42,
-                },
-              ],
-              path: "",
-            },
+            file: { hash: "after-hash", size: savedSize },
+          },
+          "sessions.diff": {
+            sessionKey: "agent:main:main",
+            root: "/workspace",
+            gitCheckout: true,
+            files: [],
+            additions: 0,
+            deletions: 0,
           },
         },
       });
 
       await page.goto(`${server.baseUrl}chat`);
+      await openChatSidePanelType(page, "Review");
+      await gateway.waitForRequest("sessions.diff");
       await openChatSidePanelType(page, "Files");
-      await page.getByRole("button", { name: "1 read", exact: true }).click();
+      await page.getByRole("button", { name: "1 changed", exact: true }).click();
       const chatLink = page.locator('a.markdown-file-link[data-file-path="README.md"]');
       await chatLink.waitFor({ state: "visible" });
       await page.screenshot({ path: path.join(artifactDir, "01-chat-file-link.png") });
@@ -495,6 +537,46 @@ describeControlUiE2e("Control UI chat file links", () => {
         "2",
       );
       await page.screenshot({ path: path.join(artifactDir, "03-workspace-file-preview.png") });
+      await page.locator('.side-panel__header button[aria-label="Files"]').click();
+      const search = page.locator('.chat-workspace-rail input[type="search"]');
+      await search.fill("README");
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.files.list")).at(-1)?.params)
+        .toMatchObject({ search: "README" });
+      await browserRow.locator(".chat-workspace-rail__file-open").click();
+      await fileView.getByRole("button", { name: "Edit file", exact: true }).click();
+      await fileView.locator(".cm-content").fill(savedText);
+      await gateway.setMethodResponse("sessions.files.list", {
+        ...listing,
+        files: listing.files.map((file) => Object.assign({}, file, { size: savedSize })),
+        browser: {
+          ...listing.browser,
+          search: "README",
+          entries: listing.browser.entries.map((file) =>
+            Object.assign({}, file, { size: savedSize }),
+          ),
+        },
+      });
+      await fileView.getByRole("button", { name: "Save", exact: true }).click();
+      await expect
+        .poll(() => fileView.getByRole("button", { name: "Save", exact: true }).isDisabled())
+        .toBe(true);
+      expect((await gateway.getRequests("sessions.files.set")).at(-1)?.params).toMatchObject({
+        content: savedText,
+        expectedHash: "before-hash",
+      });
+      expect(await fileView.isVisible()).toBe(true);
+      await page.getByRole("button", { name: "Close tab: README.md", exact: true }).click();
+      await search.waitFor({ state: "visible" });
+      expect(await search.inputValue()).toBe("README");
+      const metadata = page.locator(".chat-workspace-rail__file-meta");
+      try {
+        await expect
+          .poll(() => metadata.allTextContents())
+          .toEqual([`${savedSize} B`, `packages/app/README.md / ${savedSize} B`]);
+      } finally {
+        await page.screenshot({ path: path.join(artifactDir, "04-saved-file-list.png") });
+      }
     } finally {
       await context.close();
     }

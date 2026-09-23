@@ -47,16 +47,16 @@ describe("ask_user normalization", () => {
   });
 
   it.each([
-    ["empty questions", { questions: [] }, "1 to 3 questions"],
+    ["empty questions", { questions: [] }, "model-facing question contract"],
     [
       "too many questions",
       { questions: Array.from({ length: 4 }, () => validArgs.questions[0]) },
-      "1 to 3 questions",
+      "model-facing question contract",
     ],
     [
       "too few options",
       { questions: [{ ...validArgs.questions[0], options: [{ label: "Only" }] }] },
-      "2 to 4 options",
+      "model-facing question contract",
     ],
     [
       "duplicate ids",
@@ -66,7 +66,36 @@ describe("ask_user normalization", () => {
     [
       "invalid id",
       { questions: [{ ...validArgs.questions[0], id: "Deploy Target" }] },
-      "must be snake_case",
+      "model-facing question contract",
+    ],
+    [
+      "blank normalized header",
+      { questions: [{ ...validArgs.questions[0], header: "   " }] },
+      "model-facing display contract",
+    ],
+    [
+      "long normalized option label",
+      {
+        questions: [
+          {
+            ...validArgs.questions[0],
+            options: [{ label: "x".repeat(65) }, { label: "Production" }],
+          },
+        ],
+      },
+      "model-facing display contract",
+    ],
+    [
+      "duplicate normalized option labels",
+      {
+        questions: [
+          {
+            ...validArgs.questions[0],
+            options: [{ label: "Staging" }, { label: " staging " }],
+          },
+        ],
+      },
+      "duplicate option label",
     ],
   ])("rejects %s", (_name, args, error) => {
     expect(() => normalizeAskUserParams(args)).toThrow(error);

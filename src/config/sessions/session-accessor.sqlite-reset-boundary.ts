@@ -7,10 +7,8 @@ import {
 import type { SessionResetBoundaryWrite } from "./session-accessor.lifecycle-types.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import {
-  appendTranscriptEventsInTransaction,
-  ensureTranscriptHeader,
-} from "./session-accessor.sqlite-transcript-store.js";
+import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
 import { resolveResetBoundaryHeaderCwd } from "./transcript-header.js";
 import type { InternalSessionEntry } from "./types.js";

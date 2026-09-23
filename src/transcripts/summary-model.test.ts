@@ -63,6 +63,14 @@ afterEach(() => {
 });
 
 describe("model-backed transcript summaries", () => {
+  it("does not request model notes for an artifact-only transcript", async () => {
+    const summary = await summarizeTranscriptsWithModel({
+      ...params,
+      utterances: [{ text: "context:" }, { text: "###" }, { text: "Transcribe the audio." }],
+    });
+    expect(summary).toBeUndefined();
+    expect(runIsolatedCompletion).not.toHaveBeenCalled();
+  });
   it("joins tracked resource release before admitting a fallback model", async () => {
     const cleanup = createDeferred();
     runIsolatedCompletion.mockImplementationOnce(() =>

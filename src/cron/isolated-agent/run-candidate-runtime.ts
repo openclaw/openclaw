@@ -1,7 +1,7 @@
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "./run-execution.runtime.js";
+import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { resolveEffectiveAgentRuntime } from "./run.runtime.js";
-import type { CronRunExecutionParams } from "./run.types.js";
 
 /** Shares candidate execution policy between harness preparation and dispatch. */
 export function createCronCandidateExecutionResolver(

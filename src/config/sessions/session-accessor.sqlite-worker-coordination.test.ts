@@ -47,16 +47,21 @@ describe("SQLite mutation worker coordinator custody", () => {
         const claimant = createWorker("lease");
         const workers = [holder, claimant];
         const dispatch = (worker: Worker, result: "held" | "claimed") =>
-          withSqliteMutationWorkerCoordination(context, worker, 1, async (coordination) => {
-            const completed = Promise.all([once(worker, "message"), once(worker, "exit")]);
-            worker.postMessage(
-              coordination,
-              coordination.stateLifecycle ? [coordination.stateLifecycle] : [],
-            );
-            const [response, exited] = await completed;
-            expect(response).toEqual([result]);
-            expect(exited).toEqual([0]);
-          });
+          withSqliteMutationWorkerCoordination(
+            context,
+            { kind: "dedicated", channel: worker },
+            1,
+            async (coordination) => {
+              const completed = Promise.all([once(worker, "message"), once(worker, "exit")]);
+              worker.postMessage(
+                coordination,
+                coordination.stateLifecycle ? [coordination.stateLifecycle] : [],
+              );
+              const [response, exited] = await completed;
+              expect(response).toEqual([result]);
+              expect(exited).toEqual([0]);
+            },
+          );
         const held = once(holder, "message");
         const holding = dispatch(holder, "held");
         try {
@@ -93,9 +98,14 @@ describe("SQLite mutation worker coordinator custody", () => {
         try {
           await once(worker, "online");
           await expect(
-            withSqliteMutationWorkerCoordination(context, worker, 1, async () => {
-              throw new Error("Worker request dispatched after preparation failed");
-            }),
+            withSqliteMutationWorkerCoordination(
+              context,
+              { kind: "dedicated", channel: worker },
+              1,
+              async () => {
+                throw new Error("Worker request dispatched after preparation failed");
+              },
+            ),
           ).rejects.toBe(failure);
           expect(worker.threadId).toBe(-1);
         } finally {
@@ -158,16 +168,21 @@ describe("SQLite mutation worker coordinator custody", () => {
                       coordinator.withStateDatabaseCoordinatorRuntimeDirectory(
                         state.path("unrelated-runtime"),
                         () =>
-                          withSqliteMutationWorkerCoordination(context, worker, 1, async () => {
-                            const completed = Promise.all([
-                              once(worker, "message"),
-                              once(worker, "exit"),
-                            ]);
-                            worker.postMessage("mutation completed", []);
-                            const [[result], [exitCode]] = await completed;
-                            expect(exitCode).toBe(0);
-                            return result;
-                          }),
+                          withSqliteMutationWorkerCoordination(
+                            context,
+                            { kind: "dedicated", channel: worker },
+                            1,
+                            async () => {
+                              const completed = Promise.all([
+                                once(worker, "message"),
+                                once(worker, "exit"),
+                              ]);
+                              worker.postMessage("mutation completed", []);
+                              const [[result], [exitCode]] = await completed;
+                              expect(exitCode).toBe(0);
+                              return result;
+                            },
+                          ),
                       ),
                     ).resolves.toBe("mutation completed");
                     expect(worker.threadId).toBe(-1);

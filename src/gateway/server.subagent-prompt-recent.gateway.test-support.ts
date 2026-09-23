@@ -18,6 +18,7 @@ import {
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resetConfigOverrides } from "../config/runtime-overrides.js";
+import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
@@ -214,6 +215,10 @@ describe("Completed child results on a real parent-agent turn", () => {
             runId: "persisted-outstanding-result",
             childSessionKey: CHILD_SESSION_KEY,
             requesterSessionKey: PARENT_SESSION_KEY,
+            requesterStorePath: resolvePhysicalSessionStorePath(
+              { sessionKey: PARENT_SESSION_KEY },
+              cfg,
+            ),
             requesterAgentId: "main",
             requesterDisplayKey: "main",
             task: "read the retained result",

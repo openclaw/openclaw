@@ -15,6 +15,7 @@ import {
   resolveGatewaySupervisorLogPaths,
 } from "../../daemon/restart-logs.js";
 import { buildGatewayRuntimeRecoveryHints } from "../../daemon/runtime-hints.js";
+import { SERVICE_RUNTIME_AUDIT_CODES } from "../../daemon/service-audit-runtime.js";
 import { formatServiceInspectionReason } from "../../daemon/service-inspection-error.js";
 import { isSystemdStartLimitHit } from "../../daemon/service-runtime.js";
 import {
@@ -25,7 +26,10 @@ import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailab
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
-import { resolvePluginVersionDriftUpdateCommand } from "../../plugins/plugin-version-drift.js";
+import {
+  resolvePluginVersionDriftRegistryLag,
+  resolvePluginVersionDriftUpdateCommand,
+} from "../../plugins/plugin-version-drift.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
@@ -153,10 +157,15 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       const detail = issue.detail ? ` (${issue.detail})` : "";
       defaultRuntime.error(`${warnText("Service config issue:")} ${issue.message}${detail}`);
     }
+    const runtimeNeedsAttention = service.configAudit.issues.some((issue) =>
+      Object.values(SERVICE_RUNTIME_AUDIT_CODES).some((code) => code === issue.code),
+    );
     const recommendation = managerUnavailable
       ? `Run "${formatCliCommand("openclaw doctor")}" for guidance about this recorded service unit.`
       : (installBlock ??
-        `Recommendation: run "${formatCliCommand("openclaw doctor")}" interactively for guided checks, or reinstall with "${reinstallCommand}".`);
+        (runtimeNeedsAttention
+          ? `Recommendation: run "${formatCliCommand("openclaw doctor")}" interactively to resolve the runtime findings before reinstalling. Reinstalling alone may select the same runtime.`
+          : `Recommendation: run "${formatCliCommand("openclaw doctor")}" interactively for guided checks, or reinstall with "${reinstallCommand}".`));
     defaultRuntime.error(warnText(recommendation));
   }
 
@@ -248,12 +257,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
-  printDaemonStatusVersions(
-    status,
-    { label, infoText, warnText },
-    installBlock ??
-      `Compare the service entrypoint with \`which openclaw\`, then reinstall the service from the install you want with \`${reinstallCommand}\`.`,
-  );
+  printDaemonStatusVersions(status, { label, infoText, warnText });
 
   const runtimeLine = formatRuntimeStatus(
     service.inspectionReason ? { ...service.runtime, detail: undefined } : service.runtime,
@@ -624,10 +628,15 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
         const resolvedTarget =
           entry.targetResolution?.status === "resolved"
-            ? `; npm target ${entry.targetResolution.packageName}@${entry.targetResolution.version}`
+            ? `; ${sourceLabel} target ${entry.targetResolution.packageName}@${entry.targetResolution.version}`
             : "";
+        // A registry-confirmed version is the only target an update can actually reach.
+        const expectedVersion =
+          entry.targetResolution?.status === "resolved"
+            ? entry.targetResolution.version
+            : drift.gatewayVersion;
         defaultRuntime.log(
-          `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${drift.gatewayVersion}${resolvedTarget}`,
+          `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${expectedVersion}${resolvedTarget}`,
         );
       }
       const repairs = drift.drifts.map((entry) => ({
@@ -638,7 +647,17 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         .map(({ command }) => command)
         .filter((command): command is string => Boolean(command))
         .map((command) => formatCliCommand(command));
-      const unresolvedRepairs = repairs.filter(({ command }) => !command);
+      const unresolvedRepairs = repairs.filter(
+        ({ entry, command }) => !command && !resolvePluginVersionDriftRegistryLag(entry),
+      );
+      for (const { entry } of repairs) {
+        const registryLag = resolvePluginVersionDriftRegistryLag(entry);
+        if (registryLag) {
+          defaultRuntime.log(
+            `- ${entry.pluginId}: registry version ${registryLag.registryVersion} is already installed; no release reaches ${registryLag.expectedVersion} yet, so no update command applies.`,
+          );
+        }
+      }
       if (unresolvedRepairs.length > 0) {
         defaultRuntime.error(errorText("Plugin repair target resolution failed:"));
         for (const { entry } of unresolvedRepairs) {

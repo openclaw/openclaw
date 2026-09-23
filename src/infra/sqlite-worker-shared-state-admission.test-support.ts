@@ -1,22 +1,29 @@
 import { once } from "node:events";
 import type { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
-import { Worker, type Transferable } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import type { NativeHookRelayBridgeRecord } from "../agents/harness/native-hook-relay-bridge-record.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
+import { storeDeviceAuthTokenInDatabase } from "./device-auth-store.kernel.js";
 import * as nodeSqlite from "./node-sqlite.js";
-import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import {
+  openSharedStateSqliteWorkerStore,
+  runSqliteWorkerStoreOperation,
+} from "./sqlite-worker-store.js";
 import {
   acquireStateDatabaseCoordinator,
   acquireGatewayLifecycleCoordinator,
-  retainHeldStateDatabaseCoordinator,
   resolveStateDatabaseCoordinatorPath,
   withStateDatabaseCoordinatorRuntimeDirectory,
 } from "./state-database-coordinator.js";
@@ -24,10 +31,87 @@ import {
 export function registerSharedStateWorkerAdmissionTests(
   createContext: () => OpenClawStateWorkerContext,
 ): void {
-  it.each([undefined, false])(
-    "lets host admission share physical lifecycle custody (explicit=%s)",
-    async (requireStateLifecycle) => {
+  it("services direct broker commit admission while a native writer waits for lifecycle custody", async () => {
+    const captured = createContext();
+    await executeOpenClawStateWorker(captured, { type: "deviceAuth.prepare", input: undefined });
+    const store = await openSharedStateSqliteWorkerStore<OpenClawStateWorkerOperations>(
+      {
+        moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore),
+        databasePath: captured.admission.databasePath,
+      },
+      captured,
+    );
+    if (!store) {
+      throw new Error("Expected the prepared shared-state worker");
+    }
+    const stages: string[] = [];
+    let nativeFailure: unknown;
+    const workerInput = {
+      deviceId: "synthetic-broker-worker",
+      role: "operator",
+      token: "synthetic-worker-token",
+    };
+    const nativeInput = { ...workerInput, deviceId: "synthetic-broker-native" };
+    try {
+      await runSqliteWorkerStoreOperation(
+        store,
+        (scope) => scope.execute({ type: "deviceAuth.store", input: workerInput }),
+        captured,
+        () => captured.admission.assertCurrent(),
+        () => ({
+          nativeLocations: [captured.admission.databasePath],
+          admission: createSqliteWorkerOperationAdmission((request, grant) => {
+            stages.push(request.stage);
+            expect(grant()).toBe(true);
+            if (request.stage === "transaction") {
+              // The worker owns the real lifecycle lock and next needs its commit grant.
+              try {
+                withStateDatabaseCoordinatorRuntimeDirectory(captured.coordinatorRuntime, () =>
+                  runOpenClawStateWriteTransaction(
+                    ({ db }) => storeDeviceAuthTokenInDatabase(db, nativeInput),
+                    { path: captured.admission.databasePath, env: captured.environment },
+                  ),
+                );
+              } catch (error) {
+                nativeFailure = error;
+              }
+            }
+          }),
+        }),
+      );
+      expect(nativeFailure).toBeUndefined();
+      expect(stages).toEqual(["transaction", "commit"]);
+      for (const input of [workerInput, nativeInput]) {
+        expect(
+          await store.execute({
+            type: "deviceAuth.read",
+            input: {
+              deviceId: input.deviceId,
+              role: input.role,
+              readOnly: true,
+            },
+          }),
+        ).toMatchObject({
+          entry: { token: input.token, role: input.role },
+        });
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+  it.each(
+    [undefined, false].flatMap((requireStateLifecycle) =>
+      (["before-dispatch", "after-dispatch"] as const).map((timing) => ({
+        requireStateLifecycle,
+        timing,
+      })),
+    ),
+  )(
+    "borrows parent lifecycle custody acquired $timing for nested native admission (explicit=$requireStateLifecycle)",
+    async ({ requireStateLifecycle, timing }) => {
       const captured = createContext();
+      const worker = await prepareSharedStateWorker(captured);
       const record: NativeHookRelayBridgeRecord = {
         relayId: "synthetic-admission-relay",
         pid: 100,
@@ -36,35 +120,57 @@ export function registerSharedStateWorkerAdmissionTests(
         token: "synthetic-test-token",
         expiresAtMs: 20000,
       };
-      let grants = 0;
-      await runOpenClawStateWorkerOperation(
-        captured,
-        (scope) =>
-          scope.execute({ type: "nativeHookRelay.write", input: { record, updatedAtMs: 1 } }),
-        {
-          requireStateLifecycle,
-          createAdmission: () => ({
-            nativeLocations: [captured.admission.databasePath],
-            admission: createSqliteWorkerOperationAdmission((request, grant) => {
-              expect(request.stage).toBe("transaction");
-              // The worker already holds its write transaction and awaits this grant.
-              // An independent native acquisition must borrow the same physical owner.
-              const nested = withStateDatabaseCoordinatorRuntimeDirectory(
-                captured.coordinatorRuntime,
-                () =>
-                  acquireStateDatabaseCoordinator({
-                    databasePath: captured.admission.databasePath,
-                    busyTimeoutMs: 0,
-                  }),
-              );
-              nested.release();
-              captured.admission.assertCurrent();
-              expect(grant()).toBe(true);
-              grants += 1;
-            }),
+      const acquireParent = () =>
+        withStateDatabaseCoordinatorRuntimeDirectory(captured.coordinatorRuntime, () =>
+          acquireStateDatabaseCoordinator({
+            databasePath: captured.admission.databasePath,
+            busyTimeoutMs: 0,
           }),
-        },
-      );
+        );
+      let parent = timing === "before-dispatch" ? acquireParent() : undefined;
+      const post = worker.postMessage.bind(worker);
+      const posts = vi.spyOn(worker, "postMessage").mockImplementation((request, ...args) => {
+        if (timing === "after-dispatch" && request.type === "execute" && !parent) {
+          // The broker already chose worker acquisition; maintenance claims custody before delivery.
+          expect(request.workerStateLifecycle).toBeDefined();
+          parent = acquireParent();
+        }
+        return post(request, ...args);
+      });
+      let grants = 0;
+      try {
+        await runOpenClawStateWorkerOperation(
+          captured,
+          (scope) =>
+            scope.execute({ type: "nativeHookRelay.write", input: { record, updatedAtMs: 1 } }),
+          {
+            requireStateLifecycle,
+            createAdmission: () => ({
+              nativeLocations: [captured.admission.databasePath],
+              admission: createSqliteWorkerOperationAdmission((request, grant) => {
+                expect(request.stage).toBe("transaction");
+                // The worker already holds its write transaction and awaits this grant.
+                // An independent native acquisition must borrow the same physical owner.
+                const nested = withStateDatabaseCoordinatorRuntimeDirectory(
+                  captured.coordinatorRuntime,
+                  () =>
+                    acquireStateDatabaseCoordinator({
+                      databasePath: captured.admission.databasePath,
+                      busyTimeoutMs: 0,
+                    }),
+                );
+                nested.release();
+                captured.admission.assertCurrent();
+                expect(grant()).toBe(true);
+                grants += 1;
+              }),
+            }),
+          },
+        );
+      } finally {
+        posts.mockRestore();
+        parent?.release();
+      }
       expect(grants).toBe(1);
       expect(
         await executeOpenClawStateWorker(captured, {
@@ -75,44 +181,37 @@ export function registerSharedStateWorkerAdmissionTests(
     },
   );
 
-  it("retains explicitly requested lifecycle custody without a host grant factory", async () => {
+  it("fences explicitly requested worker execution without a host grant factory", async () => {
     const captured = createContext();
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
     await executeOpenClawStateWorker(captured, {
       type: "flows.list",
       input: { ownerKey: "agent:main:main" },
     });
-    const worker = messages.mock.contexts[0];
-    messages.mockRestore();
-    if (!(worker instanceof Worker)) {
-      throw new Error("Expected the shared-state worker");
-    }
-    const postMessage = worker.postMessage.bind(worker);
-    let observed = false;
-    vi.spyOn(worker, "postMessage").mockImplementation(
-      (request: SqliteWorkerRequest, transferList?: readonly Transferable[]) => {
-        if (request.type === "execute") {
-          const held = withStateDatabaseCoordinatorRuntimeDirectory(
-            captured.coordinatorRuntime,
-            () => retainHeldStateDatabaseCoordinator(captured.admission.databasePath),
-          );
-          expect(held).toBeDefined();
-          held?.release();
-          observed = true;
-        }
-        return postMessage(request, transferList);
-      },
-    );
-    await runOpenClawStateWorkerOperation(
+    const foreign = await holdForeignLifecycle(captured);
+    let checks = 0;
+    let completed = false;
+    const result = runOpenClawStateWorkerOperation(
       captured,
-      (scope) =>
-        scope.execute({
-          type: "flows.list",
-          input: { ownerKey: "agent:main:main" },
-        }),
-      { requireStateLifecycle: true },
-    );
-    expect(observed).toBe(true);
+      (scope) => scope.execute({ type: "flows.list", input: { ownerKey: "agent:main:main" } }),
+      {
+        requireStateLifecycle: true,
+        assertCurrent: () => {
+          checks += 1;
+        },
+      },
+    ).then((value) => {
+      completed = true;
+      return value;
+    });
+    try {
+      await vi.waitFor(() => expect(checks).toBeGreaterThan(4));
+      expect(completed).toBe(false);
+      foreign.release();
+      await expect(result).resolves.toEqual([]);
+    } finally {
+      await foreign.close();
+      await result;
+    }
   });
 
   it("waits for a bounded foreign lifecycle owner before an admitted write", async () => {
@@ -225,7 +324,9 @@ export function registerSharedStateWorkerAdmissionTests(
           },
         );
         expect(createAdmission).not.toHaveBeenCalled();
-        expect(posts.mock.calls.filter(([request]) => request.type === "execute")).toHaveLength(0);
+        expect(posts.mock.calls.some(([request]) => request.operationAdmission !== undefined)).toBe(
+          false,
+        );
       } finally {
         posts.mockRestore();
         await foreign.close();
@@ -248,14 +349,17 @@ export function registerSharedStateWorkerAdmissionTests(
     },
   );
 
-  it.each(["after-acquire", "admission-factory", "cleanup-failure"] as const)(
-    "settles a canceled head and its follower at %s before posting",
-    async (timing) => {
+  it.each(
+    (["after-acquire", "admission-factory", "cleanup-failure"] as const).flatMap((timing) =>
+      [...([false, true] as const), ...(timing === "after-acquire" ? [] : (["late"] as const))].map(
+        (parentHeld) => ({ timing, parentHeld }),
+      ),
+    ),
+  )(
+    "settles a canceled head and its follower at $timing before native execution (parent held: $parentHeld)",
+    async ({ timing, parentHeld }) => {
       const captured = createContext();
-      await executeOpenClawStateWorker(captured, {
-        type: "flows.list",
-        input: { ownerKey: "agent:main:main" },
-      });
+      const worker = await prepareSharedStateWorker(captured);
       const nativeOpen = nodeSqlite.openNodeSqliteDatabase;
       const opened = new Map<string, DatabaseSync>();
       const openSpy = vi
@@ -275,6 +379,14 @@ export function registerSharedStateWorkerAdmissionTests(
         gateway.release();
         throw new Error("Expected the native Gateway coordinator");
       }
+      const acquireParent = () =>
+        withStateDatabaseCoordinatorRuntimeDirectory(captured.coordinatorRuntime, () =>
+          acquireStateDatabaseCoordinator({
+            databasePath: captured.admission.databasePath,
+            busyTimeoutMs: 0,
+          }),
+        );
+      let parent = parentHeld === true ? acquireParent() : undefined;
       const canceled = new AbortController();
       const stopped = new Error("synthetic cancellation before post");
       let factories = 0;
@@ -287,7 +399,14 @@ export function registerSharedStateWorkerAdmissionTests(
         }
         return close();
       });
-      const posts = vi.spyOn(Worker.prototype, "postMessage");
+      const post = worker.postMessage.bind(worker);
+      const posts = vi.spyOn(worker, "postMessage").mockImplementation((request, ...args) => {
+        if (parentHeld === "late" && request.type === "execute" && !parent) {
+          expect(request.workerStateLifecycle).toBeDefined();
+          parent = acquireParent();
+        }
+        return post(request, ...args);
+      });
       try {
         await runOpenClawStateWorkerOperation(
           captured,
@@ -340,11 +459,13 @@ export function registerSharedStateWorkerAdmissionTests(
           },
         );
         const writes = posts.mock.calls.filter(([request]) => request.type === "execute");
-        expect(writes).toHaveLength(timing === "cleanup-failure" ? 0 : 1);
+        expect(factories).toBe(
+          timing === "after-acquire" ? 1 : timing === "cleanup-failure" ? 1 : 2,
+        );
         if (timing === "cleanup-failure") {
           return;
         }
-        expect(writes[0]?.[0].gatewaySchemaFence).toBeDefined();
+        expect(writes.some(([request]) => request.gatewaySchemaFence !== undefined)).toBe(true);
         expect(
           await executeOpenClawStateWorker(captured, {
             type: "nativeHookRelay.read",
@@ -359,7 +480,11 @@ export function registerSharedStateWorkerAdmissionTests(
           gateway.release();
         } finally {
           closes.mockRestore();
-          gateway.release();
+          try {
+            gateway.release();
+          } finally {
+            parent?.release();
+          }
         }
       }
     },
@@ -388,6 +513,16 @@ export function registerSharedStateWorkerAdmissionTests(
               },
               { signal },
             );
+          const cancelOverflow = async () => {
+            const controller = new AbortController();
+            const waiting = write(999, controller.signal);
+            const settled = vi.fn();
+            void waiting.then(settled, settled);
+            await Promise.resolve();
+            expect(settled).not.toHaveBeenCalled();
+            controller.abort(stopped);
+            await expect(waiting).rejects.toBe(stopped);
+          };
           const head = write(0, canceled.signal);
           const headOutcome = head.then(
             () => undefined,
@@ -395,13 +530,13 @@ export function registerSharedStateWorkerAdmissionTests(
           );
           const followers = Array.from({ length: 127 }, (_, index) => write(index + 1));
           const settledFollowers = Promise.allSettled(followers);
-          await expect(write(999)).rejects.toMatchObject({ code: "overloaded" });
+          await cancelOverflow();
           expect(factories).toBe(0);
-          canceled.abort(stopped);
-          expect(await headOutcome).toBe(stopped);
           const replacement = write(128);
           const replacementOutcome = Promise.allSettled([replacement]);
-          await expect(write(999)).rejects.toMatchObject({ code: "overloaded" });
+          canceled.abort(stopped);
+          expect(await headOutcome).toBe(stopped);
+          await cancelOverflow();
           foreign.release();
           for (const result of [...(await settledFollowers), ...(await replacementOutcome)]) {
             expect(result.status).toBe("fulfilled");
@@ -410,7 +545,7 @@ export function registerSharedStateWorkerAdmissionTests(
           const nextBurst = Promise.allSettled(
             Array.from({ length: 128 }, (_, index) => write(index + 129)),
           );
-          await expect(write(999)).rejects.toMatchObject({ code: "overloaded" });
+          await cancelOverflow();
           for (const result of await nextBurst) {
             expect(result.status).toBe("fulfilled");
           }
@@ -437,7 +572,9 @@ export function registerSharedStateWorkerAdmissionTests(
           type: string;
           input: { record: NativeHookRelayBridgeRecord };
         };
-        return command.type === "nativeHookRelay.write" ? [command.input.record.pid] : [];
+        return command.type === "nativeHookRelay.write" && command.input.record.pid !== 0
+          ? [command.input.record.pid]
+          : [];
       });
       expect(dispatched).toEqual(Array.from({ length: 256 }, (_, index) => index + 1));
       expect(factories).toBe(256);
@@ -454,6 +591,20 @@ export function registerSharedStateWorkerAdmissionTests(
   });
 }
 
+async function prepareSharedStateWorker(captured: OpenClawStateWorkerContext): Promise<Worker> {
+  const posts = vi.spyOn(Worker.prototype, "postMessage");
+  try {
+    await executeOpenClawStateWorker(captured, { type: "deviceAuth.prepare", input: undefined });
+    const worker = posts.mock.contexts[0];
+    if (!(worker instanceof Worker)) {
+      throw new Error("Expected the prepared shared-state worker");
+    }
+    return worker;
+  } finally {
+    posts.mockRestore();
+  }
+}
+
 function relayRecord(pid: number): NativeHookRelayBridgeRecord {
   return {
     relayId: "queued-lifecycle-relay",
@@ -465,7 +616,7 @@ function relayRecord(pid: number): NativeHookRelayBridgeRecord {
   };
 }
 
-async function holdForeignLifecycle(captured: OpenClawStateWorkerContext, delayMs = 0) {
+export async function holdForeignLifecycle(captured: OpenClawStateWorkerContext, delayMs = 0) {
   const coordinatorPath = resolveStateDatabaseCoordinatorPath({
     databasePath: captured.admission.databasePath,
     runtimeDirectory: captured.coordinatorRuntime.directory,

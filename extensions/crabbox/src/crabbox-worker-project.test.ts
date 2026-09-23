@@ -695,6 +695,7 @@ describe("Crabbox project snapshot provisioning", () => {
     });
     await expect(
       provider.provision({ ...PROFILE, warmImage: false }, "closed-enrollment", {
+        assertCurrent: () => {},
         beginNodeEnrollment,
       }),
     ).rejects.toMatchObject({ name: "AbortError" });

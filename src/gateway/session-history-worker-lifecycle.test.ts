@@ -8,6 +8,7 @@ import {
   replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
@@ -21,12 +22,17 @@ import {
 import { DEFAULT_WORKER_PENDING_BYTES } from "../infra/worker-task-capacity.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import { captureOpenClawAgentDatabaseRegistration } from "../state/openclaw-agent-db-registry-listing.js";
+import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.paths.js";
+import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -181,7 +187,12 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
     storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
   };
   const entry = { sessionId, updatedAt: 1 };
-  await replaceSessionEntry(target, entry);
+  // Seed reader lifecycle fixtures without queueing unrelated automatic maintenance.
+  await patchSessionEntryCore(target, () => entry, {
+    fallbackEntry: entry,
+    replaceEntry: true,
+    skipMaintenance: true,
+  });
   await replaceTranscriptEvents(target, [
     { type: "session", version: 3, id: sessionId },
     {
@@ -210,6 +221,81 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
     read: () => readChatHistoryPage(params),
   };
 }
+
+it.each(["no-commit", "metadata-refresh"] as const)(
+  "keeps history readable across unchanged sibling registration (%s)",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const a = await seed(state, "main", "registration-a");
+      const b = await seed(state, "other", "registration-b");
+      await a.read();
+      await b.read();
+      let dispatched = false;
+      observed.dispatch = (message) => {
+        const input = asOptionalRecord(asOptionalRecord(message)?.input);
+        const params = asOptionalRecord(asOptionalRecord(input?.request)?.params);
+        if (params?.sessionId !== "registration-a") {
+          return;
+        }
+        observed.dispatch = undefined;
+        dispatched = true;
+        const registration = captureOpenClawAgentDatabaseRegistration({
+          agentId: "other",
+          agentPath: b.path,
+          admission: captureOpenClawStateDatabaseReadAdmission(openOpenClawStateDatabase().path),
+        });
+        registration.begin();
+        if (mode === "metadata-refresh") {
+          registerOpenClawAgentDatabase(
+            { agentId: "other", path: b.path, env: state.env },
+            (receipt) => registration.recordCommitted(receipt),
+          );
+        }
+        registration.finish();
+      };
+      expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
+        "registration-a-message",
+      ]);
+      expect(dispatched).toBe(true);
+    });
+  },
+);
+
+it.each(["new-agent", "new-path", "schema", "physical-replacement"] as const)(
+  "rejects history when sibling discovery changes (%s)",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const a = await seed(state, "main", "topology-a");
+      const b = await seed(state, "other", "topology-b");
+      await a.read();
+      await b.read();
+      await closeOpenClawAgentDatabaseByPathAsync(b.path, "other");
+      let dispatched = false;
+      observed.dispatch = (message) => {
+        const input = asOptionalRecord(asOptionalRecord(message)?.input);
+        const params = asOptionalRecord(asOptionalRecord(input?.request)?.params);
+        if (params?.sessionId !== "topology-a") {
+          return;
+        }
+        observed.dispatch = undefined;
+        dispatched = true;
+        if (change === "physical-replacement") {
+          fs.copyFileSync(b.path, `${b.path}.replacement`);
+          fs.renameSync(b.path, `${b.path}.previous`);
+          fs.renameSync(`${b.path}.replacement`, b.path);
+        }
+        registerOpenClawAgentDatabase({
+          agentId: change === "new-agent" ? "added" : "other",
+          path: change === "new-path" ? `${b.path}.different` : b.path,
+          env: state.env,
+          ...(change === "schema" ? { schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1 } : {}),
+        });
+      };
+      await expect(a.read()).rejects.toThrow("Session store changed while preparing its metadata");
+      expect(dispatched).toBe(true);
+    });
+  },
+);
 
 it("closes A through native exit while active and queued B pages survive, then reopens replaced A", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

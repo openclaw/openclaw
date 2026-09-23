@@ -27,6 +27,11 @@ The Gateway WebSocket binds to **loopback** by default, on port `18789` (`gatewa
 
 For the always-on and laptop setups, prefer keeping `gateway.bind: "loopback"` and using **Tailscale Serve** for the Control UI, or a trusted LAN/Tailnet bind with `gateway.remote.transport: "direct"`. SSH tunnel is the fallback that works from any machine.
 
+Application previews need their own private ingress. A tunnel that forwards only
+the Gateway port does not forward portals. Use [managed private Serve or wildcard
+portal ingress](/gateway/portals#remote-access); the browser and application must
+use the service's returned portal URLs without replacing their host or port.
+
 ## Command flow (what runs where)
 
 One Gateway owns state and channels; nodes are peripherals. Example (Telegram message routed to a node tool):

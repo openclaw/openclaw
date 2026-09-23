@@ -105,6 +105,49 @@ must declare their own development dependencies rather than rely on hoisting.
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
 - Use American English spelling and grammar in code, comments, docs, and UI strings
 
+## Security-sensitive changes
+
+Changes to authentication, credentials, secret handling, sandboxing, or execution
+permissions receive a security-review notice with the affected files and review
+guidance. A PR author with a GitHub user account and repository `maintain` or
+`admin` access needs no additional security approval. Other authors need a
+command comment from a user with either role:
+
+- `/allow-security-sensitive-change` for sensitive product changes.
+- `/allow-dependencies-change` for dependency changes that require approval.
+
+Wait for the guard notice to show the current PR commit, then post the applicable
+command on its own line in a new PR comment. Use only command lines in that
+comment. If both guards require approval, post both commands; they can be on
+separate lines in one comment. A later push requires a new comment after the
+notices update. Editing an older comment does
+not grant fresh approval. Deleting the comment or removing a command revokes that
+command's approval. Normal GitHub **Approve** reviews and labels do not satisfy
+these command requirements.
+
+PR updates, approval comment events, and CI completion run security review
+automatically. Approval comments update the review result without rerunning the
+test suite. Missing approval fails the check. Automation using a GitHub user
+account follows the same role checks; GitHub App bot identities do not qualify.
+Open PRs targeting the same branch must have distinct head commits. GitHub shares
+commit statuses across PRs, so duplicate heads block security approval. Close the
+duplicate PR or push a distinct commit; security review evaluates automatically.
+
+The human-readable [security review policy](.github/security-review-policy.yml)
+lists sensitive product categories, review guidance, exclusions, and dependency
+paths. Changes to that inventory require SecOps approval.
+
+Security policy, CodeQL, and the security-review enforcement files listed in
+[CODEOWNERS](.github/CODEOWNERS) require an independent
+`@openclaw/openclaw-secops` approval, including on maintainer-authored PRs. A
+maintainer approval of product code does not replace that code-owner requirement.
+Normal project review and release-owner requirements still apply.
+The existing maintainer CI bypass can override a missing command approval, but
+does not bypass the separate code-owner review requirement.
+
+See [security review checks](https://docs.openclaw.ai/ci/pipeline#security-review-checks)
+for check behavior and enforcement setup.
+
 ## Local commit hook
 
 The normal `pnpm install` setup enables the repository's pre-commit formatting hook

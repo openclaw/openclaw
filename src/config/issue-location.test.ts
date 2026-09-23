@@ -123,49 +123,48 @@ describe("resolveConfigIssueLineInRaw", () => {
     expect(resolveConfigIssueLineInRaw(raw, ["nonexistent"])).toBeUndefined();
   });
 
-  it("handles JSON5 comments", () => {
-    const raw = ["{", "  // comment", '  "key": "value"', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(3);
-  });
-
-  it("handles comments between unquoted keys and colons", () => {
-    const raw = ["{", "  key // comment", '  : "value"', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(3);
-  });
-
-  it("handles comments directly after scalar values", () => {
-    const raw = ["{", "  ignored: 1 // comment", '  , target: "bad"', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["target"])).toBe(3);
-  });
-
-  it("uses the active value when an object repeats a key", () => {
-    const raw = ["{", '  key: "old",', '  key: "bad"', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(3);
-  });
-
-  it("handles single-quoted strings", () => {
-    const raw = ["{", "  'key': 'value'", "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(2);
-  });
-
-  it("handles hex numbers as values", () => {
-    const raw = ["{", '  "a": 0x1A,', '  "b": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
-  });
-
-  it("handles leading decimal numbers", () => {
-    const raw = ["{", '  "a": .5,', '  "b": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
-  });
-
-  it("handles Infinity value", () => {
-    const raw = ["{", '  "a": Infinity,', '  "b": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
-  });
-
-  it("handles NaN value", () => {
-    const raw = ["{", '  "a": NaN,', '  "b": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
+  it.each<[string, string, string, number]>([
+    ["handles JSON5 comments", '{\n  // comment\n  "key": "value"\n}', "key", 3],
+    [
+      "handles comments between unquoted keys and colons",
+      '{\n  key // comment\n  : "value"\n}',
+      "key",
+      3,
+    ],
+    [
+      "handles comments directly after scalar values",
+      '{\n  ignored: 1 // comment\n  , target: "bad"\n}',
+      "target",
+      3,
+    ],
+    [
+      "uses the active value when an object repeats a key",
+      '{\n  key: "old",\n  key: "bad"\n}',
+      "key",
+      3,
+    ],
+    ["handles single-quoted strings", "{\n  'key': 'value'\n}", "key", 2],
+    ["handles hex numbers as values", '{\n  "a": 0x1A,\n  "b": 1\n}', "b", 3],
+    ["handles leading decimal numbers", '{\n  "a": .5,\n  "b": 1\n}', "b", 3],
+    ["handles Infinity value", '{\n  "a": Infinity,\n  "b": 1\n}', "b", 3],
+    ["handles NaN value", '{\n  "a": NaN,\n  "b": 1\n}', "b", 3],
+    ["handles trailing commas in objects", '{\n  "a": 1,\n}', "a", 2],
+    ["handles trailing commas in arrays", '{\n  "a": [1, 2,]\n}', "a", 2],
+    [
+      "handles unicode escape sequences in strings",
+      '{\n  "a": "hello \\u0041",\n  "b": 1\n}',
+      "b",
+      3,
+    ],
+    ["handles multi-line string continuation", '{\n  "a": "hello \\\nworld",\n  "b": 1\n}', "b", 4],
+    ["handles unicode keys", '{\n  "café": 1\n}', "café", 2],
+    ["handles escaped quotes in strings", '{\n  "a": "hello \\"world\\"",\n  "b": 1\n}', "b", 3],
+    ["handles block comments before keys", '{\n  /* comment */\n  "key": "value"\n}', "key", 3],
+    ["handles mixed single/double quotes", "{\n  'key': \"value\"\n}", "key", 2],
+    ["handles empty object value", '{\n  "a": {}\n}', "a", 2],
+    ["handles empty array value", '{\n  "a": []\n}', "a", 2],
+  ])("%s", (_name, raw, key, expectedLine) => {
+    expect(resolveConfigIssueLineInRaw(raw, [key])).toBe(expectedLine);
   });
 
   it("handles null and boolean values", () => {
@@ -175,59 +174,9 @@ describe("resolveConfigIssueLineInRaw", () => {
     expect(resolveConfigIssueLineInRaw(raw, ["c"])).toBe(2);
   });
 
-  it("handles trailing commas in objects", () => {
-    const raw = ["{", '  "a": 1,', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
-  });
-
-  it("handles trailing commas in arrays", () => {
-    const raw = ["{", '  "a": [1, 2,]', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
-  });
-
   it("handles deeply nested arrays", () => {
     const raw = ["{", '  "a": { "b": { "c": [1, [2, [3]]] } } }', "}"].join("\n");
     expect(resolveConfigIssueLineInRaw(raw, ["a", "b", "c", 1, 0])).toBe(2);
-  });
-
-  it("handles unicode escape sequences in strings", () => {
-    const raw = ["{", '  "a": "hello \\u0041",', '  "b": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
-  });
-
-  it("handles multi-line string continuation", () => {
-    const raw = ["{", '  "a": "hello \\', 'world",', '  "b": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(4);
-  });
-
-  it("handles unicode keys", () => {
-    const raw = ["{", '  "café": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["café"])).toBe(2);
-  });
-
-  it("handles escaped quotes in strings", () => {
-    const raw = ["{", '  "a": "hello \\"world\\"",', '  "b": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
-  });
-
-  it("handles block comments before keys", () => {
-    const raw = ["{", "  /* comment */", '  "key": "value"', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(3);
-  });
-
-  it("handles mixed single/double quotes", () => {
-    const raw = ["{", "  'key': \"value\"", "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(2);
-  });
-
-  it("handles empty object value", () => {
-    const raw = ["{", '  "a": {}', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
-  });
-
-  it("handles empty array value", () => {
-    const raw = ["{", '  "a": []', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
   });
 
   it("gracefully degrades for unresolvable paths", () => {

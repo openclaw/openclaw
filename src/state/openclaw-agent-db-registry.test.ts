@@ -7,6 +7,34 @@ import { isSameOpenClawAgentDatabasePath } from "./openclaw-agent-db-registry.js
 
 describe("agent database alias observation", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("compares missing suffixes deeper than the default probe depth", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-alias-deep-"));
+    const probePath = path.join(stateDir, "CaseProbe");
+    fs.writeFileSync(probePath, "probe");
+    let aliases = false;
+    try {
+      const original = fs.lstatSync(probePath, { bigint: true });
+      const alternate = fs.lstatSync(path.join(stateDir, "caseProbe"), { bigint: true });
+      aliases = original.dev === alternate.dev && original.ino === alternate.ino;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    } finally {
+      fs.unlinkSync(probePath);
+    }
+
+    const parents = Array.from({ length: 64 }, () => "a");
+    expect(
+      isSameOpenClawAgentDatabasePath(
+        path.join(stateDir, ...parents, "Worker.sqlite"),
+        path.join(stateDir, ...parents, "worker.sqlite"),
+      ),
+    ).toBe(aliases);
+    expect(fs.readdirSync(stateDir)).toEqual([]);
+  });
+
   it("does not cache a missing-path comparison when its probe cannot be cleaned", () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-alias-cleanup-"));
     const compare = () =>

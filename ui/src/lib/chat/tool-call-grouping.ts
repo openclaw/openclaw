@@ -85,6 +85,36 @@ export function readPreparedActivity(message: unknown): AgentActivityItem[] {
     : [];
 }
 
-export function summarizeToolGroup(items: readonly AgentActivityItem[]): string {
-  return summarizeAgentActivity(items) || t("chat.toolCards.rawDetails");
+export function describeToolGroup(items: readonly AgentActivityItem[]) {
+  const summary = summarizeAgentActivity(items);
+  const label = Object.entries(summary.counts)
+    .filter(([, count]) => count > 0)
+    .map(([kind, count]) =>
+      t(`chat.toolCards.activity.${kind}${count === 1 ? "One" : "Many"}`, { count: String(count) }),
+    )
+    .join(" · ");
+  const outcomes = Object.entries(summary.outcomes)
+    .filter(([, count]) => count > 0)
+    .map(([kind, count]) => ({
+      kind,
+      label: t(`chat.toolCards.activity.${kind}`, { count: String(count) }),
+    }));
+  return { total: summary.total, label, outcomes };
+}
+
+export function summarizeToolGroup(
+  items: readonly AgentActivityItem[],
+  options: { includeFailureCount?: boolean } = {},
+): string {
+  const summary = describeToolGroup(items);
+  return (
+    [
+      summary.label,
+      ...summary.outcomes
+        .filter(({ kind }) => options.includeFailureCount !== false || kind !== "failed")
+        .map(({ label }) => label),
+    ]
+      .filter(Boolean)
+      .join(" · ") || t("chat.toolCards.rawDetails")
+  );
 }

@@ -3,7 +3,8 @@ import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { mergeDeep } from "../infra/deep-merge.js";
-import { normalizePluginId, normalizePluginTargetConfig } from "./config-state.js";
+import { normalizePluginConfigList } from "./config-normalization-shared.js";
+import { normalizePluginId } from "./config-state.js";
 
 /** Returns config with a plugin enabled/disabled and optional built-in channel state synced. */
 export function setPluginEnabledInConfig(
@@ -14,11 +15,11 @@ export function setPluginEnabledInConfig(
 ): OpenClawConfig {
   const builtInChannelId = normalizeChatChannelId(pluginId);
   const resolvedId = normalizePluginId(builtInChannelId ?? pluginId);
-  const normalizedConfig = normalizePluginTargetConfig(config, resolvedId);
+  const rawEntries = Object.entries(config.plugins?.entries ?? {});
   let existingEntry: PluginEntryConfig = {};
   // Fold aliases first and the canonical entry last so duplicate config keeps
   // every nested setting while canonical values win independent of file order.
-  const existingEntries = Object.entries(config.plugins?.entries ?? {})
+  const existingEntries = rawEntries
     .filter(([entryId]) => normalizePluginId(entryId) === resolvedId)
     .toSorted(([leftId], [rightId]) => {
       if (leftId === resolvedId) {
@@ -34,11 +35,19 @@ export function setPluginEnabledInConfig(
   }
 
   const next: OpenClawConfig = {
-    ...normalizedConfig,
+    ...config,
     plugins: {
-      ...normalizedConfig.plugins,
+      ...config.plugins,
+      ...(Array.isArray(config.plugins?.allow)
+        ? { allow: normalizePluginConfigList(config.plugins.allow, normalizePluginId) }
+        : {}),
+      ...(Array.isArray(config.plugins?.deny)
+        ? { deny: normalizePluginConfigList(config.plugins.deny, normalizePluginId) }
+        : {}),
       entries: {
-        ...normalizedConfig.plugins?.entries,
+        ...Object.fromEntries(
+          rawEntries.filter(([entryId]) => normalizePluginId(entryId) !== resolvedId),
+        ),
         [resolvedId]: {
           ...existingEntry,
           enabled,
@@ -51,7 +60,7 @@ export function setPluginEnabledInConfig(
     return next;
   }
 
-  const channels = normalizedConfig.channels as Record<string, unknown> | undefined;
+  const channels = config.channels as Record<string, unknown> | undefined;
   const existing = channels?.[builtInChannelId];
   const existingRecord =
     existing && typeof existing === "object" && !Array.isArray(existing)
@@ -61,7 +70,7 @@ export function setPluginEnabledInConfig(
   return {
     ...next,
     channels: {
-      ...normalizedConfig.channels,
+      ...config.channels,
       [builtInChannelId]: {
         ...existingRecord,
         enabled,

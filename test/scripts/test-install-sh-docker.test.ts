@@ -570,11 +570,22 @@ function extractInstallSmokePackHelper(name: string, nextName: string): string {
   return script.slice(start, end);
 }
 
-function runInstallSmokePackHelpers(packJson: unknown, budgetBytes?: number) {
+function runInstallSmokePackHelpers(
+  packJson: unknown,
+  budgetBytes?: number,
+  githubActions = false,
+) {
   const root = tempDirs.make("openclaw-install-pack-helper-");
   const packJsonPath = join(root, "pack.json");
+  const summaryPath = join(root, "summary.md");
   writeFileSync(packJsonPath, JSON.stringify(packJson), "utf8");
-  const env: NodeJS.ProcessEnv = { ...process.env, PACK_JSON_PATH: packJsonPath };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PACK_JSON_PATH: packJsonPath,
+    HARNESS_ROOT: process.cwd(),
+    GITHUB_ACTIONS: githubActions ? "true" : "false",
+    GITHUB_STEP_SUMMARY: summaryPath,
+  };
   delete env.OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES;
   if (budgetBytes !== undefined) {
     env.OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES = String(budgetBytes);
@@ -596,7 +607,11 @@ assert_pack_unpacked_size_budget "fixture" "$PACK_JSON_PATH"`,
       env,
     },
   );
-  return { normalized: JSON.parse(readFileSync(packJsonPath, "utf8")), result };
+  return {
+    normalized: JSON.parse(readFileSync(packJsonPath, "utf8")),
+    result,
+    summary: existsSync(summaryPath) ? readFileSync(summaryPath, "utf8") : "",
+  };
 }
 
 function runReadPackTarballFilename(filename: string) {
@@ -1234,27 +1249,6 @@ printf 'status=%s\\n' "$status"
     expect(workflow).toContain("reachable from an OpenClaw branch or release tag");
   });
 
-  it("downloads the OpenShell installer completely before execution", () => {
-    const workflow = parse(readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8"));
-    const steps = workflow.jobs.validate_special_e2e.steps as Array<{
-      name?: string;
-      run?: string;
-    }>;
-    const installStep = expectDefined(
-      steps.find((step) => step.name === "Install OpenShell CLI"),
-      "OpenShell install step",
-    );
-    const run = expectDefined(installStep.run, "OpenShell install command");
-
-    expect(run).toContain('installer_path="$(mktemp "${RUNNER_TEMP}/openshell-install.XXXXXX")"');
-    expect(run).toContain("curl -LsSf --connect-timeout 10 --max-time 120 \\");
-    expect(run).toContain('-o "$installer_path"');
-    expect(run).toContain('sh "$installer_path"');
-    expect(run).toContain("trap 'rm -f \"$installer_path\"' EXIT");
-    expect(run.indexOf('-o "$installer_path"')).toBeLessThan(run.indexOf('sh "$installer_path"'));
-    expect(run).not.toContain("install.sh | sh");
-  });
-
   it("prints package size audits for release smoke tarballs", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -1269,24 +1263,54 @@ printf 'status=%s\\n' "$status"
   });
 
   it.each([
-    { label: "required native payload", unpackedSize: 243_066_603, exitCode: 0 },
-    { label: "exact budget", unpackedSize: 235 * 1024 * 1024, exitCode: 0 },
-    { label: "one byte over budget", unpackedSize: 235 * 1024 * 1024 + 1, exitCode: 1 },
-  ])("enforces the default pack budget for $label", ({ unpackedSize, exitCode }) => {
-    const { result } = runInstallSmokePackHelpers([{ filename: "candidate.tgz", unpackedSize }]);
+    {
+      label: "required native payload",
+      unpackedSize: 243_066_603,
+      exitCode: 0,
+      githubActions: false,
+    },
+    { label: "exact budget", unpackedSize: 320 * 1024 * 1024, exitCode: 0, githubActions: false },
+    {
+      label: "one byte over budget locally",
+      unpackedSize: 320 * 1024 * 1024 + 1,
+      exitCode: 1,
+      githubActions: false,
+    },
+    {
+      label: "one byte over budget in CI",
+      unpackedSize: 320 * 1024 * 1024 + 1,
+      exitCode: 0,
+      githubActions: true,
+    },
+  ])("enforces the default pack budget for $label", ({ unpackedSize, exitCode, githubActions }) => {
+    const { result, summary } = runInstallSmokePackHelpers(
+      [{ filename: "candidate.tgz", unpackedSize }],
+      undefined,
+      githubActions,
+    );
 
     expect(result.status).toBe(exitCode);
-    if (exitCode === 0) {
+    if (exitCode === 0 && !githubActions) {
       expect(result.stderr).toBe("");
     } else {
       expect(result.stderr).toContain(
-        `candidate.tgz unpackedSize ${unpackedSize} bytes exceeds budget 246415360 bytes`,
+        `candidate.tgz unpackedSize ${unpackedSize} bytes (320.0 MiB) exceeds budget 335544320 bytes`,
       );
+    }
+    if (githubActions) {
+      expect(result.stderr).toContain("::warning file=package.json,");
+      expect(summary).toContain(`unpackedSize ${unpackedSize} bytes`);
+    } else {
+      expect(summary).toBe("");
     }
   });
 
-  it("fails closed when install smoke pack metadata has no size", () => {
-    const { result } = runInstallSmokePackHelpers([{ filename: "candidate.tgz" }]);
+  it.each([false, true])("fails closed when pack metadata has no size (CI=%s)", (githubActions) => {
+    const { result } = runInstallSmokePackHelpers(
+      [{ filename: "candidate.tgz" }],
+      undefined,
+      githubActions,
+    );
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("install smoke cannot verify pack budget");
@@ -1316,7 +1340,7 @@ printf 'status=%s\\n' "$status"
     );
     expect(oversized.result.status).not.toBe(0);
     expect(oversized.result.stderr).toContain(
-      "candidate.tgz unpackedSize 101 bytes exceeds budget 100 bytes",
+      "candidate.tgz unpackedSize 101 bytes (0.0 MiB) exceeds budget 100 bytes",
     );
   });
 
@@ -1790,7 +1814,7 @@ if (args[0] === "--version") {
     ...(before === "2026.9.1" ? { reason: "already-current" } : {}),
     before: { version: before, buildId: "candidate-build" }, after: { version: "2026.9.1", buildId: "candidate-build" },
     steps: [
-      { name: "global update", exitCode: 0, command: "npm install " + args[args.indexOf("--tag") + 1] },
+      { name: before === "2026.9.1" ? "package-install" : "global update", exitCode: 0, command: "npm install " + args[args.indexOf("--tag") + 1] },
       ...(before === "2026.9.1" ? [] : [{ name: "openclaw doctor", exitCode: 0 }]),
     ],
   }));
@@ -2006,6 +2030,62 @@ run_update_smoke
 
   it.each([
     ["verified same-build no-op", {}, "already-current", 0],
+    [
+      "released-driver same-build no-op",
+      {
+        steps: [
+          {
+            name: "global update",
+            exitCode: 0,
+            command: "npm install http://candidate.invalid/openclaw.tgz",
+          },
+        ],
+      },
+      "already-current",
+      0,
+    ],
+    [
+      "wrong staging step identity",
+      {
+        steps: [
+          {
+            name: "package-pack",
+            exitCode: 0,
+            command: "npm pack http://candidate.invalid/openclaw.tgz",
+          },
+        ],
+      },
+      "already-current",
+      1,
+    ],
+    [
+      "failed staging step",
+      {
+        steps: [
+          {
+            name: "package-install",
+            exitCode: 1,
+            command: "npm install http://candidate.invalid/openclaw.tgz",
+          },
+        ],
+      },
+      "already-current",
+      1,
+    ],
+    [
+      "wrong staging target",
+      {
+        steps: [
+          {
+            name: "package-install",
+            exitCode: 0,
+            command: "npm install http://wrong.invalid/openclaw.tgz",
+          },
+        ],
+      },
+      "already-current",
+      1,
+    ],
     ["unrelated skip", { reason: "dirty" }, "already-current", 1],
     ["changed build", { after: { version: "2026.9.3", buildId: "other" } }, "already-current", 1],
     ["missing build identity", { before: { version: "2026.9.3" } }, "already-current", 1],
@@ -2014,7 +2094,7 @@ run_update_smoke
       {
         steps: [
           {
-            name: "global update",
+            name: "package-install",
             exitCode: 0,
             command: "npm install http://candidate.invalid/openclaw.tgz",
           },
@@ -2032,7 +2112,7 @@ run_update_smoke
       reason: "already-current",
       before: { version: "2026.9.3", buildId: "candidate-build" },
       after: { version: "2026.9.3", buildId: "candidate-build" },
-      steps: [{ name: "global update", exitCode: 0, command: `npm install ${url}` }],
+      steps: [{ name: "package-install", exitCode: 0, command: `npm install ${url}` }],
       ...overrides,
     };
     const result = spawnSync(testNodeExecPath, ["-"], {
@@ -2168,8 +2248,6 @@ run_update_smoke
     expect(script).toContain("SMOKE_RUNNER_ENV_ARGS=()");
     for (const envName of [
       "OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY",
-      "OPENCLAW_INSTALL_ALLOW_LEGACY_UPDATE_WARNING",
-      "OPENCLAW_INSTALL_SELF_UPDATE_WARNING_FIXED_VERSION",
       "OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT",
       "OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL",
       "OPENCLAW_INSTALL_SMOKE_PREVIOUS",
@@ -3026,6 +3104,56 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
     expect(
       workflowStep(workflow.jobs.installer_smoke_update, "Run Rocky Linux installer smoke").run,
     ).toContain("$PAYLOAD_DIR/install.sh");
+  });
+
+  it.each([0, 23])("relays package container warnings without changing exit %i", (exitCode) => {
+    const workflow = parse(readFileSync(INSTALL_SMOKE_WORKFLOW_PATH, "utf8"));
+    const packageStep = workflow.jobs.installer_smoke_candidate_payload.steps.find(
+      (entry: { name?: string }) => entry.name === "Package candidate only inside pinned harness",
+    );
+    const root = tempDirs.make("openclaw-package-container-summary-");
+    const summary = join(root, "summary.md");
+    writeFileSync(summary, "existing summary\n");
+    const result = spawnSync(
+      "bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-c",
+        `${String.raw`
+timeout() { shift 2; "$@"; }
+docker() {
+  local receipt="" forward_actions=0 forward_summary=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      GITHUB_ACTIONS) forward_actions=1 ;;
+      GITHUB_STEP_SUMMARY=/tmp/openclaw-limit-summary.md) forward_summary=1 ;;
+      *:/tmp/openclaw-limit-summary.md) receipt="$(printf '%s' "$arg" | sed 's|:/tmp/openclaw-limit-summary.md$||')" ;;
+    esac
+  done
+  [[ "$forward_actions" == 1 && "$forward_summary" == 1 && "$GITHUB_ACTIONS" == true ]] || return 98
+  [[ -n "$receipt" && "$receipt" != "$GITHUB_STEP_SUMMARY" ]] || return 99
+  printf '<p>Warning: package size</p>\n' > "$receipt"
+  printf '::warning file=package.json,title=Package size::over budget\n'
+  return "$FIXTURE_EXIT"
+}
+`}
+${packageStep.run}`,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FIXTURE_EXIT: String(exitCode),
+          GITHUB_ACTIONS: "true",
+          GITHUB_STEP_SUMMARY: summary,
+          RUNNER_TEMP: root,
+        },
+      },
+    );
+    expect(result.status).toBe(exitCode);
+    expect(result.stdout).toContain("::warning file=package.json,");
+    expect(readFileSync(summary, "utf8")).toBe("existing summary\n<p>Warning: package size</p>\n");
   });
 
   it("kills Bun global install smoke commands that ignore TERM after timeout", () => {

@@ -133,7 +133,7 @@ command handling is enabled for the surface.
 </ParamField>
 
 <ParamField path="commands.restart" type="boolean" default="true">
-  Enables `/restart`, `/update`, and external `SIGUSR1` restart requests.
+  Enables `/restart`, `/update`, and external `SIGUSR2` restart requests.
 </ParamField>
 
 <ParamField path="commands.ownerAllowFrom" type="string[]">
@@ -214,6 +214,9 @@ plugins, and installed skills.
     | `/session max-age <duration\|off>` | Manage thread-binding max-age expiry |
     | `/export-session [path]` | Owner-only. Export the current session to HTML inside the workspace. Alias: `/export` |
     | `/export-trajectory [path]` | Export a JSONL trajectory bundle for the current session. Alias: `/trajectory` |
+
+    `/session idle` and `/session max-age` wait for the channel's binding update
+    before confirming success. A failed update does not produce a success reply.
 
     Explicit `/export-session` paths replace existing files inside the
     workspace. Omit the path to generate a collision-safe filename.

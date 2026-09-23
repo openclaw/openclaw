@@ -6,7 +6,6 @@ import type {
 } from "../config/config.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import { assertDeferredPluginMigrationConfigEditAllowed } from "../config/deferred-plugin-migration-config.js";
-import { visitConfigValueTree } from "../config/io.read-helpers.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
@@ -22,6 +21,7 @@ import {
   collectUnsupportedSecretRefPolicyIssues,
   validateConfigObjectRawWithPlugins,
 } from "../config/validation.js";
+import { visitConfigValueTree } from "../config/value-tree.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -382,6 +382,13 @@ function dedupeDryRunErrors(errors: ConfigSetDryRunError[]): ConfigSetDryRunErro
 /** Validates one final candidate and decides whether the runner may preview, skip, or write it. */
 export async function validateConfigMutation(params: {
   config: OpenClawConfig;
+  /** Keep authored model comparisons and their resolution environment together. */
+  modelValidation?: {
+    config: OpenClawConfig;
+    previousConfig: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    previousEnv?: NodeJS.ProcessEnv;
+  };
   previousConfig: OpenClawConfig;
   operations: ConfigSetOperation[];
   options: ConfigMutationOptions;
@@ -435,8 +442,7 @@ export async function validateConfigMutation(params: {
 
   const { checkTouchedTextModelRefs } = await import("./config-model-validation.js");
   const modelCheck = await checkTouchedTextModelRefs({
-    config,
-    previousConfig: params.previousConfig,
+    ...(params.modelValidation ?? { config, previousConfig: params.previousConfig }),
     touchedPaths: operations.map(({ setPath }) => setPath),
     redactDependencyValues: true,
   });

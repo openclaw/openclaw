@@ -26,6 +26,7 @@ export async function createRepositoryPublicationFixture(
   checkpoint: Mock,
   requestedRef?: string | { kind: "commit" },
   session = { sessionId: SESSION_ID, sessionKey: SESSION_KEY },
+  baseFiles: Record<string, string> = {},
 ) {
   // Only the mock GitHub service accesses this object store. The broker still
   // rejects every Git command and receives only the normalized checkpoint.
@@ -49,8 +50,38 @@ export async function createRepositoryPublicationFixture(
       },
     }).trim();
   git(["init", "--bare", "--quiet", "--initial-branch=main", "--object-format=sha1"]);
-  const baseTree = git(["mktree"], "");
-  const baseCommit = git(["commit-tree", baseTree], "fixture base\n");
+  const writeTree = (
+    base: string,
+    entries: Array<{ path: string; mode: string; sha: string | null }>,
+  ) => {
+    git(["read-tree", base]);
+    git(
+      ["update-index", "-z", "--index-info"],
+      entries
+        .map(
+          (entry) =>
+            `${entry.sha === null ? "0" : entry.mode} ${entry.sha ?? "0".repeat(40)}\t${entry.path}\0`,
+        )
+        .join(""),
+    );
+    return git(["write-tree"]);
+  };
+  const emptyTree = git(["mktree"], "");
+  const baseTree = writeTree(
+    emptyTree,
+    Object.entries(baseFiles).map(([file, content]) => ({
+      path: file,
+      mode: "100644",
+      sha: git(["hash-object", "-w", "--stdin"], content),
+    })),
+  );
+  const baseParent = Object.keys(baseFiles).length
+    ? git(["commit-tree", emptyTree], "fixture prior base\n")
+    : undefined;
+  const baseCommit = git(
+    ["commit-tree", baseTree, ...(baseParent ? ["-p", baseParent] : [])],
+    "fixture base\n",
+  );
   const sourceRef = typeof requestedRef === "string" ? requestedRef : requestedRef && baseCommit;
   const store = getSessionRepositoryWorkspaceStore();
   let workspace = store.create({
@@ -83,20 +114,34 @@ export async function createRepositoryPublicationFixture(
   });
   const sessionOwner = await persistPublicationTestSession(session.sessionKey);
   const payloads = new Map<string, { publicationStagingRoot: string; publicationDigest: string }>();
-  const capture = async (content: string | null, suffix: string) => {
+  const capture = async (
+    content: string | null,
+    suffix: string,
+    changes: Record<string, string | null> = {},
+  ) => {
     const bytes = Buffer.from(content ?? "");
     const sha = git(["hash-object", "-w", "--stdin"], bytes);
-    const workspaceTree =
-      content === null ? baseTree : git(["mktree"], `100644 blob ${sha}\tcounter.txt\n`);
     const publicationStagingRoot = path.join(root, workspace.workspaceId, "checkpoint-" + suffix);
     await fs.mkdir(path.join(publicationStagingRoot, "blobs"), { recursive: true });
-    await fs.writeFile(path.join(publicationStagingRoot, "blobs", sha), bytes);
+    const entries = await Promise.all(
+      Object.entries({
+        ...(content === null ? {} : { "counter.txt": content }),
+        ...changes,
+      }).map(async ([file, value]) => {
+        const object = value === null ? null : git(["hash-object", "-w", "--stdin"], value);
+        if (object) {
+          await fs.writeFile(path.join(publicationStagingRoot, "blobs", object), value!);
+        }
+        return { path: file, mode: "100644", sha: object };
+      }),
+    );
+    const workspaceTree = writeTree(baseTree, entries);
     const raw = JSON.stringify({
       version: 1,
       baseCommit,
       baseTree,
       workspaceTree,
-      entries: content === null ? [] : [{ path: "counter.txt", mode: "100644", sha }],
+      entries,
     });
     await fs.writeFile(path.join(publicationStagingRoot, "snapshot.json"), raw);
     const publicationDigest = "sha256:" + createHash("sha256").update(raw).digest("hex");
@@ -231,11 +276,21 @@ export async function createRepositoryPublicationFixture(
       runtime.uploaded.set(sha, bytes);
       return commandResult(JSON.stringify({ sha }));
     }
+    if (endpoint.includes("/git/trees/")) {
+      const sha = endpoint.split("/").at(-1)!;
+      const tree = git(["ls-tree", "-z", sha])
+        .split("\0")
+        .filter(Boolean)
+        .map((record) => {
+          const separator = record.indexOf("\t");
+          const [mode, type, object] = record.slice(0, separator).split(" ");
+          return { path: record.slice(separator + 1), mode, type, sha: object };
+        });
+      return commandResult(JSON.stringify({ sha, tree, truncated: false }));
+    }
     if (endpoint.endsWith("/git/trees")) {
       expect(body.base_tree).toBe(baseTree);
-      expect(body.tree).toHaveLength(1);
-      expect(body.tree[0]).toMatchObject({ path: "counter.txt", mode: "100644", type: "blob" });
-      const sha = git(["mktree"], `100644 blob ${body.tree[0].sha}\tcounter.txt\n`);
+      const sha = writeTree(baseTree, body.tree);
       return commandResult(JSON.stringify({ sha }));
     }
     if (endpoint.endsWith("/git/commits")) {
@@ -303,6 +358,7 @@ export async function createRepositoryPublicationFixture(
   });
   const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
   return {
+    git,
     baseCommit,
     baseTree,
     runtime,
@@ -317,7 +373,7 @@ export async function createRepositoryPublicationFixture(
           {
             agentId: "main",
             sessionKey: session.sessionKey,
-            storePath: path.join(root, "sessions.json"),
+            storePath: sessionOwner.storePath,
           },
           () => ({ archivedAt: Date.now() }),
         );

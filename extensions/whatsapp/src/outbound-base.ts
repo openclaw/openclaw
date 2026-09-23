@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements outbound base behavior.
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-core";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import {

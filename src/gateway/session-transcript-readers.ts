@@ -8,6 +8,9 @@ import { withCurrentProjectionSnapshot } from "../config/sessions/session-access
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { readSessionTranscriptHistoryEventCount } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import { readRestoredSessionTranscript } from "../config/sessions/session-cold-storage-read.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
 import {
   resolveTranscriptReadTarget,
@@ -34,11 +37,48 @@ export const {
   readSessionMessagesAsync,
   readSessionMessagesWithSourceAsync,
   readSessionMessageByIdAsync,
-  readSessionMessagesMatchingIdAsync,
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessagesPageWithStatsAsync,
   readSessionMessagesAroundIdWithStatsAsync,
 } = sessionTranscriptReader;
+
+/** Keep exact membership and its full-history validation in the admitted history worker. */
+export async function readSessionMessagesMatchingIdAsync(
+  scope: SessionTranscriptReadScope,
+  messageId: string,
+): Promise<unknown[]> {
+  // Incognito SQLite belongs to this process and cannot be reopened in a worker.
+  if (
+    isIncognitoSessionKey(scope.sessionKey) ||
+    (scope.storePath &&
+      isIncognitoOpenClawAgentSqlitePath(scope.storePath, {
+        agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
+        env: scope.env,
+      }))
+  ) {
+    return sessionTranscriptReader.readSessionMessagesMatchingIdAsync(scope, messageId);
+  }
+  const { bindSessionTranscriptStoreScope } =
+    await import("../config/sessions/session-accessor.transcript-target.js");
+  const { readSessionHistoryPageInWorker } =
+    await import("../config/sessions/session-history-worker-runtime.js");
+  const target = bindSessionTranscriptStoreScope(scope);
+  return readSessionHistoryPageInWorker({
+    kind: "message-lookup",
+    params: {
+      target: {
+        agentId: target.agentId,
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+        sessionEntry: target.sessionEntry
+          ? { sessionId: target.sessionEntry.sessionId }
+          : undefined,
+      },
+      messageId,
+    },
+  });
+}
 
 /** Visits raw message payloads within the SQLite read snapshot. */
 export async function visitSessionMessagesAsync(

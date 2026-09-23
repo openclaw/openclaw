@@ -31,8 +31,17 @@ openclaw status --usage --agent work
 | `--usage`               | Prints normalized provider usage windows as `X% left`.                                                          |
 | `--agent <id>`          | Selects the agent auth/profile scope for `--usage`. Required when an explicit multi-agent fleet has no default. |
 | `--json`                | Machine-readable output.                                                                                        |
-| `--timeout <ms>`        | Probe timeout in milliseconds (default: `10000`).                                                               |
+| `--timeout <ms>`        | Probe timeout in milliseconds (default: `60000`).                                                               |
 | `--verbose` / `--debug` | Also print the raw Gateway target resolution before the report.                                                 |
+
+Status starts one monotonic probe deadline when the command begins. Local readiness, Gateway status, provider usage, and deep health consume the remaining allowance. Remote targets and explicit Gateway URLs skip local readiness but keep the same deadline. Local probes report the observed startup phase while waiting. If the Gateway is still starting when the budget expires, status reports “still starting” instead of unreachable and skips deep channel probes. JSON keeps the status report and adds `gateway.readiness: "still-starting"` and `gateway.startupPhase`. An explicit `--timeout` limits that shared allowance.
+
+When no matching Gateway service or live foreground owner exists and its port is
+free, status probes directly instead of waiting for a Gateway startup. Local-only
+agent environments therefore report an unavailable Gateway promptly. Observed startup
+migrations retain startup grace across the handoff to Gateway ownership; unverifiable
+ownership also retains that grace. Lock and native process inspection consume the
+same remaining probe allowance.
 
 Channels without a probe, such as WhatsApp, report lifecycle health instead.
 In the Health table, `healthy` is `OK`; degraded lifecycle states and failed
@@ -75,10 +84,15 @@ existing read-only SQLite path.
 
 JSON `collection.notCollected` names fields that were not inspected and explains
 why. Online status leaves workspace and bootstrap checks unknown, including
-`agents.bootstrapPendingCount: null`. It also skips local config validation,
-channel and memory credential inspection, and the local plugin inspections
-normally requested by `--all` or `--deep`. Requested security audit and plugin
-compatibility sections report `collected: false`; memory remains `null`. Use
+`agents.bootstrapPendingCount: null`. It returns `channelSummary: []` without
+loading channel plugins and records `channelSummary` in `collection.notCollected`.
+An empty list there means the field was not collected, not that no channels are
+configured. Use `openclaw channels status` for the configured inventory, or
+`openclaw channels status --probe` for live account checks. Online status skips
+local config validation, channel and memory credential inspection, and the local
+plugin inspections normally requested by `--all` or `--deep`. Requested security
+audit and plugin compatibility sections report `collected: false`; memory remains
+`null`. Use
 `openclaw security audit`, `openclaw plugins inspect --all`, or
 `openclaw memory status --deep` for those local inspections. `--deep` still requests
 Gateway health, and `--usage --agent <id>` retains its credential scope.
@@ -157,6 +171,11 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
 
 - `--usage` prints normalized provider usage windows as `X% left`.
   It also adds usage snapshots to `--all`; `--agent` keeps the same usage-only scope.
+  Usage probes receive the remaining shared probe budget, capped by `--timeout` when set;
+  providers that exceed that bound report `Timeout` in the usage output.
+  An exhausted budget reports `Timeout` without starting provider auth or usage
+  requests. Expiry cancels active usage requests and prevents late auth results
+  from starting another request; completed provider snapshots remain available.
 - In an explicit multi-agent setup, `--usage` reads the auth profiles owned by
   `agents.defaults.systemAgent.agentId` by default. Pass `--agent <id>` to
   inspect another agent; without either owner, OpenClaw does not guess one
@@ -170,6 +189,15 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
   They do not mean the Gateway or channels are unhealthy.
 
 ## Overview and update status
+
+The Gateway service row compares its installed package with the active CLI.
+If they resolve to different installations, status names both package paths and
+versions. It recommends `openclaw doctor --fix` or `openclaw gateway install --force`
+when service installation is allowed, or reports the installation owner's refusal.
+This local diagnostic remains available when the Gateway connection fails,
+including a protocol mismatch. JSON exposes the comparison as
+`gatewayService.installationDrift`.
+If local session state requires Doctor, status prints any installation drift to stderr alongside the original error and preserves the failure exit status.
 
 - The **Sessions** overview counts stored conversation rows, including archived
   rows. Running turns and recent activity are separate from this inventory.

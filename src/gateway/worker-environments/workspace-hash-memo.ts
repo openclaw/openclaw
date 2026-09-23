@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { compileFunction } from "node:vm";
 import { z } from "zod";
-import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
 
 export type WorkspaceHashMetrics = {
   contentHashCount: number;
@@ -28,6 +28,7 @@ type RemoteWorkspaceHashMetrics = WorkspaceHashMetrics & {
 };
 
 export const MAX_WORKSPACE_HASH_MEMO_BYTES = 8 * 1024 * 1024;
+export const MAX_WORKSPACE_HASH_MEMO_ENTRIES = 25_000;
 
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 const WORKER_HASH_IDENTITY_PATTERN = /^worker:\d+:\d+:\d+:\d+:\d+$/u;
@@ -40,7 +41,7 @@ const remoteWorkspaceManifestEnvelopeSchema = z
       .array(
         z.tuple([z.string().regex(WORKER_HASH_IDENTITY_PATTERN), z.string().regex(SHA256_PATTERN)]),
       )
-      .max(MAX_RECONCILIATION_ENTRIES),
+      .max(MAX_WORKSPACE_HASH_MEMO_ENTRIES),
     metrics: z
       .object({
         contentHashCount: z.number().finite().nonnegative(),
@@ -168,19 +169,20 @@ export function takeWorkspaceHashMemo(
   return memo;
 }
 
-/** Self-contained for the node script; preserve the largest hashes within both wire limits. */
-export function selectWorkerWorkspaceHashMemoEntries(
-  memo: ReadonlyMap<string, string>,
-  maxEntries: number,
-  maxBytes: number,
-): Array<[string, string]> {
-  const compareIdentity = ([left]: [string, string], [right]: [string, string]) =>
+// One source for host and standalone worker execution; transformed closures cannot
+// be serialized because their compiler-owned helpers stay in the parent module.
+export const WORKSPACE_HASH_MEMO_JS = String.raw`
+function workspaceStatIdentity(owner, stats) {
+  return [owner, stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].join(":");
+}
+function selectWorkerWorkspaceHashMemoEntries(memo, maxEntries, maxBytes) {
+  const compareIdentity = ([left], [right]) =>
     left < right ? -1 : left > right ? 1 : 0;
   const candidates = [...memo]
     .filter(([identity]) => identity.startsWith("worker:"))
     .map((entry) => ({ entry, size: Number(entry[0].split(":")[3]) }))
     .toSorted((left, right) => right.size - left.size || compareIdentity(left.entry, right.entry));
-  const selected: Array<[string, string]> = [];
+  const selected = [];
   let bytes = 2;
   for (const { entry } of candidates) {
     if (selected.length === maxEntries) {
@@ -193,14 +195,33 @@ export function selectWorkerWorkspaceHashMemoEntries(
     }
   }
   return selected.toSorted(compareIdentity);
-}
+}`;
+
+const {
+  workspaceStatIdentity,
+  selectWorkerWorkspaceHashMemoEntries,
+}: {
+  workspaceStatIdentity: (
+    owner: "gateway" | "worker",
+    stats: { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint },
+  ) => string;
+  selectWorkerWorkspaceHashMemoEntries: (
+    memo: ReadonlyMap<string, string>,
+    maxEntries: number,
+    maxBytes: number,
+  ) => Array<[string, string]>;
+} = compileFunction(
+  `${WORKSPACE_HASH_MEMO_JS}\nreturn { workspaceStatIdentity, selectWorkerWorkspaceHashMemoEntries };`,
+)();
+
+export { workspaceStatIdentity };
 
 export function serializeRemoteWorkspaceHashMemo(
   memo: WorkspaceHashMemo,
   maxBytes = MAX_WORKSPACE_HASH_MEMO_BYTES,
 ): string {
   return JSON.stringify(
-    selectWorkerWorkspaceHashMemoEntries(memo, MAX_RECONCILIATION_ENTRIES, maxBytes),
+    selectWorkerWorkspaceHashMemoEntries(memo, MAX_WORKSPACE_HASH_MEMO_ENTRIES, maxBytes),
   );
 }
 
@@ -225,17 +246,4 @@ export async function measureLocalWorkspaceReconciliation<T>(
   } finally {
     metrics.localReconciliationDurationMs += performance.now() - startedAt;
   }
-}
-
-export function workspaceStatIdentity(
-  owner: "gateway" | "worker",
-  stats: {
-    dev: bigint;
-    ino: bigint;
-    size: bigint;
-    mtimeNs: bigint;
-    ctimeNs: bigint;
-  },
-): string {
-  return `${owner}:${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
 }

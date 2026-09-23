@@ -1,9 +1,9 @@
 // Gateway RPC handlers for cron job CRUD, run logs, wake, and delivery previews.
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
-import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   type CronListParams,
+  type CronRunsParams,
   ErrorCodes,
   errorShape,
   GatewayErrorDetailCodes,
@@ -91,26 +91,13 @@ import {
   assertCronDoesNotTargetAgentHarness,
 } from "./cron-input-validation.js";
 import { startCronListDiagnostics } from "./cron-list-diagnostics.js";
+import { compactCronListJob } from "./cron-list-projection.js";
 import { cronRunLogPageFilters, filterCronRunLogJobsByAgent } from "./cron-run-log-filters.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
-
-type CronRunsRequestParams = CronJobIdParams & {
-  agentId?: string;
-  scope?: "job" | "all";
-  runId?: string;
-  limit?: number;
-  offset?: number;
-  statuses?: Array<"ok" | "error" | "skipped">;
-  status?: "all" | "ok" | "error" | "skipped";
-  deliveryStatuses?: Array<"delivered" | "not-delivered" | "unknown" | "not-requested">;
-  deliveryStatus?: "delivered" | "not-delivered" | "unknown" | "not-requested";
-  query?: string;
-  sortDir?: "asc" | "desc";
-};
 
 class CronJobConfigRevisionConflictError extends Error {
   constructor(
@@ -152,51 +139,6 @@ function cronAddPayloadWithDeliveryPreview(params: {
   return {
     ...cronJobReadView(job),
     deliveryPreview: params.deliveryPreview,
-  };
-}
-
-function compactCronListJob(job: CronJob) {
-  // Optional declaration/delivery fields are omitted when unset so compact
-  // rows stay lean for the common undeclared job.
-  return {
-    id: job.id,
-    name: job.name,
-    ...(job.declarationKey ? { declarationKey: job.declarationKey } : {}),
-    ...(job.displayName ? { displayName: job.displayName } : {}),
-    ...(job.owner ? { owner: job.owner } : {}),
-    enabled: job.enabled,
-    // Keep epoch fields for existing clients; readable dates avoid model timestamp arithmetic.
-    nextRunAt: timestampMsToIsoString(job.state.nextRunAtMs) ?? null,
-    nextRunAtMs: job.state.nextRunAtMs ?? null,
-    scheduleKind: job.schedule.kind,
-    // Disabled jobs have no next run. Keep their timing without exposing event commands.
-    ...(job.schedule.kind === "at" || job.schedule.kind === "every" || job.schedule.kind === "cron"
-      ? { schedule: job.schedule }
-      : {}),
-    ...(job.trigger ? { trigger: true } : {}),
-    lastRunAt: timestampMsToIsoString(job.state.lastRunAtMs) ?? null,
-    lastRunAtMs: job.state.lastRunAtMs ?? null,
-    lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus ?? null,
-    lastRunError: job.state.lastError ?? null,
-    ...(job.state.lastDelivered !== undefined ? { lastDelivered: job.state.lastDelivered } : {}),
-    ...(job.state.lastDeliveryStatus !== undefined
-      ? { lastDeliveryStatus: job.state.lastDeliveryStatus }
-      : {}),
-    ...(job.state.lastDeliveryError !== undefined
-      ? { lastDeliveryError: job.state.lastDeliveryError }
-      : {}),
-    ...(job.state.deliverySuppressionReason !== undefined
-      ? { deliverySuppressionReason: job.state.deliverySuppressionReason }
-      : {}),
-    ...(job.state.lastFailureNotificationDelivered !== undefined
-      ? { lastFailureNotificationDelivered: job.state.lastFailureNotificationDelivered }
-      : {}),
-    ...(job.state.lastFailureNotificationDeliveryStatus !== undefined
-      ? { lastFailureNotificationDeliveryStatus: job.state.lastFailureNotificationDeliveryStatus }
-      : {}),
-    ...(job.state.lastFailureNotificationDeliveryError !== undefined
-      ? { lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError }
-      : {}),
   };
 }
 
@@ -1228,7 +1170,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateCronRunsParams, "cron.runs", respond)) {
       return;
     }
-    const p = params as CronRunsRequestParams;
+    const p = params as CronRunsParams;
     const callerScope = readCronCallerScope(client);
     const explicitScope = p.scope;
     const hasJobSelector = p.id !== undefined || p.jobId !== undefined;
@@ -1286,10 +1228,7 @@ export const cronHandlers: GatewayRequestHandlers = {
           : undefined;
       // Operator history survives job deletion; scoped reads still need a live, matching owner.
       const storeKey = cronStoreKey(context.cronStorePath);
-      if (
-        ((callerScope || p.agentId || cronVisibility) && !matchedJob) ||
-        (!job && readCronTaskRunHistoryPage({ storeKey, jobId, limit: 1 }).total === 0)
-      ) {
+      if ((callerScope || p.agentId || cronVisibility) && !matchedJob) {
         respondCronJobNotFound(respond, jobId);
         return;
       }
@@ -1306,6 +1245,14 @@ export const cronHandlers: GatewayRequestHandlers = {
           ? (entry) => !entry.sessionKey || cronVisibility(entry.sessionKey, matchedJob?.agentId)
           : undefined,
       });
+      if (
+        !job &&
+        page.total === 0 &&
+        readCronTaskRunHistoryPage({ storeKey, jobId, limit: 1 }).total === 0
+      ) {
+        respondCronJobNotFound(respond, jobId);
+        return;
+      }
       respond(true, page, undefined);
     } catch (err) {
       if (!isInvalidCronTaskRunJobIdError(err)) {

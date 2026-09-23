@@ -7,10 +7,66 @@ import {
 import type { PluginCompatRecord } from "./types.js";
 
 export const PLUGIN_COMPAT_RECORDS = [
+  {
+    code: "conversation-binding-sync-mutations",
+    status: "deprecated",
+    owner: "channel",
+    introduced: "2026-09-20",
+    deprecated: "2026-09-20",
+    warningStarts: "2026-09-20",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await getSessionBindingService().inspectByConversationAsync, resolveByConversationAsync, touchAsync, resolveRuntimeConversationBindingRouteAsync, and the Async-suffixed thread-binding lifecycle setters. Project prepared inspection facts with inspectRuntimeConversationBindingRoute. Async dispatch retains an explicit synchronous fallback for legacy external adapters; remaining bind/unbind and other storage operations are separate migration work.",
+    docsPath: "/plugins/sdk-runtime/channel#awaited-conversation-binding-mutations",
+    surfaces: [
+      "SessionBindingService.touch",
+      "SessionBindingService.resolveByConversation",
+      "SessionBindingAdapter.touch",
+      "SessionBindingAdapter.resolveByConversation",
+      "resolveRuntimeConversationBindingRoute",
+      "ChannelConversationBindingSupport.setIdleTimeoutBySessionKey",
+      "ChannelConversationBindingSupport.setMaxAgeBySessionKey",
+      "api.runtime.channel.threadBindings.setIdleTimeoutBySessionKey",
+      "api.runtime.channel.threadBindings.setMaxAgeBySessionKey",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations on synchronous methods; resolver migration is recorded here and in docs while its broad barrel remains deprecated; no runtime warnings",
+    ],
+    tests: [
+      "src/infra/outbound/session-binding-service.test.ts",
+      "src/channels/plugins/binding-routing.test.ts",
+      "src/channels/plugins/conversation-bindings.test.ts",
+    ],
+    releaseNote:
+      "Plugins can expose explicitly awaited binding mutations and pure ownership inspection; synchronous public methods remain supported while callers and persistence owners migrate.",
+  },
   ...PLUGIN_SDK_SUBPATH_RECORDS,
   ...BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   ...DEPRECATION_MARKING_COMPAT_RECORDS,
   MEDIA_LEGACY_PROJECTION_COMPAT_RECORD,
+  {
+    code: "node-workspace-sync-acquisition",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-08-21",
+    deprecated: "2026-09-15",
+    warningStarts: "2026-09-15",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await context.acquireManagedWorkspaceAsync(request) and release the returned lease in finally. Retain synchronous acquisition for supported external plugins until explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#managed-node-workspace-acquisition",
+    surfaces: ["OpenClawPluginNodeHostCommandContext.acquireManagedWorkspace"],
+    diagnostics: [
+      "TypeScript @deprecated annotation and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/node-host/invoke-workspace.test.ts",
+      "src/node-host/node-worker-workspace-retention.test.ts",
+      "extensions/codex/src/node-exec-server.test.ts",
+    ],
+    releaseNote:
+      "Node-host plugins can await managed workspace acquisition while existing synchronous callers retain their immediate lease contract.",
+  },
   {
     code: "plugin-tasks-sync-reads",
     status: "deprecated",
@@ -65,7 +121,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "src/plugins/compat/registry.test.ts",
       "src/plugin-state/plugin-state-store.test.ts",
       "src/plugin-state/plugin-state-store.runtime.test.ts",
-      "src/plugin-sdk/plugin-state-store-runtime.test.ts",
+      "test/type-contracts/plugin-state-store-runtime.ts",
       "src/plugins/loader.runtime-registry.test.ts",
     ],
     releaseNote:

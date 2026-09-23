@@ -12,7 +12,6 @@ import type {
   WorkerInferenceModelRef,
   WorkerInferenceOptions,
   WorkerInferenceStartParams,
-  WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
   invalidateComputerFrameIfMissing,
@@ -217,18 +216,6 @@ function processInferenceEvent(
   return undefined;
 }
 
-function terminalErrorMessage(
-  partial: AssistantMessage,
-  outcome: Extract<WorkerInferenceTerminalOutcome, { type: "error" }>,
-): AssistantMessage {
-  partial.stopReason = outcome.reason === "cancelled" ? "aborted" : "error";
-  partial.errorMessage = outcome.message;
-  if (outcome.usage) {
-    partial.usage = structuredClone(outcome.usage);
-  }
-  return partial;
-}
-
 function transcriptSafeErrorMessage(
   modelRef: WorkerInferenceModelRef,
   message: AssistantMessage,
@@ -315,49 +302,37 @@ export function createWorkerInferenceStreamAdapter(
       context: structuredClone(inferenceRequest.context),
       options: structuredClone(inferenceRequest.options),
     };
-    const fail = (error: unknown) => {
+    const finishError = (
+      error: unknown,
+      reason: "aborted" | "error",
+      usage?: AssistantMessage["usage"],
+    ) => {
       if (settled) {
         return;
       }
       settled = true;
-      partial.stopReason = inferenceRequest.signal?.aborted ? "aborted" : "error";
+      partial.stopReason = reason;
       partial.errorMessage = error instanceof Error ? error.message : String(error);
-      stream.push({
-        type: "error",
-        reason: partial.stopReason,
-        error: transcriptSafeErrorMessage(adapter.modelRef, partial),
-      });
-      stream.end();
-    };
-    const finishAborted = () => {
-      if (settled) {
-        return;
+      if (usage) {
+        partial.usage = structuredClone(usage);
       }
-      settled = true;
-      partial.stopReason = "aborted";
-      partial.errorMessage = "Worker inference aborted.";
       stream.push({
         type: "error",
-        reason: "aborted",
+        reason,
         error: transcriptSafeErrorMessage(adapter.modelRef, partial),
       });
       stream.end();
     };
+    const fail = (error: unknown) =>
+      finishError(error, inferenceRequest.signal?.aborted ? "aborted" : "error");
     const abort = () => {
       void adapter.client
         .cancel(identity)
         .catch(() => undefined)
-        .finally(finishAborted);
+        .finally(() => finishError("Worker inference aborted.", "aborted"));
     };
     if (inferenceRequest.signal?.aborted) {
-      partial.stopReason = "aborted";
-      partial.errorMessage = "Worker inference aborted before start.";
-      stream.push({
-        type: "error",
-        reason: "aborted",
-        error: transcriptSafeErrorMessage(adapter.modelRef, partial),
-      });
-      stream.end();
+      finishError("Worker inference aborted before start.", "aborted");
       return stream;
     }
     try {
@@ -408,8 +383,8 @@ export function createWorkerInferenceStreamAdapter(
         if (settled) {
           return;
         }
-        settled = true;
         if (outcome.type === "done") {
+          settled = true;
           if (!isWorkerTranscriptMessageFrameSafe(outcome.message)) {
             const message = emptyAssistantMessage(adapter.modelRef);
             message.stopReason = "error";
@@ -425,13 +400,11 @@ export function createWorkerInferenceStreamAdapter(
           stream.end();
           return;
         }
-        const message = transcriptSafeErrorMessage(
-          adapter.modelRef,
-          terminalErrorMessage(partial, outcome),
+        finishError(
+          outcome.message,
+          outcome.reason === "cancelled" ? "aborted" : "error",
+          outcome.usage,
         );
-        const reason = outcome.reason === "cancelled" ? "aborted" : "error";
-        stream.push({ type: "error", reason, error: message });
-        stream.end();
       })
       .catch(fail)
       .finally(() => {

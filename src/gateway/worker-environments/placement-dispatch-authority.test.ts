@@ -10,7 +10,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import {
   addSessionMember,
   removeSessionMember,
-} from "../../config/sessions/session-sharing-store.js";
+} from "../../config/sessions/session-sharing-store.native.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -77,7 +77,7 @@ describe("worker placement cancellation and reclaim authority", () => {
       expect(harness.log).not.toContain("activation");
       expect(harness.placements.current()?.state).toBe("failed");
       if (stage === "requested") {
-        expect(harness.environments.create).not.toHaveBeenCalled();
+        expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
       } else {
         expect(harness.environments.destroy).toHaveBeenCalledOnce();
       }
@@ -200,15 +200,13 @@ describe("worker placement cancellation and reclaim authority", () => {
     const settled = createDeferredCore();
     const controller = new AbortController();
     let provisionSignal: AbortSignal | undefined;
-    vi.mocked(harness.environments.create).mockImplementation(
-      async (_profile, _id, _machine, _mode, _projectPath, signal) => {
-        provisionSignal = signal;
-        entered.resolve();
-        await settled.promise;
-        signal?.throwIfAborted();
-        throw new Error("destination unexpectedly finished");
-      },
-    );
+    vi.mocked(harness.environments.createWithRequest).mockImplementation(async ({ signal }) => {
+      provisionSignal = signal;
+      entered.resolve();
+      await settled.promise;
+      signal?.throwIfAborted();
+      throw new Error("destination unexpectedly finished");
+    });
     const moving = harness.service
       .move(
         {
@@ -398,7 +396,11 @@ describe("worker placement dispatch authority", () => {
           clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
           clientMode: GATEWAY_CLIENT_MODES.NODE,
           protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-          workerHost: { enabled: true as const, capacity: { total: 2, available: 2 } },
+          workerHost: {
+            enabled: true as const,
+            capacity: { total: 2, available: 2 },
+            capturedExecPolicy: true,
+          },
           commands: ["system.run"],
         };
         let readinessObserved = false;
@@ -420,7 +422,7 @@ describe("worker placement dispatch authority", () => {
         const ready = { ...harness.ready, ...deviceIdentity };
         let current: ReturnType<typeof harness.environments.get> = ready;
         vi.mocked(harness.environments.get).mockImplementation(() => current);
-        vi.mocked(harness.environments.createFromProfileSnapshot).mockImplementation(async () => {
+        vi.mocked(harness.environments.createWithRequest).mockImplementation(async () => {
           harness.log.push("create");
           revokeAt("provisioning");
           return ready;

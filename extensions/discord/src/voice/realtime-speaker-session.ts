@@ -388,6 +388,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     logger.info(
       `discord voice: realtime bridge starting mode=${this.params.mode} provider=${resolved.provider.id} model=${resolvedModel ?? "default"} voice=${resolvedVoice ?? "default"} consultPolicy=${consultPolicy} toolPolicy=${toolPolicy} autoRespond=${autoRespondToAudio} wakeNamePolicy=${this.wakeNamePolicy} requireWakeName=${this.isWakeNameRequired(humanParticipantCount)} humanParticipants=${humanParticipantCount} wakeNames=${this.wakeNames.join(",") || "none"} interruptResponse=${interruptResponseOnInputAudio} bargeIn=${bargeIn} minBargeInAudioEndMs=${minBargeInAudioEndMs}`,
     );
+    this.attachOutputAudioPort();
     await this.bridge.connect();
     if (!this.markLifecycleReady(lifecycleGeneration)) {
       await this.close();
@@ -565,6 +566,20 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
   activateOutput(): void {
     this.readVoiceSelection();
     this.outputEnabled = true;
+    this.playback.activateOutputAudioPort();
+  }
+
+  private attachOutputAudioPort(): void {
+    const provider = this.bridge?.bridge;
+    // Wake-name/response admission still owns those sinks on main. Standby
+    // voice replacements cannot acquire physical output until activated.
+    if (
+      this.wakeNamePolicy === "never" &&
+      provider?.outputAudioMode === "continuous" &&
+      provider.setAudioOutputPort
+    ) {
+      provider.setAudioOutputPort(this.playback.createOutputAudioPort(this.outputEnabled));
+    }
   }
 
   hasActiveInput(): boolean {

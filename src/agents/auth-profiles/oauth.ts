@@ -37,8 +37,13 @@ import {
 } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
-import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
-import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
+import { createOAuthManager } from "./oauth-manager.js";
+import {
+  OAuthManagerRefreshError,
+  isSettledOAuthRefreshFailure,
+  markOAuthRefreshFailureSettled,
+  OAuthRefreshFailureError,
+} from "./oauth-refresh-failure.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -187,6 +192,7 @@ type ResolveApiKeyForProfileParams = {
   agentDir?: string;
   forceRefresh?: boolean;
   allowProfileFallback?: boolean;
+  signal?: AbortSignal;
   /** Reject an OAuth credential before the resolver persists, adopts, or returns it. */
   validateOAuthCredential?: (credential: OAuthCredential) => void;
 };
@@ -310,7 +316,9 @@ async function tryResolveOAuthProfile(
     cfg,
     forceRefresh: params.forceRefresh,
     validateCredential: params.validateOAuthCredential,
+    signal: params.signal,
   });
+  params.signal?.throwIfAborted();
   if (!resolved) {
     return null;
   }
@@ -414,6 +422,7 @@ function throwUnmaterializedAuthProfileSecretRef(params: {
 export async function resolveApiKeyForProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<ResolveApiKeyForProfileResult | null> {
+  params.signal?.throwIfAborted();
   const { cfg, store, profileId } = params;
   const storedProfile = isUserModelAuthProfileId(profileId)
     ? findPersistedAuthProfileCredential({ agentDir: params.agentDir, profileId })
@@ -534,7 +543,9 @@ export async function resolveApiKeyForProfile(
       cfg,
       forceRefresh: params.forceRefresh,
       validateCredential: params.validateOAuthCredential,
+      signal: params.signal,
     });
+    params.signal?.throwIfAborted();
     if (!resolved) {
       return null;
     }
@@ -547,6 +558,8 @@ export async function resolveApiKeyForProfile(
       credential: resolved.credential,
     });
   } catch (error) {
+    params.signal?.throwIfAborted();
+    let settlementComplete = isSettledOAuthRefreshFailure(error);
     let refreshedStore =
       error instanceof OAuthManagerRefreshError
         ? error.getRefreshedStore()
@@ -567,6 +580,7 @@ export async function resolveApiKeyForProfile(
         });
         clearedLastGood = true;
       } catch (cleanupError) {
+        settlementComplete = false;
         // The refresh failure owns the operator diagnosis; stale last-good cleanup is secondary.
         authProfilesLog.warn("failed to clear stale OAuth last-good state after refresh failure", {
           error: formatErrorMessage(cleanupError),
@@ -608,11 +622,13 @@ export async function resolveApiKeyForProfile(
           agentDir: params.agentDir,
           forceRefresh: params.forceRefresh,
           validateOAuthCredential: params.validateOAuthCredential,
+          signal: params.signal,
         });
         if (fallbackResolved) {
           return fallbackResolved;
         }
       } catch {
+        params.signal?.throwIfAborted();
         // keep original error
       }
     }
@@ -624,7 +640,7 @@ export async function resolveApiKeyForProfile(
       provider: cred.provider,
       profileId,
     });
-    throw new OAuthRefreshFailureError({
+    const failure = new OAuthRefreshFailureError({
       provider: cred.provider,
       profileId,
       message:
@@ -633,5 +649,9 @@ export async function resolveApiKeyForProfile(
         (hint ? `\n\n${hint}` : ""),
       cause: error,
     });
+    if (settlementComplete) {
+      markOAuthRefreshFailureSettled(failure);
+    }
+    throw failure;
   }
 }

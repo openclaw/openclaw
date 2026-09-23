@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -44,10 +45,12 @@ import { withShimFixture } from "./direct-run-entrypoints.test-support.js";
 const tempDirs: string[] = [];
 const invocationLogTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const artifactTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const dependencyTempDirs = useAutoCleanupTempDirTracker(afterAll);
 const repoRoot = process.cwd();
 const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
 const realBundledWrapperPath = bundledWrapperPath.replace(".mjs", "-real.mjs");
 let bundledSetupPath: string;
+let preparedDependencyRoot: string | undefined;
 const fakeCrabboxBinDirs = new Map<string, string>();
 const fakeGitBinDirs = new Map<string, string>();
 const timingPreloads = new Map<string, string>();
@@ -69,6 +72,7 @@ const fakeRunValueOptionHelp = [
   "capture-stderr string",
   "capture-stdout string",
   "download value",
+  "fresh-pr string",
   "id string",
   "idle-timeout duration",
   "label string",
@@ -245,6 +249,15 @@ async function main() {
     return;
   }
   const bundlePath = ".openclaw-crabbox-changed-gate.bundle";
+  if (process.env.OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE) {
+    const git = (args) => execFileSync("git", args, { encoding: "utf8" }).trim();
+    const changed = git(["diff", "--name-only", "--no-renames", "main"]).split("\n").filter(Boolean);
+    fs.writeFileSync(process.env.OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE, JSON.stringify({
+      base: git(["rev-parse", "main"]), source: git(["rev-parse", "HEAD"]),
+      head: fs.readFileSync(".git/HEAD", "utf8").trim(),
+      changed,
+    }));
+  }
   if (process.env.OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO) fs.copyFileSync(bundlePath, process.env.OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO);
   process.stdout.write(JSON.stringify({ args, cwd: process.cwd(), scriptContent }) + "\n");
 }
@@ -460,16 +473,6 @@ function runWrapper(helpText: string, args: string[], options: WrapperOptions = 
   });
 }
 
-function runSourceWrapper(helpText: string, args: string[], options: WrapperOptions = {}) {
-  return spawnSync(process.execPath, ["scripts/crabbox-wrapper.mjs", ...args], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    input: options.input,
-    env: wrapperEnv(helpText, options),
-    timeout: options.timeoutMs ?? 10_000,
-  });
-}
-
 function runDefaultWrapper(args: string[], options: WrapperOptions = {}) {
   return runWrapper(defaultProviderHelp, args, options);
 }
@@ -612,9 +615,13 @@ function normalizeShellLineEndings(value: string): string {
   return value.replace(/\r\n/g, "\n");
 }
 
-async function waitForCondition(predicate: () => boolean, timeoutMs = 8_000): Promise<void> {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 8_000,
+  now = Date.now,
+): Promise<void> {
+  const started = now();
+  while (now() - started < timeoutMs) {
     if (predicate()) {
       return;
     }
@@ -640,12 +647,14 @@ async function waitForProcessClose(
 
 type WrapperCleanupProof =
   | { kind: "signal"; entrypoint: "node" | "pnpm"; repeated: boolean; cooperative?: boolean }
+  | { kind: "readiness" }
   | { kind: "preparation"; cleanupFails?: boolean }
   | { kind: "stdin"; target: "macos" | "capsule" }
   | { kind: "escaped" }
   | { kind: "removal"; target: "script" | "source"; exitCode: 0 | 23 };
 
 type WrapperFixtureIdentity = { pid: number; parentPid: number; cwd: string };
+type WrapperReadinessPhase = { phase: string; at: number; pid?: number };
 
 async function runWrapperCleanupProof(proof: WrapperCleanupProof): Promise<void> {
   const entrypoint = proof.kind === "signal" ? proof.entrypoint : "node";
@@ -654,7 +663,8 @@ async function runWrapperCleanupProof(proof: WrapperCleanupProof): Promise<void>
   const preparationCleanupFailure = proof.kind === "preparation" && proof.cleanupFails;
   const readsStdin = proof.kind === "stdin" || scriptRemoval;
   const blacksmith = !readsStdin;
-  const hasDescendant = proof.kind === "signal" || proof.kind === "escaped";
+  const hasDescendant =
+    proof.kind === "signal" || proof.kind === "escaped" || proof.kind === "readiness";
   await withShimFixture(
     "scripts/crabbox-wrapper.mjs",
     async ({ checkoutRoot: producer, fixtureRoot, implementationPath, wrapperPath }) => {
@@ -672,22 +682,44 @@ async function runWrapperCleanupProof(proof: WrapperCleanupProof): Promise<void>
       const runSpawnedPath = path.join(fixtureRoot, "run.spawned");
       const removalFailurePath = path.join(fixtureRoot, "removal.json");
       const releasePath = path.join(fixtureRoot, "escaped.release");
-      const wrapperPidPath = path.join(fixtureRoot, "wrapper.pid");
       const wrapperExitPath = path.join(fixtureRoot, "wrapper-exit.json");
+      const terminalCommandPidPath = path.join(fixtureRoot, "terminal-command.pid");
+      const phasesPath = path.join(fixtureRoot, "readiness-phases.json");
       const ownerPreload = path.join(fixtureRoot, "owner.cjs");
       writeFileSync(
         ownerPreload,
         `
 const fs = require("node:fs");
 const path = require("node:path");
-if (path.resolve(process.argv[1] || ".") === ${JSON.stringify(implementationPath)}) {
-  fs.writeFileSync(${JSON.stringify(wrapperPidPath)}, String(process.pid));
+const entry = path.resolve(process.argv[1] || ".");
+const phasesPath = ${JSON.stringify(phasesPath)};
+const phases = fs.existsSync(phasesPath) ? JSON.parse(fs.readFileSync(phasesPath, "utf8")) : [];
+const phase = (name) => {
+  phases.push({ phase: name, at: Date.now(), pid: process.pid });
+  const temporary = phasesPath + "." + process.pid;
+  fs.writeFileSync(temporary, JSON.stringify(phases));
+  fs.renameSync(temporary, phasesPath);
+};
+if (entry === ${JSON.stringify(wrapperPath)}) phase("entrypoint started");
+if (entry === ${JSON.stringify(implementationPath)}) {
+  phase("loading wrapper");
+  // Stall at phase publication; teardown must already own this PID.
+  if (${proof.kind === "readiness"}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
   process.once("exit", (code) => fs.writeFileSync(${JSON.stringify(wrapperExitPath)}, JSON.stringify({ code })));
   const childProcess = require("node:child_process");
   const spawn = childProcess.spawn;
   childProcess.spawn = (command, args, options) => {
-    if (args?.[0] === "run" && args[1] !== "--help") fs.writeFileSync(${JSON.stringify(runSpawnedPath)}, "spawned");
+    if (args?.[0] === "--version") phase("wrapper loaded; probing Crabbox version");
+    if (args?.[0] === "run" && args[1] !== "--help") {
+      phase("starting Crabbox run");
+      fs.writeFileSync(${JSON.stringify(runSpawnedPath)}, "spawned");
+    }
     return spawn(command, args, options);
+  };
+  const spawnSync = childProcess.spawnSync;
+  childProcess.spawnSync = (command, args, options) => {
+    if (args?.[0] === "sync-plan") phase("preparing source capsule");
+    return spawnSync(command, args, options);
   };
   if (${proof.kind === "stdin"}) {
     const readFile = fs.readFileSync;
@@ -814,11 +846,46 @@ if (path.resolve(process.argv[1] || ".") === ${JSON.stringify(implementationPath
       let output = "";
       let stop: (() => void) | undefined;
       let forceStop: (() => void) | undefined;
+      let entrypointClosed: Promise<unknown> | undefined;
+      let finishTerminal: (() => Promise<void>) | undefined;
       let entrypointPid = 0;
       let identity: WrapperFixtureIdentity | undefined;
       let preparationIdentity: WrapperFixtureIdentity | undefined;
       let descendantPid = 0;
       let failure: Error | undefined;
+      let readinessFailure: Error | undefined;
+      const readinessTimeoutMs = 8_000;
+      const waitForReadiness = async (file: string) => {
+        try {
+          let deliberatelyStalled = false;
+          await waitForCondition(
+            () => {
+              if (proof.kind === "readiness") {
+                const phases: WrapperReadinessPhase[] = JSON.parse(
+                  readFileSync(phasesPath, "utf8"),
+                );
+                deliberatelyStalled = phases.some(({ phase }) => phase === "loading wrapper");
+              }
+              return existsSync(file);
+            },
+            readinessTimeoutMs,
+            // Startup stays real; expire only after the fixture publishes its deliberate hang.
+            () => Date.now() + (deliberatelyStalled ? readinessTimeoutMs : 0),
+          );
+        } catch (cause) {
+          const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
+          const startedAt = phases[0]!.at;
+          readinessFailure = new Error(
+            `wrapper readiness not observed within ${readinessTimeoutMs / 1000} s; last observed phase ${phases.at(-1)!.phase}\n${phases.map(({ phase, at }) => `+${at - startedAt} ms: ${phase}`).join("\n")}\n${output}`,
+            { cause },
+          );
+          throw readinessFailure;
+        }
+      };
+      writeFileSync(
+        phasesPath,
+        JSON.stringify([{ phase: "entrypoint spawn requested", at: Date.now() }]),
+      );
       try {
         let exited: Promise<{ status: number | null; signal: NodeJS.Signals | null }>;
         if (entrypoint === "pnpm") {
@@ -827,9 +894,31 @@ if (path.resolve(process.argv[1] || ".") === ${JSON.stringify(implementationPath
             env,
             pnpmArgs: ["crabbox:run", "--", ...args],
           });
+          const terminalOwnerPath = path.join(fixtureRoot, "terminal.cjs");
+          writeFileSync(
+            terminalOwnerPath,
+            `
+const fs = require("node:fs");
+const { spawn } = require("node:child_process");
+const { constants } = require("node:os");
+process.on("SIGINT", () => {});
+setInterval(() => {}, 1000);
+const child = spawn(${JSON.stringify(command.command)}, ${JSON.stringify(command.args)}, { stdio: "inherit" });
+if (child.pid) {
+  fs.writeFileSync(${JSON.stringify(terminalCommandPidPath + ".tmp")}, String(child.pid));
+  fs.renameSync(${JSON.stringify(terminalCommandPidPath + ".tmp")}, ${JSON.stringify(terminalCommandPidPath)});
+}
+child.once("error", (error) => { console.error(error); process.exit(1); });
+child.once("exit", (code, signal) => {
+  const status = signal ? 128 + constants.signals[signal] : code;
+  process.stdout.write("\\nopenclaw-pnpm-exit:" + status + "\\n");
+});
+`,
+          );
+          // A terminal session outlives its foreground command; PNPM exit must not hang up cleanup.
           const terminal = await spawnTerminalPty({
-            file: command.command,
-            args: command.args,
+            file: nodeExecPath,
+            args: [terminalOwnerPath],
             cwd: producer,
             env: Object.fromEntries(
               Object.entries(env).filter(
@@ -840,16 +929,33 @@ if (path.resolve(process.argv[1] || ".") === ${JSON.stringify(implementationPath
             rows: 24,
           });
           entrypointPid = terminal.pid;
+          let reportExit!: (result: {
+            status: number | null;
+            signal: NodeJS.Signals | null;
+          }) => void;
+          exited = new Promise((resolve) => {
+            reportExit = resolve;
+          });
           terminal.onData((data) => {
             output += data;
+            const receipt = /\r?\nopenclaw-pnpm-exit:(\d+)\r?\n/u.exec(output);
+            if (receipt) {
+              output = output.replace(receipt[0], "");
+              reportExit({ status: Number(receipt[1]), signal: null });
+            }
           });
-          exited = new Promise((resolve) => {
-            terminal.onExit(({ exitCode, signal }) =>
-              resolve({ status: signal ? 128 + signal : exitCode, signal: null }),
-            );
+          entrypointClosed = new Promise<void>((resolve) => {
+            terminal.onExit(({ exitCode, signal }) => {
+              reportExit({ status: signal ? 128 + signal : exitCode, signal: null });
+              resolve();
+            });
           });
           stop = () => terminal.write("\x03");
           forceStop = () => terminal.kill("SIGKILL");
+          finishTerminal = async () => {
+            forceStop!();
+            await entrypointClosed;
+          };
         } else {
           const runner = spawn(process.execPath, [wrapperPath, "run", ...args], {
             cwd: producer,
@@ -864,6 +970,7 @@ if (path.resolve(process.argv[1] || ".") === ${JSON.stringify(implementationPath
             output += data;
           });
           exited = waitForProcessClose(runner, 20_000);
+          entrypointClosed = exited;
           stop = () => {
             runner.kill(proof.kind === "stdin" ? "SIGINT" : "SIGTERM");
           };
@@ -875,20 +982,18 @@ if (path.resolve(process.argv[1] || ".") === ${JSON.stringify(implementationPath
           }
         }
         if (proof.kind === "preparation") {
-          await waitForCondition(() => existsSync(preparationPath));
+          await waitForReadiness(preparationPath);
           preparationIdentity = JSON.parse(readFileSync(preparationPath, "utf8"));
           expect(existsSync(path.join(preparationIdentity!.cwd, "fixture.txt"))).toBe(true);
           stop();
         } else if (proof.kind === "stdin") {
-          await waitForCondition(() => existsSync(stdinReadyPath));
+          await waitForReadiness(stdinReadyPath);
           if (proof.target === "capsule") {
             expect(readdirSync(syncRoot)).toHaveLength(1);
           }
           stop();
         } else if (hasDescendant) {
-          await waitForCondition(() => existsSync(descendantPidPath)).catch((cause: unknown) => {
-            throw new Error(`wrapper did not publish descendant readiness:\n${output}`, { cause });
-          });
+          await waitForReadiness(descendantPidPath);
           descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
           identity = JSON.parse(readFileSync(identityPath, "utf8"));
           expect(isProcessAlive(descendantPid)).toBe(true);
@@ -903,6 +1008,11 @@ if (path.resolve(process.argv[1] || ".") === ${JSON.stringify(implementationPath
           }
         }
         const result = await exited;
+        if (cooperative) {
+          expect(isProcessAlive(entrypointPid), "terminal session still owns cleanup output").toBe(
+            true,
+          );
+        }
         const expectedStatus =
           proof.kind === "escaped"
             ? 1
@@ -912,7 +1022,8 @@ if (path.resolve(process.argv[1] || ".") === ${JSON.stringify(implementationPath
                 ? 130
                 : 143;
         expect(result, output).toEqual({ status: expectedStatus, signal: null });
-        const wrapperPid = Number.parseInt(readFileSync(wrapperPidPath, "utf8"), 10);
+        const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
+        const wrapperPid = phases.find(({ phase }) => phase === "loading wrapper")!.pid!;
         // A pnpm interruption status is not the implementation's cleanup receipt.
         await waitForCondition(() => !isProcessAlive(wrapperPid), 12_000);
         expect(JSON.parse(readFileSync(wrapperExitPath, "utf8")), output).toEqual({
@@ -1006,6 +1117,9 @@ if (path.resolve(process.argv[1] || ".") === ${JSON.stringify(implementationPath
         }
         expect(readFileSync(path.join(producer, "fixture.txt"), "utf8")).toBe("original source\n");
         expect(git("ls-files", "--stage", "-z")).toBe(sourceIndex);
+        if (finishTerminal) {
+          await finishTerminal();
+        }
       } catch (error) {
         failure =
           error instanceof Error ? error : new Error("signal proof failed", { cause: error });
@@ -1027,9 +1141,8 @@ if (path.resolve(process.argv[1] || ".") === ${JSON.stringify(implementationPath
             }
           }
         }
-        const wrapperPid = existsSync(wrapperPidPath)
-          ? Number.parseInt(readFileSync(wrapperPidPath, "utf8"), 10)
-          : 0;
+        const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
+        const wrapperPid = phases.find(({ phase }) => phase === "loading wrapper")?.pid ?? 0;
         identity ??= existsSync(identityPath)
           ? JSON.parse(readFileSync(identityPath, "utf8"))
           : undefined;
@@ -1039,9 +1152,14 @@ if (path.resolve(process.argv[1] || ".") === ${JSON.stringify(implementationPath
         descendantPid ||= existsSync(descendantPidPath)
           ? Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10)
           : 0;
+        const terminalCommandPid = existsSync(terminalCommandPidPath)
+          ? Number.parseInt(readFileSync(terminalCommandPidPath, "utf8"), 10)
+          : 0;
         const ownedPids = new Set([
+          // The atomic phase record owns its PID even before later readiness receipts.
+          ...phases.map(({ pid }) => pid),
           entrypointPid,
-          wrapperPid,
+          terminalCommandPid,
           identity?.pid,
           preparationIdentity?.pid,
           descendantPid,
@@ -1067,12 +1185,15 @@ if (path.resolve(process.argv[1] || ".") === ${JSON.stringify(implementationPath
             }
           }
         }
+        await entrypointClosed;
         await waitForCondition(() => [...ownedPids].every((pid) => !pid || !isProcessAlive(pid)));
         const runReceiptRequired =
           hasDescendant || proof.kind === "removal" || existsSync(runSpawnedPath);
         if (
           failure !== undefined &&
+          readinessFailure === undefined &&
           (!wrapperPid ||
+            (entrypoint === "pnpm" && !terminalCommandPid) ||
             (runReceiptRequired && !identity) ||
             (hasDescendant && !descendantPid) ||
             (proof.kind === "preparation" && !preparationIdentity) ||
@@ -1084,13 +1205,19 @@ if (path.resolve(process.argv[1] || ".") === ${JSON.stringify(implementationPath
         throw Object.assign(
           new AggregateError(
             failure === undefined ? [cause] : [failure, cause],
-            "fixture writers did not settle",
+            readinessFailure
+              ? `${readinessFailure.message}\nfixture teardown could not be verified`
+              : "fixture writers did not settle",
             { cause: failure ?? cause },
           ),
           { processTreeState: "indeterminate" },
         );
       }
       if (failure !== undefined) {
+        // A startup timeout cannot certify writers whose ownership receipts never arrived.
+        if (readinessFailure) {
+          Object.assign(failure, { processTreeState: "indeterminate" });
+        }
         throw failure;
       }
     },
@@ -1207,17 +1334,12 @@ function withSparseSyncRoot(
   env: Record<string, string>,
   check: (fixture: { result: ReturnType<typeof runWrapper>; syncRoot: string }) => void,
 ): void {
-  const syncRoot = path.join(repoRoot, name);
-  rmSync(syncRoot, { recursive: true, force: true });
-  try {
-    const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
-      ...cleanSparseSyncOptions,
-      env: { ...env, OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot },
-    });
-    check({ result, syncRoot });
-  } finally {
-    rmSync(syncRoot, { recursive: true, force: true });
-  }
+  const syncRoot = path.join(artifactTempDirs.make("openclaw-crabbox-sparse-sync-"), name);
+  const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
+    ...cleanSparseSyncOptions,
+    env: { ...env, OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot },
+  });
+  check({ result, syncRoot });
 }
 
 function runSparseShell(shellScript: string) {
@@ -1320,7 +1442,6 @@ describe("scripts/crabbox-wrapper", () => {
       ],
       outfile: bundledWrapperPath,
     });
-    runSourceWrapper("provider: aws\n", ["--version"]);
   });
 
   it("prepares the supported executable for later workflow steps", () => {
@@ -2163,6 +2284,145 @@ describe("scripts/crabbox-wrapper", () => {
         expect(output.args).toContain("--no-sync");
       } else {
         expect(output.args.at(-1)).toContain("echo --no-sync");
+      }
+    },
+  );
+
+  it.each([
+    {
+      flags: ["--fresh-pr", "openclaw/openclaw#1"],
+      command: ["node", "scripts/source-fixture.mjs"],
+    },
+    {
+      flags: ["--fresh-pr=openclaw/openclaw#1", "--apply-local-patch"],
+      command: ["node", "scripts/check-changed.mjs"],
+    },
+    { flags: ["--no-sync"], command: ["node", "scripts/source-fixture.mjs"] },
+    { flags: ["--sync-only"], command: [] },
+    { flags: ["--target", "windows"], command: ["node", "scripts/source-fixture.mjs"] },
+  ])("preserves native AWS source selection for $flags", ({ flags, command }) => {
+    const { output, remoteCommand } = runSuccessfulDefaultWrapper(
+      ["run", "--provider", "aws", ...flags, "--", ...command],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+    expect(remoteCommand).not.toContain(".openclaw-crabbox-changed-gate.bundle");
+    if (flags.some((flag) => flag.startsWith("--fresh-pr")) || flags.includes("--no-sync")) {
+      expect(output.cwd).toBe(repoRoot);
+    }
+    for (const flag of flags) {
+      expect(output.args).toContain(flag);
+    }
+  });
+
+  it.skipIf(process.platform === "win32").each(["command", "script"])(
+    "runs native AWS no-hydrate %s payloads without Node or pnpm",
+    (mode) => {
+      const cwd = invocationLogTempDirs.make("openclaw-raw-aws-");
+      const emptyPath = path.join(cwd, "empty-path");
+      mkdirSync(emptyPath);
+      const script =
+        "set -eu\n! command -v node\n! command -v pnpm\nprintf '%s\\n' raw-bootstrap-ran\n";
+      const file = path.join(cwd, "bootstrap.sh");
+      writeFileSync(file, script);
+      const payload = mode === "script" ? ["--script", file] : ["--shell", "--", script];
+      const { output, remoteCommand } = runSuccessfulDefaultWrapper([
+        "run",
+        "--provider",
+        "aws",
+        "--no-hydrate",
+        ...payload,
+      ]);
+      expect(output.args).toContain("--no-hydrate");
+      const result = spawnSync(
+        "/bin/sh",
+        ["-c", mode === "script" ? output.scriptContent! : remoteCommand],
+        {
+          cwd,
+          encoding: "utf8",
+          env: { PATH: emptyPath },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("raw-bootstrap-ran\n");
+      expect(output.args.slice(-payload.length)).toEqual(payload);
+      expect(mode === "script" ? output.scriptContent : remoteCommand).toBe(script);
+    },
+  );
+
+  it.each([
+    { flags: ["--no-hydrate"], capsule: false },
+    { flags: ["--no-hydrate=true"], capsule: false },
+    { flags: ["--no-hydrate=1"], capsule: false },
+    { flags: ["--no-hydrate=T"], capsule: false },
+    { flags: ["--no-hydrate=false"], capsule: true },
+    { flags: ["--no-hydrate=0"], capsule: true },
+    { flags: ["--no-hydrate=F"], capsule: true },
+    { flags: ["--no-hydrate", "--no-hydrate=false"], capsule: true },
+    { flags: ["--no-hydrate=false", "--no-hydrate"], capsule: false },
+    { flags: ["--label", "--no-hydrate"], capsule: true },
+  ])("preserves native hydration option semantics: $flags", ({ flags, capsule }) => {
+    const { output, remoteCommand } = runSuccessfulDefaultWrapper([
+      "run",
+      "--provider",
+      "aws",
+      ...flags,
+      "--",
+      "echo",
+      "--no-hydrate",
+    ]);
+    expect(remoteCommand.includes(".openclaw-crabbox-changed-gate.bundle")).toBe(capsule);
+    expect(remoteCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
+    const index = output.args.indexOf(flags[0]!);
+    expect(output.args.slice(index, index + flags.length)).toEqual(flags);
+    if (capsule) {
+      expect(remoteCommand).toContain("echo --no-hydrate");
+    } else {
+      expect(output.args.slice(-2)).toEqual(["echo", "--no-hydrate"]);
+    }
+  });
+
+  it.each<{ source: string; args: string[]; options: WrapperOptions; capsule: boolean }>([
+    { source: "Linux alias", args: ["--target", "ubuntu"], options: {}, capsule: true },
+    {
+      source: "Linux environment",
+      args: [],
+      options: { env: { CRABBOX_TARGET: "linux" } },
+      capsule: true,
+    },
+    {
+      source: "macOS environment",
+      args: [],
+      options: { env: { CRABBOX_TARGET_OS: "darwin" } },
+      capsule: false,
+    },
+    {
+      source: "macOS config",
+      args: [],
+      options: { configJson: managedBrokerConfig("aws", { target: "osx" }) },
+      capsule: false,
+    },
+    {
+      source: "WSL2",
+      args: ["--target", "windows", "--windows-mode", "wsl2"],
+      options: {},
+      capsule: false,
+    },
+  ])(
+    "uses the effective $source target for ordinary AWS capsules",
+    ({ args, options, capsule }) => {
+      const { output, remoteCommand } = runSuccessfulDefaultWrapper(
+        ["run", "--provider", "aws", ...args, "--", "echo", "ok"],
+        options,
+      );
+      expect(remoteCommand.includes(".openclaw-crabbox-changed-gate.bundle")).toBe(capsule);
+      expect(remoteCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
+      if (!capsule) {
+        expect(output.args.slice(-2)).toEqual(["echo", "ok"]);
       }
     },
   );
@@ -3466,16 +3726,10 @@ esac
       "--version",
     ]);
     expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(output.args).toEqual([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "linux",
-      "--",
-      "pnpm",
-      "--version",
-    ]);
+    expect(output.args.slice(0, 5)).toEqual(["run", "--provider", "aws", "--target", "linux"]);
+    expect(remoteCommand).toContain(".openclaw-crabbox-changed-gate.bundle");
+    expect(remoteCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
+    expect(remoteCommand.endsWith("; pnpm --version")).toBe(true);
   });
 
   it.each([
@@ -3581,7 +3835,7 @@ esac
 
       const result = spawnSync(
         nodeExecPath,
-        ["scripts/crabbox-wrapper.mjs", "run", "--provider", "aws", "--", "echo ok"],
+        ["scripts/crabbox-wrapper.mjs", "run", "--provider", "aws", "--no-sync", "--", "echo ok"],
         {
           cwd: repoRoot,
           encoding: "utf8",
@@ -4106,6 +4360,7 @@ process.on("uncaughtExceptionMonitor", (error) => {
   it.skipIf(process.platform === "win32").each([
     ["aws", true, "transport"],
     ["aws", false, "transport"],
+    ["aws", false, "arbitrary"],
     ["blacksmith-testbox", true, "transport"],
     ["blacksmith-testbox", false, "transport"],
     ["blacksmith-testbox", false, "graph"],
@@ -4148,6 +4403,8 @@ process.on("uncaughtExceptionMonitor", (error) => {
         OPENCLAW_CRABBOX_SYNC_TMPDIR: path.join(root, "sync"),
         OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "0",
         OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO: capturedBundle,
+        OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE:
+          provider === "blacksmith-testbox" ? path.join(root, "native-sync.json") : "",
         OPENCLAW_FAKE_CRABBOX_PRIVACY_PATHS: JSON.stringify([
           "private-canary.txt",
           "protected-deleted.ignored",
@@ -4249,7 +4506,7 @@ process.on("uncaughtExceptionMonitor", (error) => {
         );
       }
       expect(git(producer, ["rev-parse", "--is-shallow-repository"])).toBe(String(shallow));
-      const alias = provider === "aws" ? "origin/release/fixture" : "";
+      const alias = provider === "aws" && scenario !== "arbitrary" ? "origin/release/fixture" : "";
       if (alias) {
         git(producer, ["update-ref", `refs/remotes/${alias}`, base]);
       }
@@ -4265,7 +4522,7 @@ process.on("uncaughtExceptionMonitor", (error) => {
       mkdirSync(path.dirname(fixtureWrapper), { recursive: true });
       copyFileSync(realBundledWrapperPath, fixtureWrapper);
       const sourceCommand =
-        provider === "blacksmith-testbox"
+        provider === "blacksmith-testbox" || scenario === "arbitrary"
           ? "scripts/source-fixture.mjs"
           : "scripts/check-changed.mjs";
       const special = "space ' quote ; $(touch injected) `touch injected` & |";
@@ -4300,6 +4557,16 @@ process.on("uncaughtExceptionMonitor", (error) => {
         );
         expect(result.status, failureDetail(result)).toBe(0);
         const run = expectSuccessfulWrapperRun(result);
+        let changed: string[] = [];
+        if (provider === "blacksmith-testbox") {
+          const native = JSON.parse(
+            readFileSync(env.OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE, "utf8"),
+          );
+          const source = git(producer, ["rev-parse", "HEAD"]);
+          expect(native).toMatchObject({ base, source, head: source });
+          expect(native.changed).toContain(".openclaw-crabbox-changed-gate.bundle");
+          changed = native.changed;
+        }
         expect(existsSync(run.output.cwd)).toBe(false);
         expect(readdirSync(path.join(root, "sync"))).toEqual([]);
         return {
@@ -4311,6 +4578,7 @@ process.on("uncaughtExceptionMonitor", (error) => {
             ? run.output.args.slice(run.output.args.indexOf("--") + 1)
             : [],
           bundle: readFileSync(capturedBundle),
+          changed,
         };
       };
       const receive = (
@@ -4406,7 +4674,7 @@ process.on("uncaughtExceptionMonitor", (error) => {
         }
         return { receiver, result };
       };
-      if (scenario !== "transport") {
+      if (scenario !== "transport" && scenario !== "arbitrary") {
         const installOwner = ".github/actions/setup-node-env/install-dependencies.sh";
         const ownerPath = path.join(repoRoot, installOwner);
         // Baseline uses the same action-owned recipe before its pure extraction.
@@ -4426,12 +4694,16 @@ process.on("uncaughtExceptionMonitor", (error) => {
         const { environment } = pnpmLockfileDocuments(
           readFileSync(path.join(repoRoot, "pnpm-lock.yaml"), "utf8"),
         );
+        const dependencyRoot =
+          preparedDependencyRoot ?? dependencyTempDirs.make("openclaw-capsule-dependencies-");
+        const hydratedSource = path.join(dependencyRoot, "a");
+        const selectedSource = path.join(dependencyRoot, "b");
         const dependencyEnv = {
           ...env,
           CI: "true",
           PATH: [path.dirname(process.execPath), env.PATH].join(path.delimiter),
-          PNPM_CONFIG_STORE_DIR: path.join(root, "dependency-store"),
-          PNPM_CONFIG_CACHE_DIR: path.join(root, "dependency-cache"),
+          PNPM_CONFIG_STORE_DIR: path.join(dependencyRoot, "store"),
+          PNPM_CONFIG_CACHE_DIR: path.join(dependencyRoot, "cache"),
         };
         const runPnpm = (directory: string, args: string[]) => {
           const runner = resolvePnpmRunner({ cwd: directory, env: dependencyEnv });
@@ -4487,10 +4759,20 @@ process.on("uncaughtExceptionMonitor", (error) => {
               "\nnode_modules/\n.capsule-proof/\n",
           );
         };
-        writeDependencySource(producer, "b");
-        const version = runPnpm(producer, ["--version"]);
-        expect("pnpm@" + version.stdout.trim()).toBe(packageManager.split("+")[0]);
-        runPnpm(producer, ["install", "--lockfile-only"]);
+        if (!preparedDependencyRoot) {
+          writeDependencySource(hydratedSource, "a");
+          writeDependencySource(selectedSource, "b");
+          const version = runPnpm(hydratedSource, ["--version"]);
+          expect("pnpm@" + version.stdout.trim()).toBe(packageManager.split("+")[0]);
+          runPnpm(hydratedSource, ["install", "--lockfile-only"]);
+          runPnpm(hydratedSource, ["install", "--frozen-lockfile"]);
+          runPnpm(selectedSource, ["install", "--lockfile-only"]);
+          preparedDependencyRoot = dependencyRoot;
+        }
+        // Copy relative package links verbatim; each receiver owns its modules while
+        // retaining the prepared store identity required by pnpm's install metadata.
+        const copyOptions = { recursive: true, verbatimSymlinks: true };
+        cpSync(selectedSource, producer, copyOptions);
         mkdirSync(path.dirname(path.join(producer, installOwner)), { recursive: true });
         writeFileSync(path.join(producer, installOwner), installer);
         writeFileSync(
@@ -4561,14 +4843,12 @@ process.on("uncaughtExceptionMonitor", (error) => {
           true,
           [],
           (receiver) => {
-            writeDependencySource(receiver, "a");
-            runPnpm(receiver, ["install", "--lockfile-only"]);
-            runPnpm(receiver, ["install", "--frozen-lockfile"]);
+            cpSync(hydratedSource, receiver, copyOptions);
             const probe = runCommand(
               process.execPath,
               [
                 "-e",
-                'process.stdout.write(require("node:module").createRequire(process.cwd() + "/packages/consumer/package.json")("capsule-proof-dep"))',
+                'const dependency = require("node:module").createRequire(process.cwd() + "/packages/consumer/package.json"); process.stdout.write(JSON.stringify({ graph: dependency("capsule-proof-dep"), file: dependency.resolve("capsule-proof-dep") }))',
               ],
               {
                 cwd: receiver,
@@ -4578,7 +4858,9 @@ process.on("uncaughtExceptionMonitor", (error) => {
             );
             expect(probe.error, failureDetail(probe)).toBeUndefined();
             expect(probe.status, failureDetail(probe)).toBe(0);
-            preparedGraph = probe.stdout;
+            const prepared: { graph: string; file: string } = JSON.parse(probe.stdout);
+            preparedGraph = prepared.graph;
+            expect(prepared.file.startsWith(receiver + path.sep)).toBe(true);
           },
         );
         expect(preparedGraph).toBe("graph-a");
@@ -4653,6 +4935,45 @@ process.on("uncaughtExceptionMonitor", (error) => {
                 : "source comparison ref mismatch: refs/remotes/origin/main",
             );
           }
+        }
+        return;
+      }
+      if (scenario === "arbitrary") {
+        // A raw AWS sync can have no Git seed. The actual capsule receiver must
+        // establish source identity before an ordinary command can observe it.
+        for (const [name, args] of [
+          ["node", ["node", sourceCommand, special]],
+          ["bash", ["bash", "-c", 'exec node "$1" "$2"', "fixture", sourceCommand, special]],
+        ] as const) {
+          const sent = runSender("direct", ["run", "--provider", provider, "--", ...args]);
+          const argvPath = path.join(root, `${name}-argv.json`);
+          const accepted = receive(
+            name,
+            sent.remoteCommand,
+            sent.bundle,
+            origin,
+            { TRANSPORT_FIXTURE_ARGV: argvPath },
+            false,
+          );
+          expect(accepted.result.status, failureDetail(accepted.result)).toBe(0);
+          expect(accepted.result.stdout).toBe("transport fixture reached\n");
+          expect(JSON.parse(readFileSync(argvPath, "utf8"))).toEqual([special]);
+          expect(existsSync(path.join(accepted.receiver, "injected"))).toBe(false);
+          expect(git(accepted.receiver, ["rev-parse", "HEAD^{tree}"])).toBe(
+            git(producer, ["rev-parse", "HEAD^{tree}"]),
+          );
+          expect(git(accepted.receiver, ["status", "--porcelain=v1"])).toBe("");
+          const rejected = receive(
+            `${name}-missing`,
+            sent.remoteCommand,
+            undefined,
+            origin,
+            {},
+            false,
+          );
+          expect(rejected.result.status, failureDetail(rejected.result)).toBe(2);
+          expect(rejected.result.stdout).toBe("");
+          expect(existsSync(path.join(rejected.receiver, ".git"))).toBe(false);
         }
         return;
       }
@@ -4782,6 +5103,8 @@ process.on("uncaughtExceptionMonitor", (error) => {
 
       writeFileSync(path.join(producer, "owner.txt"), "committed\n");
       git(producer, ["add", "owner.txt"]);
+      writeFileSync(path.join(producer, "committed-only.txt"), "committed source\n");
+      git(producer, ["add", "committed-only.txt"]);
       if (replacedHistory) {
         rmSync(path.join(producer, "removed-kind.ignored"));
         mkdirSync(path.join(producer, "removed-kind.ignored"));
@@ -4886,6 +5209,23 @@ process.on("uncaughtExceptionMonitor", (error) => {
         ? readFileSync(path.join(producer, ".git", "shallow"))
         : undefined;
       const candidate = runSender();
+      if (provider === "blacksmith-testbox") {
+        expect(candidate.changed).toEqual(
+          expect.arrayContaining([
+            "committed-only.txt",
+            "owner.txt",
+            "deleted.txt",
+            "rename-before.txt",
+            "renamed.txt",
+            "staged.ignored",
+            "untracked.txt",
+          ]),
+        );
+        expect(candidate.changed).not.toContain("unchanged.bin");
+        for (const file of privatePaths) {
+          expect(candidate.changed).not.toContain(file);
+        }
+      }
       // A change must not resend the unchanged, incompressible base blob.
       expect(candidate.bundle.length).toBeLessThan(unchanged.length);
       expect(git(producer, ["rev-parse", "HEAD"])).toBe(headBefore);
@@ -5728,13 +6068,12 @@ cp.spawnSync = (command, args, options) => {
       sparseChangedGateOptions,
     );
     const output = parseFakeCrabboxOutput(result);
-    const renderedCommand = shell
-      ? normalizeShellLineEndings(output.args.at(-1) ?? "")
-      : output.args.join("\0");
+    const renderedCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
 
     expect(result.status).toBe(0);
     expect(renderedCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
-    expect(renderedCommand).not.toContain("node -e");
+    expect(renderedCommand).toContain(".openclaw-crabbox-changed-gate.bundle");
+    expect(renderedCommand.endsWith(`; ${shell ? command.at(-1) : command.join(" ")}`)).toBe(true);
   });
 
   it.each([
@@ -5753,7 +6092,9 @@ cp.spawnSync = (command, args, options) => {
   ])("$name", ({ shellScript }) => {
     const { remoteCommand } = runSparseShell(shellScript);
 
-    expect(remoteCommand).not.toContain("node -e");
+    expect(remoteCommand).toContain(".openclaw-crabbox-changed-gate.bundle");
+    expect(remoteCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
+    expect(remoteCommand.endsWith(`; ${shellScript}`)).toBe(true);
   });
 
   it("detects JavaScript commands after hyphenated heredoc delimiters", () => {
@@ -5824,6 +6165,20 @@ cp.spawnSync = (command, args, options) => {
     });
   });
 
+  it("keeps overlapping sparse-sync fixtures from deleting each other's files", () => {
+    const name = ".crabbox-test-isolation-sync-root";
+    withSparseSyncRoot(name, {}, ({ result, syncRoot }) => {
+      expectSuccessfulWrapperRun(result);
+      const marker = path.join(syncRoot, "active-fixture.txt");
+      writeFileSync(marker, "owned by the outer fixture");
+      withSparseSyncRoot(name, {}, ({ result: innerResult }) => {
+        expectSuccessfulWrapperRun(innerResult);
+        expect(readFileSync(marker, "utf8")).toBe("owned by the outer fixture");
+      });
+      expect(readFileSync(marker, "utf8")).toBe("owned by the outer fixture");
+    });
+  });
+
   it("fails sparse-sync full checkout early when the sync root is too low on disk", () => {
     withSparseSyncRoot(
       ".crabbox-test-low-disk-sync-root",
@@ -5873,6 +6228,49 @@ cp.spawnSync = (command, args, options) => {
     "terminates Crabbox descendants before parent signal exit through %s",
     async (entrypoint) => {
       await runWrapperCleanupProof({ kind: "signal", entrypoint, repeated: false });
+    },
+    25_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reports the readiness deadline and last phase without inventing a writer failure",
+    async () => {
+      let failure: Error | undefined;
+      try {
+        await runWrapperCleanupProof({ kind: "readiness" });
+      } catch (error) {
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+        failure = error;
+      }
+      if (!failure) {
+        throw new Error("held wrapper unexpectedly became ready");
+      }
+      const retained = /retained fixture (.+) and output /u.exec(failure.message)?.[1];
+      expect(retained).toBeDefined();
+      if (!retained) {
+        throw failure;
+      }
+      try {
+        expect(failure.message).toContain(
+          "wrapper readiness not observed within 8 s; last observed phase loading wrapper",
+        );
+        expect(failure.message).not.toContain("fixture teardown could not be verified");
+        expect(failure.message).not.toContain("fixture writers did not settle");
+        expect(failure.message).not.toContain("fixture ownership receipts are incomplete");
+        expect(existsSync(path.join(retained, "run.spawned"))).toBe(false);
+      } finally {
+        // This injected preload cannot spawn children; join both recorded owners before disposal.
+        const phases: WrapperReadinessPhase[] = JSON.parse(
+          readFileSync(path.join(retained, "readiness-phases.json"), "utf8"),
+        );
+        expect(phases.at(-1)?.phase).toBe("loading wrapper");
+        expect(phases.filter(({ pid }) => pid).every(({ pid }) => !isProcessAlive(pid!))).toBe(
+          true,
+        );
+        rmSync(retained, { recursive: true, force: true });
+      }
     },
     25_000,
   );

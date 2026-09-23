@@ -33,7 +33,7 @@ describe("worker placement restart recovery", () => {
     async (owner) => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
       const original = createHarness(support.testState.stateDb, placements);
-      const ready = support.seedReady(original.ready.environmentId);
+      const ready = await support.seedReady(original.ready.environmentId);
       const environments = support.createService(support.createProvider());
       const attached = await environments.attachSession({
         environmentId: ready.environmentId,
@@ -232,12 +232,11 @@ describe("worker placement restart recovery", () => {
       const environments = support.createService(
         support.createProvider({ inspect: async () => ({ status: "unknown" }), destroy }),
       );
-      const ready = await environments.create(
-        "development",
-        "provider-loss-cleanup",
-        undefined,
-        "remote-exec",
-      );
+      const ready = await environments.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "provider-loss-cleanup",
+        executionMode: "remote-exec",
+      });
       const attached = await environments.attachSession({
         environmentId: ready.environmentId,
         ownerEpoch: ready.ownerEpoch,
@@ -473,10 +472,7 @@ describe("worker placement restart recovery", () => {
         ownerEpoch: 91,
         attachedSessionIds: ["session-unrelated"],
       };
-      vi.mocked(harness.environments.create).mockResolvedValue(unrelatedEnvironment);
-      vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue(
-        unrelatedEnvironment,
-      );
+      vi.mocked(harness.environments.createWithRequest).mockResolvedValue(unrelatedEnvironment);
       vi.mocked(harness.environments.get).mockImplementation((environmentId) => {
         if (environmentId === unrelatedEnvironment.environmentId) {
           return unrelatedEnvironment;
@@ -548,7 +544,7 @@ describe("worker placement restart recovery", () => {
       workerBundleHash: harness.ready.bootstrapReceipt?.bundleHash,
     });
     expect(harness.placements.current()!.generation).toBeGreaterThan(provisioning.generation);
-    expect(harness.environments.create).not.toHaveBeenCalled();
+    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     expect(harness.environments.attachSession).toHaveBeenCalledOnce();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(harness.log).toContain("recovery-barrier");
@@ -967,8 +963,8 @@ describe("worker placement restart recovery", () => {
       });
       const recovery = createRecoveryService(placements, workerService);
       const environmentId = "worker-stale-recovery";
-      const bootstrapping = support.seedBootstrapping(environmentId);
-      support.testState.store.transition({
+      const bootstrapping = await support.seedBootstrapping(environmentId);
+      await support.testState.store.transition({
         environmentId,
         from: bootstrapping.state,
         to: "ready",

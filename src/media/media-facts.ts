@@ -313,25 +313,18 @@ export function resolveMediaFactKind(fact: MediaFactInput): MediaKind | undefine
   if (!source) {
     return undefined;
   }
-  const pathValue =
-    [fact.path, fact.url, fact.fileName].find((candidate) => {
-      const extension = getFileExtension(candidate);
-      return (
-        mimeTypeFromFilePath(candidate) !== undefined ||
-        extension === ".tif" ||
-        extension === ".tiff"
-      );
-    }) ?? source;
-  const inferredMime = mimeTypeFromFilePath(pathValue);
-  if (inferredMime === "image/svg+xml") {
-    return undefined;
+  for (const candidate of [fact.path, fact.url, fact.fileName, source]) {
+    const inferredMime = mimeTypeFromFilePath(candidate);
+    if (inferredMime !== undefined) {
+      // A recognized source, including SVG, takes precedence over later filename hints.
+      return inferredMime === "image/svg+xml" ? undefined : kindFromMime(inferredMime);
+    }
+    const extension = getFileExtension(candidate);
+    if (extension === ".tif" || extension === ".tiff") {
+      return "image";
+    }
   }
-  const inferredKind = kindFromMime(inferredMime);
-  if (inferredKind) {
-    return inferredKind;
-  }
-  const extension = getFileExtension(pathValue);
-  return extension === ".tif" || extension === ".tiff" ? "image" : undefined;
+  return undefined;
 }
 
 /** Returns whether a fact can produce native image input. */

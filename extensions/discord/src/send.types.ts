@@ -1,4 +1,5 @@
 // Discord type declarations define plugin contracts.
+import type { APIAllowedMentions } from "discord-api-types/v10";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "openclaw/plugin-sdk/media-runtime";
@@ -99,6 +100,8 @@ export type DiscordMessageQuery = {
 export type DiscordMessageEdit = {
   content?: string;
   flags?: number;
+  /** Maps to Discord's allowed_mentions; omission sends no field and preserves existing edit behavior. */
+  allowedMentions?: APIAllowedMentions;
 };
 
 export type DiscordThreadCreate = {

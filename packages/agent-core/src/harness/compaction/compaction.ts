@@ -8,7 +8,6 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import type { AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import { isRuntimeContextCarrier } from "../messages.js";
-import type { HarnessMessage } from "../messages.js";
 import { buildSessionContext, projectSessionEntryMessage } from "../session/session.js";
 import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
 import { CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.js";
@@ -352,12 +351,10 @@ export function estimateTokens(message: AgentMessage): number {
     return 0;
   }
   let chars = 0;
-  const harnessMessage = message as HarnessMessage;
 
-  switch (harnessMessage.role) {
+  switch (message.role) {
     case "assistant": {
-      const assistant = harnessMessage;
-      for (const block of assistant.content) {
+      for (const block of message.content) {
         if (block.type === "text") {
           chars += estimateStringChars(block.text);
         } else if (block.type === "thinking") {
@@ -371,24 +368,23 @@ export function estimateTokens(message: AgentMessage): number {
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "user": {
-      chars = countContentChars(harnessMessage.content);
+      chars = countContentChars(message.content);
       // serializeConversation projects this exact persisted-sender suffix.
-      chars += estimateStringChars(formatPersistedSenderSuffix(harnessMessage));
+      chars += estimateStringChars(formatPersistedSenderSuffix(message));
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "custom":
     case "toolResult": {
-      chars = countContentChars(harnessMessage.content);
+      chars = countContentChars(message.content);
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "bashExecution": {
-      chars =
-        estimateStringChars(harnessMessage.command) + estimateStringChars(harnessMessage.output);
+      chars = estimateStringChars(message.command) + estimateStringChars(message.output);
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "branchSummary":
     case "compactionSummary": {
-      chars = estimateStringChars(harnessMessage.summary);
+      chars = estimateStringChars(message.summary);
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
   }

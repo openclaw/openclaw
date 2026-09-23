@@ -4,6 +4,7 @@ import type {
   AgentsListResult,
   ModelAuthStatusResult,
   ModelCatalogEntry,
+  ModelCatalogResult,
   SessionsListResult,
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -78,9 +79,12 @@ export type ChatPageHost = ChatHost &
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
     chatModelPickerOpenSessionKey?: string | null;
     chatModelCatalog: ModelCatalogEntry[];
+    chatModelCatalogInitialized?: boolean;
     chatModelCatalogError: string | null;
     chatModelCatalogRefreshFailed?: boolean;
     chatModelCatalogPendingProviders?: readonly string[];
+    chatModelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
+    chatModelCatalogRetired?: boolean;
     chatAccountSelection?: ChatAccountSelection | null;
     modelAuthStatusRequestVersion: number;
     modelAuthStatusResult: ModelAuthStatusResult | null;
@@ -95,7 +99,7 @@ export type ChatPageHost = ChatHost &
     agentsSelectedId: string | null;
     pendingAbort: PendingChatAbort | null;
     pendingSessionMessageReloadSessionKey: string | null;
-    chatSubmitGuards: Map<string, Promise<void>>;
+    chatSubmitGuards: Set<string>;
     chatSendTimingsByRun: Map<string, ChatSendTimingEntry>;
     chatStreamSegments: ChatStreamSegment[];
     toolStreamById: Map<string, ToolStreamEntry>;
@@ -120,8 +124,11 @@ export type ChatPageHost = ChatHost &
     chatFollowLocked: boolean;
     chatReadingHistory: boolean;
     chatIsProgrammaticScroll?: () => boolean;
+    chatIsManualScroll?: () => boolean;
+    chatIsMaintenanceScroll?: () => boolean;
     chatScrollElement?: () => HTMLElement | null;
     chatScrollToEnd?: (options: ChatScrollToEndOptions) => boolean;
+    chatCancelScroll?: () => void;
     sidebarLayout: SidebarLayout;
     sidebarContent: SidebarSelection | null;
     sidebarFocusPanelId: string;

@@ -292,7 +292,7 @@ export type NativeHookRelaySharedState = {
 };
 
 /** Private bundled-runtime callbacks for retained direct-child hook policy. */
-export type NativeHookRelayRetention = Readonly<{
+type NativeHookRelayRetention = Readonly<{
   readClaim: (rawPayload: unknown) => string | undefined;
   shouldRetainAfterForegroundClose: () => boolean;
   allowPreToolUse: (claim: string) => boolean;
@@ -303,12 +303,32 @@ export type NativeHookRelayRetention = Readonly<{
   onDispose: () => void;
 }>;
 
+/** Records bundled native execution custody without granting action permission. */
+export type NativeHookRelayExecutionAdmission = Readonly<{
+  toolNames: readonly string[];
+  admit: (
+    invocation: NativeHookRelayInvocation,
+    assertCurrent: () => void,
+    preparation: Readonly<{ signal?: AbortSignal; assertCurrent: () => void }>,
+  ) => void | Promise<void>;
+}>;
+
+export type NativeHookRelayOwnerOptions = {
+  retention?: NativeHookRelayRetention;
+  approvalHost?: NativeHookRelayRegistration["approvalHost"];
+  executionAdmission?: NativeHookRelayExecutionAdmission;
+};
+
+export type OwnedNativeHookRelayParams = RegisterNativeHookRelayParams &
+  NativeHookRelayOwnerOptions;
+
 export type RelayLifetime = {
   foregroundOpen: boolean;
   foregroundToken: symbol;
   policyReady: Promise<void>;
   retained?: ReturnType<typeof retainBeforeToolCallForNativeHookRelay>;
   retention?: NativeHookRelayRetention;
+  executionAdmission?: NativeHookRelayExecutionAdmission;
   removeAbortListener?: () => void;
   expiryTimer?: ReturnType<typeof setTimeout>;
 };

@@ -897,10 +897,37 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it.each([
-    ["missing output directory", ["--out-dir", "--watch"]],
-    ["empty assigned output directory", ["--out-dir="]],
-    ["repeated output directories", ["--out-dir", "first", "-d=second"]],
-  ])("rejects %s before cleanup", (_label, args) => {
+    [
+      "missing output directory",
+      ["--out-dir", "--watch"],
+      "tsdown build requires one concrete --out-dir/-d value",
+    ],
+    [
+      "empty assigned output directory",
+      ["--out-dir="],
+      "tsdown build requires one concrete --out-dir/-d value",
+    ],
+    [
+      "missing short output directory",
+      ["-d"],
+      "tsdown build requires one concrete --out-dir/-d value",
+    ],
+    [
+      "empty assigned short output directory",
+      ["-d="],
+      "tsdown build requires one concrete --out-dir/-d value",
+    ],
+    [
+      "repeated output directories",
+      ["--out-dir", "first", "-d=second"],
+      "tsdown build accepts only one --out-dir/-d value",
+    ],
+    [
+      "malformed output directory after repeated values",
+      ["--out-dir", "first", "-d=second", "--out-dir"],
+      "tsdown build requires one concrete --out-dir/-d value",
+    ],
+  ])("rejects %s before cleanup", (_label, args, message) => {
     const cleanup = vi.fn();
 
     expect(() =>
@@ -912,7 +939,7 @@ describe("resolveTsdownBuildInvocation", () => {
         },
         { cleanup },
       ),
-    ).toThrow(/tsdown build .* --out-dir\/-d value/u);
+    ).toThrow(new Error(message));
     expect(cleanup).not.toHaveBeenCalled();
   });
 

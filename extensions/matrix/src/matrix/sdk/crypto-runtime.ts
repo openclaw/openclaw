@@ -1,4 +1,3 @@
-// Matrix plugin module implements crypto runtime behavior.
 import "fake-indexeddb/auto";
 import { installFakeIndexedDbTransactionPruner } from "./fake-indexeddb-prune.js";
 

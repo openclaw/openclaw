@@ -99,7 +99,7 @@ function resolveCodexAppServerConnectionHome(
   start: CodexAppServerStartOptions,
   agentDir?: string,
 ): string | null {
-  const configured = start.env?.CODEX_HOME?.trim();
+  const configured = start.codexHome ?? start.env?.CODEX_HOME?.trim();
   if (configured) {
     return configured;
   }
@@ -133,7 +133,7 @@ function resolveCodexPluginAppCacheCodexHome(
   appServer: Pick<CodexAppServerRuntimeOptions, "start">,
   agentDir?: string,
 ): string | undefined {
-  const configuredCodexHome = appServer.start.env?.CODEX_HOME?.trim();
+  const configuredCodexHome = appServer.start.codexHome ?? appServer.start.env?.CODEX_HOME?.trim();
   if (configuredCodexHome) {
     return configuredCodexHome;
   }

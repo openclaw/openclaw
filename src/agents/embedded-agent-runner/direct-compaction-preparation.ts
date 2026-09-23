@@ -141,6 +141,7 @@ export async function prepareDirectCompactionAttempt(
   };
   const preparedModelRuntime = params.preparedModelRuntime;
   const { resolution: modelResolution } = await resolveTieredModel({
+    abortSignal: params.abortSignal,
     provider: runtimeProvider,
     modelId,
     requestedRouteResolution: params.requestedRouteResolution,
@@ -201,6 +202,7 @@ export async function prepareDirectCompactionAttempt(
     Parameters<typeof materializePreparedRuntimeModel<ProviderRuntimeModel>>[0]["resolveModel"]
   >[0]) =>
     resolveModelAsync(runtimeProvider, modelId, agentDir, config, {
+      abortSignal: params.abortSignal,
       ...modelResolutionOptions,
       modelIdSource: params.requestedRouteResolution === "resolved" ? "selected" : "input",
       skipAgentDiscovery: true,
@@ -250,6 +252,7 @@ export async function prepareDirectCompactionAttempt(
   let resolvedAuthAttempt: Awaited<ReturnType<typeof resolveRuntimeAuthAttempt>>;
   try {
     resolvedAuthAttempt = await resolveRuntimeAuthAttempt();
+    params.abortSignal?.throwIfAborted();
   } catch (err) {
     return { ok: false as const, result: fail(formatErrorMessage(err), err) };
   }
@@ -263,29 +266,31 @@ export async function prepareDirectCompactionAttempt(
         throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
       }
     } else {
-      const preparedAuth = protectPreparedProviderRuntimeAuth({
+      const runtimeAuth = await prepareProviderRuntimeAuth({
         provider: runtimeModel.provider,
-        preparedAuth: await prepareProviderRuntimeAuth({
-          provider: runtimeModel.provider,
+        config: params.config,
+        workspaceDir: resolvedWorkspace,
+        env: process.env,
+        context: {
           config: params.config,
+          agentDir,
           workspaceDir: resolvedWorkspace,
           env: process.env,
-          context: {
-            config: params.config,
-            agentDir,
-            workspaceDir: resolvedWorkspace,
-            env: process.env,
-            provider: runtimeModel.provider,
-            modelId,
-            model: runtimeModel,
-            apiKey: unwrapSecretSentinelsForProviderEgress(
-              apiKeyInfo.apiKey,
-              "provider runtime auth exchange",
-            ),
-            authMode: apiKeyInfo.mode,
-            profileId: apiKeyInfo.profileId,
-          },
-        }),
+          provider: runtimeModel.provider,
+          modelId,
+          model: runtimeModel,
+          apiKey: unwrapSecretSentinelsForProviderEgress(
+            apiKeyInfo.apiKey,
+            "provider runtime auth exchange",
+          ),
+          authMode: apiKeyInfo.mode,
+          profileId: apiKeyInfo.profileId,
+        },
+      });
+      params.abortSignal?.throwIfAborted();
+      const preparedAuth = protectPreparedProviderRuntimeAuth({
+        provider: runtimeModel.provider,
+        preparedAuth: runtimeAuth,
       });
       runtimeModel = applyPreparedRuntimeAuthToModel(runtimeModel, preparedAuth);
       const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;

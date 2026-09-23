@@ -32,6 +32,7 @@ type StatusGatewayConnection = {
 type StatusGatewayProbe = {
   connectLatencyMs?: number | null;
   error?: string | null;
+  startupPhase?: string;
 } | null;
 
 type StatusGatewayProbeAuth = {
@@ -56,6 +57,7 @@ type StatusManagedService = {
   managedByOpenClaw?: boolean;
   loadedText: string;
   runtimeShort?: string | null;
+  installationDrift?: string;
   runtime?: {
     status?: string | null;
     pid?: number | null;
@@ -161,7 +163,8 @@ function formatStatusServiceValue(params: StatusManagedService): string {
   const runtimeText = inspectionFailed
     ? redactSensitiveText(runtimeSuffix, { mode: "tools" })
     : runtimeSuffix;
-  return `${params.label} ${installedPrefix}${loadedText}${runtimeText}`;
+  const installationWarning = params.installationDrift ? ` · ${params.installationDrift}` : "";
+  return `${params.label} ${installedPrefix}${loadedText}${runtimeText}${installationWarning}`;
 }
 
 /** Returns the dashboard URL when the Control UI is enabled for the current gateway binding. */
@@ -370,11 +373,13 @@ function buildGatewayStatusSummaryParts(params: {
     : targetText;
   const reachText = params.remoteUrlMissing
     ? "misconfigured (remote.url missing)"
-    : params.gatewayReachable
-      ? `reachable ${formatDurationPrecise(params.gatewayProbe?.connectLatencyMs ?? 0)}`
-      : params.gatewayProbe?.error
-        ? `unreachable (${params.gatewayProbe.error})`
-        : "unreachable";
+    : params.gatewayProbe?.startupPhase
+      ? `still starting (phase ${params.gatewayProbe.startupPhase})`
+      : params.gatewayReachable
+        ? `reachable ${formatDurationPrecise(params.gatewayProbe?.connectLatencyMs ?? 0)}`
+        : params.gatewayProbe?.error
+          ? `unreachable (${params.gatewayProbe.error})`
+          : "unreachable";
   const authText = params.gatewayReachable
     ? `auth ${formatGatewayAuthUsed(params.gatewayProbeAuth)}`
     : "";
@@ -445,6 +450,7 @@ export function buildGatewayStatusJsonPayload(params: {
         connectLatencyMs?: number | null;
         error?: string | null;
         health?: unknown;
+        startupPhase?: string;
       }
     | null
     | undefined;
@@ -457,6 +463,9 @@ export function buildGatewayStatusJsonPayload(params: {
     urlSource: params.gatewayConnection.urlSource,
     misconfigured: params.remoteUrlMissing,
     reachable: params.gatewayReachable,
+    ...(params.gatewayProbe?.startupPhase
+      ? { readiness: "still-starting", startupPhase: params.gatewayProbe.startupPhase }
+      : {}),
     connectLatencyMs: params.gatewayProbe?.connectLatencyMs ?? null,
     self: params.gatewaySelf ?? null,
     error: params.gatewayProbe?.error ?? null,

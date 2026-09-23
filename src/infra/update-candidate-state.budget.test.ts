@@ -2,10 +2,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as realSetTimeout } from "node:timers";
 import { afterEach, expect, it, vi } from "vitest";
+import { waitForDead } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as commands from "../process/exec.js";
+import * as diskSpace from "./disk-space.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
+import { measureUpdateStateFiles } from "./update-candidate-io.js";
 import { observeUpdateCandidateIoProgress } from "./update-candidate-io.test-support.js";
+import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 
@@ -281,3 +287,187 @@ it.each([
     }
   },
 );
+
+it.each(
+  (["probe", "worker"] as const).flatMap((source) =>
+    [false, true].map((cancelled) => ({ source, cancelled })),
+  ),
+)(
+  "retains rehearsal scratch when $source settlement is uncertain (cancelled=$cancelled)",
+  async ({ source, cancelled }) => {
+    const root = await fs.realpath(tempDirs.make("rehearsal-unsettled-"));
+    const stateDir = path.join(root, "source");
+    const controller = new AbortController();
+    const original = commands.runUtf8CommandWithTimeout;
+    vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (argv, options) => {
+      if ((source === "probe") !== argv.includes("--eval")) {
+        return original(argv, options);
+      }
+      if (cancelled) {
+        controller.abort(new Error("caller cancellation"));
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: null,
+        signal: null,
+        killed: true,
+        termination: "signal",
+        cleanup: "uncertain",
+      };
+    });
+    await expect(
+      prepareUpdateCandidateStateSnapshot({
+        config: {},
+        stateDir,
+        candidateRoot: root,
+        env: { TMPDIR: root },
+        workerEnv: () => ({ ...process.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow(/cleanup.*confirmed|settlement.*uncertain/);
+    const retained = (await fs.readdir(root)).filter((name) =>
+      name.startsWith("openclaw-update-canary-"),
+    );
+    expect(retained).toHaveLength(1);
+    expect((await fs.stat(path.join(root, retained[0]!))).isDirectory()).toBe(true);
+  },
+);
+
+// Insert fixture code behind the real executable, preserving argv-based Windows
+// launch and the actual process/output/cleanup owners. Progress probes run unchanged.
+function useRehearsalWorkerFixture(runner: string): void {
+  const run = commands.runUtf8CommandWithTimeout;
+  vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation((argv, options) =>
+    run(
+      argv.some((arg) => /[/\\]update-candidate-state\.worker\.[cm]?[jt]s$/.test(arg))
+        ? [process.execPath, runner, ...argv.slice(1)]
+        : argv,
+      options,
+    ),
+  );
+}
+
+it.each(["stdout", "stderr"] as const)(
+  "terminates a rehearsal worker exceeding its %s limit",
+  async (stream) => {
+    const root = await fs.realpath(tempDirs.make("rehearsal-output-limit-"));
+    const pidPath = path.join(root, "worker.pid");
+    const runner = path.join(root, "overflow.mjs");
+    await fs.writeFile(
+      runner,
+      `
+    import fs from "node:fs";
+    for await (const chunk of process.stdin) {}
+    process.on("SIGTERM", () => {});
+    fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+    process[${JSON.stringify(stream)}].write("x".repeat(2 * 1024 * 1024));
+    setInterval(() => {}, 1000);
+  `,
+    );
+    useRehearsalWorkerFixture(runner);
+    const controller = new AbortController();
+    let deadlineReached = false;
+    const deadline = realSetTimeout(() => {
+      deadlineReached = true;
+      controller.abort(new Error("test output deadline"));
+    }, 10_000);
+    try {
+      await expect(
+        prepareUpdateCandidateStateSnapshot({
+          config: {},
+          stateDir: path.join(root, "source"),
+          candidateRoot: root,
+          env: { TMPDIR: root },
+          workerEnv: () => ({ ...process.env }),
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow(/^Update state snapshot failed \(output-limit\):/);
+      expect(deadlineReached).toBe(false);
+      await waitForDead(Number(await fs.readFile(pidPath, "utf8")), 5_000);
+      expect(
+        (await fs.readdir(root)).filter((name) => name.startsWith("openclaw-update-canary-")),
+      ).toEqual([]);
+    } finally {
+      clearTimeout(deadline);
+      controller.abort();
+    }
+  },
+);
+
+it("refuses a grown WAL family at the post-inventory capacity gate", async () => {
+  const root = await fs.realpath(tempDirs.make("rehearsal-wal-growth-"));
+  const stateDir = path.join(root, "source");
+  const database = path.join(stateDir, "state", "openclaw.sqlite");
+  await fs.mkdir(path.dirname(database), { recursive: true });
+  const db = openNodeSqliteDatabase(database);
+  const ready = path.join(root, "inventory-ready");
+  const runner = path.join(root, "inventory-runner.mjs");
+  // Execute the real inventory child, then grow the synthetic WAL before the parent remeasures it.
+  await fs.writeFile(
+    runner,
+    `
+    import fs from "node:fs";
+    import { spawnSync } from "node:child_process";
+    let input = "";
+    for await (const chunk of process.stdin) input += chunk;
+    const request = JSON.parse(input);
+    if (request.mode !== "inventory") throw new Error("snapshot must not be launched after WAL growth");
+    const child = spawnSync(process.execPath, process.argv.slice(2), { input, encoding: "utf8" });
+    if (child.status !== 0) { process.stderr.write(child.stderr); process.exit(child.status ?? 1); }
+    fs.writeFileSync(${JSON.stringify(ready)}, "inventory-complete");
+    while (!fs.existsSync(${JSON.stringify(ready + ".grown")})) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+    process.stdout.write(child.stdout);
+  `,
+  );
+  useRehearsalWorkerFixture(runner);
+  try {
+    db.exec(
+      "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE payload(bytes BLOB);",
+    );
+    const measured = await measureUpdateStateFiles([database]);
+    const free = measured.bytes * 2 + measured.largest * 3 + 64 * 1024 * 1024 + 1024 * 1024;
+    vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue({
+      targetPath: root,
+      checkedPath: root,
+      availableBytes: free,
+      totalBytes: free,
+    });
+    const controller = new AbortController();
+    const operation = prepareUpdateCandidateStateSnapshot({
+      config: {},
+      stateDir,
+      candidateRoot: root,
+      env: { TMPDIR: root },
+      workerEnv: () => ({ ...process.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
+      signal: controller.signal,
+    });
+    const outcome = operation.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await waitForFile(ready);
+      db.exec("INSERT INTO payload VALUES (zeroblob(2097152));");
+      await fs.writeFile(ready + ".grown", "continue");
+      expect(await outcome).toMatchObject({
+        error: {
+          capacity: expect.objectContaining({ reason: "snapshot-capacity-insufficient" }),
+        },
+      });
+      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      expect(db.prepare("SELECT length(bytes) AS n FROM payload").get()).toEqual({ n: 2097152 });
+      expect(
+        (await fs.readdir(root)).filter((name) => name.startsWith("openclaw-update-canary-")),
+      ).toEqual([]);
+    } finally {
+      await fs.writeFile(ready + ".grown", "release");
+      controller.abort();
+      await outcome;
+    }
+  } finally {
+    db.close();
+  }
+});

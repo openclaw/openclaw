@@ -1,13 +1,11 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
+  usePreparedModelRuntimeHarness,
   getPreparedModelRuntimeTestApi,
-  resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
@@ -15,25 +13,17 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
-import {
   acquireAgentRunPreparedModelRuntime,
+  acquireAgentRuntimeCleanupRegistries,
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 
-const mocks = getPreparedModelRuntimeMocks();
-let state: OpenClawTestState;
+const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
+const { mocks } = fixture;
 
 describe("prepared model runtime Gateway leases", () => {
-  beforeEach(async () => {
-    state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    await resetPreparedModelRuntimeHarness(state);
-  });
-
   it("borrows a configured generation for another model but builds for an uncovered provider", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {
@@ -138,7 +128,7 @@ describe("prepared model runtime Gateway leases", () => {
     const acquire = async (modelId: string) => {
       const lease = await acquireAgentRunPreparedModelRuntime({
         agentId: "default",
-        agentDir: state.agentDir("default"),
+        agentDir: fixture.state.agentDir("default"),
         config,
         loadRuntimePlugins: true,
         runtimePluginSelections: [{ provider: "openai", modelId, runtime: "codex" }],
@@ -159,6 +149,42 @@ describe("prepared model runtime Gateway leases", () => {
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(12);
   });
 
+  it("retains switched-away execution registries for agent-scoped session cleanup", async () => {
+    mocks.configuredAgentIds = ["default"];
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() =>
+      createEmptyPluginRegistry(),
+    );
+    const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      catalogMode: "static",
+      gatewayLifecycle: true,
+    });
+    const previous = [];
+    for (const modelId of ["first", "second"]) {
+      await using lease = await acquireAgentRunPreparedModelRuntime({
+        agentId: "default",
+        agentDir: fixture.state.agentDir("default"),
+        config,
+        loadRuntimePlugins: true,
+        workspaceDir: fixture.state.workspaceDir,
+        runtimePluginSelections: [{ provider: "openai", modelId, runtime: "codex" }],
+      });
+      previous.push(lease.snapshot.pluginRegistry);
+    }
+    mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
+    await using cleanup = await acquireAgentRuntimeCleanupRegistries(
+      fixture.state.agentDir("default"),
+    );
+    for (const registry of previous) {
+      expect(cleanup.registries).toContain(registry);
+    }
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+    await using unrelated = await acquireAgentRuntimeCleanupRegistries(
+      fixture.state.agentDir("other"),
+    );
+    expect(unrelated.registries).toEqual([]);
+  });
+
   it("never evicts a configured owner acquired through the gateway run path", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
@@ -168,7 +194,7 @@ describe("prepared model runtime Gateway leases", () => {
     });
     const configuredInput = {
       agentId: "default",
-      agentDir: state.agentDir("default"),
+      agentDir: fixture.state.agentDir("default"),
       config,
       runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
       workspaceDir: "/tmp/unused-workspace",
@@ -202,7 +228,7 @@ describe("prepared model runtime Gateway leases", () => {
     for (let index = 0; index < 3; index += 1) {
       const lease = await acquireAgentRunPreparedModelRuntime({
         agentId: "default",
-        agentDir: state.agentDir("default"),
+        agentDir: fixture.state.agentDir("default"),
         config,
         loadRuntimePlugins: true,
         runtimePluginSelections: [
@@ -220,8 +246,4 @@ describe("prepared model runtime Gateway leases", () => {
 
     expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
   });
-});
-
-afterEach(async ({ task }) => {
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });

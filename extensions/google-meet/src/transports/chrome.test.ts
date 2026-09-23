@@ -502,7 +502,7 @@ describe("google meet chrome transport", () => {
           },
         },
       );
-      const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+      const now = vi.spyOn(performance, "now").mockReturnValue(1_000_000);
       try {
         const result = await readChromeMeetTranscript({
           runtime,

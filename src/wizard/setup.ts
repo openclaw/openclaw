@@ -659,7 +659,7 @@ async function runSetupWizardOnce(
     });
   }
 
-  let commitAppRecommendationResult: (() => void) | undefined;
+  let commitAppRecommendationResult: (() => Promise<void>) | undefined;
   if (flow !== "quickstart") {
     const { setupOfficialPluginInstalls } = await import("./setup.official-plugins.js");
     nextConfig = await setupOfficialPluginInstalls({
@@ -697,7 +697,7 @@ async function runSetupWizardOnce(
   });
   nextConfig = committed.nextConfig;
   onboardingTarget = resolveOnboardingSetupTarget(nextConfig);
-  commitAppRecommendationResult?.();
+  await commitAppRecommendationResult?.();
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
   const finalizeResult = await finalizeSetupWizard({

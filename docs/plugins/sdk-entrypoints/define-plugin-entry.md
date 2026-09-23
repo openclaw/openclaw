@@ -59,6 +59,21 @@ export default definePluginEntry({
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
 
+  The optional `allowPartialResults` flag is true only when a connected caller
+  explicitly opts in while receiving host progress on a list without host selection
+  or cursors. When true, a provider may return retained host snapshots or mark a
+  still-loading host `pending: true`, then publish its completed snapshot through
+  `onHost` and `waitUntil`. Pending hosts preserve existing client rows and cursors;
+  omitted hosts are removed. Clear `pending` on a completed host.
+  Each `onHost` publication must be authoritative for that host: the Gateway
+  includes the latest publication for each retained host in the aggregate response
+  even when another provider or visibility projection delays delivery. The final
+  host set is authoritative: an omitted host is withdrawn, not restored from an
+  earlier publication. Preserve the last known
+  rows while refreshing; do not publish an empty host to represent pending work.
+  When the flag is absent or false, return the complete compatibility snapshot.
+  Targeted host lookups and pagination retain that complete-response contract.
+
   If a host can finish after `list` returns a fail-soft snapshot, register its
   bounded completion with the optional `waitUntil(completion: Promise<void>)`
   hook before `list` settles. Include host mapping and the `onHost` call in that
@@ -77,7 +92,13 @@ export default definePluginEntry({
   grant new authority, or permit starting work after the owner retires. Providers
   remain responsible for bounded work that settles after cancellation.
 
-  Keep `onHost`, `waitUntil`, and `signal` separate from validated catalog query
+  The Gateway admits at most 16 foreground catalog lists or fill steps at once,
+  with one active step and up to 32 queued steps per provider ID. Queued
+  work keeps FIFO order within each provider; the oldest eligible step starts when
+  capacity becomes available. A slow provider cannot occupy every slot. Lists for
+  the same provider wait their turn, including calls from different clients.
+
+  Keep `allowPartialResults`, `onHost`, `waitUntil`, and `signal` separate from validated catalog query
   objects and node command payloads. The request-owned `sessionEntries` snapshot
   and `listNodes` hook must be released when `list` settles, or when the optional
   list operation below closes. Prepare the facts needed by late host mapping

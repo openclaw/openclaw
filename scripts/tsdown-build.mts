@@ -449,24 +449,7 @@ function readForwardedOptions(args: string[], names: string[]) {
 const readForwardedOption = (args: string[], names: string[]) =>
   readForwardedOptions(args, names)[0];
 function readForwardedScalarOption(args: string[], names: string[], label: string) {
-  const values: string[] = [];
-  for (const [index, arg] of args.entries()) {
-    for (const name of names) {
-      if (arg === name) {
-        const value = args[index + 1];
-        if (!value || value.startsWith("-")) {
-          throw new Error(`tsdown build requires one concrete ${label} value`);
-        }
-        values.push(value);
-      } else if (arg.startsWith(`${name}=`)) {
-        const value = arg.slice(name.length + 1);
-        if (!value) {
-          throw new Error(`tsdown build requires one concrete ${label} value`);
-        }
-        values.push(value);
-      }
-    }
-  }
+  const values = readForwardedOptions(args, names);
   if (values.length > 1) {
     throw new Error(`tsdown build accepts only one ${label} value`);
   }

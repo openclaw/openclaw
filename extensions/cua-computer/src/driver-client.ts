@@ -10,8 +10,11 @@ type CuaSessionState = import("@trycua/cua-driver").SessionStateOutput;
 type CuaDriverSdk = Pick<
   typeof import("@trycua/cua-driver"),
   | "ActionTarget"
+  | "ClickPosition"
   | "CuaDriver"
+  | "DriverError"
   | "EscalationReason"
+  | "InputDeliveryMode"
   | "ScrollBy"
   | "SessionPermissionMode"
   | "createTrustedSession"
@@ -188,10 +191,36 @@ class DirectCuaDriverSession {
   async click(
     input: { x: number; y: number; button: ClickButton; count: number },
     signal?: AbortSignal,
-  ) {
-    return await this.invoke(signal, () =>
-      this.session.click({ ...input, target: this.desktopTarget }, asyncOptions(signal)),
-    );
+  ): Promise<CuaToolResult> {
+    return await this.invoke(signal, async () => {
+      // Typed clicks return ActionResult and throw tool refusals; other SDK
+      // actions still use the shared ToolResult envelope.
+      try {
+        const action = await this.session.click(
+          {
+            position: this.sdk.ClickPosition.Coordinates.new({ x: input.x, y: input.y }),
+            deliveryMode: this.sdk.InputDeliveryMode.Foreground,
+            button: input.button,
+            count: input.count,
+            target: this.desktopTarget,
+          },
+          asyncOptions(signal),
+        );
+        return { text: "", images: [], isError: false, degraded: false, rawJson: "{}", action };
+      } catch (error) {
+        if (!this.sdk.DriverError.Tool.instanceOf(error)) {
+          throw error;
+        }
+        return {
+          text: error.inner.message,
+          images: [],
+          isError: true,
+          degraded: false,
+          rawJson: "{}",
+          errorCode: error.inner.errorCode,
+        };
+      }
+    });
   }
   async drag(
     input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },

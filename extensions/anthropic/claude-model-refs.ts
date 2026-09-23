@@ -12,7 +12,7 @@ type ClaudeCliAnthropicModelRefs = {
   rewriteRef?: string;
 };
 
-function splitTrailingModelAuthProfile(raw: string): { model: string; profile?: string } {
+export function splitTrailingModelAuthProfile(raw: string): { model: string; profile?: string } {
   const trimmed = raw.trim();
   if (!trimmed) {
     return { model: "" };
@@ -133,7 +133,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     ]) ||
     /^claude-opus-4-20\d{6}/.test(normalized)
   ) {
-    return "claude-opus-5";
+    return "claude-opus-5-5";
   }
   if (
     normalized === "claude-sonnet-4" ||
@@ -150,7 +150,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     return "claude-sonnet-4-6";
   }
   if (normalized.startsWith("claude-3") && normalized.includes("opus")) {
-    return "claude-opus-5";
+    return "claude-opus-5-5";
   }
   if (
     normalized.startsWith("claude-3") &&
@@ -159,7 +159,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     return "claude-sonnet-4-6";
   }
   if (["opus-4.5", "opus-4.1", "opus-4", "opus-3"].includes(normalized)) {
-    return "claude-opus-5";
+    return "claude-opus-5-5";
   }
   if (
     [

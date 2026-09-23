@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements outbound mentions behavior.
 import type { AnyMessageContent } from "baileys";
 
 export type WhatsAppOutboundMentionParticipant =

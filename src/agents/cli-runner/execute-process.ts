@@ -12,10 +12,11 @@ import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { appendCapturedOutput, createCapturedOutputBuffers } from "../../process/exec-output.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
+import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
 import type { FailoverError } from "../failover-error.js";
-import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { resolveReplyExpectation } from "../reply-completion.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
@@ -97,6 +98,7 @@ export async function executeCliProcess(params: {
         parseJsonlEvent: context.backendResolved.parseJsonlEvent,
         parseJsonlLifecycleEvent: context.backendResolved.parseJsonlLifecycleEvent,
         onAssistantDelta: params.events.emitCliAssistantDelta,
+        onCompletedReply: params.events.emitCliCompletedReply,
         onThinkingDelta: params.events.emitCliThinkingDelta,
         onThinkingProgress: params.events.emitCliThinkingProgress,
         onCompaction: params.events.emitCliCompaction,
@@ -124,9 +126,9 @@ export async function executeCliProcess(params: {
   const stderrHash = crypto.createHash("sha256");
   // Only the core lifecycle owner may publish recovery facts. Plugin records
   // carry output, never the authority or deadline used to protect its execution.
-  const reportStreamProgress = createModelCallStreamProgressReporter(
-    () => backendActivity?.observeOutput(true) ?? false,
-  );
+  const reportStreamProgress = createModelCallStreamProgressReporter({
+    recordProgress: () => backendActivity?.observeOutput(true) ?? false,
+  });
   const streamProgressTarget = {
     runId: runParams.runId,
     ...(runParams.sessionKey ? { sessionKey: runParams.sessionKey } : {}),
@@ -208,6 +210,7 @@ export async function executeCliProcess(params: {
       result = await executePluginOwnedProcess({
         context,
         execute: context.executionTarget.execute,
+        watchdogClock: params.deps.watchdogClock,
         executionCommand: params.executionCommand,
         executionArgv0: params.executionArgv0,
         executionArgs: [...params.executionLeadingArgv, ...params.resolveExecutionArgs()],
@@ -318,6 +321,7 @@ export async function executeCliProcess(params: {
               kind: "cli" as const,
               runId: runParams.runId,
               toolAuthorityFingerprint: runParams.toolAuthorityFingerprint,
+              terminalReplyExpectation: resolveReplyExpectation(runParams),
               cancel: () => {
                 processCancelled = true;
                 managedRun.cancel("manual-cancel");
@@ -463,7 +467,7 @@ export async function executeCliProcess(params: {
         Boolean(params.resolvedSessionId) &&
         Boolean(context.openClawHistoryPrompt) &&
         Boolean(runParams.sessionKey) &&
-        runParams.timeoutMs - (Date.now() - context.started) > 0;
+        runParams.timeoutMs - (performance.now() - context.startedMonotonicMs) > 0;
       if (runParams.sessionKey && params.events.emitLiveEvents && !deferNotice) {
         const stallNotice = [
           `CLI agent (${runParams.provider}) produced no output for ${timeoutSeconds}s and was terminated.`,
@@ -563,11 +567,9 @@ export async function executeCliProcess(params: {
     `cli turn: provider=${runParams.provider} model=${context.modelId} durationMs=${Date.now() - params.cliTurnStartedAt} ${formatCliBackendOutputDigest(rawText)}`,
   );
   return {
-    ...parsed,
+    ...transformCliResultText(parsed, context.backendResolved.textTransforms?.output),
     ...(terminalInterruption ? { terminalInterruption } : {}),
     diagnostics: { ...parsed.diagnostics, process: processDiagnostics },
-    rawText,
     finalPromptText: params.prompt,
-    text: applyPluginTextReplacements(rawText, context.backendResolved.textTransforms?.output),
   };
 }

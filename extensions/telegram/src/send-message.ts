@@ -466,10 +466,12 @@ export async function sendMessageTelegram(
             silent: opts.silent,
           });
         },
-        () => ({
-          receipt: buildMediaReceipt(),
-          visibleReplySent: true,
-        }),
+        {
+          partialDeliveryResult: () => ({
+            receipt: buildMediaReceipt(),
+            visibleReplySent: true,
+          }),
+        },
       );
       const mediaMessageId = resolveTelegramMessageIdOrThrow(lastMedia.result, "media send");
       const resolvedChatId = String(lastMedia.result.chat?.id ?? chatId);

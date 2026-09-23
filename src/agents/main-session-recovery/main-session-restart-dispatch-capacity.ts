@@ -13,16 +13,19 @@ export async function dispatchRestartRecoveryWithinCapacity(params: {
   capacity?: MainSessionRecoveryCapacity;
   gatewayRuntime: GatewayRecoveryRuntime;
   onSettled?: () => void;
+  beginDispatch: () => boolean;
   shouldContinue: () => boolean;
 }): Promise<RestartRecoveryDispatchStartOutcome | undefined> {
   const terminalRunId = params.agentParams.idempotencyKey;
   if (!terminalRunId) {
     throw new Error("Restart recovery capacity requires an idempotency key");
   }
-  const release = params.capacity?.acquire
-    ? await params.capacity.acquire(params.shouldContinue)
-    : undefined;
+  const release = await params.capacity?.acquire(params.shouldContinue);
   if (params.capacity && !release) {
+    return undefined;
+  }
+  if (!params.beginDispatch()) {
+    release?.();
     return undefined;
   }
   let settled = false;

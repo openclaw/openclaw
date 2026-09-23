@@ -15,6 +15,7 @@ import { showToast } from "../lib/toast.ts";
 import { restoreChatApiAttachments } from "../pages/chat/attachment-restoration.ts";
 import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
+import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { buildPlacementStartupInitialTurn } from "./session-placement-initial-turn.ts";
 import {
@@ -35,6 +36,8 @@ export type ApplicationPlacementStartupStatus = {
     | "starting"
     | "active"
     | "sending"
+    | "reconnecting"
+    | "cancelled"
     | "failed";
   readonly startedAt: number;
   readonly error?: string;
@@ -76,18 +79,23 @@ export type ApplicationPlacementStartupRuntime = {
 
 export type ApplicationPlacementStartup = ApplicationPlacementStartupRuntime;
 
-// A transport loss retains ownership, not permission to display content or execute.
+// Submitted display survives transport loss; a changed connection owner revokes it.
 export function capturePlacementStartupConnection(
   gateway: ApplicationGateway,
   { gatewayUrl, recoveryScope }: Pick<SessionPlacementRecovery, "gatewayUrl" | "recoveryScope">,
 ): () => boolean {
   const revision = gateway.connectionRevision;
+  const presentationScope = gatewayPresentationScope(gateway);
   return () => {
     const client = gateway.snapshot.client;
+    const currentScope =
+      gateway.snapshot.hello?.auth?.recoveryScope ??
+      (client?.recoveryScopeReady ? client.recoveryScope : undefined);
     return (
       gateway.connectionRevision === revision &&
+      gatewayPresentationScope(gateway) === presentationScope &&
       gateway.connection.gatewayUrl === gatewayUrl &&
-      (!client?.recoveryScopeReady || client.recoveryScope === recoveryScope)
+      (!currentScope || currentScope === recoveryScope)
     );
   };
 }
@@ -277,13 +285,14 @@ export function createApplicationPlacementStartup(
       const error = runtimeLoad?.error;
       const reloadBlocked = isStaleChunkImportError(error) && !canReload();
       const displayError = reloadBlocked ? t("newSession.placementReloadBlocked") : error?.message;
-      return readyClient()
+      const reconnecting = !readyClient();
+      return !reconnecting || input
         ? {
             sessionKey,
             ...pending,
-            phase: error ? "failed" : "pending",
+            phase: reconnecting ? "reconnecting" : error ? "failed" : "pending",
             error: displayError,
-            retryable: Boolean(error) && !reloadBlocked,
+            retryable: !reconnecting && Boolean(error) && !reloadBlocked,
             ...(input
               ? {
                   initialTurn: buildPlacementStartupInitialTurn({
@@ -291,10 +300,13 @@ export function createApplicationPlacementStartup(
                     attachments: input.displayAttachments,
                     createdAt: input.createdAt,
                     error: displayError,
+                    reconnecting,
                   }),
                 }
               : {}),
-            ...(reloadBlocked ? { discardAndReload: captureDiscardAndReload() } : {}),
+            ...(reloadBlocked && !reconnecting
+              ? { discardAndReload: captureDiscardAndReload() }
+              : {}),
           }
         : null;
     },
@@ -345,6 +357,9 @@ export function createApplicationPlacementStartup(
       });
     },
     retry(sessionKey) {
+      if (!readyClient()) {
+        return;
+      }
       const pending = preRuntimeEntries.get(sessionKey)?.();
       if (pending || pendingStoredRecovery?.read(sessionKey)) {
         const loading = runtimeLoad;

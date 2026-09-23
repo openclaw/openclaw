@@ -1,4 +1,3 @@
-// Msteams plugin module implements send behavior.
 import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,

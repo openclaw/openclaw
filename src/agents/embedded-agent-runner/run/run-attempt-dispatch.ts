@@ -17,12 +17,16 @@ import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../m
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
 import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
+import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
 import { resolveSessionPlacementSandbox } from "../../session-placement-admission.js";
 import { resolveSessionSkillResourceSnapshot } from "../../session-placement-skill-resources.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
-import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
+import {
+  resolveAttemptWorkspaceSandbox,
+  resolveHarnessWorkspace,
+} from "../../workspace-sandbox.js";
 import type { EmbeddedRunReplayState } from "../replay-state.js";
 import { remapSkillReferencePaths } from "../sandbox-skills.js";
 import { prepareEmbeddedSkills } from "../skill-runtime.js";
@@ -181,7 +185,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     workspaceDir,
     agentDir,
     agentId: workspaceResolution.agentId,
-    thinkingLevel: mapThinkingLevelForProvider(runtime.thinkLevel),
+    thinkingLevel: mapThinkingLevelForProvider(runtime.thinkLevel, effectiveModel),
     extraParamsOverride: { ...params.streamParams, fastMode: attemptFastMode },
   });
   const trajectoryAttribution = resolveAttemptTrajectoryAttribution({
@@ -270,6 +274,28 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     modelMaxTokens: effectiveModel.maxTokens,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
   });
+  if (!params.admittedRunContext) {
+    throw new Error("embedded attempt reached dispatch without an admitted run context");
+  }
+  const admittedRunContext = params.admittedRunContext;
+  const assertActiveRun = resolveAdmittedRunActiveAssertion(
+    admittedRunContext,
+    attemptAbortController.signal,
+  );
+  if (!assertActiveRun) {
+    throw new Error("embedded attempt reached dispatch without an active admitted run");
+  }
+  assertActiveRun();
+  const placementSandbox = runtime.pluginHarnessOwnsTransport
+    ? await resolveSessionPlacementSandbox({
+        agentId: workspaceResolution.agentId,
+        config: params.config,
+        sessionId,
+        sessionKey: resolvedSessionKey,
+        workspaceDir,
+      })
+    : null;
+  assertActiveRun();
   const pluginWorkspace = runtime.pluginHarnessOwnsTransport
     ? await resolveAttemptWorkspaceSandbox({
         ...params,
@@ -278,6 +304,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
         sessionId,
         sessionKey: resolvedSessionKey,
         workspaceDir,
+        placementSandbox,
       })
     : undefined;
   const promptMedia = pluginWorkspace
@@ -302,19 +329,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           finalize: params.finalizePromptForResolvedTools,
         })
       : undefined;
-  const pluginSandbox = runtime.pluginHarnessOwnsTransport
-    ? ((await resolveSessionPlacementSandbox({
-        agentId: workspaceResolution.agentId,
-        config: params.config,
-        sessionId,
-        sessionKey: resolvedSessionKey,
-        workspaceDir,
-      })) ?? pluginWorkspace?.sandbox)
-    : undefined;
-  if (!params.admittedRunContext) {
-    throw new Error("embedded attempt reached dispatch without an admitted run context");
-  }
-  const admittedRunContext = params.admittedRunContext;
+  const pluginSandbox = placementSandbox ?? pluginWorkspace?.sandbox;
   if (params.permissionMode) {
     // Attempts narrow this shared run-owned policy before recovery can reuse it.
     params.execOverrides ??= {};
@@ -348,14 +363,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     readPath: path.posix.join(mount.containerPath, "SKILL.md"),
   }));
   if (pluginSandbox?.enabled && !pluginSandbox.readOnlyResourceMounts?.length && skillsSnapshot) {
-    const assertActiveRun = resolveAdmittedRunActiveAssertion(
-      admittedRunContext,
-      attemptAbortController.signal,
-    );
     const prepared = await prepareEmbeddedSkills({
       assertCurrent: () => {
         attemptAbortController.signal.throwIfAborted();
-        assertActiveRun?.();
+        assertActiveRun();
       },
       applySkillEnvironment: false,
       includeCodeModeSkills: false,
@@ -391,6 +402,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     sessionKey: string;
     agentHarnessId: string;
   } = {
+    providerReviewAcknowledgment: params.providerReviewAcknowledgment,
     pluginRuntimeRefreshPending: pluginRefresh.isPending,
     registerPluginRuntimeRefreshConsumer: (isCurrent) => {
       if (attemptControls.isCurrent()) {
@@ -411,10 +423,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     sandboxSessionKey: params.sandboxSessionKey,
     sandboxAgentId: params.sandboxAgentId,
     trigger: params.trigger,
+    terminalReplyExpectation: resolveReplyExpectation(params),
     memoryFlushWritePath: params.memoryFlushWritePath,
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
+    bootstrapUserProfileId: params.bootstrapUserProfileId,
     gatewayUiCommandTarget: params.gatewayUiCommandTarget,
     pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,
@@ -449,11 +463,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     sessionFile,
     ...(sessionManager ? { sessionManager } : { sessionTarget: resolvedSessionTarget }),
     trajectoryRecorder: trajectoryRecorder ?? undefined,
-    workspaceDir,
+    ...resolveHarnessWorkspace(workspaceDir, params, pluginWorkspace, pluginSandbox),
     bootstrapWorkspaceDir,
-    cwd: params.cwd,
     permissionMode: params.permissionMode,
-    sessionRoot: params.sessionRoot,
     requireWorkspaceOnly: params.requireWorkspaceOnly,
     requireWritableSandbox: params.requireWritableSandbox,
     agentDir,
@@ -677,7 +689,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   const rawAttempt = await withPreparedEmbeddedGatewayTools(
     attemptParams,
     attemptControls.isCurrent,
-    () => runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime),
+    () => runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media),
   )
     .catch((err: unknown): never => {
       throw input.getPostCompactionAbortError() ?? err;

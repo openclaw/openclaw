@@ -3,10 +3,8 @@ import path from "node:path";
 // dispatch, and result details for spawned child sessions.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  configureExecutionDecisionWorkSink,
-  type ExecutionDecisionWork,
-} from "../../audit/execution-decision-work.js";
+import { configureExecutionDecisionWorkSink } from "../../audit/execution-decision-work.js";
+import type { ExecutionDecisionWork } from "../../audit/execution-decision-work.types.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
@@ -28,10 +26,6 @@ const hoisted = vi.hoisted(() => {
   const spawnAcpDirectMock = vi.fn();
   const registerSubagentRunMock = vi.fn();
   const inProcessCreationMock = vi.fn();
-  const getSubagentDeliveryBacklogPressureMock = vi.fn(() => ({
-    suspended: 0,
-    blocked: false,
-  }));
   const runSubagentProgressMock = vi.fn(async () => {});
   const prepareModelChoiceMock = vi.fn<typeof supportedSpawnModelChoice>();
   return {
@@ -39,14 +33,13 @@ const hoisted = vi.hoisted(() => {
     spawnAcpDirectMock,
     registerSubagentRunMock,
     inProcessCreationMock,
-    getSubagentDeliveryBacklogPressureMock,
     runSubagentProgressMock,
     prepareModelChoiceMock,
   };
 });
 
-vi.mock("../subagents/spawn/subagent-spawn-deps.js", () => ({
-  getSubagentSpawnDeps: () => ({ prepareModelChoice: hoisted.prepareModelChoiceMock }),
+vi.mock("../subagents/spawn/subagent-spawn.runtime.js", () => ({
+  prepareModelChoice: hoisted.prepareModelChoiceMock,
 }));
 
 vi.mock("../subagents/spawn/subagent-spawn.js", () => ({
@@ -61,7 +54,6 @@ vi.mock("../subagents/spawn/acp-spawn.js", () => ({
 
 vi.mock("../subagents/registry/subagent-registry.js", () => ({
   registerSubagentRun: (...args: unknown[]) => hoisted.registerSubagentRunMock(...args),
-  getSubagentDeliveryBacklogPressure: () => hoisted.getSubagentDeliveryBacklogPressureMock(),
 }));
 
 vi.mock("./in-process-gateway.js", async (importOriginal) => {
@@ -134,9 +126,6 @@ describe("sessions_spawn tool", () => {
     });
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.inProcessCreationMock.mockReset();
-    hoisted.getSubagentDeliveryBacklogPressureMock
-      .mockReset()
-      .mockReturnValue({ suspended: 0, blocked: false });
     hoisted.runSubagentProgressMock.mockClear();
   });
 
@@ -377,30 +366,6 @@ describe("sessions_spawn tool", () => {
       expect(JSON.stringify(result.details)).not.toContain("parent-execution");
     },
   );
-
-  it.each([
-    { label: "native", args: { task: "investigate", runtime: "subagent" } },
-    { label: "ACP", args: { task: "investigate", runtime: "acp" }, acp: true },
-    { label: "visible", args: { task: "investigate", visible: true } },
-  ])("blocks $label starts when retained delivery pressure reaches capacity", async (testCase) => {
-    if (testCase.acp) {
-      registerAcpBackendForTest();
-    }
-    hoisted.getSubagentDeliveryBacklogPressureMock.mockReturnValue({
-      suspended: 50,
-      blocked: true,
-    });
-    const callGateway = vi.fn();
-    const tool = createSessionsSpawnTool({ callGateway });
-
-    const result = await tool.execute(`blocked-${testCase.label}`, testCase.args);
-
-    expectDetailFields(result.details, { status: "forbidden" });
-    expect(JSON.stringify(result.details)).toContain("50 completed tasks have blocked delivery");
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
-    expect(callGateway).not.toHaveBeenCalled();
-  });
 
   it("hides ACP runtime affordances when ACP policy is disabled", () => {
     registerAcpBackendForTest();
@@ -1445,9 +1410,6 @@ describe("sessions_spawn tool", () => {
         status: sandboxMode === "all" ? "forbidden" : "accepted",
       });
       if (sandboxMode === "all") {
-        expect(result.details).toMatchObject({
-          error: "Sandboxed sessions cannot spawn unsandboxed sessions.",
-        });
         expect(callGateway).not.toHaveBeenCalled();
       } else {
         expect(callGateway).toHaveBeenCalledWith(

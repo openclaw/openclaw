@@ -8,6 +8,30 @@ type IndexedClient = {
 export class GatewayClientRegistry extends Set<GatewayWsClient> {
   readonly #byConnectionId = new Map<string, IndexedClient>();
   #nextOrder = 0;
+  readonly #activeRequests = new Map<GatewayWsClient, number>();
+  // Revocation covers retained requests; presence and fanout still see live transports only.
+  get authorityClients(): Iterable<GatewayWsClient> {
+    return {
+      [Symbol.iterator]: () => new Set([...this, ...this.#activeRequests.keys()]).values(),
+    };
+  }
+
+  retainRequest(client: GatewayWsClient): () => void {
+    this.#activeRequests.set(client, (this.#activeRequests.get(client) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      const remaining = this.#activeRequests.get(client)! - 1;
+      if (remaining === 0) {
+        this.#activeRequests.delete(client);
+      } else {
+        this.#activeRequests.set(client, remaining);
+      }
+    };
+  }
 
   constructor(clients?: Iterable<GatewayWsClient>) {
     super();

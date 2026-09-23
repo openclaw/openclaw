@@ -576,7 +576,7 @@ describe("publish model catalog", () => {
     expect(serializeModelCatalogBundle(bundle)).toBe(previous);
   });
 
-  it.each(["fetch failure", "malformed feed", "missing mapped provider"])(
+  it.each(["fetch failure", "malformed feed"])(
     "rejects models.dev %s before changing the bundle",
     async (scenario) => {
       const manifests = [
@@ -616,6 +616,54 @@ describe("publish model catalog", () => {
       expect(serializeModelCatalogBundle(bundle)).toBe(previous);
     },
   );
+
+  it("publishes a provider unhydrated when its models.dev source disappears", async () => {
+    const manifests = [
+      {
+        pluginId: "fixture",
+        manifestPath: "fixture.json",
+        manifest: {
+          providers: ["anthropic", "openai"],
+          modelCatalog: {
+            modelsDev: { anthropic: "anthropic", openai: "renamed-upstream" },
+            providers: {
+              anthropic: fixtureProvider("claude", 100),
+              openai: fixtureProvider("gpt", 100),
+            },
+          },
+        },
+      },
+    ];
+    const bundle = await assembleModelCatalogBundle({
+      manifests,
+      generatedAt: Date.now(),
+      sourceCommit: "fixture-sha",
+    });
+    const openaiBefore = JSON.stringify(bundle.providers.openai);
+    const warnings: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((value) => {
+      warnings.push(String(value));
+      return true;
+    });
+    const result = await hydrateModelCatalogFromModelsDev({
+      bundle,
+      manifests,
+      fetchImpl: async () =>
+        Response.json({
+          anthropic: {
+            id: "anthropic",
+            models: { "hydrated-claude": modelsDevModel("hydrated-claude") },
+          },
+        }),
+    }).finally(() => stderr.mockRestore());
+    expect(result.anthropic).toEqual({ added: 1, filled: 0, skipped: 0 });
+    expect(result.openai).toBeUndefined();
+    expect(JSON.stringify(bundle.providers.openai)).toBe(openaiBefore);
+    expect(bundle.providers.anthropic?.models.map((model) => model.id)).toContain(
+      "hydrated-claude",
+    );
+    expect(warnings.join("")).toContain("renamed-upstream");
+  });
 
   it.each(["absent", "unowned", "without provider catalog"])(
     "does not fetch models.dev with source declaration: %s",

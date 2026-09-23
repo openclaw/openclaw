@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
-import { threadId, type MessagePort, type Worker } from "node:worker_threads";
+import { threadId, type MessagePort } from "node:worker_threads";
 import {
   createSqliteLifecycleAggregateError,
   runWithSqliteCoordinator,
@@ -19,6 +19,11 @@ import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import {
+  sqliteMutationWorkerThreadId,
+  terminateSqliteMutationWorker,
+  type SqliteMutationWorkerTransport,
+} from "./session-accessor.sqlite-worker-transport.js";
 
 export type SqliteMutationWorkerCoordination = {
   actorId: string;
@@ -65,17 +70,18 @@ async function prepareLifecycleDelegate(context: OpenClawStateWorkerContext, act
 /** The original request owns this pin until its result or native exit is settled. */
 export async function withSqliteMutationWorkerCoordination<T>(
   context: OpenClawStateWorkerContext,
-  worker: Worker,
+  transport: SqliteMutationWorkerTransport,
   operationId: number,
   run: (coordination: SqliteMutationWorkerCoordination) => Promise<T>,
 ): Promise<T> {
-  const actorId = `${worker.threadId}:${operationId}`;
+  const worker = transport.channel;
+  const actorId = `${sqliteMutationWorkerThreadId(transport)}:${operationId}`;
   // Preparation can fail before the mutation request installs its transport owner.
   const preparingError = () => {};
   worker.on("error", preparingError);
   try {
     return await withSqliteWorkerLifecycleCoordination(context, actorId, run, async () => {
-      await worker.terminate();
+      await terminateSqliteMutationWorker(transport);
     });
   } finally {
     worker.off("error", preparingError);

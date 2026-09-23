@@ -114,6 +114,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   runtimeModel: string;
   systemPromptText: string;
   applyPromptBuildToolsAllow: (toolsAllow: string[] | undefined) => string[];
+  prepareSystemPrompt?: (currentSystemPrompt: string) => Promise<string>;
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
   setLeasedSteering: (lease: EmbeddedAttemptSteeringLease) => void;
 }): Promise<EmbeddedAttemptPromptAssembly> {
@@ -176,7 +177,15 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         hookRunner: input.hookRunner,
         bootstrapContextRunKind: attempt.bootstrapContextRunKind,
       });
-  const promptCacheToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
+  const callableToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
+  // Regenerate owned capability guidance before composing hook additions, without
+  // rerunning hooks or altering already-recorded conversation messages.
+  if (input.prepareSystemPrompt) {
+    const preparedSystemPrompt = await input.prepareSystemPrompt(systemPromptText);
+    if (preparedSystemPrompt !== systemPromptText) {
+      setSystemPrompt(preparedSystemPrompt);
+    }
+  }
   const hookRunner = input.hookRunner;
   const assertHostActive = resolveAdmittedRunActiveAssertion(
     attempt.admittedRunContext,
@@ -187,13 +196,13 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       ? undefined
       : await hookRunner.runAuthorizedPromptBuild(promptEvent, hookCtx, {
           toolAuthorityFingerprint: attempt.toolAuthorityFingerprint,
-          activeToolNames: promptCacheToolNames,
+          activeToolNames: callableToolNames,
           assertHostActive,
         });
   const promptBeforeResolvedToolFinalization = effectivePrompt;
   effectivePrompt = applyResolvedToolPromptFinalizer({
     prompt: effectivePrompt,
-    activeToolNames: promptCacheToolNames,
+    activeToolNames: callableToolNames,
     finalize: attempt.finalizePromptForResolvedTools,
   });
   let effectiveTranscriptPrompt = attempt.transcriptPrompt ?? promptBeforeResolvedToolFinalization;

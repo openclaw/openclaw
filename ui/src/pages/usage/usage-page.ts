@@ -23,7 +23,7 @@ import type { ProviderUsageSummary } from "./data-types.ts";
 import { UsageDetailsController } from "./detail-controller.ts";
 import { createUsageJsonExportRequest } from "./export.ts";
 import {
-  currentLocalDate,
+  createDefaultUsageDateRange,
   selectUsageSessionKeys,
   toggleUsageRangeSelection,
   toUsageErrorMessage,
@@ -61,10 +61,12 @@ class UsagePage extends OpenClawLightDomElement {
   @state() private providerUsageUnavailable = false;
   @state() private providerUsageIncomplete = false;
   @state() private usageError: string | null = null;
-  @state() private usageStartDate = currentLocalDate();
-  @state() private usageEndDate = currentLocalDate();
+  private readonly initialDateRange = createDefaultUsageDateRange();
+  @state() private usageStartDate = this.initialDateRange.startDate;
+  @state() private usageEndDate = this.initialDateRange.endDate;
   @state() private usageScope: "instance" | "family" = "family";
   @state() private usageAgentId: string | null = null;
+  @state() private usageCreatorKey: string | null = null;
   @state() private usageSelectedSessions: string[] = [];
   @state() private usageSelectedDays: string[] = [];
   @state() private usageSelectedHours: number[] = [];
@@ -127,6 +129,7 @@ class UsagePage extends OpenClawLightDomElement {
   private readonly observeAgentScope = watchAgentScope((scopeId) => {
     if (this.routeDataInitialized && this.usageAgentId !== scopeId) {
       this.usageAgentId = scopeId;
+      this.usageCreatorKey = null;
       this.clearSelectionsAndDetails();
       this.refreshPolicy.request("manual");
     }
@@ -252,6 +255,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageScope = data.query.scope;
     this.usageTimeZone = data.query.timeZone;
     this.usageAgentId = data.query.agentId;
+    this.usageCreatorKey = data.query.creatorKey ?? null;
     this.usageSnapshot = {
       query: this.currentQuery,
       result: data.result,
@@ -284,6 +288,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.resetProviderUsage();
     this.usageError = null;
     this.usageAgentId = this.context.agentSelection.state.scopeId;
+    this.usageCreatorKey = null;
     this.clearSelectionsAndDetails();
   }
 
@@ -330,6 +335,7 @@ class UsagePage extends OpenClawLightDomElement {
       scope: this.usageScope,
       timeZone: this.usageTimeZone,
       agentId: normalizeLowercaseStringOrEmpty(this.usageAgentId ?? "") || undefined,
+      creatorKey: this.usageCreatorKey ?? undefined,
     };
   }
 
@@ -340,7 +346,8 @@ class UsagePage extends OpenClawLightDomElement {
       query.endDate === current.endDate &&
       query.scope === current.scope &&
       query.timeZone === current.timeZone &&
-      query.agentId === current.agentId
+      query.agentId === current.agentId &&
+      query.creatorKey === current.creatorKey
     );
   }
 
@@ -354,6 +361,14 @@ class UsagePage extends OpenClawLightDomElement {
     return this.usageSnapshot && this.isCurrentQuery(this.usageSnapshot.query)
       ? this.usageSnapshot.costSummary
       : null;
+  }
+
+  private get usageCreatorOptions() {
+    // Keep the selector usable during a filter change, but never carry another
+    // agent's identities across an agent or Gateway replacement.
+    return this.usageSnapshot?.query.agentId === this.currentQuery.agentId
+      ? (this.usageSnapshot?.result?.creatorOptions ?? [])
+      : [];
   }
 
   private get providerUsageStalled(): boolean {
@@ -482,6 +497,7 @@ class UsagePage extends OpenClawLightDomElement {
         exporting: this.usageExportRequest.pending,
         error: this.usageError,
         sessions: this.usageResult?.sessions ?? [],
+        creatorOptions: this.usageCreatorOptions,
         agents:
           this.context.agents.state.agentsList?.agents.map((entry) => entry.id).filter(Boolean) ??
           [],
@@ -506,6 +522,7 @@ class UsagePage extends OpenClawLightDomElement {
         selectedDays: this.usageSelectedDays,
         selectedHours: this.usageSelectedHours,
         agentId: this.usageAgentId,
+        creatorKey: this.usageCreatorKey,
         query: this.usageQuery,
         queryDraft: this.usageQueryDraft,
         timeZone: this.usageTimeZone,
@@ -565,6 +582,11 @@ class UsagePage extends OpenClawLightDomElement {
           onAgentChange: (agentId) => {
             this.context.agentSelection.setScope(agentId);
           },
+          onCreatorChange: (creatorKey) => {
+            this.usageCreatorKey = creatorKey;
+            this.clearSelectionsAndDetails();
+            this.refreshPolicy.request("manual");
+          },
           onRefresh: () => this.refreshPolicy.request("manual"),
           onTimeZoneChange: (timeZone) => {
             this.usageTimeZone = timeZone;
@@ -598,11 +620,11 @@ class UsagePage extends OpenClawLightDomElement {
             this.usageQueryDraft = "";
             this.usageQuery = "";
           },
-          onSelectDay: (day, shiftKey) => {
+          onSelectDay: (day, shiftKey, orderedDays) => {
             this.usageSelectedDays = toggleUsageRangeSelection(
               this.usageSelectedDays,
               day,
-              (this.usageCostSummary?.daily ?? []).map((entry) => entry.date),
+              orderedDays,
               shiftKey,
               false,
             );

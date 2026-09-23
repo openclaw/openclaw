@@ -1320,6 +1320,7 @@ function assertCompanionPluginRecords(
       mkdirSync(join(isolatedScripts, "lib"), { recursive: true });
       for (const file of [
         "release-version.mjs",
+        "sqlite-transcript-payload.mjs",
         "upgrade-survivor-policy.mjs",
         "upgrade-survivor-scenarios.json",
       ]) {
@@ -1329,6 +1330,7 @@ function assertCompanionPluginRecords(
         "scripts/prepublish-plugin-registry-artifact.mjs",
         join(isolatedScripts, "prepublish-plugin-registry-artifact.mjs"),
       );
+      cpSync("scripts/windows-cmd-helpers.mjs", join(isolatedScripts, "windows-cmd-helpers.mjs"));
       assertionsPath = join(isolatedLib, "upgrade-survivor", "assertions.mjs");
     }
     execFileSync(
@@ -1349,99 +1351,6 @@ function assertCompanionPluginRecords(
         },
         stdio: "pipe",
       },
-    );
-  } finally {
-    rmSync(root, { force: true, recursive: true });
-  }
-}
-
-function createUpdateRunSelfUpgradeSummary() {
-  const sourceVersion = "2026.4.26";
-  const targetVersion = "2026.7.2";
-  const note = "QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE";
-  return {
-    status: "passed",
-    source: { spec: `openclaw@${sourceVersion}`, version: sourceVersion },
-    target: { tag: "latest", resolvedVersion: targetVersion },
-    installedVersion: targetVersion,
-    expectedRestartNote: note,
-    updateRpcResult: {
-      ok: true,
-      result: {
-        status: "ok",
-        before: { version: sourceVersion },
-        after: { version: targetVersion },
-        steps: [{ name: "package manager install" }],
-      },
-      restart: { scheduled: true },
-      sentinel: { payload: { message: note } },
-    },
-    restartSentinel: {
-      kind: "update",
-      status: "ok",
-      message: note,
-      stats: {
-        before: { version: sourceVersion },
-        after: { version: targetVersion },
-      },
-    },
-    qaChannelInstallRecord: {
-      source: "path",
-      sourcePath: "/tmp/source/dist/extensions/qa-channel",
-      installPath: "/tmp/source/dist/extensions/qa-channel",
-      version: "2026.4.25",
-    },
-    sourcePluginInspect: {
-      plugin: { id: "qa-channel", status: "loaded" },
-    },
-    targetPluginIndex: {
-      installRecords: {
-        "qa-channel": {
-          source: "path",
-          sourcePath: "/tmp/source/dist/extensions/qa-channel",
-          installPath: "/tmp/source/dist/extensions/qa-channel",
-          version: "2026.4.25",
-        },
-      },
-    },
-    supervisorHandoff: {
-      servicePid: 4242,
-      systemctlInvocations: ["--user start openclaw-gateway.service"],
-      monitorEvents: [
-        "source Gateway exited through supervised update handoff",
-        "starting installed service without provider suppression",
-        "service Gateway started pid=4242",
-      ],
-    },
-    gateway: {
-      healthz: { body: { ok: true, status: "live" } },
-      readyz: { body: { ready: true } },
-      status: {
-        cli: { version: targetVersion },
-        gateway: { version: targetVersion },
-        rpc: { ok: true, version: targetVersion },
-      },
-    },
-    qaChannel: {
-      status: {
-        channelAccounts: {
-          "qa-channel": [{ accountId: "default", running: true, restartPending: false }],
-        },
-      },
-      busPollsAfterRestart: 2,
-    },
-  };
-}
-
-function assertUpdateRunSelfUpgrade(summary: ReturnType<typeof createUpdateRunSelfUpgradeSummary>) {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-update-run-self-upgrade-"));
-  try {
-    const summaryPath = join(root, "summary.json");
-    writeJson(summaryPath, summary);
-    execFileSync(
-      testNodeExecPath,
-      [ASSERTIONS_PATH, "assert-update-run-self-upgrade", summaryPath],
-      { stdio: "pipe" },
     );
   } finally {
     rmSync(root, { force: true, recursive: true });
@@ -1844,6 +1753,44 @@ process.stdout.write(sessionDir + "\\n");
       }),
     ).toThrow(/gateway auth mode/);
   });
+
+  it.each([
+    ["anthropic", "anthropic-messages", "https://api.anthropic.com", "ANTHROPIC_API_KEY"],
+    [
+      "google",
+      "google-generative-ai",
+      "https://generativelanguage.googleapis.com/v1beta",
+      "GEMINI_API_KEY",
+    ],
+  ])(
+    "requires the configured %s provider and its env credential to survive",
+    (provider, api, baseUrl, keyEnv) => {
+      const config = {
+        models: {
+          providers: {
+            [provider]: {
+              api,
+              baseUrl,
+              apiKey: { source: "env", provider: "default", id: keyEnv },
+              models: [],
+            },
+          },
+        },
+      };
+      const acceptedIntents = [`models-${provider}`];
+      expect(() => assertConfig({ acceptedIntents, config, scenario: "base" })).not.toThrow();
+      expect(() => assertConfig({ acceptedIntents, config: {}, scenario: "base" })).toThrow(
+        `${provider} model provider missing`,
+      );
+      config.models.providers[provider]!.apiKey.id = "WRONG_API_KEY";
+      expect(() => assertConfig({ acceptedIntents, config, scenario: "base" })).toThrow(
+        `${provider} model provider env credential reference changed`,
+      );
+      expect(() =>
+        assertConfig({ acceptedIntents: [], config: {}, scenario: "base" }),
+      ).not.toThrow();
+    },
+  );
 
   it("allows token rotation and requires each reconnect to use the newest stored token", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-mobile-pairing-evidence-"));
@@ -2831,61 +2778,5 @@ process.stdout.write(JSON.stringify(result));
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
-  });
-
-  it("accepts executed update.run package transition and post-restart health evidence", () => {
-    expect(() => assertUpdateRunSelfUpgrade(createUpdateRunSelfUpgradeSummary())).not.toThrow();
-  });
-
-  it("rejects no-op update.run package transitions", () => {
-    const summary = createUpdateRunSelfUpgradeSummary();
-    summary.target.resolvedVersion = summary.source.version;
-    summary.installedVersion = summary.source.version;
-    summary.updateRpcResult.result.after.version = summary.source.version;
-    summary.restartSentinel.stats.after.version = summary.source.version;
-    summary.gateway.status.gateway.version = summary.source.version;
-
-    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/did not advance beyond source/);
-  });
-
-  it("rejects unsupported update.run paths that did not execute package steps", () => {
-    const summary = createUpdateRunSelfUpgradeSummary();
-    summary.updateRpcResult.ok = false;
-    summary.updateRpcResult.result.status = "skipped";
-    summary.updateRpcResult.result.steps = [];
-
-    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/did not report ok/);
-  });
-
-  it("rejects QA channel payloads without a canonical path install record", () => {
-    const summary = createUpdateRunSelfUpgradeSummary();
-    summary.qaChannelInstallRecord.source = "npm";
-
-    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/was not path-installed/);
-  });
-
-  it("rejects upgrades that lose the path install during SQLite migration", () => {
-    const summary = createUpdateRunSelfUpgradeSummary();
-    Reflect.deleteProperty(summary.targetPluginIndex.installRecords, "qa-channel");
-
-    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(
-      /target SQLite index did not preserve/,
-    );
-  });
-
-  it("rejects source fixtures that were never runtime-loaded", () => {
-    const summary = createUpdateRunSelfUpgradeSummary();
-    summary.sourcePluginInspect.plugin.status = "error";
-
-    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/source package did not load/);
-  });
-
-  it("rejects duplicate target service starts during the supervised handoff", () => {
-    const summary = createUpdateRunSelfUpgradeSummary();
-    summary.supervisorHandoff.systemctlInvocations.push(
-      "--user --quiet start openclaw-gateway.service",
-    );
-
-    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/target exactly once/);
   });
 });

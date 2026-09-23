@@ -3,6 +3,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode, ModelAuthStatusResult, ModelsProbeResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
+import type { DecisionModelEntry } from "../../components/decision-model-picker.ts";
 import { icons } from "../../components/icons.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
@@ -59,6 +60,7 @@ type ModelProvidersViewProps = {
   credentialAgentLabel: string;
   cards: ModelProviderCard[];
   configuredModels: ModelPickerEntry[];
+  decisionModels: DecisionModelEntry[];
   defaultModels: DefaultModelSelection;
   authStatus?: ModelAuthStatusResult | null;
   automaticUtilityModel?: string | null;
@@ -89,6 +91,7 @@ type ModelProvidersViewProps = {
   addProviderOpen: boolean;
   addProviderId: string;
   addProviderKey: string;
+  installedAgents: TemplateResult | typeof nothing;
   onRefresh: () => void;
   onOpenKeyEditor: (provider: string) => void;
   onCloseKeyEditor: () => void;
@@ -105,6 +108,7 @@ type ModelProvidersViewProps = {
   onPrimaryChange: (model: string) => void;
   onFallbackChange: (model: string | null) => void;
   onUtilityChange: (model: string | null) => void;
+  onDecisionChange: (model: string | null) => void;
   onThinkingChange: (level: string, element: HTMLElement) => void;
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
@@ -558,6 +562,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
     <div id=${MODEL_SETTINGS_TARGET_IDS.behavior}>
       ${renderDefaultModels({
         models: props.configuredModels,
+        decisionModels: props.decisionModels,
         selection: props.defaultModels,
         authStatus: props.authStatus,
         automaticUtilityModel: props.automaticUtilityModel,
@@ -575,6 +580,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         onPrimaryChange: props.onPrimaryChange,
         onFallbackChange: props.onFallbackChange,
         onUtilityChange: props.onUtilityChange,
+        onDecisionChange: props.onDecisionChange,
         onThinkingChange: props.onThinkingChange,
         onThinkingReset: props.onThinkingReset,
         onFastModeChange: props.onFastModeChange,
@@ -582,6 +588,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         onCatalogRetry: props.onCatalogRetry,
       })}
     </div>
+    ${props.installedAgents}
     ${renderSettingsSection(
       {
         title: t("modelProviders.accessTitle"),
@@ -616,7 +623,14 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
           </openclaw-tooltip>
         `,
       },
-      props.loading ? renderSettingsGroup(renderSettingsLoadingSkeleton()) : providerRows,
+      props.loading
+        ? renderSettingsGroup(renderSettingsLoadingSkeleton())
+        : props.cards.length === 0 &&
+            props.installedAgents !== nothing &&
+            !props.error &&
+            !props.providerUsageFailed
+          ? nothing
+          : providerRows,
     )}
     ${
       props.providerUsageStalled

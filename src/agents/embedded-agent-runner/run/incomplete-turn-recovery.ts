@@ -4,11 +4,9 @@ import { MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE } from "../../../llm/types.js"
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { isPreDispatchToolCallRejectionMessage } from "../../failover/message-patterns.js";
+import { resolveReplyCompletion, resolveReplyExpectation } from "../../reply-completion.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
-import {
-  hasCommittedMessagingToolDeliveryEvidence,
-  hasCompletedMessagingToolDeliveryEvidence,
-} from "../delivery-evidence.js";
+import { resolveSourceReplyDelivery } from "../delivery-evidence.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
 import {
   hasAsyncActivity,
@@ -18,7 +16,6 @@ import {
 } from "./attempt-terminal-evidence.js";
 import {
   classifyAssistantTurn,
-  hasExplicitSilentAssistantReply,
   hasPositiveOutputTokenUsage,
   isOllamaIncompleteTurnProvider,
   isReasoningOnlyAssistantTurn,
@@ -86,7 +83,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   if (!Array.isArray(content)) {
     return false;
   }
-  if (content.length === 0) {
+  if (content.every((block) => block.type === "text" && !block.text.trim())) {
     // Rejected arguments can consume tokens without output; the preceding guards own replay safety.
     return (
       !hasPositiveOutputTokenUsage(assistant) ||
@@ -131,33 +128,18 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
-  // NO_REPLY is an authored outcome, not missing output: a successful reaction
-  // can be the entire reply. Agents: classify it before the side-effect retry
-  // guard, or it becomes a false missing-summary warning (or a repeated tool).
-  // Actual failures, aborts and pending work still pass through the guards below.
-  const terminalReplyOptional = params.terminalReplyExpectation === "optional";
-  const explicitSilentReply =
-    params.payloadCount === 0 && hasExplicitSilentAssistantReply(params.attempt);
-  const tolerateSideEffects = terminalReplyOptional || explicitSilentReply;
-  if (
-    (!params.allowEmptyAssistantReplyAsSilent && !explicitSilentReply) ||
-    shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects })
-  ) {
-    return false;
-  }
-  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
-    return false;
-  }
-  if (explicitSilentReply) {
-    return true;
-  }
-  // A visible turn owes a reply unless the model explicitly chose NO_REPLY.
-  // Bare empty and reasoning-only stops are provider failures, even when the
-  // conversation policy permits deliberate silence.
-  if (params.onlyExplicitSilentReply || !terminalReplyOptional) {
-    return false;
-  }
-  return classifyAssistantTurn(params).nonVisibleEligibleForSilentReply;
+  const completion = resolveReplyCompletion(
+    resolveReplyExpectation(params),
+    params.payloadCount === 0 ? "empty" : "ready",
+  );
+  const assistant = classifyAssistantTurn(params);
+  return (
+    completion.outcome === "silent" &&
+    !shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects: true }) &&
+    resolveSourceReplyDelivery(params.attempt) === "missing" &&
+    (!params.onlyExplicitSilentReply || assistant.silent) &&
+    assistant.nonVisibleEligibleForSilentReply
+  );
 }
 
 /**
@@ -362,7 +344,6 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   );
   if (
     params.payloadCount !== 0 ||
-    (!params.allowEmptyStopContinuation && hasExplicitSilentAssistantReply(attempt)) ||
     params.hasTerminalToolPresentation ||
     params.aborted ||
     ((params.timedOut || terminal.kind === "timeout") && !idlePromptTimeout) ||
@@ -380,7 +361,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   ) {
     return null;
   }
-  if (attempt.hasToolMediaBlockReply || hasCompletedMessagingToolDeliveryEvidence(attempt)) {
+  if (attempt.hasToolMediaBlockReply || resolveSourceReplyDelivery(attempt) !== "missing") {
     return null;
   }
   if (

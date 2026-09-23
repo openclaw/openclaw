@@ -741,9 +741,7 @@ suite.define(() => {
 
       await gateway.setOnline(false);
       await page
-        .locator(
-          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
-        )
+        .locator('.agent-chat__composer-status[data-tone="info"] .agent-chat__composer-status-band')
         .waitFor({ timeout: 10_000 });
 
       const prompt = "send this when the Gateway returns";
@@ -870,9 +868,7 @@ suite.define(() => {
         })
         .toBe(false);
       await page
-        .locator(
-          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
-        )
+        .locator('.agent-chat__composer-status[data-tone="info"] .agent-chat__composer-status-band')
         .waitFor({ state: "detached" });
       await expectRequestCountStable(gateway, "chat.send", 1);
       if (artifactDir) {

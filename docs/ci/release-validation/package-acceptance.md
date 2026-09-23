@@ -69,6 +69,14 @@ different bytes; preserving published dist-tags alone does not isolate them.
 After those baseline commands, candidate installs keep using the verified
 candidate registry, including its exact-version dependencies.
 
+The `legacy-operator-state` and `msteams-polls` companion fixtures preserve the
+published archive for its package name/version across both registry phases.
+When the candidate companion has that same version, installation assertions
+require the retained published bytes. A different version selects and verifies
+the prepared candidate archive. This keeps same-version core update proof from
+simulating an npm republish; testing changed companion bytes requires a distinct
+companion version.
+
 Expanded release qualification requires the candidate's `YYYY.M.PATCH` base version
 to be at least the trusted workflow package's base version, ignoring prerelease
 suffixes for this comparison. It then reads immutable source-directory metadata for
@@ -112,19 +120,25 @@ All supported baseline rows require successful updates. Existing synthetic
 on the candidate-relative predecessor. The lane does not run an extra Doctor or
 omit those fixtures to turn a failed schema upgrade into a pass.
 
+Current cross-OS tooling runs packaged fresh-install and upgrade checks on both
+Node 24.19.0 and the Node 26.1.0 support floor across Linux, Windows, and macOS.
+Windows packaged fresh-install retains Node 24.16.0 for its Node 24 cell because
+of the later libuv file-watcher regression. Both runtime variants consume the
+same prepared candidate tarball. A focused `suite_filter` selects both Node
+variants; the Node 26 jobs and artifacts have distinct names. Installer and
+source-update lanes keep their existing Node 24 coverage. Explicitly selecting
+older `workflow_ref` tooling retains that revision's historical matrix.
+
 The Windows packaged and installer fresh lanes also verify that an installed package can import a browser-control override from a raw absolute Windows path. The OpenAI cross-OS agent-turn smoke defaults to `OPENCLAW_CROSS_OS_OPENAI_MODEL` when set, otherwise `openai/gpt-5.6-luna`, so the install and gateway proof uses the lower-cost GPT-5.6 test tier.
 
 ### Legacy compatibility windows
 
-Package Acceptance has bounded legacy-compatibility windows for already-published packages. Packages through `2026.4.25`, including `2026.4.25-beta.*`, may use the compatibility path:
-
-- known private QA entries in `dist/postinstall-inventory.json` may point at tarball-omitted files;
-- `doctor-switch` may skip the `gateway install --wrapper` persistence subcase when the package does not expose that flag;
-- `update-channel-switch` may prune missing pnpm `patchedDependencies` from the tarball-derived fake git fixture and may log missing persisted `update.channel`;
-- plugin smokes may read legacy install-record locations or accept missing marketplace install-record persistence;
-- `plugin-update` may allow config metadata migration while still requiring the install record and no-reinstall behavior to stay unchanged.
-
-The published `2026.4.26` package may also warn for local build metadata stamp files that were already shipped. Current package validators require both npm lockfile formats to be absent from new tarballs.
+Package Acceptance no longer relaxes assertions for pre-June 2026 candidates.
+Missing inventory entries, shipped local build metadata, missing service-wrapper
+support, and incomplete update or plugin install-record persistence fail the
+current contracts. Current package validators also require both npm lockfile
+formats to be absent from new tarballs. To reproduce historical acceptance
+results, select the matching historical `workflow_ref` tooling.
 
 ### Examples
 

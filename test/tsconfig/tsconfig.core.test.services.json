@@ -10,13 +10,22 @@
     "../../src/infra/package-update-*.test.tsx",
     "../../src/cli/daemon-cli/**/*.test.ts",
     "../../src/cli/daemon-cli/**/*.test.tsx",
-    "../../src/cron/**/*.test.ts",
-    "../../src/cron/**/*.test.tsx",
     "../../src/daemon/**/*.test.ts",
     "../../src/daemon/**/*.test.tsx",
     "../../src/process/**/*.test.ts",
     "../../src/process/**/*.test.tsx",
+    "../../src/system-agent/**/*.test.ts",
+    "../../src/system-agent/**/*.test.tsx",
     "../../src/skills/**/*.test.ts",
-    "../../src/skills/**/*.test.tsx"
+    "../../src/skills/**/*.test.tsx",
+    "../../src/system-agent/**/*.test.ts",
+    "../../src/system-agent/**/*.test.tsx"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../src/infra/update-managed-service-handoff-*.test.ts",
+    "../../src/infra/update-managed-service-handoff-*.test.tsx"
   ]
 }

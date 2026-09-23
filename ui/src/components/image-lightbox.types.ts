@@ -3,7 +3,10 @@ export type ImageLightboxItem = {
   src: string;
   originalSrc?: string;
   title: string;
+  width?: number;
+  height?: number;
   release?: () => void;
+  loadFullResolution?: () => Promise<ImageLightboxItem | null>;
   gallery?: ImageLightboxGallery;
 };
 

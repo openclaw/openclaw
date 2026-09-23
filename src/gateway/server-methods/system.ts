@@ -23,10 +23,8 @@ import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.defaul
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import { resolveSystemMainSessionTarget } from "../../config/sessions.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
-import {
-  loadOrCreateProcessDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../../infra/device-identity.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
+import { publicKeyRawBase64UrlFromPem } from "../../infra/device-identity.js";
 import { tryReadDiskSpace } from "../../infra/disk-space.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { requestHeartbeat, setHeartbeatsEnabled } from "../../infra/heartbeat-wake.js";
@@ -50,6 +48,11 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 let advertisedLanHostPromise: Promise<string | null> | null = null;
+// CPU identity belongs to this process; os.cpus() also reads every core's live timings.
+const cpuInfoSnapshot = (() => {
+  const cpus = os.cpus();
+  return { cpuCount: cpus.length, cpuModel: cpus[0]?.model.trim() || undefined };
+})();
 
 function resolveCachedAdvertisedLanHost(): Promise<string | null> {
   // Route discovery may spawn a platform command. Keep the result process-stable
@@ -59,8 +62,7 @@ function resolveCachedAdvertisedLanHost(): Promise<string | null> {
 }
 
 async function collectSystemInfo(context: GatewayRequestContext): Promise<SystemInfoResult> {
-  const cpus = os.cpus();
-  const cpuModel = cpus[0]?.model.trim() || undefined;
+  const { cpuCount, cpuModel } = cpuInfoSnapshot;
   const [oneMinute = 0, fiveMinutes = 0, fifteenMinutes = 0] = os.loadavg();
   const loadAverage: [number, number, number] = [oneMinute, fiveMinutes, fifteenMinutes];
   const stateDir = resolveStateDir();
@@ -99,7 +101,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
     pid: process.pid,
     processInstanceId: getGatewayProcessInstanceId(),
     uptimeMs: Math.round(process.uptime() * 1000),
-    cpuCount: cpus.length,
+    cpuCount,
     ...(cpuModel ? { cpuModel } : {}),
     ...(loadAverage.some((value) => value !== 0) ? { loadAverage } : {}),
     memoryTotalBytes: os.totalmem(),
@@ -125,8 +127,8 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
 
 /** Gateway handlers for identity, host information, heartbeat toggles, and presence events. */
 export const systemHandlers: GatewayRequestHandlers = {
-  "gateway.identity.get": ({ respond }) => {
-    const identity = loadOrCreateProcessDeviceIdentity();
+  "gateway.identity.get": async ({ respond }) => {
+    const identity = await loadOrCreateProcessDeviceIdentityAsync();
     respond(
       true,
       {

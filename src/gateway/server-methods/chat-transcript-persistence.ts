@@ -1,6 +1,5 @@
 // Transcript persistence and source-reply rewrites shared by chat send and abort.
 import { asOptionalRecord as transcriptEventRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Result } from "@openclaw/normalization-core/result";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   findTranscriptEvent,
@@ -28,7 +27,11 @@ import {
   extractAssistantPhaseText,
   readAssistantTextBlocksForPhase,
 } from "../../shared/chat-message-content.js";
-import { loadSessionEntry } from "../session-utils.js";
+import {
+  abortedPartialPersistenceError,
+  type AbortedPartialSnapshot,
+  type ChatAbortOrigin,
+} from "./chat-aborted-partial.js";
 import {
   sanitizeAssistantDisplayText,
   type AssistantDisplayContentBlock,
@@ -46,21 +49,6 @@ type TranscriptAppendResult = {
   skipped?: boolean;
   error?: string;
 };
-
-export type ChatAbortOrigin = "rpc" | "stop-command" | "placement-abandon";
-
-export type ChatAbortSessionSnapshot = Result<
-  Pick<
-    ReturnType<typeof loadSessionEntry>,
-    "cfg" | "storePath" | "entry" | "canonicalKey" | "agentId"
-  >,
-  unknown
->;
-
-export type AbortedPartialSnapshot = {
-  runId: string;
-  abortOrigin: ChatAbortOrigin;
-} & Result<Parameters<typeof appendAssistantTranscriptMessage>[0], unknown>;
 
 type AssistantTranscriptScopeParams = {
   sessionId: string;
@@ -392,6 +380,7 @@ export async function appendAssistantTranscriptMessage(params: {
     runId: string;
   };
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
+  contextFreeCommand?: true;
   cfg?: OpenClawConfig;
 }): Promise<TranscriptAppendResult> {
   const scope = assistantTranscriptScope(params);
@@ -415,69 +404,20 @@ export async function appendAssistantTranscriptMessage(params: {
     stopReason: params.stopReason,
     abortMeta: params.abortMeta,
     ttsSupplement: params.ttsSupplement,
+    ...(params.contextFreeCommand === true ? { contextFreeCommand: true } : {}),
     config: params.cfg,
   });
   return appended;
 }
 
-export function captureAbortedPartial(params: {
-  runId: string;
-  sessionKey: string;
-  sessionId: string;
-  agentId?: string;
-  text: string;
-  abortOrigin: ChatAbortOrigin;
-  session?: ChatAbortSessionSnapshot;
-}): AbortedPartialSnapshot {
-  const { runId, abortOrigin } = params;
-  try {
-    const session = params.session ?? {
-      ok: true,
-      value: loadSessionEntry(
-        params.sessionKey,
-        params.agentId ? { agentId: params.agentId } : undefined,
-      ),
-    };
-    if (!session.ok) {
-      throw session.error;
-    }
-    const { cfg, storePath, entry, canonicalKey, agentId } = session.value;
-    if (entry?.sessionId !== params.sessionId) {
-      throw new Error("Aborted partial transcript session changed before persistence");
-    }
-    // Snapshot the incarnation before signaling. Reset can keep the SID, and
-    // the guarded writer rechecks both facts inside its commit transaction.
-    return {
-      runId,
-      abortOrigin,
-      ok: true,
-      value: {
-        sessionKey: canonicalKey,
-        sessionId: params.sessionId,
-        expectedSessionId: params.sessionId,
-        expectedLifecycleRevision: entry.lifecycleRevision ?? null,
-        agentId,
-        storePath,
-        cfg,
-        message: params.text,
-        createIfMissing: true,
-        idempotencyKey: `${runId}:assistant`,
-        abortMeta: { aborted: true, origin: abortOrigin, runId },
-      },
-    };
-  } catch (error) {
-    // Preparation is fallible metadata I/O, never a prerequisite for cancellation.
-    return { runId, abortOrigin, ok: false, error };
-  }
-}
-
 export async function persistAbortedPartials(params: {
   context: { logGateway: { warn: (message: string) => void } };
   snapshots: AbortedPartialSnapshot[];
-}): Promise<void> {
+}): Promise<string | undefined> {
+  let warning: string | undefined;
   for (const snapshot of params.snapshots) {
     if (!snapshot.ok) {
-      throw snapshot.error;
+      throw abortedPartialPersistenceError(snapshot.error, warning);
     }
     const appended = await appendAssistantTranscriptMessage(snapshot.value);
     if (appended.skipped) {
@@ -489,8 +429,11 @@ export async function persistAbortedPartials(params: {
       if (snapshot.abortOrigin === "placement-abandon") {
         throw new Error(error);
       }
+      warning =
+        "Stopped, but a reply could not be saved to history. Copy any visible text before leaving this chat.";
     }
   }
+  return warning;
 }
 
 async function touchAssistantTranscriptSessionEntry(

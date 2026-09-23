@@ -145,4 +145,15 @@ describe("browser action input file/download commands", () => {
     expect(String(errorCall?.[0])).toContain("Specify only one of --accept or --dismiss");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
+
+  it.each(["", "  padded 🦞  "])("preserves prompt response %j", async (prompt) => {
+    await createActionInputProgram().parseAsync(
+      ["browser", "dialog", "--accept", "--prompt", prompt],
+      { from: "user" },
+    );
+    expect(gatewayMock.mock.calls.at(-1)?.[2]).toMatchObject({
+      path: "/hooks/dialog",
+      body: { accept: true, promptText: prompt },
+    });
+  });
 });

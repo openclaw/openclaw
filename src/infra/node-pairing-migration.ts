@@ -7,6 +7,8 @@
 // never repeats. Pending rows are 5-minute transients and are not migrated;
 // connecting nodes re-request their surface.
 import fs from "node:fs/promises";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preserveLegacyDesktopStreamOptOut } from "./device-pairing-node-desktop-migration.js";
 import { withPairedDeviceRecords, listApprovedPairedDeviceRoles } from "./device-pairing.js";
 import {
   coercePairingStateRecord,
@@ -50,6 +52,7 @@ async function archiveLegacyFile(path: string): Promise<void> {
  */
 export async function migrateLegacyNodePairingStore(params?: {
   baseDir?: string;
+  cfg?: OpenClawConfig;
   log?: { info: (message: string) => void; warn: (message: string) => void };
 }): Promise<LegacyNodePairingMigrationResult | null> {
   const { pendingPath, pairedPath } = resolvePairingPaths(params?.baseDir, "nodes");
@@ -91,6 +94,7 @@ export async function migrateLegacyNodePairingStore(params?: {
           lastConnectedAtMs:
             typeof row.lastConnectedAtMs === "number" ? row.lastConnectedAtMs : undefined,
         };
+        preserveLegacyDesktopStreamOptOut(device, params?.cfg ?? {}, now);
         migrated += 1;
       }
       return { value: undefined, persist: migrated > 0 };

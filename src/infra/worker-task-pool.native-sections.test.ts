@@ -1,16 +1,17 @@
 import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { workerTaskPoolEntrypoints } from "./worker-task-pool-runtime.test-support.js";
 import type { NativeCancellation } from "./worker-task-pool.native-sections.test-support.js";
 
 async function runFixture(ending: NativeCancellation | "exit"): Promise<unknown> {
   const { stdout } = await promisify(execFile)(
     process.execPath,
     [
-      "--import",
-      "tsx",
-      fileURLToPath(new URL("./worker-task-pool.native-sections.test-support.ts", import.meta.url)),
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.nativeSections),
+      ),
       ending,
     ],
     { timeout: 15_000 },

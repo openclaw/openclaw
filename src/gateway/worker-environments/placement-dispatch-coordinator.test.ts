@@ -665,8 +665,10 @@ describe("worker placement dispatch coordinator", () => {
       const releaseEnvironmentGuard = createDeferredCore();
       const environmentGuardEntered = createDeferredCore();
       const fullSweepJoinedEnvironmentPass = createDeferredCore();
+      const recoveryStarted = createDeferredCore();
       const recoveryCore = vi.fn(async () => {});
       const resumeProvisioning = vi.fn(async (_placement, reconcileCore) => {
+        recoveryStarted.resolve();
         await reconcileCore();
       });
       const dispatch = vi.fn(async () => {
@@ -706,12 +708,12 @@ describe("worker placement dispatch coordinator", () => {
         kind === "full" ? coordinated.reconcile() : coordinated.reconcileActive("worker-target");
       releaseEnvironmentGuard.resolve();
       await environmentGuardEntered.promise;
-      await Promise.resolve();
+      await setImmediatePromise();
       expect(resumeProvisioning).not.toHaveBeenCalled();
       releaseDispatch.resolve();
       await dispatching;
       await fullSweepJoinedEnvironmentPass.promise;
-      await Promise.resolve();
+      await recoveryStarted.promise;
 
       expect(resumeProvisioning).toHaveBeenCalledOnce();
       await Promise.all([externalEnvironmentPass, fullSweep]);

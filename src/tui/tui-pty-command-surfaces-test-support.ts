@@ -39,6 +39,10 @@ export async function exerciseTuiCommandSurface(
       await waitForRows((rows) =>
         ["/settings", "/exit"].every((text) => rows.some((row) => row.trim() === text)),
       );
+      await fixture.run.write("/browser-setup install --token fixture-secret\r", { delay: false });
+      await fixture.run.waitForOutput("Usage: /browser-setup", startupTimeoutMs);
+      const calls = await readFixtureLog(fixture.logPath);
+      expect(calls.some((entry) => entry.method === "sendChat")).toBe(false);
       await fixture.run.write("/gateway-status\r", { delay: false });
       await fixture.waitForLogEntry((entry) => entry.method === "getGatewayStatus");
       await waitForRows((rows) => rows.some((row) => row.trim() === "fixture gateway ok"));

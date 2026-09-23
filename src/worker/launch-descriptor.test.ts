@@ -461,7 +461,7 @@ describe("worker launch descriptor", () => {
       { security: null, ask: "off" },
       { security: "deny", ask: false },
       { host: "gateway", security: "full", ask: "off", unexpected: true },
-      ...[null, false, {}, ["head"], ["/usr/bin/head"]].map((safeBins) => ({
+      ...[undefined, null, false, {}, ["head"], ["/usr/bin/head"]].map((safeBins) => ({
         host: "gateway",
         security: "allowlist",
         ask: "off",
@@ -510,11 +510,55 @@ describe("worker launch descriptor", () => {
     }
   });
 
+  it("preserves omitted optional authority fields and rejects inherited grants", () => {
+    const descriptor = launchDescriptor();
+    const allowedToolNames = ["read"];
+    const exec = { host: "node", security: "full", ask: "off" };
+    for (const [authority, expected] of [
+      [{ allowedToolNames, exec: undefined }, { allowedToolNames }],
+      [
+        { allowedToolNames, exec: { ...exec, node: undefined, safeBins: [] } },
+        { allowedToolNames, exec: { ...exec, safeBins: [] } },
+      ],
+      [
+        {
+          allowedToolNames,
+          exec: Object.assign(Object.create({ node: undefined }), { ...exec, host: "gateway" }),
+        },
+        { allowedToolNames, exec: { ...exec, host: "gateway" } },
+      ],
+    ]) {
+      expect(
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, toolAuthority: authority },
+        }).assignment.toolAuthority,
+      ).toStrictEqual(expected);
+    }
+    for (const toolAuthority of [
+      Object.assign(Object.create({ exec }), { allowedToolNames }),
+      { allowedToolNames, exec: Object.assign(Object.create({ node: "other" }), exec) },
+      { allowedToolNames, exec: Object.assign(Object.create({ safeBins: [] }), exec) },
+      ...["gateway", "sandbox"].map((host) => ({
+        allowedToolNames,
+        exec: Object.assign(Object.create({ node: "other" }), { ...exec, host }),
+      })),
+    ]) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, toolAuthority },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
+  });
+
   it("accepts only a closed absolute loopback browser attachment descriptor", () => {
     const descriptor = launchDescriptor();
     descriptor.assignment.browser = {
       cdpUrl: "http://127.0.0.1:9222",
       launcherPath: "/usr/local/bin/openclaw-worker-browser",
+      launcherArgs: ["literal;$(text)", "arg with spaces"],
     };
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
 
@@ -526,6 +570,12 @@ describe("worker launch descriptor", () => {
       { ...browser, cdpUrl: "http://127.0.0.1" },
       { ...browser, cdpUrl: "http://127.0.0.1:9222/json/version" },
       { ...browser, launcherPath: "openclaw-worker-browser" },
+      { ...browser, launcherPath: "/app\0" },
+      { ...browser, launcherPath: `/${"x".repeat(4096)}` },
+      { ...browser, launcherArgs: ["arg\0"] },
+      { ...browser, launcherArgs: Array(33).fill("a") },
+      { ...browser, launcherArgs: ["x".repeat(4097)] },
+      { ...browser, launcherArgs: Array(3).fill("x".repeat(4096)) },
     ];
     for (const invalidBrowser of cases) {
       expect(() =>

@@ -59,6 +59,45 @@ mutating native state. The callback belongs to one registered harness lifetime;
 retaining it after the operation closes does not retain authority. Post-delete
 hooks are notifications, not the owner of durable binding removal.
 
+Implement `withSessionContextReset(params, run)` when a native binding must be
+invalidated by a successful same-key rewind or branch switch. This optional hook
+uses the same prepared `commit`/`rollback` contract, but keeps the session key and
+retained history. Core commits invalidation only after validating the requested
+cut and restores it if the transcript transaction fails. Release subscriptions
+after the committed mutation settles. The optional `previousSessionId` is the
+recorded predecessor, allowing retirement of a binding not yet transferred after
+compaction without adopting it during preparation. Ordinary compaction does not
+invoke this hook and continues to preserve native thread continuity.
+
+## Shared native binding lifecycle
+
+Official harnesses use the JavaScript-only private
+`openclaw/plugin-sdk/agent-harness-session-runtime`; it is not a third-party
+Plugin SDK contract and uses the existing synchronous plugin-state store.
+`createNativeSessionBindingLifecycle` owns exact-token lease acquisition,
+renewal, mutation fences, and transactional deletion/rollback. The backend
+supplies its record codec, acquisition/retention policy, errors, and timing.
+Pass host authority through `assertCurrent` and validate the expected generation
+in `assertRecordCurrent`. Leases coordinate storage; they grant no execution
+authority. Keep native cleanup after the host transaction commits.
+
+Inside `withLease`, call `captureLeaseAssertion(key)` to capture the exact owner
+and recheck its live, unexpired lease before native requests or transcript writes.
+Combine it with host authority for normal work. Cleanup may use retained lease
+ownership after host retirement, but must reject an expired, replaced, or closed
+lease even while the harness remains alive.
+
+`captureNativeSessionGenerationAuthority`, `reclaimNativeSessionGeneration`,
+and `resolveNativeSessionBinding` preserve the host generation and predecessor
+across waits, adopting a verified predecessor before stale reclamation. A missing
+host entry permits an ephemeral session; a failed read cannot authorize a binding.
+
+`createNativeSessionInitializationOwner` associates binding and upstream-link
+writes with the exact host creation handle. Rollback requires the matching
+store, identity, binding, and live authority, removes only the exact upstream
+link, then invokes backend cleanup. Queue selection, native protocol/policy,
+and resource cleanup remain with the backend; core owns host session lifecycle.
+
 ## Subagent task history
 
 Native subagents can expose the shared task transcript view through the optional
@@ -94,6 +133,12 @@ the child, create another transcript store, or change cancellation and recovery.
 
 ## Tool and media results
 
+`inferToolMetaFromArgs` from `openclaw/plugin-sdk/agent-harness-runtime` returns
+compact, lossy display metadata. Array values deeper than 64 levels are omitted;
+shallower siblings still contribute to the preview. The helper can return
+`undefined`. Keep the original arguments for validation and execution: display
+metadata is neither an argument replacement nor a general-purpose traversal limit.
+
 Core constructs the OpenClaw tool list and passes it into the prepared
 attempt. When a harness executes a dynamic tool call, return the tool result
 back through the harness result shape instead of sending channel media
@@ -101,6 +146,35 @@ yourself.
 
 This keeps text, image, video, music, TTS, approval, and messaging-tool
 outputs on the same delivery path as OpenClaw-backed runs.
+
+For messaging tools, read the original result's `details.messageDelivery` with
+`readEmbeddedMessageDeliveryFact` from `openclaw/plugin-sdk/agent-harness-runtime`.
+Only settled delivery counts as a sent message; successful dry runs and suppressed
+sends must not suppress a later reply. Preserve partial delivery evidence when a
+tool also reports an error. Messaging tool results without a delivery fact use
+`isDeliveredMessagingToolResult`, which owns tool eligibility and receipt interpretation.
+For core conversation tools, it reads the original Gateway result's `details.status`:
+`sent` confirms delivery, as do `replied` and `timeout` for `conversations_turn`.
+A peer-reply timeout or correlation error does not undo the channel send or change
+the tool's error status. `queued`, `suppressed`, and `unknown` do not confirm delivery,
+even when they include a prepared message ID. Session coordination results are not
+external delivery receipts.
+Use `requirePluginDeliveryId: true` when legacy plugin results need a concrete
+message ID; authoritative core conversation statuses do not require one.
+`projectPluginMessageDeliveryFact` reads legacy result envelopes into the shared
+delivery shape, retaining partial-delivery status for attachment handling.
+For legacy message sends, an error takes precedence over a message ID unless
+the result confirms partial delivery.
+Use `isDeliveredMessagingToolSendToCurrentSource` for source-route comparisons and
+`extractMessagingToolSourceReplyPayload` to retain attachment metadata and the
+transcript owner's confirmation. Presentation middleware cannot establish new
+delivery facts.
+
+The same runtime entrypoint exports `sanitizeToolArgs` for diagnostic tool
+arguments and event payloads. It redacts nested fields without mutating the input
+and preserves own JSON keys, including `__proto__`; repeated references become
+`"[Circular]"`. Use `sanitizeToolResult` for result presentation, which also applies
+the shared result-size and image-storage rules.
 
 For successful `sessions_spawn` results, use `normalizeAcceptedSessionSpawnResult`
 from `openclaw/plugin-sdk/agent-harness-tool-runtime` and retain its

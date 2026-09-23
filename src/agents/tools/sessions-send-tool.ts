@@ -15,6 +15,7 @@ import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { AgentRouteBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { shouldResumeParentSubagent } from "../../gateway/session-subagent-resume.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store-lookup.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
@@ -67,14 +68,10 @@ import { ToolInputError } from "../tool-input-error.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
 import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
-import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
   hasInProcessGatewayToolContext,
-  runWithGatewayToolCleanupContext,
+  runWithGatewayToolContinuationContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
@@ -90,7 +87,7 @@ import {
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
 import { buildAgentToAgentMessageContext } from "./sessions-send-helpers.js";
-import { resumeSessionsSendTask } from "./sessions-send-resume.js";
+import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import { startSessionsSendAgentRun } from "./sessions-send-tool.delivery.js";
 
@@ -349,17 +346,8 @@ export function createSessionsSendTool(opts?: {
       ) {
         throw new ToolInputError("mode must be notify, steer, followup, or resume");
       }
-      const caller = mode === "resume" ? getGatewayToolCallerIdentity() : undefined;
-      const assertCallerCurrent =
-        mode === "resume" ? captureGatewayToolCallerAssertion() : undefined;
       const resumeCaller =
-        caller && assertCallerCurrent
-          ? {
-              agentId: caller.agentId,
-              sessionKey: caller.sessionKey,
-              assertCurrent: assertCallerCurrent,
-            }
-          : undefined;
+        mode === undefined || mode === "resume" ? captureSessionsSendResumeCaller() : undefined;
       if (mode === "resume" && !resumeCaller) {
         return jsonResult({
           runId: crypto.randomUUID(),
@@ -964,7 +952,17 @@ export function createSessionsSendTool(opts?: {
             extraSystemPrompt: agentMessageContext,
             inputProvenance,
           };
-          if (mode === "resume") {
+          if (
+            mode === "resume" ||
+            (mode === undefined &&
+              resumeCaller &&
+              !targetAcpMeta &&
+              shouldResumeParentSubagent({
+                cfg,
+                caller: resumeCaller,
+                childSessionKey: resolvedKey,
+              }))
+          ) {
             if (!resumeCaller) {
               throw new ToolInputError("Task resume requires an admitted parent tool caller.");
             }
@@ -1077,8 +1075,8 @@ export function createSessionsSendTool(opts?: {
               return;
             }
             // Detached turns must not retain the caller's resource or runtime generation scope.
-            runWithGatewayToolCleanupContext(() => {
-              void runWithGatewayDetachedWorkContinuation(
+            void runWithGatewayToolContinuationContext(() =>
+              runWithGatewayDetachedWorkContinuation(
                 () =>
                   runOutsidePreparedModelRuntimePluginGenerationScope(() =>
                     runWithoutOwnedSessionTranscriptWrites(() =>
@@ -1104,11 +1102,11 @@ export function createSessionsSendTool(opts?: {
                     ),
                   ),
                 "session:a2a-send",
-              ).catch((err: unknown) => {
-                log.warn("sessions_send announce flow admission failed", {
-                  runId,
-                  error: formatErrorMessage(err),
-                });
+              ),
+            ).catch((err: unknown) => {
+              log.warn("sessions_send announce flow admission failed", {
+                runId,
+                error: formatErrorMessage(err),
               });
             });
           };
@@ -1157,7 +1155,7 @@ export function createSessionsSendTool(opts?: {
             return jsonResult({
               runId,
               status: "timeout",
-              error: result.error,
+              error: result.error ?? "agent run timed out",
               sentBeforeError: true,
               sessionKey: displayKey,
               ...watchField,

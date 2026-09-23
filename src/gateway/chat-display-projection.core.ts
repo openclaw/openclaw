@@ -18,7 +18,10 @@ import {
 } from "../sessions/nested-tool-activity.js";
 import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import { formatProviderRefusalText } from "../shared/assistant-error-format.js";
-import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
+import {
+  isOpenClawMessageToolMirrorAssistantMessage,
+  isTranscriptOnlyOpenClawAssistantMessage,
+} from "../shared/transcript-only-openclaw-assistant.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
@@ -36,7 +39,6 @@ import {
   toProjectedMessages,
   type SubagentCoordinationDisplayResolver,
 } from "./chat-display-projection.history.js";
-import { createMessageToolVisibleReplyProjection } from "./chat-display-projection.message-tool.js";
 import {
   sanitizeChatHistoryContentBlock,
   sanitizeChatHistoryMessage,
@@ -49,6 +51,7 @@ import type {
   CurrentUserProfileDisplay,
   CurrentUserProfileDisplayResolver,
 } from "./current-user-profile-display.js";
+import { projectTranscriptImageArtifacts } from "./transcript-image-artifacts.js";
 
 export type ChatDisplayProjectionOptions = {
   resolveCronJobName?: (jobId: string) => string | undefined;
@@ -422,7 +425,8 @@ function prepareChatHistoryRecoveryMessages(
   messages: unknown[],
   options?: ChatHistoryRecoveryOptions,
 ) {
-  const projectedMessages = messages.map((message) => {
+  const projectedMessages = messages.map((original) => {
+    const message = projectTranscriptImageArtifacts(original);
     const entry = asOptionalRecord(message);
     if (entry?.role === "custom" && entry.customType === "run-failed-before-reply") {
       const runId = normalizeOptionalString(asOptionalRecord(entry.details)?.runId);
@@ -460,27 +464,18 @@ function prepareChatHistoryRecoveryMessages(
 }
 
 export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecoveryOptions) {
-  const mirror = createMessageToolVisibleReplyProjection();
   const projectCoordination = createSubagentCoordinationHistoryProjection(
     options?.subagentCoordination,
   );
-  let recovery = createRecoveredAssistantErrorProjection(options?.assistantErrorPending);
-  let processedMessages = 0;
+  const recovery = createRecoveredAssistantErrorProjection(options?.assistantErrorPending);
   return {
     append(messages: unknown[]) {
-      const mirrored = mirror.append(
-        projectCoordination(prepareChatHistoryRecoveryMessages(messages, options)),
-      );
-      if (mirrored.replacedFrom !== undefined && mirrored.replacedFrom < processedMessages) {
-        // A late tool result can hide an earlier delivery mirror and undo a repair.
-        // Replay the same recovery owner over retained derived rows in that case.
-        recovery = createRecoveredAssistantErrorProjection(options?.assistantErrorPending);
-        processedMessages = 0;
+      const projected = projectCoordination(prepareChatHistoryRecoveryMessages(messages, options));
+      for (const message of toProjectedMessages(projected)) {
+        if (!isOpenClawMessageToolMirrorAssistantMessage(message)) {
+          recovery.append(message);
+        }
       }
-      for (const message of toProjectedMessages(mirrored.messages.slice(processedMessages))) {
-        recovery.append(message);
-      }
-      processedMessages = mirrored.messages.length;
     },
     get pending() {
       return recovery.pending;

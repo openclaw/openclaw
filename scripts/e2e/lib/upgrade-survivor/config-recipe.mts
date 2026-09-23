@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  classifyReleaseTrain,
   compareReleaseVersions,
   parsePinnedReleaseVersion,
   parseReleaseVersion,
@@ -137,6 +138,18 @@ function configSetJsonFile(
 
 const representativeConfigSteps: ConfigStep[] = [
   configSetJsonFile("models-openai", "models", "models.providers.openai", "models-openai.json"),
+  configSetJsonFile(
+    "models-anthropic",
+    "models-anthropic",
+    "models.providers.anthropic",
+    "models-anthropic.json",
+  ),
+  configSetJsonFile(
+    "models-google",
+    "models-google",
+    "models.providers.google",
+    "models-google.json",
+  ),
   // Keep the migration specimen idle while baseline and candidate services run:
   // a heartbeat refreshes its skills snapshot before inference, even when auth fails.
   configSetJsonFile("agents", "agents", "agents", "agents.json"),
@@ -232,7 +245,16 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
           "config",
           "set",
           "plugins.allow",
-          JSON.stringify(["discord", "memory", "telegram", "whatsapp", "codex"]),
+          JSON.stringify([
+            "anthropic",
+            "google",
+            "openai",
+            "discord",
+            "memory",
+            "telegram",
+            "whatsapp",
+            "codex",
+          ]),
           "--strict-json",
         ],
       },
@@ -337,7 +359,14 @@ function adaptStepForBaseline(
       agents.entries.main.default = true;
       delete agents.ownership;
     }
-    if (compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1) {
+    // July's extended-stable line branched before keyed rosters shipped.
+    const baselineRelease = parseReleaseVersion(baselineVersion ?? "");
+    if (
+      (baselineRelease?.year === 2026 &&
+        baselineRelease.month === 7 &&
+        classifyReleaseTrain(baselineRelease) === "extended-stable") ||
+      compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1
+    ) {
       agents.list = Object.entries<Record<string, unknown>>(agents.entries).map(([id, entry]) =>
         Object.assign(entry, { id }),
       );

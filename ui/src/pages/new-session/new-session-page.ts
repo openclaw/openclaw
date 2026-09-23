@@ -4,7 +4,6 @@ import { property, state } from "lit/decorators.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { LazyCustomElementRequestController } from "../../app/lazy-custom-element.ts";
-import { readPresenceEntries } from "../../app/user-profile.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import "../../styles/new-session-attachment-panel.css";
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
@@ -20,6 +19,7 @@ import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
+import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
@@ -31,11 +31,12 @@ import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import { ConnectMachineSetupState, renderConnectMachineDialog } from "./connect-machine-dialog.ts";
 import { renderNewSessionBody } from "./draft-body.ts";
-import { DraftGatewayState } from "./draft-gateway-state.ts";
+import { NewSessionDraftController } from "./draft-controller.ts";
+import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import * as drafts from "./draft-navigation-handoff.ts";
-import { DraftPlaceBrowser } from "./draft-place-browser.ts";
-import { DraftPlaceState } from "./draft-place-state.ts";
-import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
+import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
+import type { DraftPlaceState } from "./draft-place-state.ts";
+import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { NewSessionTitleController } from "./draft-title.ts";
 import { renderNewSessionDraftView } from "./draft-view.ts";
 import { renderNewSessionIncognitoControl } from "./incognito-control.ts";
@@ -45,10 +46,7 @@ import {
   closeAgentPicker,
   closeSessionMenus,
   createControllerHost,
-  isPlaceTopologyEvent,
-  nodePresenceStateSignature,
 } from "./new-session-runtime.ts";
-import type { SubmissionOutcomeReason } from "./session-placement-recovery-state.ts";
 import { renderAgentSelect, renderNewSessionPlaceControls } from "./target-controls.ts";
 
 registerNewSessionSetupEnglish();
@@ -80,7 +78,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private openedGroupDefaults = "";
   private openedAgentId = "";
   private messageOwnerKey = "";
-  private presenceSignature = "";
   private readonly connectMachine: ConnectMachineSetupState;
   @state() private attachmentPanel: {
     content: Extract<SidebarContent, { kind: "attachment" }>;
@@ -106,6 +103,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
     () => this.data,
     () => this.context?.revalidate("new-session"),
   );
+  private readonly draft: NewSessionDraftController;
   private readonly gateway: DraftGatewayState;
   private readonly browser: DraftPlaceBrowser;
   private readonly place: DraftPlaceState;
@@ -127,81 +125,20 @@ export class NewSessionPage extends OpenClawLightDomElement {
   constructor() {
     super();
     const host = createControllerHost(this);
-    this.gateway = new DraftGatewayState(
+    this.draft = new NewSessionDraftController(
       host,
-      () => ({
-        context: this.context,
-        data: this.data,
-        isConnected: this.isConnected,
-        isAdmin: this.place?.isAdmin() ?? false,
-        canStartAsDraft: this.submission?.capabilities.canStartAsDraft(this.context) ?? false,
-        visibility: this.submission?.visibility ?? "normal",
-        cloudProfileId: this.place?.cloudProfileId ?? "",
-        pendingPlacement: this.submission?.pendingPlacement ?? {
-          sessionKey: "",
-          gatewayUrl: "",
-          recoveryScope: "",
-        },
-        agentsHydrated: this.place?.agentsHydrated ?? false,
-        runtimeId: this.place?.devicePlacementRuntime()?.id ?? "",
-      }),
-      {
-        requestUpdate: () => this.requestUpdate(),
-        updateComplete: () => this.updateComplete,
-        onInvalidate: (resetHostSelection, outcome) =>
-          this.invalidateGatewayDiscovery(resetHostSelection, outcome),
-        onVisibilityRetired: () => this.submission.setVisibility("normal"),
-        onCloudProfileCleared: () => this.place.clearCloudProfile(),
-        onCloudState: (error) => this.submission.setError(error),
-        onPendingPlacementReset: () => this.submission.releasePendingPlacementOwner(),
-        onRecoveryReady: (gatewayUrl, recoveryScope) =>
-          restoreDraftOwner(this.submission, gatewayUrl, recoveryScope),
-        onAdoptAgentDefaults: () =>
-          this.place.adoptAgentDefaults({
-            preserveSelectedAgent: true,
-            preserveSelectedFolder: true,
-          }),
-      },
-    );
-    this.browser = new DraftPlaceBrowser(
-      host,
-      this.gateway,
-      () => ({
-        context: this.context,
-        isAdmin: this.place?.isAdmin() ?? false,
-      }),
-      {
-        requestUpdate: () => this.requestUpdate(),
-        onProjectMissing: () => this.place.clearProjectSelection(),
-        onSelectProject: (projectId) => this.place.selectProjectId(projectId),
-        onApprovedListing: (listing) => this.place.recordGatewayApprovedListing(listing),
-        querySelector: (selector) => this.querySelector(selector),
-        activeElement: () => this.ownerDocument.activeElement,
-        body: () => this.ownerDocument.body,
-      },
-    );
-    this.place = new DraftPlaceState(
-      this.gateway,
-      this.browser,
-      () => ({
-        context: this.context,
-        data: this.data,
-        submitting: this.submission?.submitting ?? false,
-        pendingPlacementSessionKey: this.submission?.pendingPlacement.sessionKey ?? "",
-      }),
-      {
-        requestUpdate: () => this.requestUpdate(),
-        onError: (error) =>
-          error === null ? this.submission.clearError() : this.submission.setError(error),
-        onClearError: (error) => this.submission.clearError(error),
-      },
-    );
-    this.submission = new DraftSubmissionFlow(
-      this.gateway,
-      this.place,
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {
         requestUpdate: () => this.requestUpdate(),
+        querySelector: (selector) => this.querySelector(selector),
+        activeElement: () => this.ownerDocument.activeElement,
+        body: () => this.ownerDocument.body,
+        onInvalidate: () => {
+          this.closeAttachmentPanel();
+          this.connectMachine?.close();
+        },
+        onRecoveryReady: (gatewayUrl, recoveryScope) =>
+          restoreDraftOwner(this.submission, gatewayUrl, recoveryScope),
         closeTransientUi: () => {
           this.closeAttachmentPanel();
           closeSessionMenus(this);
@@ -234,6 +171,10 @@ export class NewSessionPage extends OpenClawLightDomElement {
         },
       },
     );
+    this.gateway = this.draft.gateway;
+    this.browser = this.draft.browser;
+    this.place = this.draft.place;
+    this.submission = this.draft.submission;
     this.connectMachine = new ConnectMachineSetupState(
       () => ({ client: this.gateway.client, connected: this.gateway.connected }),
       () => this.requestUpdate(),
@@ -255,39 +196,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
         (theme, notify) => theme.subscribe(notify),
       )
       .watch(
-        () => this.context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
-        (gateway) => this.gateway.synchronize(gateway),
-      )
-      .effect(
-        () => this.context?.gateway,
-        (gateway) => {
-          this.presenceSignature = nodePresenceStateSignature(
-            readPresenceEntries(gateway.snapshot.hello?.snapshot) ?? [],
-          );
-          return gateway.subscribeEvents((event) => {
-            if (this.context?.gateway !== gateway) {
-              return;
-            }
-            if (isPlaceTopologyEvent(event.event)) {
-              void this.gateway.refreshCloudProfiles();
-              this.gateway.handleCatalogRetry();
-              return;
-            }
-            const presence = event.event === "presence" ? readPresenceEntries(event.payload) : null;
-            if (!presence) {
-              return;
-            }
-            const signature = nodePresenceStateSignature(presence);
-            if (signature !== this.presenceSignature) {
-              this.presenceSignature = signature;
-              void this.gateway.refreshCloudProfiles();
-              this.gateway.handleCatalogRetry();
-            }
-          });
-        },
-      )
-      .watch(
         () => this.context?.agents,
         (agents, notify) => agents.subscribe(notify),
       )
@@ -299,6 +207,10 @@ export class NewSessionPage extends OpenClawLightDomElement {
         () => this.context?.sessions,
         (sessions, notify) => sessions.subscribe(notify),
         (sessions) => this.groupRouteRevalidation.synchronize(sessions),
+      )
+      .watch(
+        () => this.context?.placementStartup,
+        (startup, notify) => startup.subscribe(notify),
       )
       .watch(
         () => this.context?.runtimeConfig,
@@ -314,6 +226,25 @@ export class NewSessionPage extends OpenClawLightDomElement {
     if (event instanceof KeyboardEvent) {
       focusChatComposerFromPrintableKeydown(this, event);
     }
+  }
+
+  focusComposer(): void {
+    const context = this.context;
+    const owner = this.routeOwnerKey();
+    const previousFocus = document.activeElement;
+    void this.updateComplete.then(() => {
+      if (
+        this.isConnected &&
+        !this.retainedForHandoff &&
+        this.context === context &&
+        this.routeOwnerKey() === owner &&
+        // A later interaction owns focus even if this draft is still mounted.
+        (document.activeElement === previousFocus || document.activeElement === document.body) &&
+        !document.openClawModalLayers?.size
+      ) {
+        this.submission.composerTextarea.getTextarea()?.focus({ preventScroll: true });
+      }
+    });
   }
 
   override connectedCallback() {
@@ -342,13 +273,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private disposeDraft() {
     forgetInstantThreadPage(this.data, this);
     retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
-    this.gateway.invalidateDiscovery(
-      true,
-      this.submission.pendingPlacement.sessionKey ? "placement-interrupted" : "gateway-changed",
-    );
-    this.gateway.disconnect();
-    this.browser.disconnect();
-    this.submission.disconnect();
+    this.draft.disconnect();
   }
 
   override willUpdate() {
@@ -379,14 +304,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
     void this.context?.agentIdentity.ensure(
       this.agentPickerOpen ? this.place.agents().map((agent) => agent.id) : [this.place.agentId],
     );
-    const agentState = this.context?.agents.state;
-    const agentsReady = Boolean(
-      this.gateway.connected &&
-      this.gateway.client &&
-      agentState?.connected &&
-      agentState.client === this.gateway.client &&
-      this.place.agents().length > 0,
-    );
+    const agentsReady = this.draft.agentsReady();
     this.place.modelControl.loadCatalogTargets(
       this.context,
       agentsReady && this.place.agentId ? (this.place.selectedAgent()?.id ?? "") : "",
@@ -414,6 +332,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
         ownedMessage,
         ownedMentions,
       );
+      this.focusComposer();
       return;
     }
     if (this.openedGroupDefaults !== groupDefaults) {
@@ -424,34 +343,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
       this.openedAgentId = resolvedAgentId;
       this.place.setAgentsHydrated(false);
     }
-    if (!this.place.agentsHydrated && agentsReady) {
-      this.place.setAgentsHydrated(true);
-      this.place.adoptAgentDefaults({
-        preserveSelectedAgent: true,
-        preserveSelectedFolder: true,
-      });
-    }
-    this.place.restorePreferenceSelections();
-    this.place.synchronizeTerminalHosts();
+    this.draft.synchronizeSelections();
     activateDraft(this.submission, openKey);
     this.submission.resumeInterruptedSubmission();
-  }
-
-  private invalidateGatewayDiscovery(
-    resetHostSelection: boolean,
-    submissionOutcome: SubmissionOutcomeReason,
-  ) {
-    this.closeAttachmentPanel();
-    this.place.invalidateGatewayDiscovery(resetHostSelection);
-    this.submission.attachmentDraft.abortReads();
-    this.submission.invalidate(submissionOutcome);
-    if (resetHostSelection && this.submission.pendingPlacement.sessionKey) {
-      this.submission.markPendingPlacementUnavailable(submissionOutcome);
-    }
-    if (resetHostSelection) {
-      this.submission.clearError();
-    }
-    this.connectMachine.close();
   }
 
   private resetDraft() {
@@ -506,6 +400,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
         submitting: this.submission.submitting,
         pendingPlacement: Boolean(this.submission.pendingPlacement.sessionKey),
         onConnectMachine: () => this.openConnectMachine(),
+        onNavigate: (route, options) => this.context?.navigate(route, options),
+        onFocusComposer: () =>
+          this.submission.composerTextarea.getTextarea()?.focus({ preventScroll: true }),
         requestUpdate: () => this.requestUpdate(),
       }),
       retrying:
@@ -589,6 +486,8 @@ export class NewSessionPage extends OpenClawLightDomElement {
 
   override render() {
     const pendingMessage = this.submission.pendingMessage;
+    const completed = this.submission.completedSubmission;
+    const startup = completed ? this.context?.placementStartup.get(completed.key) : null;
     const identity = this.context?.gateway.snapshot.selfUser?.identity;
     const incognito = this.submission.visibility === "incognito";
     const panelLoad = this.attachmentPanelLoader.visibleState;
@@ -611,7 +510,23 @@ export class NewSessionPage extends OpenClawLightDomElement {
           pendingMessage,
           userId: identity?.type === "profile" ? identity.id : null,
           submitting: this.submission.submitting,
-          renderDraft: () => this.renderWelcome(),
+          statusLabel:
+            this.context?.gateway.snapshot.phase === "connected"
+              ? undefined
+              : t("connection.reconnecting"),
+          completion: completed
+            ? {
+                label:
+                  completed.error ??
+                  startup?.error ??
+                  chatStartupStatusLabel(null, startup) ??
+                  t("newSession.created"),
+                onOpen: () => void this.submission.openSubmittedSession(),
+                disabled: this.context?.gateway.snapshot.phase !== "connected",
+              }
+            : undefined,
+          showDraft: Boolean(completed),
+          renderDraft: () => (completed ? this.renderDraftBlock() : this.renderWelcome()),
           onOpenImage: this.setImageLightbox,
         })}
         ${renderConnectMachineDialog({

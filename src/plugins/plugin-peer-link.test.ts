@@ -261,32 +261,35 @@ describe("plugin peer links", () => {
     expect(messages.join("\n")).toContain('Linked peerDependency "openclaw"');
   });
 
-  it("relinks openclaw runtime dependencies in the managed npm root", async () => {
-    const npmRoot = makeTempDir();
-    const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
-    fs.mkdirSync(packageDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
-        name: "runtime-plugin",
-        version: "1.0.0",
-        dependencies: {
-          openclaw: "2026.7.1",
-        },
-      }),
-      "utf8",
-    );
+  it.each(["dependencies", "optionalDependencies"] as const)(
+    "relinks openclaw %s in the managed npm root",
+    async (declaration) => {
+      const npmRoot = makeTempDir();
+      const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
+      fs.mkdirSync(packageDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({
+          name: "runtime-plugin",
+          version: "1.0.0",
+          [declaration]: {
+            openclaw: "2026.7.1",
+          },
+        }),
+        "utf8",
+      );
 
-    const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({
-      npmRoot,
-      logger: {},
-    });
+      const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({
+        npmRoot,
+        logger: {},
+      });
 
-    const linkPath = path.join(packageDir, "node_modules", "openclaw");
-    expect(result).toEqual({ checked: 1, attempted: 1, repaired: 1, skipped: 0 });
-    expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
-    expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(process.cwd()));
-  });
+      const linkPath = path.join(packageDir, "node_modules", "openclaw");
+      expect(result).toEqual({ checked: 1, attempted: 1, repaired: 1, skipped: 0 });
+      expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+      expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(process.cwd()));
+    },
+  );
 
   it("reports one unreadable package and continues repairing its sibling", async () => {
     const npmRoot = makeTempDir();

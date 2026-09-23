@@ -312,8 +312,8 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       if (suspendedMethod === "model/list") {
         expect(fake.methods).not.toContain("thread/start");
       }
-      expect(fake.notifications).toHaveLength(0);
-      expect(fake.requests).toHaveLength(0);
+      expect(fake.notifications.size).toBe(0);
+      expect(fake.requests.size).toBe(0);
       if (!codexHome) {
         throw new Error("expected the bounded turn's temporary Codex home");
       }

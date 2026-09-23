@@ -4,7 +4,6 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
-  emitAgentActivityEvent,
   type AgentCommandOutputEventData,
   projectAgentToolActivity,
 } from "../infra/agent-activity-events.js";
@@ -16,6 +15,7 @@ import {
   buildCommandItemTitle,
   buildToolStartKey,
   emitAgentEventCallbackBestEffort,
+  emitToolActivityEvent,
   emitTrackedItemEvent,
   isExecToolName,
   toolStartData,
@@ -166,13 +166,7 @@ export function handleToolExecutionUpdate(
         output,
         status: "running",
       };
-      emitAgentActivityEvent({
-        runId: ctx.params.runId,
-        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-        stream: "command_output",
-        data: outputData,
-      });
-      emitAgentEventCallbackBestEffort(ctx, {
+      emitToolActivityEvent(ctx, {
         stream: "command_output",
         data: outputData,
       });

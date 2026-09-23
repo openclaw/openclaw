@@ -233,10 +233,13 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
       mentionMenu.close();
     } else {
       mentionMenu.update(
-        target.value,
-        target.selectionStart,
+        target,
         options.requestUpdate,
-        event?.inputType === "insertText" && event.data?.includes("@") === true,
+        !event
+          ? "selection"
+          : event.inputType === "insertText" && event.data?.includes("@") === true
+            ? "trigger"
+            : "input",
       );
     }
     updateEmojiMenu(target);
@@ -245,6 +248,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     const target = event.currentTarget;
     if (target instanceof HTMLTextAreaElement) {
       if (event.type === "keyup") {
+        mentionMenu.update(target, options.requestUpdate);
         updateEmojiMenu(target);
       } else {
         updateMenus(target);
@@ -387,7 +391,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               .value=${guard([visibleMessage], () => live(visibleMessage))}
               aria-autocomplete="list"
               aria-controls=${ifDefined(menuVisible ? menuListboxId : undefined)}
-              aria-expanded=${ifDefined(menuVisible ? "true" : undefined)}
+              aria-haspopup=${ifDefined(menuVisible ? "listbox" : undefined)}
               aria-activedescendant=${ifDefined(activeMenuOptionId ?? undefined)}
               aria-describedby=${menuAnnouncementId}
               @input=${(event: InputEvent) => {
@@ -475,6 +479,9 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                 }
               }}
             ></textarea>
+            <span class="agent-chat__composer-placeholder" aria-hidden="true"
+              >${animatedPlaceholder}</span
+            >
             <span
               id=${menuAnnouncementId}
               class="sr-only"
@@ -515,7 +522,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
       ${
         options.blockedSubmitNotice
           ? html`<div
-              class="new-session-page__blocked-submit agent-chat__composer-underlaps"
+              class="new-session-page__blocked-submit agent-chat__composer-status"
               data-tone="info"
               role="status"
             >

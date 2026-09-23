@@ -6,6 +6,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
 import type { HealthSummary } from "../health/types.js";
+import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 /**
  * Health-state cache tests covering coalescing, sensitive probes, and broadcasts.
@@ -390,32 +391,60 @@ describe("refreshGatewayHealthSnapshot", () => {
     expect(healthState.getHealthCache()).toBe(secondPassiveSummary);
   });
 
-  it("passes event-loop health only when the hook returns a snapshot", async () => {
-    const healthState = await loadHealthState();
-    const eventLoop = {
-      degraded: true,
-      degradedSinceMs: 61_000,
-      reasons: ["event_loop_delay" as const],
-      intervalMs: 2_000,
-      delayP99Ms: 1_500,
-      delayMaxMs: 1_700,
-      utilization: 0.2,
-      cpuCoreRatio: 0.1,
-    };
-
-    await healthState.refreshGatewayHealthSnapshot({
-      probe: false,
-      getEventLoopHealth: () => eventLoop,
-    });
-    await healthState.refreshGatewayHealthSnapshot({
-      probe: true,
-      getEventLoopHealth: () => undefined,
-    });
-
-    expect(collectGatewayHealthSnapshotMock).toHaveBeenCalledTimes(2);
-    expect(healthSnapshotCallArg()?.eventLoop).toBe(eventLoop);
-    expect(Object.hasOwn(healthSnapshotCallArg(1) ?? {}, "eventLoop")).toBe(false);
-  });
+  it.each([
+    { includeSensitive: false, reset: false },
+    { includeSensitive: false, reset: true },
+    { includeSensitive: true, reset: false },
+    { includeSensitive: true, reset: true },
+  ])(
+    "publishes current event-loop health after collection ($includeSensitive, $reset)",
+    async ({ includeSensitive, reset }) => {
+      const healthState = await loadHealthState();
+      const initial = {
+        degraded: true,
+        degradedSinceMs: 61_000,
+        reasons: ["event_loop_delay" as const],
+        intervalMs: 2_000,
+        delayP99Ms: 1_500,
+        delayMaxMs: 1_700,
+        utilization: 0.2,
+        cpuCoreRatio: 0.1,
+      };
+      let current: GatewayEventLoopHealth | undefined = initial;
+      const started = createDeferred();
+      const release = createDeferred();
+      const broadcast = vi.fn();
+      healthState.setBroadcastHealthUpdate(broadcast);
+      collectGatewayHealthSnapshotMock.mockImplementationOnce(
+        async (params: { eventLoop?: HealthSummary["eventLoop"] }) => {
+          started.resolve();
+          await release.promise;
+          return {
+            ...createHealthSummary(),
+            ...(params.eventLoop ? { eventLoop: params.eventLoop } : {}),
+          };
+        },
+      );
+      const pending = healthState.refreshGatewayHealthSnapshot({
+        probe: true,
+        includeSensitive,
+        getEventLoopHealth: () => current,
+      });
+      await started.promise;
+      current = reset
+        ? undefined
+        : { ...initial, delayP99Ms: 20, delayMaxMs: 25, cpuCoreRatio: 1.2 };
+      release.resolve();
+      const result = await pending;
+      expect(result.eventLoop).toBe(current);
+      if (includeSensitive) {
+        expect(broadcast).not.toHaveBeenCalled();
+      } else {
+        expect(healthState.getHealthCache()).toBe(result);
+        expect(broadcast).toHaveBeenCalledExactlyOnceWith(result);
+      }
+    },
+  );
 
   it("passes the config reloader hot-reload status only when the hook returns one", async () => {
     const healthState = await loadHealthState();

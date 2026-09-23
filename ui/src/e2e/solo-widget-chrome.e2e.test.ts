@@ -120,15 +120,28 @@ suite.define(() => {
         const menu = await showHeaderMenu(page);
         await page.keyboard.press("Escape");
         await page.locator(".chat-header-session-menu__trigger").focus();
+        await menu.locator("wa-dropdown").evaluate((dropdown) => {
+          dropdown.addEventListener(
+            "wa-after-show",
+            () => dropdown.setAttribute("data-e2e-after-show", ""),
+            { once: true },
+          );
+        });
         await page.keyboard.press("Enter");
+        await expect
+          .poll(() => menu.locator("wa-dropdown").getAttribute("data-e2e-after-show"))
+          .not.toBeNull();
         const capabilities = menu.getByRole("note", { name: "Active widget capabilities" });
         await capabilities.waitFor({ state: "visible" });
         expect(await capabilities.textContent()).toContain("Tool: health");
         await menu.locator('[value="board-widget:resize:xl"]').waitFor();
-        const itemFonts = await menu
-          .locator("wa-dropdown-item")
-          .evaluateAll((items) => items.map((item) => getComputedStyle(item).font));
-        expect(new Set(itemFonts).size).toBe(1);
+        const itemFonts = await menu.evaluate((element) =>
+          Array.from(
+            element.querySelectorAll("wa-dropdown-item"),
+            (item) => getComputedStyle(item).font,
+          ),
+        );
+        expect([...new Set(itemFonts)]).toEqual([expect.any(String)]);
         await page.screenshot({ path: path.join(suite.artifactDir, "candidate-header-menu.png") });
         const resized = { ...board, revision: 2 };
         await gateway.setMethodResponse("board.update", resized);

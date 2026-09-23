@@ -132,7 +132,7 @@ describe("listThinkingLevels", () => {
     }));
 
     expect(listThinkingLevels("openai", "gpt-5.6-luna", undefined, "openclaw")).toContain("ultra");
-    expect(listThinkingLevels("openai", "gpt-5.6-luna", undefined, "codex")).not.toContain("ultra");
+    expect(listThinkingLevels("openai", "gpt-5.6-luna", undefined, "codex")).toContain("ultra");
     expect(providerRuntimeMocks.resolveProviderThinkingProfile).toHaveBeenLastCalledWith({
       provider: "openai",
       context: expect.objectContaining({ agentRuntime: "codex" }),
@@ -645,6 +645,7 @@ describe("listThinkingLevels", () => {
       "off",
       "high",
       "max",
+      "ultra",
     ]);
   });
 
@@ -708,6 +709,36 @@ describe("listThinkingLevels", () => {
     ).toBe(true);
   });
 
+  it("does not treat provider-native effort labels as user thinking aliases", () => {
+    const catalog = [
+      {
+        provider: "custom",
+        id: "native-efforts",
+        api: "openai-completions",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["high", "XHIGH", "MAX", "extra-high", "auto"] },
+      },
+    ];
+
+    expect(listThinkingLevels("custom", "native-efforts", catalog, "openclaw")).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "ultra",
+    ]);
+    expect(
+      isThinkingLevelSupported({
+        provider: "custom",
+        model: "native-efforts",
+        level: "max",
+        catalog,
+        agentRuntime: "openclaw",
+      }),
+    ).toBe(false);
+  });
+
   it("uses advanced catalog efforts and derives OpenClaw Ultra from Max", () => {
     const catalog = [
       {
@@ -750,7 +781,7 @@ describe("listThinkingLevels", () => {
         agentRuntime: "openclaw",
       }),
     ).toBe(true);
-    expect(listThinkingLevels("myazure", "gpt-5.6-sol", catalog, "codex")).not.toContain("ultra");
+    expect(listThinkingLevels("myazure", "gpt-5.6-sol", catalog, "codex")).toContain("ultra");
   });
 
   it("preserves catalog-advertised Ultra for non-OpenClaw runtimes", () => {

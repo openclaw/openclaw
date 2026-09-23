@@ -273,7 +273,10 @@ describe("detectChangedScope", () => {
       "scripts/format-swift.sh",
       "scripts/install-swift-tools.sh",
       "scripts/install-xcodegen.sh",
+      "scripts/lib/swift-toolchain.sh",
       "scripts/lint-swift.sh",
+      "scripts/run-swiftlint.mts",
+      "scripts/lib/check-limits.mts",
       "scripts/prepare-apple-mermaid.mjs",
     ]) {
       expect(detectChangedScope([toolingPath])).toEqual({
@@ -404,7 +407,6 @@ describe("detectChangedScope", () => {
     "scripts/codesign-mac-app.sh",
     "scripts/create-dmg.sh",
     "scripts/lib/plistbuddy.sh",
-    "scripts/lib/swift-toolchain.sh",
     "scripts/notarize-mac-artifact.sh",
     "scripts/package-mac-app.sh",
     "scripts/package-mac-dist.sh",
@@ -464,6 +466,8 @@ describe("detectChangedScope", () => {
     ["src/shared/runtime-import.test.ts", true, false],
     ["scripts/npm-runner.mts", true, false],
     ["scripts/lib/format-generated-module.mts", true, false],
+    ["scripts/lib/ci-windows-test-plan.mts", true, false],
+    ["test/scripts/ci-windows-test-plan.test.ts", true, false],
     ["test/scripts/format-generated-module.test.ts", true, false],
     [".github/workflows/openclaw-cross-os-release-checks-reusable.yml", true, false],
     [".github/workflows/windows-testbox-probe.yml", true, false],

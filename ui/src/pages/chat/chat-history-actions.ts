@@ -1,3 +1,4 @@
+import { retireInitialChatSubmission } from "../../app/chat-submissions.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
@@ -122,6 +123,7 @@ export async function clearChatHistory(
     agentId: agentParams.agentId,
   };
   const runId = state.chatRunId;
+  const initialSubmission = state.chatSubmissions?.readInitial(sessionKey, client);
   const hadActiveRun = hasAbortableChatSessionRun(state);
   try {
     const resetResult = await state.sessions.reset(sessionKey, agentParams);
@@ -133,6 +135,9 @@ export async function clearChatHistory(
     // Reset is destructive once issued. Drop the captured session's cached
     // transcript before classifying the result so an ambiguous response cannot
     // expose stale pre-reset history after a route switch.
+    if (initialSubmission) {
+      retireInitialChatSubmission(initialSubmission);
+    }
     clearCachedChatMessagesForSession(state, sessionKey, agentParams.agentId);
     if (
       resetResult === "uncertain" ||

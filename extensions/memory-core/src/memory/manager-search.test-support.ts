@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
+  encodeMemoryEmbedding,
   ensureMemoryIndexSchema,
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -39,12 +40,9 @@ export function insertKeywordFixture(
     `${id}:hash`,
     model,
     text,
-    JSON.stringify([0]),
+    encodeMemoryEmbedding([0]),
     Date.now(),
   );
-  db.prepare(
-    "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).run(text, id, path, source, model, startLine, endLine);
 }
 
 export function createMemorySearchDb(options: { ftsTokenizer?: "unicode61" | "trigram" } = {}) {

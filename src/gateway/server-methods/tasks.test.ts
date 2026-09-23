@@ -9,12 +9,13 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../../agents/internal-runtime-context.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import * as taskRuntime from "../../tasks/runtime-internal.js";
 import {
   finalizeTaskRecordByRunId,
   getTaskById,
@@ -24,8 +25,10 @@ import {
 import { createAcpTaskBackingDetailForTest } from "../../tasks/task-backing-authority.test-support.js";
 import { updateTaskStateByRunId } from "../../tasks/task-registry-record-api.js";
 import { reloadTaskRegistryFromStoreAsync } from "../../tasks/task-registry-state.js";
+import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
 import { createTaskFixture } from "../../tasks/task-registry.test-support.js";
 import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
+import { createInMemoryTaskRegistryStore } from "../../test-utils/task-registry-store.js";
 import {
   getTaskPayload,
   mainSessionTaskScope,
@@ -41,6 +44,82 @@ import {
 const { cancelSessionMock } = useTaskGatewayFixture();
 
 describe("tasks gateway handlers", () => {
+  it.each([
+    { change: "mutation", continuation: false },
+    { change: "mutation", continuation: true },
+    { change: "replacement", continuation: false },
+    { change: "replacement", continuation: true },
+  ])(
+    "revalidates a selected page after $change before responding (cursor: $continuation)",
+    async ({ change, continuation }) => {
+      const task = createTaskFixture("cli", {
+        ...mainSessionTaskScope,
+        task: "Selected before the response turn",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        lastEventAt: 200,
+      });
+      createTaskFixture("cli", {
+        ...mainSessionTaskScope,
+        task: "Second page",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        lastEventAt: 100,
+      });
+      const context = createContext();
+      const first = await runTaskHandler("tasks.list", { limit: 1 }, {}, null, context);
+      const select = taskRuntime.listTaskRecordPage;
+      const replacement = { ...task, taskId: "replacement", task: "Current registry" };
+      let reload: Promise<void> | undefined;
+      let changed = false;
+      const spy = vi.spyOn(taskRuntime, "listTaskRecordPage").mockImplementation(async (params) => {
+        const page = await select(params);
+        if (!changed && page.ok) {
+          changed = true;
+          queueMicrotask(() => {
+            if (change === "mutation") {
+              markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 300 });
+            } else {
+              configureTaskRegistryRuntime({
+                store: createInMemoryTaskRegistryStore({
+                  tasks: new Map([[replacement.taskId, replacement]]),
+                  deliveryStates: new Map(),
+                }),
+              });
+              reload = reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+            }
+          });
+        }
+        return page;
+      });
+      try {
+        const result = await runTaskHandler(
+          "tasks.list",
+          { limit: 1, ...(continuation ? { cursor: first.payload?.nextCursor } : {}) },
+          {},
+          null,
+          context,
+        );
+        expect(changed).toBe(true);
+        if (continuation) {
+          expect(result.calls[0]).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
+        } else {
+          expect(result.calls[0]?.[0]).toBe(true);
+          expect(result.payload?.tasks).toMatchObject([
+            change === "mutation"
+              ? { id: task.taskId, status: "completed" }
+              : { id: replacement.taskId, title: replacement.task },
+          ]);
+        }
+      } finally {
+        await reload;
+        spy.mockRestore();
+      }
+    },
+  );
+
   it("lists task summaries with SDK-facing statuses and filters", async () => {
     const running = createTaskFixture("subagent", {
       taskKind: "investigation",
@@ -90,33 +169,6 @@ describe("tasks gateway handlers", () => {
       sessionKey: "agent:main:main",
     });
     expect(canonical.payload?.tasks?.map((task) => task.taskId)).toEqual([running.taskId]);
-  });
-
-  it("uses the persisted fixed-store owner for a bare task session filter", async () => {
-    const task = createTaskFixture("cli", {
-      requesterSessionKey: "global",
-      ownerKey: "global",
-      scopeKind: "session",
-      runId: "run-global",
-      task: "Owned task",
-      status: "running",
-      deliveryStatus: "pending",
-    });
-    const { calls, payload } = await runTaskHandler(
-      "tasks.list",
-      { sessionKey: "global" },
-      {
-        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-        agents: {
-          ownership: "explicit",
-          list: [{ id: "ops" }, { id: "research" }],
-          defaults: { sessionStore: { agentId: "ops" } },
-        },
-      },
-    );
-
-    expect(calls[0]?.[0]).toBe(true);
-    expect(payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
   });
 
   it("orders the ledger by last activity, not creation time", async () => {
@@ -576,10 +628,11 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.result).toBe(fixture.expected);
   });
 
-  it("keeps bounded prompts lookup-only", async () => {
+  it("keeps complete prompts lookup-only", async () => {
+    const prompt = `Inspect the task prompt ${"x".repeat(5_000)}\n  Keep the final command argument.`;
     const task = createTaskFixture("cli", {
       ...mainSessionTaskScope,
-      task: `Inspect the task prompt ${"x".repeat(5_000)}`,
+      task: prompt,
       status: "running",
       deliveryStatus: "pending",
     });
@@ -588,31 +641,28 @@ describe("tasks gateway handlers", () => {
     expect(listed.payload?.tasks?.[0]?.prompt).toBeUndefined();
 
     const { payload } = await getTaskPayload(task.taskId);
-    expect(payload?.task?.prompt).toHaveLength(4_000);
-    expect(payload?.task?.prompt).toMatch(/^Inspect the task prompt/);
-    expect(payload?.task?.prompt).toMatch(/…$/);
+    expect(payload?.task?.prompt).toBe(prompt);
   });
 
-  it("preserves prompt layout while removing internal runtime context", async () => {
-    const visiblePrompt = [
-      "Review this workflow:",
-      "",
-      "  ```yaml",
-      "  steps:",
-      "    - test",
-      "  ```",
-    ].join("\n");
-    const task = createTaskFixture("cli", {
-      ...mainSessionTaskScope,
-      task: `${visiblePrompt}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nhidden\n${INTERNAL_RUNTIME_CONTEXT_END}`,
-      status: "running",
-      deliveryStatus: "pending",
-    });
+  it.each([
+    ["Review this workflow:", "", "  ```yaml", "  steps:", "    - test", "  ```"].join("\n"),
+    "printf A\n\nprintf A",
+    "printf '<final>literal argument</final>\n'",
+  ])(
+    "preserves task input verbatim while removing internal runtime context %#",
+    async (visiblePrompt) => {
+      const task = createTaskFixture("cli", {
+        ...mainSessionTaskScope,
+        task: `${visiblePrompt}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nhidden\n${INTERNAL_RUNTIME_CONTEXT_END}`,
+        status: "running",
+        deliveryStatus: "pending",
+      });
 
-    const { payload } = await getTaskPayload(task.taskId);
+      const { payload } = await getTaskPayload(task.taskId);
 
-    expect(payload?.task?.prompt).toBe(visiblePrompt);
-  });
+      expect(payload?.task?.prompt).toBe(visiblePrompt);
+    },
+  );
 
   it("sanitizes task text before exposing SDK summaries", async () => {
     const task = createTaskFixture("cli", {

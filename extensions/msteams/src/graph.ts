@@ -1,4 +1,3 @@
-// Msteams plugin module implements graph behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   captureChannelReadAuthority,

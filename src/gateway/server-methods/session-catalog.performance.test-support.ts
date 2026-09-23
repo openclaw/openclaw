@@ -1,7 +1,9 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { vi } from "vitest";
 import { WebSocketServer } from "ws";
 import type {
   SessionCatalogHost,
@@ -9,6 +11,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import * as maintenance from "../../config/sessions/session-accessor.sqlite-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
@@ -21,6 +24,7 @@ import {
 } from "../../plugins/runtime.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import type { OpenClawPluginDefinition } from "../../plugins/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import {
   loadBundledPluginFacade,
@@ -179,15 +183,18 @@ export async function createComposedCatalogFixture(
     };
     await state.writeConfig(config);
     setRuntimeConfigSnapshot(config);
-    runOpenClawAgentWriteTransaction(
+    // These are resident catalog rows, not an age-pruning fixture.
+    const localUpdatedAt = Date.now();
+    const databasePath = runOpenClawAgentWriteTransaction(
       (database) => {
         for (let index = 0; index < 3_000; index++) {
           writeSessionEntry(database, `agent:main:local-${index}`, {
             sessionId: `local-${index}`,
-            updatedAt: 1_700_000_000_000 - index,
+            updatedAt: localUpdatedAt - index,
             displayName: `Local session ${index}`,
           });
         }
+        return database.path;
       },
       { agentId: "main" },
     );
@@ -300,20 +307,51 @@ export async function createComposedCatalogFixture(
       }
       return host;
     };
+    const setupMaintenance = { started: 0, completed: 0 };
     return {
       api,
       projection,
       rows,
       requests,
       list,
-      continueSession: (hostId: string, threadId: string, sourceHomeId?: string) =>
-        call("sessions.catalog.continue", {
-          catalogId: "codex",
-          agentId: "main",
-          hostId,
-          threadId,
-          sourceHomeId,
-        }),
+      setupMaintenance,
+      async continueSession(hostId: string, threadId: string, sourceHomeId?: string) {
+        const finalize =
+          maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
+        const completed = createDeferredCore<Awaited<ReturnType<typeof finalize>>>();
+        const observer = vi
+          .spyOn(maintenance, "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort")
+          .mockImplementation((scope, plans, options) => {
+            const result = finalize(scope, plans, options);
+            // Creation also finalizes an empty plan; only the readiness patch's
+            // automatic owner supplies isCurrent. Join it before the next adoption.
+            if (scope.agentId === "main" && scope.path === databasePath && options?.isCurrent) {
+              setupMaintenance.started++;
+              void result.then((value) => {
+                setupMaintenance.completed++;
+                completed.resolve(value);
+              }, completed.reject);
+            }
+            return result;
+          });
+        try {
+          const [result] = await Promise.all([
+            call("sessions.catalog.continue", {
+              catalogId: "codex",
+              agentId: "main",
+              hostId,
+              threadId,
+              sourceHomeId,
+            }),
+            completed.promise,
+          ]);
+          // Let the maintenance owner finish its post-finalizer continuation.
+          await nextTurn();
+          return result;
+        } finally {
+          observer.mockRestore();
+        }
+      },
       async close() {
         connection.abort();
         await cleanup();

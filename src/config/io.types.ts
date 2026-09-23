@@ -28,7 +28,10 @@ export type ConfigWriteInputBasis = { kind: ConfigMutationBase; config: unknown 
 export const configWritePostCommitRollback = Symbol("configWritePostCommitRollback");
 
 export type InternalConfigWriteResult = ConfigWriteResult & {
-  [configWritePostCommitRollback]?: (assertCurrent: () => void) => void;
+  [configWritePostCommitRollback]?: {
+    restoreFile: (assertCurrent: () => void) => Promise<boolean>;
+    restoreEffects: (assertCurrent: () => void) => void;
+  };
 };
 
 export type ConfigWriteAuditOrigin =
