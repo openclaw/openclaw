@@ -4,7 +4,6 @@ import { updateTask } from "./task-registry-mutation.js";
 import { cloneTaskRecord } from "./task-registry-records.js";
 import { withTaskRegistryMutation, ensureTaskRegistryReady, tasks } from "./task-registry-state.js";
 import { transitionTaskRecordsByRunNative } from "./task-registry-transition.native.js";
-import type { TaskRunStateTransitionParams } from "./task-registry-transition.operation.js";
 import {
   parseTaskNotifyPolicy,
   type JsonValue,
@@ -12,6 +11,7 @@ import {
   type TaskNotifyPolicy,
   type TaskRecord,
   type TaskRuntime,
+  type TaskRunStateTransitionParams,
   type TaskStatus,
   type TaskTerminalOutcome,
 } from "./task-registry.types.js";

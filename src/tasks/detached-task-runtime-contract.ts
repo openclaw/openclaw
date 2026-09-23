@@ -1,6 +1,5 @@
 // Defines the detached task runtime contract and spawn options.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { TaskRunTransition } from "./task-registry-transition.operation.js";
 import type {
   JsonValue,
   TaskDeliveryState,
@@ -9,6 +8,7 @@ import type {
   TaskRecord,
   TaskPersistenceReceipt,
   TaskRuntime,
+  TaskRunTransition,
   TaskScopeKind,
   TaskStatus,
   TaskTerminalOutcome,

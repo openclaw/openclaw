@@ -22,12 +22,13 @@ import {
   tasks,
   withTaskRegistryMutation,
 } from "./task-registry-state.js";
-import {
-  runTaskRecordTransitionOperation,
-  type TaskRunTransition,
-} from "./task-registry-transition.operation.js";
+import { runTaskRecordTransitionOperation } from "./task-registry-transition.operation.js";
 import { tryPersistTaskUpsert } from "./task-registry.store.js";
-import type { TaskPersistenceReceipt, TaskRecord } from "./task-registry.types.js";
+import type {
+  TaskPersistenceReceipt,
+  TaskRecord,
+  TaskRunTransition,
+} from "./task-registry.types.js";
 
 /** Legacy adapters retain insertion-order selection and per-row commit/publication. */
 export function transitionTaskRecordsByRunNative(
