@@ -1,5 +1,5 @@
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
+import type { CurrentInboundPromptContext } from "../../agents/internal-runtime-context.js";
 import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
