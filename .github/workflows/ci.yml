@@ -5646,12 +5646,13 @@ jobs:
             swift_test_width=$(( logical_cpu < 12 ? logical_cpu : 12 ))
             echo "[macos-swift] Swift Testing parallelization width: $swift_test_width"
             swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")
-            if [[ "$HISTORICAL_TARGET" == "true" ]]; then
-              run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"
-            else
+            # Rendered Quick Chat keeps its former XCTest process isolation from executor-changing tests;
+            # parallel suites take key status and dismiss its panel. Frozen targets without the suite skip the lane.
+            if [[ "$HISTORICAL_TARGET" != "true" || -f apps/macos/Tests/OpenClawIPCTests/QuickChatCatalogPresentationTests.swift ]]; then
               run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests"
-              # Rendered Quick Chat keeps its former XCTest process isolation from executor-changing tests.
               run_apple_command_logged "$native_test_log_dir/default-rendered-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --filter "QuickChatCatalogPresentationTests"
+            else
+              run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"
             fi
             run_apple_command_logged "$native_test_log_dir/named-$native_test_log_id.log" node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter "AppStateIsolationTests|ProfileChatPreferencesTests"
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
