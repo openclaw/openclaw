@@ -850,6 +850,7 @@ if (entry === ${JSON.stringify(implementationPath)}) {
       let finishTerminal: (() => Promise<void>) | undefined;
       let entrypointPid = 0;
       let pnpmRetainsShell = false;
+      const pnpmOwnerChain: Array<{ pid: number; parentPid: number; command: string }> = [];
       let identity: WrapperFixtureIdentity | undefined;
       let preparationIdentity: WrapperFixtureIdentity | undefined;
       let descendantPid = 0;
@@ -1005,18 +1006,35 @@ child.once("exit", (code, signal) => {
               const pnpmPid = Number(readFileSync(terminalCommandPidPath, "utf8"));
               expect(shim.parentPid).toBeGreaterThan(1);
               expect(pnpmPid).toBeGreaterThan(1);
-              if (shim.parentPid !== pnpmPid) {
+              let ownerPid = shim.parentPid;
+              const visited = new Set<number>();
+              while (ownerPid !== pnpmPid) {
+                if (
+                  ownerPid === undefined ||
+                  !Number.isSafeInteger(ownerPid) ||
+                  ownerPid <= 1 ||
+                  visited.has(ownerPid)
+                ) {
+                  throw new Error(
+                    `Wrapper shim is not owned by pnpm ${pnpmPid}: ${JSON.stringify(pnpmOwnerChain)}`,
+                  );
+                }
+                visited.add(ownerPid);
                 const owner = spawnSync(
                   "ps",
-                  ["-o", "ppid=", "-o", "comm=", "-p", String(shim.parentPid)],
+                  ["-o", "ppid=", "-o", "comm=", "-p", String(ownerPid)],
                   { encoding: "utf8" },
                 );
                 expect(owner.status, owner.stderr).toBe(0);
                 const [parentPid, ...command] = owner.stdout.trim().split(/\s+/u);
-                expect(Number(parentPid)).toBe(pnpmPid);
-                pnpmRetainsShell = ["sh", "dash", "bash"].includes(
-                  path.basename(command.join(" ")),
-                );
+                const commandName = command.join(" ");
+                pnpmOwnerChain.push({
+                  pid: ownerPid,
+                  parentPid: Number(parentPid),
+                  command: commandName,
+                });
+                pnpmRetainsShell ||= ["sh", "dash", "bash"].includes(path.basename(commandName));
+                ownerPid = Number(parentPid);
               }
             }
             stop();
@@ -1136,14 +1154,16 @@ child.once("exit", (code, signal) => {
         expect(readFileSync(path.join(producer, "fixture.txt"), "utf8")).toBe("original source\n");
         expect(git("ls-files", "--stage", "-z")).toBe(sourceIndex);
         // pnpm 12.4.2 escalates the second interrupt to TERM on its immediate child.
-        // A retained shell dies by TERM; an exec'd shim preserves the owner's first signal.
-        if (proof.kind === "signal" && proof.repeated && pnpmRetainsShell) {
-          expect(result, output).toEqual({ status: null, signal: "SIGTERM" });
-        } else if (entrypoint === "pnpm") {
+        // Corepack can translate a retained shell's TERM into a numeric exit code.
+        if (entrypoint === "pnpm") {
           const exitStatus = result.signal
             ? 128 + osConstants.signals[result.signal]
             : result.status;
-          expect(exitStatus, output).toBe(expectedStatus);
+          const expectedLauncherStatus =
+            proof.kind === "signal" && proof.repeated && pnpmRetainsShell ? 143 : expectedStatus;
+          expect(exitStatus, `${output}\npnpm ownership: ${JSON.stringify(pnpmOwnerChain)}`).toBe(
+            expectedLauncherStatus,
+          );
         } else {
           expect(result, output).toEqual({ status: expectedStatus, signal: null });
         }
