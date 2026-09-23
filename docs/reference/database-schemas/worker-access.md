@@ -104,6 +104,14 @@ stores, already executing workers, Doctor maintenance,
 and prepared native deletion rollback closures retain their synchronous kernels.
 Schemas, retained bytes, configuration, and update behavior are unchanged.
 
+Disk-budget historical discovery reads reference, recent-history, and admitted-key
+protection in the existing maintenance read worker. It returns candidate IDs;
+the host captures live admission identities and rechecks protection before each
+archive and deletion. A deferred WAL checkpoint still blocks another discovery
+pass until a newer completed checkpoint. Exact lifecycle removal and logical
+maintenance planning limit reference results to the generations they might
+delete. No new cache, index, schema, retention policy, or update step is required.
+
 ## Migrate a caller
 
 1. Trace the registered request, event, or timer through the store owner. Check

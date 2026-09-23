@@ -466,19 +466,31 @@ checklist below explains each step; this section decides what the default is.
    cut -f1 cancelled-for-release.tsv | xargs -n1 gh run rerun --repo openclaw/openclaw
    ```
 
-6. **Targeted local proof.** Do not mirror FRV locally. Run a lane locally only
+6. **Flip GitHub as soon as npm is out.** The moment `openclaw@YYYY.M.PATCH`
+   is visible on npm under the target dist-tag, publish the GitHub release:
+   un-draft it and mark it latest for stable. Never wait for Docker, ClawHub,
+   the macOS/Windows/Linux app publishers, or the parent's finalize step; the
+   macOS publisher requires the public release, so a lingering draft blocks
+   apps. If the parent has not flipped it yet, do it by hand:
+   `gh release edit vYYYY.M.PATCH --repo openclaw/openclaw --draft=false --latest`.
+   Run the beta-to-stable dist-tag sync (`openclaw-npm-dist-tags.yml` in
+   `openclaw/releases`, `mode=sync_beta_to_stable`) immediately after core npm
+   publishes and before the parent's completion verify, because that verify
+   fails on a stale `beta` tag and leaves the release drafted.
+
+7. **Targeted local proof.** Do not mirror FRV locally. Run a lane locally only
    after it failed in CI, to separate flake from defect, bounded to 15 minutes
    per lane.
-7. **Backports.** Before FRV dispatch, cherry-pick only merged `main` PRs;
+8. **Backports.** Before FRV dispatch, cherry-pick only merged `main` PRs;
    pure-data model/catalog additions and bundled-runtime version bumps qualify.
    After dispatch, admit nothing except a fix for a required-lane defect.
-8. **Already-published plugin versions.** When a plugin's `YYYY.M.PATCH` already
+9. **Already-published plugin versions.** When a plugin's `YYYY.M.PATCH` already
    exists on npm from an earlier slip and the delta is release metadata only,
    the publish plan skips it. Record the skip in the handoff; it is not a
    blocker.
-9. **Budget.** The handoff record carries the wall-clock budget. When it is
-   exceeded, report the blocking lane and the decision taken instead of starting
-   another full run.
+10. **Budget.** The handoff record carries the wall-clock budget. When it is
+    exceeded, report the blocking lane and the decision taken instead of starting
+    another full run.
 
 ### Full checklist
 
@@ -573,7 +585,7 @@ For beta, stable, and full profiles, Linux (`ubuntu`) cross-OS lanes gate npm pu
    Then run the post-publish package acceptance against the published `openclaw@YYYY.M.PATCH-beta.N` or `openclaw@beta` package. If a pushed or published prerelease needs a fix, cut the next matching prerelease number; never delete or rewrite the old one.
 
 10. On a failed publish attempt, keep the Release SHA unchanged unless the failure proves a product or changelog defect. Resume successful immutable children and artifacts; never rebuild or republish a package version that already succeeded. An app failure is an independent recovery task: retain its summary and evidence, and recover that platform without rerunning npm or keeping the GitHub release drafted.
-11. For stable, publish through `OpenClaw Release Publish` after Full Release Validation and candidate evidence pass, reusing the successful preflight artifact via `preflight_run_id`. Plugin npm publication gates core npm; ClawHub runs in parallel. The GitHub release finalizes after npm and Docker evidence passes. Run macOS through the validation, preflight, and publish workflows in `openclaw/releases`; its `.zip`, `.dmg`, `.dSYM.zip`, and signed `appcast.xml` retain their own verification requirements. Windows Hub and Android also attach their verified assets independently. Android dispatch starts after core npm succeeds and may finish after the GitHub release becomes public. Supply both optional Windows inputs to schedule promotion after GitHub publication, or use the [manual recovery command](#regular-release-publish-automation) later. App approval, build, signing, promotion, or failure never delays npm or the GitHub release.
+11. For stable, publish through `OpenClaw Release Publish` after Full Release Validation and candidate evidence pass, reusing the successful preflight artifact via `preflight_run_id`. Plugin npm publication gates core npm; ClawHub runs in parallel. The GitHub release finalizes after npm and Docker evidence passes. Run macOS through the validation, preflight, and publish workflows in `openclaw/releases`; its `.zip`, `.dmg`, `.dSYM.zip`, and signed `appcast.xml` retain their own verification requirements. Windows Hub and Android also attach their verified assets independently. Android dispatch starts after core npm succeeds and may finish after the GitHub release becomes public. Supply both optional Windows inputs to schedule promotion after GitHub publication, or use the [manual recovery command](#regular-release-publish-automation) later. App approval, build, signing, promotion, or failure never delays npm or the GitHub release. As soon as the npm version is visible under its dist-tag, the GitHub release must be public: if the parent stalls before finalizing, run `gh release edit vYYYY.M.PATCH --repo openclaw/openclaw --draft=false --latest` yourself rather than waiting for Docker, ClawHub, or any app publisher.
 12. After publish, run the npm post-publish verifier, optional standalone published-npm Telegram E2E when you need post-publish channel proof, dist-tag promotion when needed, and verify the generated GitHub release page. Announce the published surfaces accurately, then complete [Stable main closeout](#stable-main-closeout), recording pending apps explicitly. App workflows can finish afterward; verify their assets and the macOS appcast before announcing those platforms complete.
 
 Regular stable GitHub activation automatically requests the Linux AppImage and

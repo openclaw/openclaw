@@ -92,6 +92,7 @@ it.runIf(!process.versions.bun)(
           ok: true,
           value: {
             kind: "session-store-target",
+            logicalAgentId: "main",
             sourcePath: request.database.path,
             database: request.database,
           },

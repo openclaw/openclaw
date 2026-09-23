@@ -669,6 +669,11 @@ run-ID-cached bytes first.
      evidence, and repeat Release SHA proof
    - publish child/registry selector failure: keep Release SHA and resume the
      failed child; never rebuild an immutable version that already published
+   - parent failed after core npm published (for example a stale `beta`
+     dist-tag failing the completion verify): flip the GitHub release public
+     immediately with
+     `gh release edit v<version> --repo openclaw/openclaw --draft=false --latest`;
+     never leave it drafted waiting for Docker, ClawHub, apps, or the resume
      Only the first class changes the Code SHA. After one diagnosis/fix/narrow
      retry, reassess instead of starting another all-group cycle.
 7. If a required PR CI run is capacity-stalled with queued jobs and no active

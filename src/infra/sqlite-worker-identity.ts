@@ -106,9 +106,17 @@ export async function readDatabasePathIdentity(
   }
 }
 
-export function assertExistingDatabaseIdentity(databasePath: string, expected: string): void {
+export function assertExistingDatabaseIdentity(
+  databasePath: string,
+  expected: string,
+  expectedBirthtime?: string,
+): void {
   const file = statSync(databasePath, { bigint: true });
-  if (!file.isFile() || `file:${file.dev}:${file.ino}` !== expected) {
+  if (
+    !file.isFile() ||
+    `file:${file.dev}:${file.ino}` !== expected ||
+    (expectedBirthtime !== undefined && file.birthtimeNs.toString() !== expectedBirthtime)
+  ) {
     throw new Error("SQLite database file identity changed before existing-only open");
   }
 }
