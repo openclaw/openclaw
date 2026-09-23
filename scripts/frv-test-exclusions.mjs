@@ -120,7 +120,12 @@ export async function validateTestExclusions({ paths, configs, cwd = process.cwd
     return;
   }
   const selections = await discoverTestSelections(configs, cwd);
-  const discovered = new Set(selections.flatMap((selection) => [...selection.files]));
+  const discovered = new Set();
+  for (const selection of selections) {
+    for (const file of selection.files) {
+      discovered.add(file);
+    }
+  }
   const unknown = paths.filter((file) => !discovered.has(file));
   if (unknown.length) {
     throw new Error(`Frozen-target exclusions are not selected test files: ${unknown.join(", ")}`);
@@ -161,7 +166,10 @@ async function withTestExclusions({ paths, configs, cwd = process.cwd() }, callb
   const selections = await discoverTestSelections(configs, cwd);
   const selectedPaths = new Map();
   for (const selection of selections) {
-    for (const file of paths.filter((file) => selection.files.has(file))) {
+    for (const file of paths) {
+      if (!selection.files.has(file)) {
+        continue;
+      }
       if (!selectedPaths.has(selection.absolute)) {
         selectedPaths.set(selection.absolute, new Set());
       }
@@ -169,6 +177,7 @@ async function withTestExclusions({ paths, configs, cwd = process.cwd() }, callb
     }
   }
   const overlays = [];
+  let outcome;
   try {
     for (const [absolute, matchingPaths] of selectedPaths) {
       const backup = path.join(path.dirname(absolute), `.frv-source-${randomUUID()}.ts`);
@@ -197,32 +206,42 @@ async function withTestExclusions({ paths, configs, cwd = process.cwd() }, callb
       }
       fs.renameSync(temporary, absolute);
     }
-    return await callback();
-  } finally {
-    const errors = [];
-    for (const overlay of overlays.toReversed()) {
-      try {
-        if (overlay.temporaryCreated && fs.existsSync(overlay.temporary)) {
-          fs.unlinkSync(overlay.temporary);
-        }
-        if (!fs.readFileSync(overlay.backup).equals(overlay.original)) {
-          throw new Error(`Frozen-target config backup changed: ${overlay.backup}`);
-        }
-        const current = fs.readFileSync(overlay.absolute);
-        if (!current.equals(Buffer.from(overlay.wrapper)) && !current.equals(overlay.original)) {
-          throw new Error(
-            `Frozen-target config changed during execution; original retained at ${overlay.backup}`,
-          );
-        }
-        fs.renameSync(overlay.backup, overlay.absolute);
-      } catch (error) {
-        errors.push(error);
+    outcome = { ok: true, value: await callback() };
+  } catch (error) {
+    outcome = { ok: false, error };
+  }
+  const errors = [];
+  for (const overlay of overlays.toReversed()) {
+    try {
+      if (overlay.temporaryCreated && fs.existsSync(overlay.temporary)) {
+        fs.unlinkSync(overlay.temporary);
       }
-    }
-    if (errors.length) {
-      throw new AggregateError(errors, "Could not restore frozen-target test configs");
+      if (!fs.readFileSync(overlay.backup).equals(overlay.original)) {
+        throw new Error(`Frozen-target config backup changed: ${overlay.backup}`);
+      }
+      const current = fs.readFileSync(overlay.absolute);
+      if (!current.equals(Buffer.from(overlay.wrapper)) && !current.equals(overlay.original)) {
+        throw new Error(
+          `Frozen-target config changed during execution; original retained at ${overlay.backup}`,
+        );
+      }
+      fs.renameSync(overlay.backup, overlay.absolute);
+    } catch (error) {
+      errors.push(error);
     }
   }
+  if (errors.length) {
+    if (!outcome.ok) {
+      errors.unshift(outcome.error);
+    } else if (outcome.value !== 0) {
+      errors.unshift(new Error(`Command exited with status ${outcome.value}`));
+    }
+    throw new AggregateError(errors, "Could not restore frozen-target test configs");
+  }
+  if (!outcome.ok) {
+    throw outcome.error;
+  }
+  return outcome.value;
 }
 
 async function runCommand(command, args) {
@@ -293,8 +312,10 @@ async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main().catch((error) => {
+  try {
+    await main();
+  } catch (error) {
     console.error(error);
     process.exitCode = 1;
-  });
+  }
 }

@@ -171,6 +171,11 @@ if (mode) {
     const pluginExports = await import(pathToFileURL(path.join(root, configs[0])).href);
     assert.deepEqual(pluginExports.nativeFiles, [excluded[1]]);
   }
+  if (mode === "conflict") {
+    fs.writeFileSync(path.join(root, configs[0]), "// concurrent config owner");
+    console.error("candidate failure before cleanup");
+    process.exit(23);
+  }
   process.exit(mode === "failure" ? 23 : 0);
 }
 
@@ -234,6 +239,8 @@ const failedSpawn = spawnSync(process.execPath, [adapter, "run", "--", path.join
   cwd: root, env: commandEnv, encoding: "utf8",
 });
 assert.equal(failedSpawn.status, 1, failedSpawn.stderr);
+assert.match(failedSpawn.stderr, /ENOENT/);
+assert.ok(failedSpawn.stderr.includes(path.join(root, "missing-command")));
 assertRestored();
 
 if (process.platform !== "win32") {
@@ -257,6 +264,26 @@ if (process.platform !== "win32") {
   assert.equal(exitCode, 143);
   assertRestored();
 }
+
+const secondConfig = "test/vitest/vitest.additional.config.ts";
+fs.writeFileSync(path.join(root, secondConfig), original[0]);
+const conflicted = spawnSync(process.execPath, [adapter, "run", "--", process.execPath, process.argv[1], "conflict"], {
+  cwd: root,
+  env: { ...commandEnv, FRV_TEST_CONFIGS_JSON: JSON.stringify([secondConfig, ...configs]) },
+  encoding: "utf8",
+});
+assert.equal(conflicted.status, 1, conflicted.stderr);
+assert.match(conflicted.stderr, /candidate failure before cleanup/);
+assert.match(conflicted.stderr, /Command exited with status 23/);
+assert.match(conflicted.stderr, /Frozen-target config changed during execution; original retained at/);
+assert.equal(fs.readFileSync(path.join(root, configs[0]), "utf8"), "// concurrent config owner");
+assert.deepEqual(fs.readFileSync(path.join(root, configs[1])), original[1]);
+assert.deepEqual(fs.readFileSync(path.join(root, secondConfig)), original[0]);
+const retained = fs.readdirSync(path.join(root, "test/vitest")).filter(name => name.startsWith(".frv-source-"));
+assert.equal(retained.length, 1);
+const retainedPath = path.join(root, "test/vitest", retained[0]);
+assert.ok(conflicted.stderr.includes(retainedPath));
+assert.deepEqual(fs.readFileSync(retainedPath), original[0]);
 console.log("exact exclusions and restoration verified");
 `,
     );
