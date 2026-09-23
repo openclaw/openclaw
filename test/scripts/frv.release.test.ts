@@ -51,6 +51,22 @@ describe("FRV protected gh evidence reads", () => {
     expect(result.calls).toHaveLength(1);
   });
 
+  it.each(["getRun", "getAttemptJobs"])(
+    "bounds the protected %s transport retries by the read deadline",
+    (method) => {
+      const args =
+        method === "getRun"
+          ? ["101", { operationDeadline: 15_000 }]
+          : ["101", 2, { operationDeadline: 15_000 }];
+      const endpoint =
+        method === "getRun" ? "actions/runs/101" : "actions/runs/101/attempts/2/jobs?per_page=100";
+      const result = runProtectedFrv(method, args, endpoint, "transient-deadline");
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("FRV operation timed out");
+      expect(result.calls).toHaveLength(1);
+    },
+  );
+
   it("falls back once when gh does not support the escape-sequence flag", () => {
     const result = runProtectedFrv("getJobLog", [1], "actions/jobs/1/logs", "legacy-flag");
     expect(result.status, result.stderr).toBe(0);
@@ -75,9 +91,9 @@ describe("FRV protected gh evidence reads", () => {
 
 function runProtectedFrv(
   method: string,
-  args: Array<string | number>,
+  args: Array<string | number | Record<string, unknown>>,
   endpoint: string,
-  failure: "none" | "legacy-flag" | "protected" | "unrelated" = "none",
+  failure: "none" | "legacy-flag" | "protected" | "unrelated" | "transient-deadline" = "none",
 ) {
   const root = mkdtempSync(join(tmpdir(), "frv-protected-"));
   const gh = join(root, "gh");
@@ -90,6 +106,7 @@ fs.appendFileSync("calls.jsonl", JSON.stringify(args) + "\\n");
 const fail = (message, code) => { console.error(message); process.exit(code); };
 const failure = ${JSON.stringify(failure)};
 if (failure === "protected") fail("protected refusal", 19);
+if (failure === "transient-deadline") fail("HTTP 502: transient fixture failure", 1);
 if (args[0] !== "api" || !args.includes(${JSON.stringify(`repos/${REPOSITORY}/${endpoint}`)})) fail("unexpected request", 17);
 if (!args.some((arg, i) => ["-H", "--header"].includes(arg) && args[i+1] === "Cache-Control: max-age=0")) fail("missing live header", 18);
 if (${endpoint.endsWith("/logs")} && failure === "legacy-flag" && args.includes("--allow-escape-sequences")) fail("unknown flag: --allow-escape-sequences", 1);
@@ -111,9 +128,18 @@ if (${endpoint.includes("/jobs?")}) {
         "-e",
         `
       import {createClient} from ${JSON.stringify(moduleUrl)};
+      import {existsSync} from "node:fs";
+      if (${JSON.stringify(failure)} === "transient-deadline") {
+        Date.now = () => existsSync("calls.jsonl") ? 20_000 : 10_000;
+        const nativeSetTimeout = globalThis.setTimeout;
+        globalThis.setTimeout = (...args) => {
+          if (Date.now() >= 15_000) throw new Error("transport scheduled work after its deadline");
+          return nativeSetTimeout(...args);
+        };
+      }
       try {
         console.log(JSON.stringify(await createClient(${JSON.stringify(REPOSITORY)})[${JSON.stringify(method)}](...${JSON.stringify(args)})));
-      } catch (error) { console.error(error.message); process.exitCode = error.code; }
+      } catch (error) { console.error(error.message); process.exitCode = typeof error.code === "number" ? error.code : 1; }
     `,
       ],
       {

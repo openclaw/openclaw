@@ -864,8 +864,10 @@ describe("full-release-validation-at-sha", () => {
     }
   });
 
-  it("retains explicit publication wire values and reopens the same request read-only", () => {
+  it("retains publication and lane inputs in the envelope and reopens the same request read-only", () => {
     const fixture = createDispatchFixture();
+    const excluded = ["extensions/example/src/example.test.ts"];
+    const excludedJson = JSON.stringify(excluded, null, 1);
     const selection = JSON.stringify(
       {
         route: "normal",
@@ -885,6 +887,8 @@ describe("full-release-validation-at-sha", () => {
         "validation_purpose=publish",
         "-f",
         `publication_selection_json=${selection}`,
+        "-f",
+        `extension_test_exclude_patterns_json=${excludedJson}`,
       ]);
       expect(result.status, result.stderr).toBe(0);
       const record = JSON.parse(readFileSync(fixture.requestPath(), "utf8"));
@@ -897,11 +901,14 @@ describe("full-release-validation-at-sha", () => {
         },
         validationPurpose: "publish",
         publicationSelection: JSON.parse(selection),
+        laneInputs: { extension_test_exclude_patterns_json: JSON.stringify(excluded) },
       });
       expect(record.request.inputs.trusted_workflow_json).toBe(wire);
       expect(fixture.readPayload().body.inputs.trusted_workflow_json).toBe(wire);
       expect(record.request.inputs).not.toHaveProperty("validation_purpose");
       expect(record.request.wireInputs).not.toHaveProperty("publication_selection_json");
+      expect(record.request.wireInputs).not.toHaveProperty("extension_test_exclude_patterns_json");
+      expect(Object.keys(fixture.readPayload().body.inputs)).toHaveLength(25);
       const before = readFileSync(fixture.requestPath());
       const callsBefore = fixture.readCalls(fixture.ghCallsPath).length;
       const reopened = fixture.run(
@@ -912,10 +919,19 @@ describe("full-release-validation-at-sha", () => {
           "validation_purpose=publish",
           "-f",
           `publication_selection_json=${JSON.stringify(JSON.parse(selection))}`,
+          "-f",
+          `extension_test_exclude_patterns_json=${excludedJson}`,
         ],
         true,
       );
       expect(reopened.status, reopened.stderr).toBe(0);
+      expect(readFileSync(fixture.requestPath())).toEqual(before);
+      const changedExclusion = fixture.run(
+        ["--request-file", fixture.requestPath(), "-f", "extension_test_exclude_patterns_json=[]"],
+        true,
+      );
+      expect(changedExclusion.status).toBe(1);
+      expect(changedExclusion.stderr).toContain("conflict with the retained request");
       expect(readFileSync(fixture.requestPath())).toEqual(before);
       expect(
         fixture
@@ -1726,6 +1742,28 @@ describe("full-release-validation-at-sha", () => {
       expect(
         fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) === "DELETE"),
       ).toEqual([]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("refuses unsupported packed lane controls before creating refs or dispatching", () => {
+    const fixture = createDispatchFixture({
+      workflowSource: CURRENT_WORKFLOW_SOURCE.replace(
+        '  FULL_RELEASE_LANE_INPUTS_CONTRACT: "1"\n',
+        "",
+      ),
+    });
+    try {
+      const result = fixture.run([
+        "--workflow-sha",
+        fixture.workflowSha,
+        "-f",
+        'extension_test_exclude_patterns_json=["extensions/example/src/example.test.ts"]',
+      ]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("does not support packed lane inputs");
+      expect(fixture.readCalls(fixture.ghCallsPath)).toEqual([]);
     } finally {
       fixture.cleanup();
     }

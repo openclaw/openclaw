@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { isRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { withContainerEnvFile } from "../infra/container-env-file.js";
+import { createRedactingStreamWriter } from "../logging/redacting-stream.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -11,7 +12,6 @@ import {
   type CellContainerProfile,
   type FleetContainerRuntimeName,
 } from "./cell-profile.js";
-import { createRedactingStreamWriter } from "./containers.redaction.js";
 
 type FleetContainerCommandOptions = {
   allowFailure?: boolean;

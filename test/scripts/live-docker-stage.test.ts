@@ -695,16 +695,18 @@ describe("frozen bundle committed contract", () => {
   const managerPath = "src/agents/agent-bundle-mcp-manager-api.ts";
   const runtimeSource =
     "export async function getOrCreateSessionMcpRuntime() {}\nexport async function disposeAllSessionMcpRuntimes() {}\n";
-  const managerSource =
+  const intermediateManagerSource =
+    "export async function getOrCreateSessionMcpRuntime() {}\nexport async function disposeAllSessionMcpRuntimes() {}\n";
+  const currentManagerSource =
     "export async function acquireSessionMcpRuntime() {}\nexport async function disposeAllSessionMcpRuntimes() {}\n";
 
   function fixture(
-    layout: "June" | "July" | "current" = "July",
+    layout: "June" | "July" | "intermediate" | "current" = "July",
     overrides: Record<string, string | null> = {},
   ) {
     const clientPath = layout === "June" ? juneClient : julyClient;
     const prefix = layout === "June" ? "../.." : "../../../..";
-    const owner = layout === "current" ? "manager-api" : "runtime";
+    const owner = layout === "June" || layout === "July" ? "runtime" : "manager-api";
     const acquire =
       layout === "current" ? "acquireSessionMcpRuntime" : "getOrCreateSessionMcpRuntime";
     const files: Record<string, string | null> = {
@@ -717,7 +719,11 @@ describe("frozen bundle committed contract", () => {
       ].join("\n"),
       [helperPath]: "export async function createE2eStateDir() {}\n",
       [runtimePath]: runtimeSource,
-      ...(layout === "current" ? { [managerPath]: managerSource } : {}),
+      ...(layout === "intermediate"
+        ? { [managerPath]: intermediateManagerSource }
+        : layout === "current"
+          ? { [managerPath]: currentManagerSource }
+          : {}),
       ...overrides,
     };
     return { ...committedSourceFixture(files), clientPath, files };
@@ -761,15 +767,15 @@ describe("frozen bundle committed contract", () => {
     expect(result.stdout).toBe(":\n");
   }
 
-  it.each(["June", "July", "current"] as const)(
+  it.each(["June", "July", "intermediate", "current"] as const)(
     "selects the committed %s contract regardless of package version and dirty decoys",
     (layout) => {
       const source = fixture(layout);
       writeFileSync(path.join(source.root, source.clientPath), "dirty client\n");
       writeFileSync(path.join(source.root, helperPath), "dirty helper\n");
       writeFileSync(path.join(source.root, "package.json"), '{"type":"commonjs"}');
-      if (layout !== "current") {
-        writeFileSync(path.join(source.root, managerPath), managerSource);
+      if (layout === "June" || layout === "July") {
+        writeFileSync(path.join(source.root, managerPath), currentManagerSource);
       }
       const result = resolve(source);
       expect(result.status, result.stderr).toBe(0);
@@ -910,7 +916,7 @@ describe("frozen bundle committed contract", () => {
     },
     {
       name: "mixed manager/client",
-      files: { [managerPath]: managerSource },
+      files: { [managerPath]: currentManagerSource },
       error: "client/API contract",
     },
     { name: "unknown client", files: { [julyClient]: "export {};\n" }, error: "helper contract" },

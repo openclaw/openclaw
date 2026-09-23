@@ -35,6 +35,7 @@ describe("chat transcript scroll ownership", () => {
         requestUpdate: vi.fn(),
         updateComplete: Promise.resolve(true),
       },
+      () => "retired-end-index",
       { canFollowEnd: () => !policy.chatFollowLocked },
     );
     Object.assign(policy, {
@@ -108,6 +109,7 @@ describe("chat transcript scroll ownership", () => {
         requestUpdate: vi.fn(),
         updateComplete: Promise.resolve(true),
       },
+      () => "measurement-reader",
       {
         canFollowEnd: () => !policy.chatFollowLocked,
         onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),

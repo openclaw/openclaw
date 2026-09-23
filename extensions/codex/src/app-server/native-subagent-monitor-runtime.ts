@@ -1,4 +1,6 @@
 import {
+  captureAgentHarnessCompletionCustody,
+  createAgentHarnessTaskEventSink,
   createAgentHarnessTaskRuntime,
   deliverAgentHarnessTaskCompletion,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
@@ -27,7 +29,7 @@ type ParentRegistration = Pick<
   | "agentId"
   | "submissionStore"
 > &
-  Omit<ParentOwner, "turnId">;
+  Omit<ParentOwner, "turnId" | "completionCustody">;
 
 type NativeMonitor = {
   registerParent(params: ParentRegistration): {
@@ -44,6 +46,8 @@ type NativeMonitorConstructor = new (
 ) => NativeMonitor;
 
 export const defaultNativeSubagentMonitorRuntime: NativeSubagentMonitorRuntime = {
+  captureAgentHarnessCompletionCustody,
+  createAgentHarnessTaskEventSink,
   createAgentHarnessTaskRuntime,
   deliverAgentHarnessTaskCompletion,
 };

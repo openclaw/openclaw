@@ -16,7 +16,6 @@ import {
   RELEASE_PATH_PROFILE,
   findLaneByName,
   parseLaneSelection,
-  requiredPrepublishPluginPackagesForLanes,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mts";
 import {
@@ -1088,17 +1087,6 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
         timeoutMs: 2_700_000,
         weight: 3,
       },
-      {
-        command:
-          "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade",
-        imageKind: "bare",
-        live: false,
-        name: "update-run-package-self-upgrade",
-        resources: ["docker", "npm", "service"],
-        stateScenario: "upgrade-survivor",
-        timeoutMs: 2_700_000,
-        weight: 3,
-      },
     ]);
     expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).toEqual(["plugins"]);
     expect(pluginsRuntimeServices.lanes.map(summarizeLane)).toEqual([
@@ -1230,8 +1218,8 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       ].map((releaseChunk) => planFor({ ...options, releaseChunk }));
       const lanes = partitions.flatMap((partition) => partition.lanes);
 
-      expect(partitions.map((partition) => partition.lanes.length)).toEqual([5, 2, 3]);
-      expect(new Set(lanes.map((lane) => lane.name)).size).toBe(10);
+      expect(partitions.map((partition) => partition.lanes.length)).toEqual([5, 2, 2]);
+      expect(new Set(lanes.map((lane) => lane.name)).size).toBe(9);
       expect(lanes.map(summarizeLane)).toEqual(aggregate.lanes.map(summarizeLane));
       const complete = planFor({ ...options, planReleaseAll: true });
       const packageNames = new Set(lanes.map((lane) => lane.name));
@@ -1277,7 +1265,6 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       "published-upgrade-survivor",
       "upgrade-survivor",
       "update-first-hop-compat",
-      "update-run-package-self-upgrade",
     ]);
     expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual([
       "plugins",
@@ -2453,9 +2440,6 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       "@openclaw/discord",
       "@openclaw/whatsapp",
     ]);
-    const selfUpgradeLane = findLaneByName("update-run-package-self-upgrade");
-    expect(selfUpgradeLane).toBeDefined();
-    expect(requiredPrepublishPluginPackagesForLanes([selfUpgradeLane!])).toEqual([]);
   });
 
   it.each([

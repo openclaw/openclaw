@@ -62,8 +62,6 @@ const updateMigrationCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"',
 );
-const updateRunPackageSelfUpgradeCommand =
-  "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade";
 const updateFirstHopCompatCommand =
   "OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat";
 const CODEX_HARNESS_API_KEY_ENV = "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key";
@@ -251,12 +249,6 @@ function createPackageUpdateMaintenanceLanes() {
       stateScenario: "upgrade-survivor",
       // Four serial packaged-updater hops (2026.9.1 through 2026.9.4) take
       // ~6 minutes each on hosted runners; 25 minutes cut the fourth hop off.
-      timeoutMs: 45 * 60 * 1000,
-      weight: 3,
-    }),
-    npmLane("update-run-package-self-upgrade", updateRunPackageSelfUpgradeCommand, {
-      resources: ["service"],
-      stateScenario: "upgrade-survivor",
       timeoutMs: 45 * 60 * 1000,
       weight: 3,
     }),
@@ -927,7 +919,6 @@ const releasePathPackageMigrationLanes = scheduledLaneList(
 const releasePathPackageSelfUpgradeLanes = scheduledLaneList(
   "upgrade-survivor",
   "update-first-hop-compat",
-  "update-run-package-self-upgrade",
 );
 const releasePathPackageUpdateCoreLanes = [
   ...releasePathPackageOnboardingLanes,

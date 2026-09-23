@@ -24,6 +24,8 @@ const repositoryScriptEntries = [
   "src/node-host/mac-worker-entry.ts!",
   // CI imports this selector from its trusted harness inside an inline Node script.
   ".github/actions/git-owner/test-prerequisites.mjs!",
+  // The compiler below exposes this workflow's inline and generated-config imports.
+  ".github/workflows/plugin-prerelease.yml!",
   // mobile-release-authority invokes this helper from composite-action YAML.
   ".github/actions/mobile-release-authority/authority.mjs!",
   // setup-node-env invokes this helper from composite-action YAML.
@@ -241,6 +243,35 @@ function listScriptShimEntries(dir = "scripts"): string[] {
       ? [entryPath, implementationPath].map((filePath) => `${filePath.replaceAll("\\", "/")}!`)
       : [];
   });
+}
+
+function compileFrvWorkflowConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) !== path.resolve(".github/workflows/plugin-prerelease.yml")) {
+    return "";
+  }
+  const names = new Set(
+    [
+      ...source.matchAll(
+        /\b(?:import|const)\s*\{([^}]+)\}\s*(?:from\s*|=\s*await\s+import\()["']\.\/\.frv-tooling\/scripts\/frv-test-exclusions\.mjs["']/gu,
+      ),
+    ].flatMap((match) => match[1]?.split(",").map((name) => name.trim()) ?? []),
+  );
+  // The run CLI writes a Vitest config importing its own URL. Model that emitted
+  // import only while the workflow invokes the generator, and derive its names
+  // from the real template so removing a consumer restores the unused finding.
+  if (/\.frv-tooling\/scripts\/frv-test-exclusions\.mjs["']?,?\s+["']?run["']?/u.test(source)) {
+    const generator = fs.readFileSync("scripts/frv-test-exclusions.mjs", "utf8");
+    for (const match of generator.matchAll(
+      /`import\s*\{([^}]+)\}\s*from\s*\$\{JSON\.stringify\(import\.meta\.url\)\};`/gu,
+    )) {
+      for (const name of match[1]?.split(",") ?? []) {
+        names.add(name.trim());
+      }
+    }
+  }
+  return names.size
+    ? `import { ${[...names].join(", ")} } from "../../scripts/frv-test-exclusions.mjs";`
+    : "";
 }
 
 const rootEntries = [
@@ -530,6 +561,7 @@ const ignoredTestSupportFiles = [
 ] as const;
 
 const config = {
+  compilers: { yml: compileFrvWorkflowConsumers },
   ignoreFiles: [
     // Production mode excludes dev/maintainer executables. The full-tree
     // companion config removes this exclusion and audits them as script roots.

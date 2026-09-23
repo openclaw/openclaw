@@ -10,6 +10,7 @@ import {
   UpdateDoctorConfigChangeSchema,
   UpdateDoctorConfigWriteRefusalSchema,
 } from "./update-doctor-config-schema.js";
+import { updateRecoveryCaptureStateSchema } from "./update-recovery-receipt-schema.js";
 import { updateRecoverySchema } from "./update-recovery.js";
 import { UPDATE_RUN_TEXT_LIMIT, UPDATE_RUN_DIAGNOSTIC_LIMIT } from "./update-run-limits.js";
 import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity-schema.js";
@@ -109,6 +110,7 @@ export const UpdateRunRecordSchema = z.object({
   status: z.enum(UPDATE_RUN_STATUSES),
   reason: text.nullable(),
   origin: z.object({
+    updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),
     driver: driver.optional(),
     previousDrivers: z
       .array(driver)

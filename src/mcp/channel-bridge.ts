@@ -27,13 +27,7 @@ import type {
   SessionMessagePayload,
   WaitFilter,
 } from "./channel-shared.js";
-import {
-  matchEventFilter,
-  normalizeApprovalId,
-  resolveMessageId,
-  toConversation,
-  toText,
-} from "./channel-shared.js";
+import { matchEventFilter, normalizeApprovalId, toConversation, toText } from "./channel-shared.js";
 
 /**
  * Runtime bridge between MCP tools and the OpenClaw Gateway channel APIs.
@@ -84,7 +78,6 @@ export class OpenClawChannelBridge {
   private ready = false;
   private started = false;
   private retryingInitialConnect = false;
-  private supportsExactMessageLookup = false;
   private readonly readyPromise: Promise<void>;
   private resolveReady!: () => void;
   private rejectReady!: (error: Error) => void;
@@ -163,8 +156,7 @@ export class OpenClawChannelBridge {
       onEvent: (event) => {
         void this.dispatchGatewayEvent(event);
       },
-      onHelloOk: (hello) => {
-        this.supportsExactMessageLookup = hello.features.methods.includes("chat.message.get");
+      onHelloOk: () => {
         this.retryingInitialConnect = false;
         void this.handleHelloOk();
       },
@@ -277,14 +269,8 @@ export class OpenClawChannelBridge {
     return response.messages ?? [];
   }
 
-  async readMessage(sessionKey: string, messageId: string, legacyLimit = 100) {
+  async readMessage(sessionKey: string, messageId: string) {
     await this.waitUntilReady();
-    if (!this.supportsExactMessageLookup) {
-      // v2026.5.28 shares protocol v4 but predates chat.message.get. Remove this
-      // bounded fallback when the remote compatibility floor excludes that release.
-      const messages = await this.readMessages(sessionKey, legacyLimit);
-      return messages.find((entry) => resolveMessageId(entry) === messageId) ?? null;
-    }
     const result = await this.requestGateway("chat.message.get", {
       sessionKey,
       messageId,

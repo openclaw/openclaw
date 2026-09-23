@@ -88,6 +88,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
         skillsSnapshot: params.skillsSnapshot,
         workspaceDir: resolvedWorkspace,
         assertCurrent,
+        admittedRunContext: params.admittedRunContext,
       });
   assertCurrent?.();
   const projectedWorkspace = sandbox?.enabled && sandbox.workspaceSource === "managed-worktree";
