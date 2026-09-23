@@ -2251,7 +2251,7 @@ jobs:
 
       - name: Save automatic retry intent
         id: intent_save
-        if: steps.intent_witness.outcome == 'success'
+        if: ${{ github.run_attempt == 1 && steps.intent_witness.outcome == 'success' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: full-release-flake-intent

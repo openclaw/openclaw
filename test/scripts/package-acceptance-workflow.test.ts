@@ -3419,6 +3419,7 @@ function runFullReleaseChildDispatch(
     CI_RELEASE_SCOPE: "full",
     CODEX_PLUGIN_SPEC: "",
     CROSS_OS_SUITE_FILTER: "",
+    EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
     FAIL_FAST: "false",
     GH_TOKEN: "fixture-token",
     LIVE_SUITE_FILTER: "",
@@ -8659,18 +8660,30 @@ test "$package_manager" = "pnpm@12.1.0"
     const decisionDownloads = workflowStep(summary, "Download release decision attempts");
     const drainDownloads = workflowStep(summary, "Download diagnostic drain attempts");
 
-    expect(decision.needs).toEqual(["resolve_target", "release_execution_plan"]);
-    expect(drain.needs).toEqual(["resolve_target", "release_execution_plan"]);
+    expect(decision.needs).toEqual([
+      "resolve_target",
+      "release_execution_plan",
+      "automatic_flake_retry",
+    ]);
+    expect(drain.needs).toEqual([
+      "resolve_target",
+      "release_execution_plan",
+      "automatic_flake_retry",
+    ]);
     expect(decision.if).toBe("always()");
     expect(drain.if).toBe("always()");
     expect(decisionStep.run).toBe(drainStep.run);
     expect(decisionStep.env).toMatchObject({
       FAIL_FAST: "${{ inputs.fail_fast }}",
       FULL_RELEASE_STATE_MODE: "decision",
+      FULL_RELEASE_RETRY_RECORDS_PATH: "${{ runner.temp }}/full-release-flake-retry-records",
+      FULL_RELEASE_RETRY_OWNER_RESULT: "${{ needs.automatic_flake_retry.result }}",
     });
     expect(drainStep.env).toMatchObject({
       FAIL_FAST: "false",
       FULL_RELEASE_STATE_MODE: "drain",
+      FULL_RELEASE_RETRY_RECORDS_PATH: "${{ runner.temp }}/full-release-flake-retry-records",
+      FULL_RELEASE_RETRY_OWNER_RESULT: "${{ needs.automatic_flake_retry.result }}",
     });
     expectTextToIncludeAll(decisionStep.run, [
       'node scripts/full-release-validation-state.mjs "$FULL_RELEASE_STATE_MODE"',
@@ -8765,50 +8778,95 @@ test "$package_manager" = "pnpm@12.1.0"
 
   it("pins every Full Release Validation artifact download to the canonical action", () => {
     const workflow = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
-    const downloadSteps = Object.values(workflow.jobs ?? {}).flatMap((job) =>
-      (job.steps ?? []).filter((step) => step.uses?.startsWith("actions/download-artifact@")),
+    const downloadSteps = Object.entries(workflow.jobs ?? {}).flatMap(([jobId, job]) =>
+      (job.steps ?? [])
+        .filter((step) => step.uses?.startsWith("actions/download-artifact@"))
+        .map((step) => ({ jobId, step })),
     );
 
-    expect(downloadSteps).toHaveLength(8);
+    expect(downloadSteps).toHaveLength(12);
     expect(
-      downloadSteps.map((step) => [
+      downloadSteps.map(({ jobId, step }) => [
+        jobId,
         step.name,
         step.with?.name ?? step.with?.pattern,
         step.with?.path,
       ]),
     ).toEqual([
       [
+        "evidence_reuse",
         "Download publication admission for reuse budgeting",
         "full-release-publication-admission-${{ github.run_id }}-1",
         "${{ runner.temp }}/full-release-publication-admission",
       ],
       [
+        "release_execution_plan",
         "Restore immutable release execution plan artifact",
         "full-release-execution-plan-${{ github.run_id }}",
         "${{ github.workspace }}/full-release-execution-plan",
       ],
       [
+        "release_execution_plan",
         "Download immutable publication admission",
         "full-release-publication-admission-${{ github.run_id }}-1",
         "${{ runner.temp }}/full-release-publication-admission",
       ],
-      ...Array.from({ length: 3 }, () => [
+      [
+        "automatic_flake_retry",
+        "Download immutable release execution plan",
+        "full-release-execution-plan-${{ github.run_id }}",
+        "${{ github.workspace }}/full-release-execution-plan",
+      ],
+      [
+        "automatic_flake_retry",
+        "Restore automatic retry intent artifact",
+        "full-release-flake-intent-${{ github.run_id }}-${{ matrix.child }}",
+        "${{ github.workspace }}/full-release-flake-intent",
+      ],
+      [
+        "release_decision",
         "Download immutable release execution plan",
         "full-release-execution-plan-${{ github.run_id }}",
         "${{ runner.temp }}/full-release-execution-plan",
-      ]),
+      ],
       [
+        "release_decision",
+        "Download automatic retry records",
+        "full-release-flake-retry-${{ github.run_id }}-*-${{ github.run_attempt }}",
+        "${{ runner.temp }}/full-release-flake-retry-records",
+      ],
+      [
+        "diagnostic_drain",
+        "Download immutable release execution plan",
+        "full-release-execution-plan-${{ github.run_id }}",
+        "${{ runner.temp }}/full-release-execution-plan",
+      ],
+      [
+        "diagnostic_drain",
+        "Download automatic retry records",
+        "full-release-flake-retry-${{ github.run_id }}-*-${{ github.run_attempt }}",
+        "${{ runner.temp }}/full-release-flake-retry-records",
+      ],
+      [
+        "summary",
+        "Download immutable release execution plan",
+        "full-release-execution-plan-${{ github.run_id }}",
+        "${{ runner.temp }}/full-release-execution-plan",
+      ],
+      [
+        "summary",
         "Download release decision attempts",
         "full-release-decision-${{ github.run_id }}-*",
         "${{ runner.temp }}/full-release-decision-attempts",
       ],
       [
+        "summary",
         "Download diagnostic drain attempts",
         "full-release-diagnostics-${{ github.run_id }}-*",
         "${{ runner.temp }}/full-release-diagnostic-attempts",
       ],
     ]);
-    for (const step of downloadSteps) {
+    for (const { step } of downloadSteps) {
       expect(step.uses).toBe(DOWNLOAD_ARTIFACT_V8);
     }
   });
