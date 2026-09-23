@@ -1210,7 +1210,7 @@ async function buildResponsesPayload(
     }
   }
   if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(allInputText)) {
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+    if (!hasCompletedToolOutput && canCallMessage) {
       return buildToolCallEventsWithArgs("message", {
         action: "react",
         emoji: "👍",
@@ -1222,7 +1222,7 @@ async function buildResponsesPayload(
   }
   const whatsAppUploadMatch = QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE.exec(allInputText);
   if (whatsAppUploadMatch?.[1]) {
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+    if (!hasCompletedToolOutput && canCallMessage) {
       return buildToolCallEventsWithArgs("message", {
         action: "upload-file",
         buffer: TINY_PNG_BASE64,
