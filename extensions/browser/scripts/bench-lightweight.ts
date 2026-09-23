@@ -11,12 +11,16 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 type Engine = "chromium" | "lightpanda";
-type Run = { engine: Engine; executable: string } | { engine: Engine; endpoint: string };
+type Distribution = "chromium" | "chromium-headless-shell" | "lightpanda";
+type Run =
+  | { engine: Engine; distribution: Distribution; executable: string }
+  | { engine: Engine; endpoint: string };
 
 const { values } = parseArgs({
   options: {
     lightpanda: { type: "string" },
     chromium: { type: "string" },
+    "headless-shell": { type: "string" },
     endpoint: { type: "string" },
     engine: { type: "string" },
     "fixture-bind": { type: "string", default: "127.0.0.1" },
@@ -33,7 +37,7 @@ assert(
 const runs: Run[] = [];
 if (values.endpoint) {
   assert(
-    !values.lightpanda && !values.chromium,
+    !values.lightpanda && !values.chromium && !values["headless-shell"],
     "Use either native binaries or an external --endpoint, not both.",
   );
   assert(
@@ -47,18 +51,19 @@ if (values.endpoint) {
   runs.push({ engine: values.engine, endpoint: values.endpoint });
 } else {
   assert(!values.engine, "--engine requires --endpoint.");
-  for (const [engine, executable] of [
-    ["chromium", values.chromium],
-    ["lightpanda", values.lightpanda],
+  for (const [engine, distribution, executable] of [
+    ["chromium", "chromium", values.chromium],
+    ["chromium", "chromium-headless-shell", values["headless-shell"]],
+    ["lightpanda", "lightpanda", values.lightpanda],
   ] as const) {
     if (executable) {
-      runs.push({ engine, executable: path.resolve(executable) });
+      runs.push({ engine, distribution, executable: path.resolve(executable) });
     }
   }
 }
 assert(
   runs.length > 0,
-  "Pass --lightpanda <binary>, --chromium <binary>, or --endpoint <url> --engine <engine>.",
+  "Pass --lightpanda <binary>, --chromium <binary>, --headless-shell <binary>, or --endpoint <url> --engine <engine>.",
 );
 
 async function freePort() {
@@ -265,7 +270,7 @@ async function main() {
         let startupMs: number | null = null;
         let engineVersion: string | null = null;
         if ("executable" in spec) {
-          const engineHome = path.join(scratchDir, engine);
+          const engineHome = path.join(scratchDir, spec.distribution);
           await fs.mkdir(engineHome);
           const args =
             engine === "lightpanda"
@@ -513,6 +518,7 @@ async function main() {
         const sorted = tasks.map((item) => item.durationMs).toSorted((a, b) => a - b);
         return {
           engine,
+          distribution: "distribution" in spec ? spec.distribution : null,
           engineVersion,
           connectionMode: proc ? "spawned" : "external",
           warmIterations: iterations,
@@ -586,6 +592,7 @@ async function main() {
         workload:
           "Local synthetic form through OpenClaw routes, no LLM. One first task includes initial page open/attachment; each measured warm task includes navigation, default efficient AI snapshot (Lightpanda selects aria refs), typing, exactly one submission, wait and text extraction. Capability/session checks run after measurement.",
         engineOrder: runs.map((spec) => spec.engine),
+        distributionOrder: runs.map((spec) => ("distribution" in spec ? spec.distribution : null)),
         results,
       },
       null,

@@ -120,6 +120,7 @@ export async function certifySessionCanonicalValidationPending(
                               "session.canonical-validation.certify",
                               { reclamationAdmission },
                               "worker",
+                              signal,
                             ),
                         }),
                     );

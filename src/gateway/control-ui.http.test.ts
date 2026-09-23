@@ -446,15 +446,19 @@ describe("handleControlUiHttpRequest", () => {
     const originalRead = fileHandlePrototype.read;
     await probe.close();
     let constrained = false;
-    return vi
-      .spyOn(fileHandlePrototype, "read")
-      .mockImplementation(async function (this: unknown, target, offset, length, position) {
-        if (!constrained && position === 0 && length > maxBytes) {
-          constrained = true;
-          return await originalRead.call(this, target, offset, maxBytes, position);
-        }
-        return await originalRead.call(this, target, offset, length, position);
-      });
+    return vi.spyOn(fileHandlePrototype, "read").mockImplementation(async function (
+      this: unknown,
+      target,
+      offset,
+      length,
+      position,
+    ) {
+      if (!constrained && position === 0 && length > maxBytes) {
+        constrained = true;
+        return await originalRead.call(this, target, offset, maxBytes, position);
+      }
+      return await originalRead.call(this, target, offset, length, position);
+    });
   }
 
   async function withBasePathRootFixture<T>(params: {

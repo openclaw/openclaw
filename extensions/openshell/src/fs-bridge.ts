@@ -62,29 +62,18 @@ class OpenShellFsBridge implements SandboxFsBridge {
   async readFile(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<Buffer> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
-    let opened: Awaited<ReturnType<Awaited<ReturnType<typeof fsRoot>>["open"]>>;
     try {
       await assertLocalPathSafety({
         target,
         allowFinalSymlinkForUnlink: false,
       });
       const root = await fsRoot(target.mountHostRoot);
-      if (params.maxBytes !== undefined) {
-        return (
-          await root.read(path.relative(target.mountHostRoot, hostPath), {
-            hardlinks: "reject",
-            maxBytes: params.maxBytes,
-          })
-        ).buffer;
-      }
-      opened = await root.open(path.relative(target.mountHostRoot, hostPath), {
-        hardlinks: "reject",
-      });
-      try {
-        return (await opened.handle.readFile()) as Buffer;
-      } finally {
-        await opened.handle.close();
-      }
+      return (
+        await root.read(path.relative(target.mountHostRoot, hostPath), {
+          hardlinks: "reject",
+          maxBytes: params.maxBytes ?? Infinity,
+        })
+      ).buffer;
     } catch (err) {
       throw new Error(
         `Sandbox boundary checks failed; cannot read files: ${target.containerPath}`,

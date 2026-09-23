@@ -245,8 +245,17 @@ function openAgentDatabaseBackend(
   let providerReview:
     | typeof import("../config/sessions/provider-review-store.worker.js")
     | undefined;
+  let archives:
+    | typeof import("../config/sessions/session-accessor.sqlite-archive-store-kernel.js")
+    | undefined;
   let archivePruning:
     | typeof import("../config/sessions/session-history-archive-pruning.worker.js")
+    | undefined;
+  let transcript:
+    | {
+        initialize: typeof import("../config/sessions/session-accessor.sqlite-transcript-header.js").ensureTranscriptHeader;
+        assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity;
+      }
     | undefined;
   let replacements:
     | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
@@ -271,6 +280,16 @@ function openAgentDatabaseBackend(
   return {
     prepare(command) {
       if (
+        command.type === "session.archives.preparePublication" ||
+        command.type === "session.archives.recordPublication"
+      ) {
+        return import("../config/sessions/session-accessor.sqlite-archive-store-kernel.js").then(
+          (module) => {
+            archives = module;
+          },
+        );
+      }
+      if (
         command.type === "session.archivePruning.deletePublished" ||
         command.type === "session.archivePruning.removeLegacy" ||
         command.type === "session.archivePruning.reclaimPages"
@@ -280,6 +299,17 @@ function openAgentDatabaseBackend(
             archivePruning = module;
           },
         );
+      }
+      if (command.type === "session.transcript.initialize") {
+        return Promise.all([
+          import("../config/sessions/session-accessor.sqlite-transcript-header.js"),
+          import("../config/sessions/session-accessor.sqlite-scope.js"),
+        ]).then(([header, scope]) => {
+          transcript = {
+            initialize: header.ensureTranscriptHeader,
+            assertIdentity: scope.assertSqliteTranscriptWriteIdentity,
+          };
+        });
       }
       if (command.type === "session.entries.replace") {
         return import("../config/sessions/session-accessor.sqlite-replacement-state.js").then(
@@ -327,6 +357,57 @@ function openAgentDatabaseBackend(
       if (command.type === "database.prepareWrite") {
         openWriter();
         return undefined;
+      }
+      if (
+        (command.type === "session.archives.preparePublication" ||
+          command.type === "session.archives.recordPublication") &&
+        archives
+      ) {
+        const opened = openWriter();
+        const kernel = archives;
+        return runOpenClawAgentWriteTransaction(
+          (current) => {
+            if (current.db !== opened.db) {
+              throw new Error("Session archive publication lost its canonical database owner");
+            }
+            admit("transaction");
+            const result =
+              command.type === "session.archives.preparePublication"
+                ? kernel.prepareSessionTranscriptArchivePublishPlans(current, command.input)
+                : kernel.recordSessionTranscriptArchivePublishResults(
+                    current,
+                    command.input.results,
+                    command.input.nowMs,
+                  );
+            admit("commit");
+            return result;
+          },
+          options,
+          { operationLabel: "session.archive.publish" },
+        );
+      }
+      if (command.type === "session.transcript.initialize" && transcript) {
+        const assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity =
+          transcript.assertIdentity;
+        assertIdentity(command.input);
+        const initialize = transcript.initialize;
+        const opened = openWriter();
+        return runOpenClawAgentWriteTransaction(
+          (current) => {
+            if (current.db !== opened.db) {
+              throw new Error("Session transcript lost its canonical database owner");
+            }
+            admit("transaction");
+            initialize(
+              current,
+              { agentId: input.agentId, path: input.databasePath, ...command.input },
+              command.input.cwd,
+            );
+            admit("commit");
+          },
+          options,
+          { operationLabel: "session.entry.create-with-transcript" },
+        );
       }
       if (command.type === "session.entries.replace" && replacements) {
         const opened = openWriter();
