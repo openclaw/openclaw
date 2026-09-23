@@ -220,8 +220,25 @@ export function estimateBase64DecodedByteLength(value: string): number {
   return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
 }
 
-const REALTIME_TALK_PCM_OUTPUT_MAX_QUEUED_SECONDS = 10;
-const REALTIME_TALK_PCM_OUTPUT_MAX_SOURCES = 320;
+// Realtime providers can relay an entire spoken reply over the socket far
+// faster than it plays back (e.g. several sentences of audio arriving in a
+// second or two), which pushes the queued-ahead duration past a small cap
+// long before the reply is actually finished. A 10s cap left too little
+// headroom for ordinary multi-sentence replies and caused them to be
+// cancelled mid-sentence with reason "playback-overflow" (#148658); 60s
+// comfortably covers realistic reply lengths while keeping queued PCM16
+// memory bounded (60s of 24kHz mono PCM is under 3MB).
+const REALTIME_TALK_PCM_OUTPUT_MAX_QUEUED_SECONDS = 60;
+// The gateway relay re-chunks provider audio into 20ms frames, and each frame
+// becomes one AudioBufferSourceNode that is only released on `ended`. A fixed
+// source cap therefore rejects relayed replies long before the seconds budget
+// does (320 sources was 6.4s of speech). Size it as the number of relay-sized
+// frames the seconds budget holds so both gates bind together, while still
+// bounding graph-node count for frames far smaller than the relay contract.
+const REALTIME_TALK_PCM_OUTPUT_RELAY_FRAME_SECONDS = 0.02;
+const REALTIME_TALK_PCM_OUTPUT_MAX_SOURCES = Math.ceil(
+  REALTIME_TALK_PCM_OUTPUT_MAX_QUEUED_SECONDS / REALTIME_TALK_PCM_OUTPUT_RELAY_FRAME_SECONDS,
+);
 
 type RealtimeTalkPcmOutputQueuePlayResult = "queued" | "ignored" | "overflow";
 
