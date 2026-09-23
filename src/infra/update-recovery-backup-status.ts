@@ -392,11 +392,19 @@ async function listBackups(installRoot?: string): Promise<
       continue;
     }
     const directory = path.join(store, captureId);
+    const entry = await statOrMissing(directory);
+    // Doctor's schema archives share this root but are not recovery captures.
+    if (entry?.isFile() && /^agent-schema-.+\.tar\.gz$/u.test(captureId)) {
+      continue;
+    }
     const manifestPath = path.join(directory, "manifest.json");
-    if (
-      !(await statOrMissing(directory))?.isDirectory() ||
-      !(await statOrMissing(manifestPath))?.isFile()
-    ) {
+    const manifestEntry = entry?.isDirectory() ? await statOrMissing(manifestPath) : undefined;
+    // Rehearsal scratch uses this prefix on every platform. A present manifest
+    // still belongs to recovery validation, even under a scratch-like name.
+    if (entry?.isDirectory() && /^openclaw-update-canary-.+$/u.test(captureId) && !manifestEntry) {
+      continue;
+    }
+    if (!entry?.isDirectory() || !manifestEntry?.isFile()) {
       throw new Error(
         `Unresolved update capture ${directory} has incomplete publication. Inspection only: openclaw update status --json; npx openclaw@latest doctor --fix. Earlier captures are retained.`,
       );

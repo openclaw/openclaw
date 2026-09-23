@@ -215,6 +215,8 @@ it.each([
   "incomplete-publication",
   "manifest-symlink",
   "manifest-hardlink",
+  "canary-file",
+  "archive-directory",
 ])("refuses %s through the production status reader", async (fault) => {
   const c = await capture();
   if (fault === "config-inventory") {
@@ -247,19 +249,63 @@ it.each([
       await fs.link(target, c.manifestPath);
     }
   }
+  if (fault === "canary-file") {
+    await fs.writeFile(path.join(path.dirname(c.directory), "openclaw-update-canary-aB12cD"), "");
+  }
+  if (fault === "archive-directory") {
+    await fs.mkdir(path.join(path.dirname(c.directory), "agent-schema-run-id.tar.gz"));
+  }
   await updateStatusCommand({ json: true });
   expect(result()).not.toHaveProperty("recoverySets");
   expect(result().recoverySetsError).toBeTypeOf("string");
   expect(result().recoverySetsError.length).toBeGreaterThan(0);
 });
-it("ignores only the known capture privacy marker", async () => {
-  await fs.mkdir(`${stateDir}.update-captures`);
-  await fs.writeFile(
-    path.join(`${stateDir}.update-captures`, ".openclaw-private-update-capture"),
-    "openclaw-private-update-capture-v1\n",
-  );
+it.each(["privacy-marker", "doctor-archive", "canary-directory"])(
+  "keeps recovery sets visible beside a known %s without changing either artifact",
+  async (artifact) => {
+    const c = await capture();
+    await terminal(c, "committed");
+    const store = path.dirname(c.directory);
+    const sibling = path.join(
+      store,
+      artifact === "privacy-marker"
+        ? ".openclaw-private-update-capture"
+        : artifact === "doctor-archive"
+          ? `agent-schema-${c.manifest.runId}-22222222-2222-4222-8222-222222222222.tar.gz`
+          : "openclaw-update-canary-aB12cD",
+    );
+    const contents =
+      artifact === "privacy-marker"
+        ? "openclaw-private-update-capture-v1\n"
+        : "retained sibling bytes";
+    if (artifact === "canary-directory") {
+      await fs.mkdir(sibling);
+    } else {
+      await fs.writeFile(sibling, contents);
+    }
+    await updateStatusCommand({ json: true });
+    expect(result()).not.toHaveProperty("recoverySetsError");
+    expect(result().recoverySets).toEqual([
+      expect.objectContaining({ runId: c.manifest.runId, status: "stale" }),
+    ]);
+    if (artifact === "canary-directory") {
+      expect(await fs.readdir(sibling)).toEqual([]);
+    } else {
+      expect(await fs.readFile(sibling, "utf8")).toBe(contents);
+    }
+    expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
+    // Recognized siblings must not hide genuinely incomplete captures.
+    await fs.unlink(c.manifestPath);
+    await updateStatusCommand({ json: true });
+    expect(result().recoverySetsError).toContain("incomplete publication");
+  },
+);
+it("still validates a manifest in a canary-named directory", async () => {
+  const c = await capture("openclaw-update-canary-aB12cD");
+  await fs.writeFile(c.manifestPath, "{");
   await updateStatusCommand({ json: true });
-  expect(result().recoverySets).toEqual([]);
+  expect(result()).not.toHaveProperty("recoverySets");
+  expect(result().recoverySetsError).toBeTypeOf("string");
 });
 
 it("reports one failed set as unresolved and multiple failed sets as ambiguous", async () => {
