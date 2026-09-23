@@ -65,7 +65,6 @@ import {
   discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
   realtimeTalkDeviceIssueMessage,
-  type RealtimeTalkCameraDevice,
   type RealtimeTalkInputDevice,
 } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
@@ -113,6 +112,24 @@ type SessionObserverModelsResult = {
 };
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
 
+function createMediaDeviceState(): {
+  devices: RealtimeTalkInputDevice[];
+  permissionRequired: boolean;
+  loading: boolean;
+  error: string | null;
+  loaded: boolean;
+  requestsPermission: boolean;
+} {
+  return {
+    devices: [],
+    permissionRequired: true,
+    loading: false,
+    error: null,
+    loaded: false,
+    requestsPermission: false,
+  };
+}
+
 function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
   const activeSection = configSectionKeysForPage(pageId)?.[0] ?? null;
   if (activeSection === null && pageId !== "advanced") {
@@ -144,10 +161,6 @@ export function configSelectionFromSearch(pageId: ConfigPageId, search: string):
     return defaultConfigSelection(pageId);
   }
   return normalizeConfigSelection(pageId, section, null);
-}
-
-function configPageTitle(pageId: ConfigPageId): string {
-  return titleForRoute(pageId);
 }
 
 function renderConfigPageSubtitle(pageId: ConfigPageId) {
@@ -238,47 +251,13 @@ export class ConfigPage extends OpenClawLightDomElement {
   @state() private sessionObserverModels: ModelCatalogEntry[] = [];
   @state() private sessionObserverModelsUnavailable = false;
   private mediaDeviceWatch: (() => void) | null = null;
-  @state() private microphoneDevices: RealtimeTalkInputDevice[] = [];
-  @state() private microphonePermissionRequired = true;
-  @state() private microphoneLoading = false;
-  @state() private microphoneError: string | null = null;
-  private microphoneLoaded = false;
-  private microphoneRefreshRequestsPermission = false;
-  @state() private cameraDevices: RealtimeTalkCameraDevice[] = [];
-  @state() private cameraPermissionRequired = true;
-  @state() private cameraLoading = false;
-  @state() private cameraError: string | null = null;
-  private cameraLoaded = false;
-  private cameraRefreshRequestsPermission = false;
+  private readonly mediaDevices = {
+    microphone: createMediaDeviceState(),
+    camera: createMediaDeviceState(),
+  };
   private cameraSelectionRequest = 0;
-  @state() private formModes: Record<ConfigPageId, ConfigFormMode> = {
-    communications: "form",
-    appearance: "form",
-    notifications: "form",
-    security: "form",
-    automation: "form",
-    mcp: "form",
-    memory: "form",
-    talk: "form",
-    infrastructure: "form",
-    updates: "form",
-    "ai-agents": "form",
-    advanced: "form",
-  };
-  @state() private selections: Record<ConfigPageId, ConfigSelection> = {
-    communications: defaultConfigSelection("communications"),
-    appearance: defaultConfigSelection("appearance"),
-    notifications: defaultConfigSelection("notifications"),
-    security: defaultConfigSelection("security"),
-    automation: defaultConfigSelection("automation"),
-    mcp: defaultConfigSelection("mcp"),
-    memory: defaultConfigSelection("memory"),
-    talk: defaultConfigSelection("talk"),
-    infrastructure: defaultConfigSelection("infrastructure"),
-    updates: defaultConfigSelection("updates"),
-    "ai-agents": defaultConfigSelection("ai-agents"),
-    advanced: defaultConfigSelection("advanced"),
-  };
+  @state() private formModes: Partial<Record<ConfigPageId, ConfigFormMode>> = {};
+  @state() private selections: Partial<Record<ConfigPageId, ConfigSelection>> = {};
   @state() private customThemeImport = themeImport.INITIAL_CUSTOM_THEME_IMPORT_STATE;
   private readonly customThemeImportOwner = new themeImport.CustomThemeImportOwner((next) => {
     this.customThemeImport = next;
@@ -473,8 +452,9 @@ export class ConfigPage extends OpenClawLightDomElement {
   };
 
   private retireMediaPermissionRequests() {
-    this.microphoneRefreshRequestsPermission = false;
-    this.cameraRefreshRequestsPermission = false;
+    for (const device of Object.values(this.mediaDevices)) {
+      device.requestsPermission = false;
+    }
   }
 
   override connectedCallback() {
@@ -493,8 +473,8 @@ export class ConfigPage extends OpenClawLightDomElement {
     // behind their own controls, and a hardware change must never turn into an
     // unasked-for browser dialog on a settings page.
     this.mediaDeviceWatch = observeRealtimeTalkDevices(() => {
-      void this.refreshMicrophones(false);
-      void this.refreshCameras(false);
+      void this.refreshMediaDevices("microphone", false);
+      void this.refreshMediaDevices("camera", false);
     });
     this.syncRouteData();
   }
@@ -537,63 +517,46 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.syncUpdateCountdownPolling();
     // Device labels stay hidden until the user grants media permission; each
     // picker requests its permission explicitly when opened.
-    if (this.pageId === "appearance" && !this.microphoneLoaded) {
-      this.microphoneLoaded = true;
-      void this.refreshMicrophones(false);
-    }
-    if (this.pageId === "appearance" && !this.cameraLoaded) {
-      this.cameraLoaded = true;
-      void this.refreshCameras(false);
+    if (this.pageId === "appearance") {
+      for (const kind of ["microphone", "camera"] as const) {
+        if (!this.mediaDevices[kind].loaded) {
+          this.mediaDevices[kind].loaded = true;
+          void this.refreshMediaDevices(kind, false);
+        }
+      }
     }
   }
 
-  private async refreshMicrophones(requestPermission: boolean) {
-    if (this.microphoneLoading) {
-      this.microphoneRefreshRequestsPermission ||= requestPermission;
+  private async refreshMediaDevices(kind: "microphone" | "camera", requestPermission: boolean) {
+    const device = this.mediaDevices[kind];
+    if (device.loading) {
+      device.requestsPermission ||= requestPermission;
       return;
     }
-    this.microphoneLoading = true;
-    this.microphoneRefreshRequestsPermission = requestPermission;
-    this.microphoneError = null;
+    device.loading = true;
+    device.requestsPermission = requestPermission;
+    device.error = null;
+    this.requestUpdate();
     try {
-      const result = await discoverRealtimeTalkInputs(
-        () => this.microphoneRefreshRequestsPermission,
-      );
-      this.microphoneDevices = result.devices;
-      this.microphonePermissionRequired = result.permissionRequired;
-      this.microphoneError = result.issue
-        ? realtimeTalkDeviceIssueMessage(result.issue, "audioinput")
+      const discover =
+        kind === "microphone" ? discoverRealtimeTalkInputs : discoverRealtimeTalkCameras;
+      const result = await discover(() => device.requestsPermission);
+      device.devices = result.devices;
+      device.permissionRequired = result.permissionRequired;
+      device.error = result.issue
+        ? realtimeTalkDeviceIssueMessage(
+            result.issue,
+            kind === "microphone" ? "audioinput" : "videoinput",
+          )
         : null;
     } catch (error) {
       // Discovery is best-effort in blocked/inactive contexts; a rejection
       // must not wedge the picker in its loading state.
-      this.microphoneError = formatUiError(error);
+      device.error = formatUiError(error);
     } finally {
-      this.microphoneLoading = false;
-      this.microphoneRefreshRequestsPermission = false;
-    }
-  }
-
-  private async refreshCameras(requestPermission: boolean) {
-    if (this.cameraLoading) {
-      this.cameraRefreshRequestsPermission ||= requestPermission;
-      return;
-    }
-    this.cameraLoading = true;
-    this.cameraRefreshRequestsPermission = requestPermission;
-    this.cameraError = null;
-    try {
-      const result = await discoverRealtimeTalkCameras(() => this.cameraRefreshRequestsPermission);
-      this.cameraDevices = result.devices;
-      this.cameraPermissionRequired = result.permissionRequired;
-      this.cameraError = result.issue
-        ? realtimeTalkDeviceIssueMessage(result.issue, "videoinput")
-        : null;
-    } catch (error) {
-      this.cameraError = formatUiError(error);
-    } finally {
-      this.cameraLoading = false;
-      this.cameraRefreshRequestsPermission = false;
+      device.loading = false;
+      device.requestsPermission = false;
+      this.requestUpdate();
     }
   }
 
@@ -762,7 +725,10 @@ export class ConfigPage extends OpenClawLightDomElement {
   private setActiveSubsection(section: string | null) {
     this.selections = {
       ...this.selections,
-      [this.pageId]: { ...this.selections[this.pageId], activeSubsection: section },
+      [this.pageId]: {
+        ...(this.selections[this.pageId] ?? defaultConfigSelection(this.pageId)),
+        activeSubsection: section,
+      },
     };
   }
 
@@ -884,7 +850,8 @@ export class ConfigPage extends OpenClawLightDomElement {
   private async selectCamera(deviceId: string) {
     const request = ++this.cameraSelectionRequest;
     const videoDeviceId = deviceId.trim() || undefined;
-    this.cameraError = null;
+    this.mediaDevices.camera.error = null;
+    this.requestUpdate();
     try {
       await switchActiveRealtimeTalkCameras(videoDeviceId);
       if (request !== this.cameraSelectionRequest) {
@@ -897,7 +864,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       });
     } catch (error) {
       if (request === this.cameraSelectionRequest) {
-        this.cameraError = formatUiError(error);
+        this.mediaDevices.camera.error = formatUiError(error);
+        this.requestUpdate();
       }
     }
   }
@@ -925,10 +893,6 @@ export class ConfigPage extends OpenClawLightDomElement {
         ),
       message: t("configPage.themeRemoved"),
     });
-  }
-
-  private includeSections(): readonly string[] | undefined {
-    return configSectionKeysForPage(this.pageId);
   }
 
   private isUpdateBusy(): boolean {
@@ -999,14 +963,15 @@ export class ConfigPage extends OpenClawLightDomElement {
         onReportFailure: (attemptId) => this.context.overlays.reportUpdateFailure(attemptId),
       });
     }
-    const includeSections = this.includeSections();
+    const includeSections = configSectionKeysForPage(this.pageId);
     // Advanced shows everything without a curated home elsewhere.
     const excludeSections =
       this.pageId === "advanced" ? [...SCOPED_CONFIG_SECTION_KEYS] : undefined;
+    const currentSelection = this.selections[this.pageId] ?? defaultConfigSelection(this.pageId);
     const selection = normalizeConfigSelection(
       this.pageId,
-      this.selections[this.pageId].activeSection,
-      this.selections[this.pageId].activeSubsection,
+      currentSelection.activeSection,
+      currentSelection.activeSubsection,
     );
     const activeSection = this.pageId === "mcp" ? "mcp" : selection.activeSection;
     const browserPanelAvailable = isBrowserPanelAvailable(this.context.gateway.snapshot);
@@ -1042,7 +1007,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       schema: configState.configSchema,
       schemaLoading: configState.configSchemaLoading,
       uiHints: configState.configUiHints,
-      formMode: this.formModes[this.pageId],
+      formMode: this.formModes[this.pageId] ?? "form",
       rawDraftPending: configState.configFormMode === "raw" && configState.configFormDirty,
       viewState: this.configViewState,
       rawAvailable: Boolean(
@@ -1072,10 +1037,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       onSave: () => void runtimeConfig.save(),
       onRawDiscard: () => void runtimeConfig.discardDraft(),
       onOpenFile: () => void runtimeConfig.openFile(),
-      version:
-        this.context.config.current.serverVersion ??
-        this.context.gateway.snapshot.hello?.server?.version ??
-        "",
       theme: this.settings.theme,
       themeOverridden: themePref.overridden,
       themeProvenance: themePref.provenance,
@@ -1208,29 +1169,23 @@ export class ConfigPage extends OpenClawLightDomElement {
       sessionSourcePluginsLoading: this.sessionSourcePluginsTask.status === TaskStatus.PENDING,
       setCatalogOpenTarget: (value) => this.applySettings({ catalogOpenTarget: value }),
       microphone: {
-        devices: this.microphoneDevices,
-        permissionRequired: this.microphonePermissionRequired,
+        ...this.mediaDevices.microphone,
         selectedDeviceId: this.settings.realtimeTalkInputDeviceId ?? "",
-        loading: this.microphoneLoading,
-        error: this.microphoneError,
       },
       composerHoldToRecord: this.settings.composerHoldToRecord !== false,
       setComposerHoldToRecord: (enabled) => this.applySettings({ composerHoldToRecord: enabled }),
-      onMicrophoneRefresh: () => void this.refreshMicrophones(true),
+      onMicrophoneRefresh: () => void this.refreshMediaDevices("microphone", true),
       onMicrophoneSelect: (deviceId) => this.selectMicrophone(deviceId),
       camera: {
-        devices: this.cameraDevices,
-        permissionRequired: this.cameraPermissionRequired,
+        ...this.mediaDevices.camera,
         selectedDeviceId: this.settings.realtimeTalkVideoDeviceId ?? "",
-        loading: this.cameraLoading,
-        error: this.cameraError,
       },
-      onCameraRefresh: () => void this.refreshCameras(true),
+      onCameraRefresh: () => void this.refreshMediaDevices("camera", true),
       onCameraSelect: (deviceId) => void this.selectCamera(deviceId),
       gatewayUrl: this.context.gateway.connection.gatewayUrl,
       assistantName: this.context.config.current.assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
-      navRootLabel: this.pageId === "advanced" ? undefined : configPageTitle(this.pageId),
+      navRootLabel: this.pageId === "advanced" ? undefined : titleForRoute(this.pageId),
       showSectionDocs: this.pageId !== "communications",
       renderSection:
         this.pageId === "communications" && activeSection === "transcripts"
@@ -1362,7 +1317,7 @@ export class ConfigPage extends OpenClawLightDomElement {
           ? nothing
           : html`
               ${renderSettingsPageHeader({
-                title: configPageTitle(this.pageId),
+                title: titleForRoute(this.pageId),
                 subtitle: renderConfigPageSubtitle(this.pageId),
               })}
             `

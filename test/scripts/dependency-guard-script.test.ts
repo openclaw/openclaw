@@ -447,6 +447,67 @@ describe("dependency guard script", () => {
     },
   );
 
+  it("restores modified, deleted, and added lockfiles from the PR merge base after main advances", () => {
+    const content = (text: string) => ({
+      type: "file",
+      encoding: "base64",
+      content: Buffer.from(text).toString("base64"),
+    });
+    const result = runDependencyGuard(
+      {
+        [`GET ${pullPath}`]: { ...pullRequest, changed_files: 4 },
+        [`GET ${pullPath}/files`]: [
+          { filename: "pnpm-lock.yaml", status: "modified" },
+          { filename: "tools/package-lock.json", status: "removed" },
+          { filename: "new/package-lock.json", status: "added" },
+          { filename: "README.md", status: "modified" },
+        ],
+        [`GET ${comparisonPath}`]: {
+          base_commit: { sha: staleSha },
+          merge_base_commit: { sha: mergeBaseSha },
+        },
+        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
+        [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=${mergeBaseSha}`]:
+          content("original lockfile"),
+        [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=${staleSha}`]:
+          content("unrelated main update"),
+        [`GET /repos/openclaw/openclaw/contents/tools/package-lock.json?ref=${mergeBaseSha}`]:
+          content("original nested lockfile"),
+        [`GET /repos/openclaw/openclaw/contents/tools/package-lock.json?ref=${staleSha}`]: {
+          httpError: 404,
+        },
+        [`GET /repos/openclaw/openclaw/contents/new/package-lock.json?ref=${mergeBaseSha}`]: {
+          httpError: 404,
+        },
+        [`GET /repos/openclaw/openclaw/contents/new/package-lock.json?ref=${staleSha}`]: content(
+          "independently added on main",
+        ),
+        "POST /graphql": { data: { createCommitOnBranch: { commit: { oid: rolloutSha } } } },
+      },
+      "autoscrub",
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const writes = result.calls.filter((call) => call.path === "/graphql");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.body?.variables?.input).toEqual({
+      branch: { repositoryNameWithOwner: "openclaw/openclaw", branchName: "change" },
+      expectedHeadOid: headSha,
+      fileChanges: {
+        additions: [
+          { path: "pnpm-lock.yaml", contents: content("original lockfile").content },
+          {
+            path: "tools/package-lock.json",
+            contents: content("original nested lockfile").content,
+          },
+        ],
+        deletions: [{ path: "new/package-lock.json" }],
+      },
+      message: { headline: "chore: remove dependency lockfile change" },
+    });
+    expect(result.stdout).toContain(`Merge base: \`${mergeBaseSha}\``);
+    expect(result.stdout).not.toContain("Verification result:");
+  });
+
   it("keeps dependency approval required when an editable fork has no autoscrub token", () => {
     const routes = {
       [`GET ${pullPath}`]: {
@@ -623,6 +684,7 @@ describe("dependency guard script", () => {
 
   it("renders deterministic removal guidance for blocked lockfile changes", () => {
     const body = renderBlockedDependencyComment({
+      baseRepository: "openclaw/openclaw",
       baseBranch: "main",
       headSha,
       lockfileChanges: ["pnpm-lock.yaml", "tools/nested/pnpm-lock.yaml"],
@@ -640,8 +702,9 @@ describe("dependency guard script", () => {
     expect(body).toContain("- `tools/nested/pnpm-lock.yaml`\n");
     expect(body).toContain("- `package.json`\n");
     expect(body).toContain(
-      "git checkout 'origin/main' -- 'pnpm-lock.yaml' 'tools/nested/pnpm-lock.yaml'",
+      "git restore --source=\"$(git merge-base HEAD FETCH_HEAD)\" --staged --worktree -- 'pnpm-lock.yaml' 'tools/nested/pnpm-lock.yaml'",
     );
+    expect(body).toContain("git fetch 'https://github.com/openclaw/openclaw.git' 'main'");
     expect(body).toContain("```text\n/allow-dependencies-change\n```");
     expect(body).toContain(`Current SHA: \`${headSha}\``);
     expect(body).toContain("A later push requires a fresh approval comment.");
@@ -649,6 +712,7 @@ describe("dependency guard script", () => {
 
   it("shell-quotes PR-controlled paths in removal guidance", () => {
     const body = renderBlockedDependencyComment({
+      baseRepository: "openclaw/openclaw",
       baseBranch: "release/canary branch",
       headSha,
       lockfileChanges: [
@@ -659,7 +723,7 @@ describe("dependency guard script", () => {
     });
 
     expect(body).toContain(
-      "git checkout 'origin/release/canary branch' -- 'dir with spaces/pnpm-lock.yaml' 'safe/quote'\\''$(touch bad);/package-lock.json'",
+      "git restore --source=\"$(git merge-base HEAD FETCH_HEAD)\" --staged --worktree -- 'dir with spaces/pnpm-lock.yaml' 'safe/quote'\\''$(touch bad);/package-lock.json'",
     );
   });
 
@@ -752,6 +816,7 @@ describe("dependency guard script", () => {
     const body = renderAutoscrubbedDependencyComment({
       baseBranch: "main",
       commitSha: staleSha,
+      mergeBaseSha,
       lockfileChanges: ["pnpm-lock.yaml", "tools/nested/pnpm-lock.yaml"],
     });
 
@@ -762,16 +827,16 @@ describe("dependency guard script", () => {
     expect(body).toContain("`tools/nested/pnpm-lock.yaml`");
     expect(body).toContain(`Cleanup commit: \`${staleSha}\``);
     expect(body).toContain(
-      "restored each listed lockfile from the target branch and pushed the cleanup commit to this PR head",
+      "restored each listed lockfile to its merge-base state, removing files added by this PR",
     );
-    expect(body).toContain(
-      "this PR no longer carries those package lockfile diffs after the cleanup commit",
-    );
+    expect(body).toContain(`Merge base: \`${mergeBaseSha}\``);
+    expect(body).not.toContain("Verification result:");
     expect(isAutoscrubbedDependencyComment({ body })).toBe(true);
   });
 
   it("renders fork and dependency-manifest autoscrub guidance", () => {
     const forkBody = renderBlockedDependencyComment({
+      baseRepository: "openclaw/openclaw",
       baseBranch: "main",
       headSha,
       lockfileChanges: ["pnpm-lock.yaml"],
@@ -779,6 +844,7 @@ describe("dependency guard script", () => {
       autoscrubStatus: { kind: "not-attempted" },
     });
     const unsafeBody = renderBlockedDependencyComment({
+      baseRepository: "openclaw/openclaw",
       baseBranch: "main",
       headSha,
       lockfileChanges: ["pnpm-lock.yaml"],
@@ -789,6 +855,7 @@ describe("dependency guard script", () => {
       },
     });
     const mixedBody = renderBlockedDependencyComment({
+      baseRepository: "openclaw/openclaw",
       baseBranch: "main",
       headSha,
       lockfileChanges: ["pnpm-lock.yaml"],
@@ -816,6 +883,9 @@ describe("dependency guard script", () => {
     const baseApi = {
       request: async (requestPath: string) => {
         calls.push({ api: "base", path: requestPath });
+        if (requestPath.includes("/compare/")) {
+          return { base_commit: { sha: "base-sha" }, merge_base_commit: { sha: mergeBaseSha } };
+        }
         if (requestPath.includes("/contents/pnpm-lock.yaml?")) {
           return {
             content: Buffer.from("base lockfile").toString("base64"),
@@ -869,12 +939,13 @@ describe("dependency guard script", () => {
       },
     );
 
-    expect(commit).toEqual({ sha: staleSha });
+    expect(commit).toEqual({ sha: staleSha, mergeBaseSha });
     expect(calls.map((call) => `${call.api}:${call.path}`)).toEqual([
-      "base:/repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=base-sha",
+      `base:/repos/openclaw/openclaw/compare/base-sha...${headSha}?per_page=1&page=2`,
+      `base:/repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=${mergeBaseSha}`,
       "write:graphql",
     ]);
-    expect(calls[1]?.variables).toMatchObject({
+    expect(calls[2]?.variables).toMatchObject({
       input: {
         branch: {
           repositoryNameWithOwner: "contributor/openclaw",

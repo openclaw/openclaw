@@ -2142,7 +2142,7 @@ src/cli/claws-cli.runtime.ts	2
 src/cli/command-config-resolution.ts	2
 src/cli/command-format.ts	1
 src/cli/command-options.ts	1
-src/cli/command-secret-targets.ts	2
+src/cli/command-secret-targets.ts	1
 src/cli/completion-runtime.ts	4
 src/cli/config-cli-input.ts	2
 src/cli/config-cli-path.ts	5
@@ -2181,7 +2181,7 @@ src/cli/nodes-cli/register.location.ts	2
 src/cli/nodes-cli/register.pairing.ts	4
 src/cli/nodes-cli/register.push.ts	1
 src/cli/nodes-cli/register.screen.ts	1
-src/cli/nodes-cli/register.status.ts	4
+src/cli/nodes-cli/register.status.ts	3
 src/cli/nodes-cli/rpc.ts	2
 src/cli/one-shot-exit.ts	2
 src/cli/output-file.runtime.ts	1
@@ -3502,7 +3502,6 @@ ui/src/components/config-form.node.shared.ts	3
 ui/src/components/config-form.node.ts	1
 ui/src/components/config-form.render.ts	1
 ui/src/components/config-form.search.ts	1
-ui/src/components/config-form.shared.ts	2
 ui/src/components/config-form.tiers.ts	1
 ui/src/components/confirm-dialog.ts	1
 ui/src/components/connect-command.ts	2
@@ -3588,7 +3587,6 @@ ui/src/pages/channels/view.nostr-profile-form.ts	4
 ui/src/pages/channels/view.nostr.ts	5
 ui/src/pages/channels/view.ts	9
 ui/src/pages/chat/chat-avatar.ts	4
-ui/src/pages/chat/chat-command-executor.ts	1
 ui/src/pages/chat/chat-composer-capability-host.ts	4
 ui/src/pages/chat/chat-gateway.ts	1
 ui/src/pages/chat/chat-history-retry.ts	1

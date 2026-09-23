@@ -71,10 +71,6 @@ export function getConsoleSettings(): ConsoleLoggerSettings {
   return loggingState.cachedConsoleSettings as ConsoleSettings;
 }
 
-export function getResolvedConsoleSettings(): ConsoleLoggerSettings {
-  return getConsoleSettings();
-}
-
 // Route all console output (including tslog console writes) to stderr.
 // This keeps stdout clean for RPC/JSON modes.
 export function routeLogsToStderr(): void {
