@@ -34,13 +34,10 @@ test("preserves task pagination during metadata patches but invalidates new requ
   const initializeTasks = () => {
     resetTaskRegistryForTests({ persist: false });
     configureTaskRegistryRuntime({
-      store: {
-        ...createInMemoryTaskRegistryStore(),
-        loadSnapshot: () => ({
-          tasks: new Map([...createTaskSnapshot()].slice(0, 256)),
-          deliveryStates: new Map(),
-        }),
-      },
+      store: createInMemoryTaskRegistryStore({
+        tasks: new Map([...createTaskSnapshot()].slice(0, 256)),
+        deliveryStates: new Map(),
+      }),
     });
   };
   await withAuthenticatedTaskGateway(initializeTasks, async ({ admin, viewer }) => {

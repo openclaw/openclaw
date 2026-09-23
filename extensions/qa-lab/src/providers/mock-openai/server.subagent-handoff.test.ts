@@ -347,7 +347,8 @@ describe("mock terminal subagents through structured Tool Search", () => {
         const input = [user(prompt), metadataCarrier];
         const parent = {
           model: "gpt-5.6-luna",
-          instructions: "Runtime: embedded | sessionId=structured-parent",
+          instructions:
+            "Runtime: embedded | agent=qa | session=agent:qa:main | sessionId=structured-parent",
           tools: structuredTools,
         };
         const spawn = await expectNonStreamingResponsesJson(server, { ...parent, input });
@@ -389,6 +390,20 @@ describe("mock terminal subagents through structured Tool Search", () => {
         expect(outputText(acknowledged)).toBe(
           terminalCase === "empty" ? "QA-SUBAGENT-EMPTY-PARENT-ACK" : "Worker started.",
         );
+        await server.terminalRequesters.settle({
+          call: async () => ({
+            sessions: [
+              {
+                key: "agent:qa:main",
+                agentId: "qa",
+                sessionId: "structured-parent",
+                hasActiveRun: false,
+                status: "done",
+                abortedLastRun: false,
+              },
+            ],
+          }),
+        });
         const child = {
           model: "gpt-5.6-luna",
           instructions: `Runtime: embedded | sessionId=structured-child\n- Your session: ${childSessionKey}.`,

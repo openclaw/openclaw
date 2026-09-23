@@ -184,7 +184,7 @@ describe("project runner native empty-file policy", () => {
         XDG_CONFIG_HOME: path.join(root, "config"),
         TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
         TSX_DISABLE_CACHE: "1",
-        NODE_DISABLE_COMPILE_CACHE: "1",
+        NODE_COMPILE_CACHE: path.join(preparedCli.root, "node-compile-cache"),
         COREPACK_ENABLE_NETWORK: "0",
         GIT_OPTIONAL_LOCKS: "0",
         CI: "1",

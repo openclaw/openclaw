@@ -198,7 +198,7 @@ suite.define(() => {
           await page.screenshot({ path: path.join(proofDir, "04-final-state.png") });
           writeFileSync(path.join(proofDir, "samples.json"), JSON.stringify(samples, null, 2));
         }
-        await context.close();
+        await suite.closeBrowserContext(context);
       }
     },
   );
@@ -375,7 +375,7 @@ suite.define(() => {
       if (proofDir) {
         writeFileSync(path.join(proofDir, "geometry.json"), JSON.stringify(report, null, 2));
       }
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -604,7 +604,7 @@ suite.define(() => {
       if (proofDir) {
         writeFileSync(path.join(proofDir, "geometry.json"), JSON.stringify(report, null, 2));
       }
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 });

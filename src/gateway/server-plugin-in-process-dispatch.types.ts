@@ -1,3 +1,4 @@
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
@@ -12,6 +13,17 @@ import type {
   GatewayRequestOptions,
   TrustedAgentToolCaller,
 } from "./server-methods/types.js";
+
+export type OperatorToolGatewayAuthority = {
+  authenticatedUserProfile?: NonNullable<
+    NonNullable<GatewayRequestOptions["client"]>["authenticatedUserProfile"]
+  >;
+  scopes: readonly string[];
+  operatorRoleActor?: GatewayOperatorRoleActor;
+  operatorRunAuthority?: AdmittedRunOperatorAuthority;
+  signal: AbortSignal;
+  assertCurrent?: () => void;
+};
 
 export type DispatchGatewayMethodInProcessOptions = {
   privateCompletion?: true;

@@ -1291,6 +1291,7 @@ globalThis.Date = class extends OriginalDate {
                   candidate_required: steps.candidate_request!.outputs.required,
                 },
               },
+              plugin_compatibility_readiness: { result: "success" },
               evidence_reuse: { result: "skipped", outputs: { reuse: "false" } },
             },
           });
@@ -1925,6 +1926,7 @@ describe("FRV publication source admission", () => {
                   id === "docker_runtime_assets_preflight" ? "2026.9.9-alpha.1" : "2026.9.9",
               },
             },
+            plugin_compatibility_readiness: { result: "success" },
             evidence_reuse: { result: "skipped", outputs: { reuse: "false" } },
           },
         }),
@@ -2284,6 +2286,7 @@ describe("FRV publication source admission", () => {
                     id === "docker_runtime_assets_preflight" ? "2026.9.9-alpha.1" : "2026.9.9",
                 },
               },
+              plugin_compatibility_readiness: { result: "success" },
               evidence_reuse: { result: "skipped", outputs: { reuse: "false" } },
             },
           }),
@@ -2385,6 +2388,30 @@ describe("publication source intent and durable binding", () => {
     expect(
       validatePublicationSourceBinding({ sourceAdmissionContract: "1", sourceAdmission: source }),
     ).toEqual(source);
+    expect(source.coverage.extension_test_exclude_patterns_json).toBe("[]");
+    const historicalRequest = structuredClone(request);
+    delete historicalRequest.coverage.extension_test_exclude_patterns_json;
+    const historical = createPublicationSourceFact(historicalRequest, null, null);
+    const historicalBytes = publicationSourceJson(historical);
+    expect(
+      validatePublicationSourceBinding({
+        sourceAdmissionContract: "1",
+        sourceAdmission: historical,
+      }),
+    ).toBe(historical);
+    expect(publicationSourceJson(historical)).toBe(historicalBytes);
+    expect(() =>
+      validatePublicationSourceBinding({
+        sourceAdmissionContract: "1",
+        sourceAdmission: historical,
+        validationInputs: {
+          ...publicationIntentInputs(historical),
+          targetContextRef: "main",
+          extensionTestExcludePatternsJson:
+            '["extensions/codex/src/app-server/run-attempt.test.ts"]',
+        },
+      }),
+    ).toThrow("coverage extensionTestExcludePatternsJson differs");
     expect(() => validatePublicationSourceBinding({}, { sourceAdmissionContract: "1" })).toThrow(
       "contract missing",
     );

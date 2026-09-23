@@ -52,6 +52,7 @@ export function waitForFile(file) {
     "windows-cmd-helpers.mjs",
     "lib/tsx-cli-shim.mjs",
     "lib/local-check-runtime.mts",
+    "lib/check-limits.mts",
     "lib/direct-run.mjs",
     "lib/dist-artifact-ownership.mts",
     "lib/failed-trailer.mts",
@@ -69,7 +70,7 @@ export function waitForFile(file) {
     write(file, fs.readFileSync(path.resolve(file), "utf8"));
   }
   // Only this disposable fixture gets synthetic binaries; installed tools stay untouched.
-  for (const name of ["tsx", "p-map", "@openclaw/fs-safe"]) {
+  for (const name of ["tsx", "p-map", "@openclaw/fs-safe", "json5"]) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.symlinkSync(path.resolve("node_modules", name), target, "junction");
@@ -352,6 +353,9 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
             ? ["--tsconfig", "extensions/tsconfig.json", "extensions"]
             : ["--only=extensions", "--extension-stripe=1/1"];
         for (const hasError of [false, true]) {
+          const stylelintRunsBefore = readRows<Step>(root, "steps.jsonl").filter(
+            (step) => step.step === "stylelint",
+          ).length;
           fs.writeFileSync(source, warningSource + (hasError ? "export var legacy = 1;\n" : ""));
           const result = await fixture.track(
             runNodeScript(
@@ -363,9 +367,9 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
           );
           const details = formatShimResult(result);
           expect(result.error, details).toBeUndefined();
-          expect(result.status, details).toBe(hasError ? 1 : 0);
+          expect(result.status, details).toBe(hasError || !githubActions ? 1 : 0);
           expect(result.stdout, details).toContain("eslint(max-lines)");
-          expect(result.stdout, details).toContain("warning");
+          expect(result.stdout, details).toContain(githubActions ? "warning" : "error");
           if (githubActions) {
             expect(result.stdout, details).toContain(hasError ? "1 error" : "0 errors");
             expect(result.stdout, details).toContain("1 warning");
@@ -376,7 +380,7 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
           if (entry === "run-lint.mts") {
             expect(
               readRows<Step>(root, "steps.jsonl").filter((step) => step.step === "stylelint"),
-            ).toHaveLength(1);
+            ).toHaveLength(stylelintRunsBefore + (githubActions && !hasError ? 1 : 0));
           }
         }
       }),

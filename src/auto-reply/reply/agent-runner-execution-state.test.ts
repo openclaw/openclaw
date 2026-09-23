@@ -129,7 +129,7 @@ describe("executeAgentTurn: session state", () => {
     expect(followupRun.run.provider).toBe("openai");
     expect(followupRun.run.model).toBe("gpt-5.6-luna");
     expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]).toEqual(
-      expect.objectContaining({ agentHarnessRuntimeOverride: "codex", thinkLevel: "max" }),
+      expect.objectContaining({ agentHarnessRuntimeOverride: "codex", thinkLevel: "ultra" }),
     );
   });
 

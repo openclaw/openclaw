@@ -40,7 +40,8 @@ const isolatedCompletionMocks = vi.hoisted(() => ({
 
 export { isolatedCompletionMocks };
 
-vi.mock("./agent-scope.js", () => ({
+vi.mock("./agent-scope.js", async () => ({
+  ...(await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js")),
   resolveAgentDir: () => "/tmp/agent",
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
   resolveDefaultAgentId: () => "main",

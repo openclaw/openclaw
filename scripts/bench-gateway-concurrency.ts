@@ -1134,6 +1134,8 @@ function buildConfig(
   if (provider === "openai") {
     configureLiveGatewayBenchmark(config, root, concurrency);
   } else {
+    // The mock emits shell exec calls, not Code Mode JavaScript cells.
+    config.tools = { codeMode: false };
     applyMockOpenAiModelConfig(config, {
       mockPort,
       modelRef: "openai/gpt-5.6-luna",

@@ -294,7 +294,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         areUiSessionKeysEquivalent(renderedSessionKey, stateSessionKey)
       ) {
         saveChatSessionScrollPosition(
-          this.presentationId,
+          this.paneId,
           renderedSessionKey,
           captureChatSessionScrollPosition(root),
         );

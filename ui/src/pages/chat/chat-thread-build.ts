@@ -4,7 +4,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
-import { t } from "../../i18n/index.ts";
 import {
   type ChatGuardianNotice,
   type ChatItem,
@@ -39,6 +38,7 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
+import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
   appendCanvasBlockToAssistantMessage,
@@ -59,7 +59,6 @@ import {
   timestampAfterVisibleItems,
   transcriptPositionTimestamp,
   type TurnInsertionBounds,
-  userTurnRunId,
 } from "./chat-thread-items.ts";
 import {
   applyPersistedToolInvocationBounds,
@@ -74,7 +73,6 @@ import {
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
-import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import {
   isLiveTerminalForRun,
   readLiveTerminalRunId,
@@ -278,31 +276,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
 
-    const provenance = asRecord(raw.provenance);
-    if (role === "user" && provenance?.kind === "internal_system") {
-      const noticeKind = resolveSystemNoticeKind(
-        typeof provenance.sourceTool === "string" ? provenance.sourceTool : undefined,
-      );
-      const text = noticeKind?.summaryKey
-        ? t(noticeKind.summaryKey)
-        : extractTextCached(msg)?.replace(/^\[System\] /u, "");
-      if (text?.trim()) {
-        items.push({
-          kind: "notice",
-          key: itemKey,
-          icon: noticeKind?.icon ?? "cpu",
-          label: noticeKind ? t(noticeKind.labelKey) : t("common.system"),
-          ...(noticeKind?.startsTurn === false ? {} : { startsTurn: true }),
-          ...(noticeKind?.collapsedBody ? { collapsedBody: true } : {}),
-          text,
-          timestamp: normalized.timestamp,
-          ...optionalBoundaryIdentity(userTurnRunId(msg)),
-        });
-      }
-      continue;
+    const projected = projectChatSystemNotice(item, normalized);
+    if (projected) {
+      items.push(projected);
     }
-
-    items.push(item);
   }
   const queuedSends = props.queue ?? [];
   const { queue: threadQueuedSends, pendingInputs } = selectChatInputDisplay(

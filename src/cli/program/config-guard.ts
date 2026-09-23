@@ -113,13 +113,6 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
   return dirHasFile(oauthDir, isLegacyWhatsAppAuthFile);
 }
 
-function hasPendingSqliteSidecarArchive(sourcePath: string): boolean {
-  return (
-    fileOrDirExists(`${sourcePath}.migrated`) &&
-    ["-shm", "-wal", "-journal"].some((suffix) => fileOrDirExists(`${sourcePath}${suffix}`))
-  );
-}
-
 function hasLegacyStateMigrationInputs(): boolean {
   // Only run migration prompts when old state actually exists in known legacy locations.
   const stateDir = resolveStateDir(process.env, os.homedir);
@@ -132,11 +125,6 @@ function hasLegacyStateMigrationInputs(): boolean {
   ) {
     return true;
   }
-  const sqliteSidecarPaths = [
-    path.join(stateDir, "flows", "registry.sqlite"),
-    path.join(stateDir, "plugin-state", "state.sqlite"),
-    path.join(stateDir, "tasks", "runs.sqlite"),
-  ];
   const legacyExecApprovalsPath = resolveExecApprovalsPath(process.env);
   return (
     [
@@ -149,11 +137,7 @@ function hasLegacyStateMigrationInputs(): boolean {
       path.join(stateDir, "restart-sentinel.json.doctor-importing"),
       path.join(stateDir, "sessions"),
       path.join(stateDir, "state", "openclaw.sqlite"),
-    ].some(fileOrDirExists) ||
-    sqliteSidecarPaths.some(
-      (sourcePath) => fileOrDirExists(sourcePath) || hasPendingSqliteSidecarArchive(sourcePath),
-    ) ||
-    hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir)
+    ].some(fileOrDirExists) || hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir)
   );
 }
 

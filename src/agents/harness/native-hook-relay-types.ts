@@ -306,7 +306,11 @@ type NativeHookRelayRetention = Readonly<{
 /** Records bundled native execution custody without granting action permission. */
 export type NativeHookRelayExecutionAdmission = Readonly<{
   toolNames: readonly string[];
-  admit: (invocation: NativeHookRelayInvocation, assertCurrent: () => void) => void;
+  admit: (
+    invocation: NativeHookRelayInvocation,
+    assertCurrent: () => void,
+    preparation: Readonly<{ signal?: AbortSignal; assertCurrent: () => void }>,
+  ) => void | Promise<void>;
 }>;
 
 export type NativeHookRelayOwnerOptions = {

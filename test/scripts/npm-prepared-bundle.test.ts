@@ -838,8 +838,8 @@ describe("prepared npm bundle", () => {
         fixture.descriptor,
         {
           baseline: "published",
-          // Successful releases can carry multi-megabyte declaration diffs.
-          diff: { exports: [{ before: "export type Previous = unknown;\n".repeat(150_000) }] },
+          // Extended-stable comparisons can exceed 16 MiB across declaration history.
+          diff: { exports: [{ before: "export type Previous = unknown;\n".repeat(575_000) }] },
         },
         dependencyReports,
       );

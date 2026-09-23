@@ -126,7 +126,8 @@ binding applies through the same live role-policy update described below.
 
 With live configuration reload enabled, edits to `gateway.roles` and
 `gateway.auth.identityScopes` apply without restarting the Gateway. Existing
-Gateway clients reconnect to receive the current scope ceiling. Pending
+Gateway clients reconnect to receive the current scope ceiling, except for changes
+confined to model policies as described below. Pending
 handshakes and mutations recheck the policy before acquiring authority;
 already-admitted runs retain their normal completion and cancellation lifecycle,
 including cancellation when their original access-policy grant expires or is revoked.
@@ -159,6 +160,73 @@ Set `agents: "*"` to allow session creation and agent runs on every agent, list
 agent IDs to allow only those agents, or use an empty array to disallow both.
 The allowlist also applies when a run targets an already-existing session.
 
+Set a role's optional `modelPolicy` to limit the models used by its requests:
+
+```json5 validate=false
+// Inside gateway.roles.definitions.guest
+modelPolicy: {
+  sourceAgent: "shared-agent",
+  deny: ["provider/restricted-*"],
+}
+```
+
+With no `allow` override, the policy follows that agent's configured primary and
+fallback models in order. Omitting `sourceAgent` uses the configured system or
+default agent, or the sole agent. A multi-agent Gateway without such an owner
+must name a source agent. This reads the existing agent configuration; it does
+not copy a model list or grant access to every installed model.
+
+Use `allow` to replace the permitted set centrally, and `deny` to exclude models
+from either source. An empty `allow: []` denies all models. Both lists accept
+exact `provider/model` references, aliases from the source agent's model settings,
+and trailing wildcards such as `provider/*`, `provider/family/*`, or
+`provider/restricted-*`. Other wildcard placements are rejected. Exclusions
+match resolved identities, so aliases cannot bypass them and a family prefix
+also excludes newly configured family members.
+
+The role policy is an additional ceiling. Existing agent rules still govern
+manual model selection. Default can use the first permitted source model that
+the target agent already allows manually or through its configured primary and
+fallback chain. Automatic retries filter that chain before preparing providers;
+an empty permitted result returns an error instead of widening access.
+
+With config reload enabled, edits confined to existing roles' `modelPolicy`
+settings apply when the config transaction commits, without restarting the
+Gateway or reconnecting its clients. Other role changes hot-apply and reconnect
+clients with current authority, including when combined with a model-policy edit.
+Disabling config reload leaves the current policy active until config application
+resumes.
+
+The original role ceiling follows queued work and child runs. Accepted work must
+satisfy both its original model ceiling and the current policy. Removing one
+source model cancels its active model requests and blocks later calls using it,
+while still-permitted sibling models and unrelated work retain their authority.
+New requests use the updated source choices. Direct model requests, title
+previews, and user-invoked model completion or decision tools apply the same
+policy. Interactive plugin runtime attempts must certify exact model-policy
+enforcement before they can execute restricted requests, regardless of who supplies
+their credentials. Currently the built-in OpenClaw runtime supports these attempts;
+uncertified plugin runtimes, including Codex, refuse them with a compatible-runtime error.
+Adding a policy also cancels uncertified work that started without one, including
+retained work after its foreground turn finishes. An outer selected model does
+not establish which model a native runtime actually uses. Isolated prompt-only
+completions keep their separate exact-route contract and bind the selected model
+through completion and cleanup.
+
+Bounded automatic metadata, operator-configured
+inbound media preprocessing, and host-owned execution approval keep their
+existing service authority. Omitting `modelPolicy` preserves the role's existing
+model access, and shared-secret System access is unchanged.
+
+Native Codex staff work without a model policy has a limited attribution case
+when qualified native hooks are disabled or unavailable: previously accepted
+unrestricted input mixed with other work may continue under the receiver's valid
+authority after its sender loses authorization or becomes restricted. Direct and
+otherwise unambiguously bound work still observes revocation. See the
+[native model-policy boundary](/plugins/codex-harness/routing#operator-role-model-permissions).
+Visitor Access requires an explicit model policy; its Codex runs require the
+qualified integration.
+
 The optional `sandbox` policy defaults to `"inherit"`, which keeps the agent's
 configured sandbox mode. Set `sandbox: "required"` to sandbox every new session
 created by an authenticated person with that role, even when the agent's
@@ -177,8 +245,9 @@ and other sessions without a role-required sandbox keep their configured scope
 and workspace access.
 
 The Gateway records the authenticated creator and their sandbox requirement
-together before a new session first runs, including chat, Talk, recovery,
-forks, checkpoint branches, cron, outbound messages, and spawned children.
+together before a new session first runs, including chat, the OpenAI-compatible
+HTTP endpoints, Talk, recovery, forks, checkpoint branches, cron, outbound
+messages, and spawned children.
 Delegated child work inherits a required parent's original creator and sandbox
 policy, even after role changes. Recovery and branching requested by another
 person use that person's own role rather than the source session's policy.

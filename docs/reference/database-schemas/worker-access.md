@@ -71,6 +71,32 @@ Automatic process-exit cleanup makes one attempt. A failed attempt retains worke
 and lease custody for an explicit lifecycle retry instead of repeatedly scheduling
 cleanup whenever the event loop drains.
 
+Physical page reclamation releases the session writer permit between vacuum units,
+so queued foreground writers receive their FIFO turn before the next unit. Each
+connection starts with eight-page units and adjusts toward a 25 ms hold target,
+capped at 512 pages. Periodic and cold reclamation retain their existing total
+page budgets. Archive selection, file
+removal, and row deletion retain their existing shared permit, with disk pressure
+rechecked after admission. Page limits do not bound checkpoint copying or storage
+latency. Slow transaction diagnostics include commit and rollback time on both
+the main thread and workers, naming the database and operation when supplied.
+
+Watched human-turn signals and upstream observations use the shared-state writer,
+including their watcher probe and pruning. Producers await settlement and recheck
+current session authority; upstream observations compare the captured source in
+the committing transaction. Goal events share that recording command. Synchronous
+creation, compaction, terminal-event, watch, reset, and deletion callbacks remain
+separate migration work.
+
+Durable session entry replacement reads its detached snapshot in the history
+worker and commits through the existing agent database executor. The transaction
+rereads comparison bytes and current rows, and the host rechecks caller authority
+at admission and commit. Committed receipts invalidate retained entry projections
+and publish sharing facts before observers. Missing databases are prepared by the
+same worker owner. Incognito stores, already executing workers, Doctor maintenance,
+and prepared native deletion rollback closures retain their synchronous kernels.
+Schemas, retained bytes, configuration, and update behavior are unchanged.
+
 ## Migrate a caller
 
 1. Trace the registered request, event, or timer through the store owner. Check
@@ -98,7 +124,7 @@ the bounded delta. The main thread retains display/profile projection, byte
 budgets, and fresh sharing checks against the originally admitted sources. A
 failed visibility lookup joins worker retirement before its partial facts return;
 the host observes that failure only if projection reaches the lookup before a
-history reset. Selected/current entries, pending inputs and receipts, retained
+history reset. Pending inputs and receipts, retained
 transcript-session keys, and SSE inline subagent visibility reads remain migration
 debt. Process-held incognito databases and the existing
 CLI-import history path still need their owner/lifetime migration; they are not
@@ -145,6 +171,28 @@ recent messages in the history worker. They recheck the current config,
 sharing policy, and session identity before responding. Hot transcript reads use
 the atomic reader's cold marker; restoration runs only after a cold rejection and
 retains the bounded retry for a concurrent rearchive.
+
+`chat.history` and `chat.startup` also select entries and participant facts from
+the row projection. They prepare the requested row before selection and recheck
+current sharing and the captured store and session generation after awaited
+history reads, publishing the response in that synchronous frame. Retained task
+history keeps its recorded transcript when the live session advances. Responses
+own their nested metadata independently of resident rows. Pending-input
+reconciliation remains a separate synchronous owner; this change does not alter
+storage, migrations, configuration, or update behavior.
+
+A missing resident row gets a bounded worker sharing read before history treats
+it as absent. This preserves refusal for durable entries marked incognito, which
+are intentionally excluded from the resident roster. The sharing owner retains
+negative reads through response publication, invalidating them when the selected
+key, physical source, or route changes. Unrelated catalog refreshes do not reject
+empty history. Excluded metadata never grants transcript access or enters resident
+rows.
+
+Bulk hydration, stored parent links, inherited model lookups, and ACP metadata
+also retain qualified stored addresses when main aliases or global scope change.
+Request aliases still follow current configuration; preparing history never
+rekeys an existing row or redirects its stored lineage.
 
 Startup/topology hydration, internal synchronous keyed and archived reads, and
 process-held incognito stores remain migration debt. Preserve the
@@ -203,6 +251,24 @@ aliases before and after policy callbacks.
 For writes, shared-state domain operations registered by
 `src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results
 through their original store/projection owner.
+
+Streaming assistant and tool-result completion events use the session manager's
+existing SQLite writer domain. The host retains extension hooks, redaction, and
+tool-result custody; the worker validates the prepared parent, appends the exact
+storage bytes, and returns the committed version and any required view reload.
+The manager adopts that receipt before publishing pending-tool changes. Each
+event still commits before the runtime advances; bulk transcript imports reuse
+their transaction-local append cursor. Root checks read metadata without saved
+prompt payloads. No cross-transaction root cache is introduced.
+
+Runtime report navigation and writes use the same broker's agent database owner.
+Custom report selectors consume prepared facts on the host, and the worker
+compares the transcript version before appending. Only a definite version conflict
+repeats selection; uncertain writes are never replayed. Startup orphan repair
+retains its native transaction so session settlement and the report remain atomic.
+Process-held incognito databases, user-input custody, custom-message writes, and
+the shipped synchronous SessionManager SDK remain separate migration work.
+Schemas, stored bytes, retention, and update behavior are unchanged.
 
 Channel identity administration, profile role assignments, email linking, and
 HTTP/WebSocket sign-in acquisition use that writer and the existing read worker.

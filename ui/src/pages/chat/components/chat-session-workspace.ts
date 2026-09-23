@@ -196,7 +196,8 @@ async function loadArtifactSidebarContent(
 
 export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFiles: boolean) {
   if (refreshSessionWorkspaceState(state, refreshFiles)) {
-    state.handleOpenSidebar(resolveSessionDiffSidebarContent(state));
+    state.sidebarContent = resolveSessionDiffSidebarContent(state);
+    requestWorkspaceUpdate(state);
   }
 }
 
@@ -272,6 +273,9 @@ function openFile(
                 );
                 const hash = saved?.file.hash;
                 const updatedAtMs = saved?.file.updatedAtMs;
+                if (typeof hash === "string" && isCurrentSessionWorkspace(state, workspace)) {
+                  refreshSessionWorkspace(state, true);
+                }
                 return typeof hash === "string"
                   ? {
                       ok: true as const,

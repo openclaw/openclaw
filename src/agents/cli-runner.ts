@@ -23,6 +23,7 @@ import {
 } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { bindOperatorModelExecution, readRunOperatorAuthority } from "./admitted-run-context.js";
 import {
   loadAuthProfileStoreForRuntime,
   markAuthProfileFailure,
@@ -230,25 +231,45 @@ async function runCliAgentInternal(
       },
     };
   }
-  const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
-  let context: PreparedCliRunContext;
+  const modelExecution = bindOperatorModelExecution(
+    readRunOperatorAuthority(params),
+    params.requesterModel,
+  );
+  const assertCallerCurrent = params.assertCurrent;
   try {
-    context = await prepareCliRunContext(params);
-  } catch (error) {
-    params.assertCurrent?.();
-    await settleCliPreparationError(error, params);
-    throw error;
+    const runParams = modelExecution
+      ? {
+          ...params,
+          abortSignal: params.abortSignal
+            ? AbortSignal.any([params.abortSignal, modelExecution.signal])
+            : modelExecution.signal,
+          assertCurrent: () => {
+            assertCallerCurrent?.();
+            modelExecution.assertCurrent();
+          },
+        }
+      : params;
+    const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
+    let context: PreparedCliRunContext;
+    try {
+      context = await prepareCliRunContext(runParams);
+    } catch (error) {
+      runParams.assertCurrent?.();
+      await settleCliPreparationError(error, runParams);
+      throw error;
+    }
+    // Preparation resolves the session's execution owner for diagnostic attribution.
+    diagnosticLifecycle?.setExecutionOwner(context.params.agentId);
+    const result = await settlePreparedCliRun({
+      context,
+      diagnosticLifecycle,
+      run: async () => await runPreparedCliAgent(context, diagnosticLifecycle),
+    });
+    modelExecution?.assertCurrent();
+    return result;
+  } finally {
+    modelExecution?.release();
   }
-  // Preparation replaced the caller's agentId with the session-resolved
-  // execution owner; publish that fact so run/harness diagnostic events
-  // attribute to the owner that actually executes, like the prepared
-  // model-call events already do.
-  diagnosticLifecycle?.setExecutionOwner(context.params.agentId);
-  return await settlePreparedCliRun({
-    context,
-    diagnosticLifecycle,
-    run: async () => await runPreparedCliAgent(context, diagnosticLifecycle),
-  });
 }
 
 /** Runs an already-prepared CLI agent context through hooks and execution. */
@@ -407,6 +428,7 @@ async function runPreparedCliAgentOwned(
       cliSessionIdToUse,
       diagnosticLifecycle ? { onPhase: diagnosticLifecycle.setPhase } : undefined,
     );
+    params.assertCurrent?.();
     // Test facades and non-instrumented executors may not signal the boundary.
     diagnosticLifecycle?.setPhase("resolve");
     const sourceReplyMirror = resolveCliSourceReplyMirror({

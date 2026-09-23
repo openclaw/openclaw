@@ -772,8 +772,11 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
         continue;
       }
       if (names.has(job.name)) {
-        throw new Error(
-          `release child attempt ${expectedAttempt} contains duplicate job identity: ${job.name}`,
+        throw Object.assign(
+          new Error(
+            `release child attempt ${expectedAttempt} contains duplicate job identity: ${job.name}`,
+          ),
+          { code: "FRV_DUPLICATE_JOB_IDENTITY", runAttempt: expectedAttempt },
         );
       }
       names.add(job.name);

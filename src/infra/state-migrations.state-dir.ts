@@ -9,23 +9,16 @@ import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { probePathCaseInsensitiveSync, resolvePathPrefixSync } from "./fs-safe-advanced.js";
 import { resolveUserPath } from "./home-dir.js";
 import { isWithinDir } from "./path-safety.js";
-import { logStateMigrationResult } from "./state-migrations.messages.js";
 import {
   migrateLegacyInstalledPluginIndex,
   preflightLegacyInstalledPluginIndexMigration,
 } from "./state-migrations.plugin-state.js";
-import { migrateLegacyTaskStateSidecars } from "./state-migrations.storage.js";
 import type { MigrationLogger } from "./state-migrations.types.js";
 
 let autoMigrateStateDirChecked = false;
-let autoMigrateTaskStateSidecarsChecked = false;
 
 export function resetAutoMigrateLegacyStateDirForTest() {
   autoMigrateStateDirChecked = false;
-}
-
-export function resetAutoMigrateLegacyTaskStateSidecarsForTest() {
-  autoMigrateTaskStateSidecarsChecked = false;
 }
 
 type StateDirMigrationResult = {
@@ -509,32 +502,5 @@ export async function autoMigrateLegacyStateDir(params: {
     changes,
     warnings,
     ...(notices.length > 0 ? { notices } : {}),
-  };
-}
-
-export async function autoMigrateLegacyTaskStateSidecars(params: {
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  log?: MigrationLogger;
-}): Promise<{
-  migrated: boolean;
-  skipped: boolean;
-  changes: string[];
-  warnings: string[];
-  notices?: string[];
-}> {
-  if (autoMigrateTaskStateSidecarsChecked) {
-    return { migrated: false, skipped: true, changes: [], warnings: [] };
-  }
-  autoMigrateTaskStateSidecarsChecked = true;
-
-  const stateDir = resolveStateDir(params.env ?? process.env, params.homedir);
-  const result = await migrateLegacyTaskStateSidecars({ stateDir });
-  logStateMigrationResult(result, params.log);
-  return {
-    migrated: result.changes.length > 0,
-    skipped: false,
-    changes: result.changes,
-    warnings: result.warnings,
   };
 }

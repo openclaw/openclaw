@@ -144,6 +144,9 @@ export async function createSessionRowProjection(params: {
     rows,
     dirty,
     put,
+    config: () => cfg,
+    context: () => metadata.current,
+    referenced,
     enqueue: (id, change) => backfill.enqueue(id, change),
     release(id) {
       transcriptUpdates.remove(id);
@@ -151,7 +154,7 @@ export async function createSessionRowProjection(params: {
       dirty.delete(id);
     },
     prepare(row) {
-      metadata.prepare(epoch, cfg, matching, put);
+      metadata.prepare(epoch, cfg, matching, put, referenced);
       const current = acquireEntry(row, readSessionRowEntry(row));
       if (current && materialize(current)) {
         backfill.enqueue(records.identity(current));
@@ -172,6 +175,8 @@ export async function createSessionRowProjection(params: {
       creators.update(row);
       records.index(row, indexes, true);
       rows.delete(id);
+      // Cold dependents reselect only after the removed parent is absent from the inventory.
+      markRelated(row);
       if (row.entry && !byKey.has(`id:${row.entry.sessionId}`)) {
         placementFacts.forget(row.entry.sessionId);
       }
@@ -197,13 +202,14 @@ export async function createSessionRowProjection(params: {
   }
   function acquireEntry(row: records.Row, storedEntry: SessionEntry | undefined) {
     if (storedEntry?.archivedAt !== undefined) {
-      inOwnerContext(() => metadata.prepare(epoch, cfg, matching, put));
+      inOwnerContext(() => metadata.prepare(epoch, cfg, matching, put, referenced));
     }
     return records.acquireSessionRowEntry({
       row,
       storedEntry,
       cfg,
       context: metadata.current,
+      referenced,
       remove,
       put,
       markRelated,
@@ -221,7 +227,6 @@ export async function createSessionRowProjection(params: {
   function topology() {
     const revision = epoch;
     cfg = params.getConfig?.() ?? cfg;
-    const admitted = new Set<string>();
     const storeRead = createStoreRead({ stores, rows, byStore });
     const loaded = loadCombinedSessionStoreForGatewayCore(cfg, {
       includeIncognito: false,
@@ -236,38 +241,22 @@ export async function createSessionRowProjection(params: {
         }
       },
     });
-    for (const [key, target] of loaded.targetsBySessionKey) {
-      const entry = target.entry;
-      if (!entry || entry.incognito || isIncognitoSessionKey(key)) {
-        continue;
-      }
-      const fields = {
-        key: target.storeKey ?? key,
-        agentId: target.agentId,
-        storeTarget: target.storeTarget,
-      };
-      const id = records.identity(fields);
-      admitted.add(id);
-      if (!rows.has(id) || storeRead.replaced.has(target.storeTarget.storePath)) {
-        remove(id);
-        const row = acquireEntry(records.create(fields), entry);
-        if (row && !isCold(row)) {
-          dirty.add(id);
-          backfill.enqueue(id);
-        }
-      } else {
-        const row = rows.get(id)!;
-        if (row.entry?.archivedAt !== undefined) {
-          acquireEntry(row, entry);
-        }
-      }
-    }
-    for (const id of rows.keys()) {
-      if (!admitted.has(id)) {
-        remove(id);
-      }
-    }
+    const acquisitions = records.seedSessionRowEntries({
+      targets: loaded.targetsBySessionKey,
+      rows,
+      replaced: storeRead.replaced,
+      remove,
+      put,
+    });
     stores = storeRead.sources;
+    // Every stored identity must be visible before an earlier store selects a later parent.
+    for (const { row, entry } of acquisitions) {
+      const current = acquireEntry(row, entry);
+      if (current && !isCold(current)) {
+        dirty.add(records.identity(current));
+        backfill.enqueue(records.identity(current));
+      }
+    }
     membership.updateTargets(
       [...stores.values()].map((source) => ({
         agentId: source.target.agentId,
@@ -291,9 +280,11 @@ export async function createSessionRowProjection(params: {
     const presentationOnly = metadata.invalidate(change) && !change.factsInvalidated;
     if (!presentationOnly) {
       revisionToken = undefined;
-      databaseRevision++;
     }
     if ("all" in change) {
+      if (!presentationOnly) {
+        databaseRevision++;
+      }
       placementFacts.invalidateChange(change);
       topologyDirty ||= change.scope === "stores" || change.scope === "config";
       if (change.scope === "catalog" || change.scope === "config") {
@@ -321,7 +312,7 @@ export async function createSessionRowProjection(params: {
       const exact = matching(query);
       const registryFactsReady = inOwnerContext(getSubagentSessionListReadSnapshotIdentity);
       for (const previous of new Set([...exact, ...matching(query, "id")])) {
-        previous.pendingDatabaseFacts = undefined;
+        records.invalidateDatabaseFacts(previous);
         if (previous.entry) {
           placementFacts.invalidate(previous.entry.sessionId);
         }
@@ -447,7 +438,7 @@ export async function createSessionRowProjection(params: {
     placementFacts,
     membership,
     prepare: () => {
-      metadata.prepare(epoch, cfg, matching, put);
+      metadata.prepare(epoch, cfg, matching, put, referenced);
       return cfg;
     },
     revision: () => epoch,
@@ -483,9 +474,8 @@ export async function createSessionRowProjection(params: {
         return;
       }
       epoch++;
-      databaseRevision++;
       revisionToken = undefined;
-      row.pendingDatabaseFacts = undefined;
+      records.invalidateDatabaseFacts(row);
       dirty.add(id);
       backfill.enqueue(id);
       void ensureMaterialized().catch(() => {});
@@ -530,7 +520,7 @@ export async function createSessionRowProjection(params: {
     if (topologyDirty) {
       inOwnerContext(topology);
     }
-    metadata.prepare(epoch, cfg, matching, put);
+    metadata.prepare(epoch, cfg, matching, put, referenced);
   }
   const describe = (query: records.Lookup, captured?: records.Row) =>
     inOwnerContext(() => {
@@ -594,6 +584,7 @@ export async function createSessionRowProjection(params: {
             dirty,
             matching,
             acquire: (row) => acquireEntry(row, readSessionRowEntry(row)),
+            referenced,
           },
           query,
         ),

@@ -65,12 +65,12 @@ export type SessionHistorySnapshot = {
   transcriptPath?: string;
 };
 
-export type SessionHistoryTranscriptTarget = {
-  agentId?: string;
+export type SessionHistoryTranscriptTarget = Pick<
+  SessionTranscriptReadScope,
+  "agentId" | "env" | "sessionId" | "storePath"
+> & {
   sessionEntry?: SessionEntry;
-  sessionId: string;
   sessionKey: string;
-  storePath?: string;
 };
 
 export type SessionHistoryReadParams = {

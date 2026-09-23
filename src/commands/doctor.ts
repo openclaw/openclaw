@@ -185,7 +185,18 @@ async function maybeCreateSessionSqliteGithubIssue(
   const supportIssue = report.supportIssue;
   if (!supportIssue) {
     if (shouldLog) {
-      runtime.log("session-sqlite recover: no support issue payload was generated");
+      runtime.log(
+        report.totals.issues === 0 &&
+          report.totals.importedEntries === 0 &&
+          report.totals.archivedTranscriptFiles === 0 &&
+          report.totals.archivedUnreferencedJsonlFiles === 0 &&
+          report.targets.every(
+            (target) =>
+              !target.restore?.restoredFiles.length && !target.corruptRecovery?.movedFiles.length,
+          )
+          ? "session-sqlite recover: nothing to recover; no report filed"
+          : "session-sqlite recover: no support issue payload was generated",
+      );
     }
     return;
   }

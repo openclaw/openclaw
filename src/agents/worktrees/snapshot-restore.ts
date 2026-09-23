@@ -232,7 +232,8 @@ async function restoreSnapshot(
   }
   const repository = await resolveRepository(record.repoRoot);
   requireSpace(record.path, repository);
-  const provisionedState = getRegistryWorktreeProvisionedState(env, record.id);
+  const provisionedState = await getRegistryWorktreeProvisionedState(env, record.id);
+  params.commitGuard?.();
   if (provisionedState === undefined) {
     throw new Error(`worktree ${record.id} snapshot lacks provisioned file metadata`);
   }
