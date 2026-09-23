@@ -15,7 +15,10 @@ import {
 } from "../agents/mcp-oauth-store.worker.js";
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
-import * as worktreeRegistry from "../agents/worktrees/registry-read.kernel.js";
+import {
+  isWorktreeRegistryReadCommand,
+  executeWorktreeRegistryReadCommand,
+} from "../agents/worktrees/registry-read.worker.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
 import { executeAuditWriterCommand } from "../audit/audit-event-writer.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
@@ -620,10 +623,8 @@ export function executeSharedStateCommand(
     ensureProjectRegistrySchema(writeOptions);
     return listProjectRegistryInDatabase(database.db);
   }
-  if (command.type === "worktrees.list" || command.type === "worktrees.liveIds") {
-    return command.type === "worktrees.list"
-      ? worktreeRegistry.listRegistryWorktreesInDatabase(database.db)
-      : worktreeRegistry.listLiveRegistryWorktreeIdsInDatabase(database.db);
+  if (isWorktreeRegistryReadCommand(command)) {
+    return executeWorktreeRegistryReadCommand(database.db, command);
   }
   if (command.type === "projects.resolve") {
     ensureProjectRegistrySchema(writeOptions);
