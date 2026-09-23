@@ -18,10 +18,8 @@ import type { CodexServerNotification } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import {
-  CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS,
-  waitForPromiseOrAbort,
-} from "./turn-router.js";
+import { waitForPromiseOrAbort } from "./timeout.js";
+import { CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS } from "./turn-router.js";
 import type { CodexThreadRouteScope } from "./turn-router.js";
 
 export function createCodexAttemptNotificationController(

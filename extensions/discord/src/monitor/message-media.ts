@@ -1,4 +1,3 @@
-// Discord plugin module implements message media behavior.
 import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
 import {
   formatMediaPlaceholderText,
@@ -78,8 +77,12 @@ function isDiscordAudioAttachmentFileName(fileName?: string | null): boolean {
   return Boolean(ext && AUDIO_ATTACHMENT_EXTENSIONS.has(ext));
 }
 
-function hasDiscordVoiceAttachmentFields(attachment: APIAttachment): boolean {
-  return typeof attachment.duration_secs === "number" || typeof attachment.waveform === "string";
+function isDiscordVoiceWaveform(attachment: APIAttachment): boolean {
+  return typeof attachment.waveform === "string";
+}
+
+function isDiscordVoiceDurationOnly(attachment: APIAttachment): boolean {
+  return typeof attachment.duration_secs === "number" && !isDiscordVoiceWaveform(attachment);
 }
 
 const NON_DEFINITIVE_MEDIA_TYPES = new Set([
@@ -116,11 +119,20 @@ function resolveDiscordMediaClassification(params: {
     fetchedContentType: params.fetchedContentType,
   });
   const mime = normalizeMimeType(contentType);
+  // Discord now sends duration_secs on ordinary video/image attachments, so a
+  // bare duration is no longer a voice-note signal. A waveform remains the
+  // definitive native voice-note marker and keeps overriding a conflicting
+  // MIME; a duration-only hint only implies audio when the type is not a
+  // definitive visual one.
+  const definitiveVisual =
+    mime?.startsWith("video/") === true || mime?.startsWith("image/") === true;
   const audioKind =
     mime?.startsWith("audio/") ||
-    hasDiscordVoiceAttachmentFields(params.attachment) ||
-    (isDiscordAudioAttachmentFileName(params.attachment.filename ?? params.attachment.url) &&
-      !isDefinitiveMediaType(contentType))
+    isDiscordVoiceWaveform(params.attachment) ||
+    (!definitiveVisual &&
+      (isDiscordVoiceDurationOnly(params.attachment) ||
+        (isDiscordAudioAttachmentFileName(params.attachment.filename ?? params.attachment.url) &&
+          !isDefinitiveMediaType(contentType))))
       ? "audio"
       : undefined;
   const kind =

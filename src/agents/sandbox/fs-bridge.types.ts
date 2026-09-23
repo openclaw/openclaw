@@ -71,6 +71,23 @@ export type SandboxFsBridge = {
     signal?: AbortSignal;
     maxBytes?: number;
   }): Promise<Buffer>;
+  /**
+   * Returns the canonical runtime path pinned by the successful read itself.
+   * This identifies directory aliases, not inode equivalence across renames.
+   * Consumers that filter protected sources must require this capability;
+   * a separate path lookup cannot establish the source of the returned bytes.
+   */
+  readFileWithSource?(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+    maxBytes?: number;
+  }): Promise<{
+    data: Buffer;
+    canonicalPath: string;
+    /** Canonical POSIX path within the workspace mount; absent for other mounts. */
+    workspaceRelativePath?: string;
+  }>;
   /** Streams a regular file within the sandbox when the backend supports native copying. */
   copyFile?(params: {
     sourcePath: string;

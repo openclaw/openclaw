@@ -5,7 +5,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import type { NodeWorkerWorkspaceRetainInput } from "../worker/node-workspace-retain-protocol.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
@@ -17,7 +20,13 @@ import {
 import * as workspaceTransfer from "./node-worker-transfer-client.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 function hashPathComponent(value: string, length: number): string {
   return createHash("sha256").update(value).digest("hex").slice(0, length);
@@ -84,11 +93,10 @@ function retainInput(
 
 afterEach(() => {
   vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
 });
 
 describe("node worker workspace retention", () => {
-  it("claims only the exact canonical placement workspace identity", () => {
+  it("preserves legacy synchronous plugin acquisition for the exact canonical placement workspace identity", () => {
     const root = fs.realpathSync.native(tempDirs.make("node-worker-workspace-managed-identity-"));
     const workspace = new NodeWorkerWorkspaceRuntime({ root });
     const input = testWorkerLaunchInput("/unused", "managed-identity");
@@ -132,7 +140,7 @@ describe("node worker workspace retention", () => {
     const input = testWorkerLaunchInput("/unused", "managed-retention");
     const ownerEpoch = input.descriptor.admission.ownerEpoch;
     const workspaceDir = seedGeneration(root, input, ownerEpoch);
-    const claim = workspace.acquireManagedWorkspace({
+    const claim = await workspace.acquireManagedWorkspaceAsync({
       workspaceDir,
       environmentId: input.descriptor.admission.environmentId,
       sessionId: input.descriptor.admission.sessionId,
@@ -140,12 +148,12 @@ describe("node worker workspace retention", () => {
       sessionKey: "agent:main:managed",
     });
 
-    await workspace.applyRetainSnapshot(retainInput(input, 1, []), () => []);
+    await workspace.applyRetainSnapshot(retainInput(input, 1, []), async () => []);
     expect(fs.existsSync(workspaceDir)).toBe(true);
 
     claim.release();
     claim.release();
-    await workspace.applyRetainSnapshot(retainInput(input, 2, []), () => []);
+    await workspace.applyRetainSnapshot(retainInput(input, 2, []), async () => []);
     expect(fs.existsSync(workspaceDir)).toBe(false);
   });
 
@@ -180,7 +188,7 @@ describe("node worker workspace retention", () => {
       return await remove(target, options);
     });
     const retention = workspace
-      .applyRetainSnapshot(retainInput(input, 1, []), () => [], controller.signal)
+      .applyRetainSnapshot(retainInput(input, 1, []), async () => [], controller.signal)
       .then(
         () => undefined,
         (error: unknown) => error,
@@ -190,7 +198,7 @@ describe("node worker workspace retention", () => {
       await removalStarted;
       controller.abort(new Error("retention cancelled"));
       expect(fs.existsSync(workspaceDir)).toBe(true);
-      expect(() => workspace.acquireManagedWorkspace(request)).toThrow(
+      await expect(workspace.acquireManagedWorkspaceAsync(request)).rejects.toThrow(
         "workspace is being removed",
       );
     } finally {
@@ -248,7 +256,7 @@ describe("node worker workspace retention", () => {
         return await originalLstat(candidate);
       });
       const retention = workspace
-        .applyRetainSnapshot(snapshot, () => [], controller.signal)
+        .applyRetainSnapshot(snapshot, async () => [], controller.signal)
         .then(
           () => undefined,
           (error: unknown) => error,
@@ -262,7 +270,7 @@ describe("node worker workspace retention", () => {
       expect(await retention).toBe(controller.signal.reason);
       expect(fs.existsSync(target)).toBe(true);
 
-      await expect(workspace.applyRetainSnapshot(snapshot, () => [])).resolves.toMatchObject({
+      await expect(workspace.applyRetainSnapshot(snapshot, async () => [])).resolves.toMatchObject({
         applied: true,
         hasMore: false,
       });
@@ -288,13 +296,13 @@ describe("node worker workspace retention", () => {
       }
     });
     const snapshot = retainInput(input, 1, []);
-    await expect(workspace.applyRetainSnapshot(snapshot, () => [], controller.signal)).rejects.toBe(
-      reason,
-    );
+    await expect(
+      workspace.applyRetainSnapshot(snapshot, async () => [], controller.signal),
+    ).rejects.toBe(reason);
     expect(fs.existsSync(manifest)).toBe(false);
     expect(fs.existsSync(path.dirname(manifest))).toBe(true);
 
-    await workspace.applyRetainSnapshot(snapshot, () => []);
+    await workspace.applyRetainSnapshot(snapshot, async () => []);
     expect(fs.existsSync(sessionRoot(root, input))).toBe(false);
   });
 
@@ -463,13 +471,13 @@ describe("node worker workspace retention", () => {
       for (const artifact of artifacts) {
         fs.mkdirSync(artifact);
       }
-      await workspace.applyRetainSnapshot(retainInput(input, 1, [retainedEntry]), () => []);
+      await workspace.applyRetainSnapshot(retainInput(input, 1, [retainedEntry]), async () => []);
 
       expect(fs.existsSync(first)).toBe(true);
       expect(artifacts.every((artifact) => !fs.existsSync(artifact))).toBe(true);
 
       const latest = await transferManifest("d".repeat(64));
-      await workspace.applyRetainSnapshot(retainInput(input, 2, [retainedEntry]), () => []);
+      await workspace.applyRetainSnapshot(retainInput(input, 2, [retainedEntry]), async () => []);
 
       expect(fs.existsSync(first)).toBe(false);
       expect(fs.existsSync(latest)).toBe(true);
@@ -478,7 +486,7 @@ describe("node worker workspace retention", () => {
       const sibling = seedGeneration(root, input, generation + 1);
       await workspace.applyRetainSnapshot(
         retainInput(input, 3, [{ ...retainedEntry, generation: generation + 1 }]),
-        () => [],
+        async () => [],
       );
 
       expect(fs.existsSync(workspaceDir)).toBe(false);
@@ -540,7 +548,10 @@ describe("node worker workspace retention", () => {
       }
       return await originalLstat(target);
     });
-    const retention = workspace.applyRetainSnapshot(retainInput(input, 1, []), () => reservations);
+    const retention = workspace.applyRetainSnapshot(
+      retainInput(input, 1, []),
+      async () => reservations,
+    );
     await started;
     reservations = [
       {
@@ -578,14 +589,14 @@ describe("node worker workspace retention", () => {
       ],
     });
     await vi.waitFor(() => expect(fs.existsSync(started)).toBe(true));
-    const retention = workspace.applyRetainSnapshot(retainInput(input, 1, []), () => []);
+    const retention = workspace.applyRetainSnapshot(retainInput(input, 1, []), async () => []);
     fs.writeFileSync(release, "release");
 
     await command;
     await retention;
     expect(fs.existsSync(path.dirname(started))).toBe(true);
 
-    await workspace.applyRetainSnapshot(retainInput(input, 2, []), () => []);
+    await workspace.applyRetainSnapshot(retainInput(input, 2, []), async () => []);
     expect(fs.existsSync(path.dirname(started))).toBe(false);
   });
 
@@ -624,7 +635,7 @@ describe("node worker workspace retention", () => {
     seedGeneration(root, first, 1);
     const other = seedGeneration(root, second, 1);
 
-    await workspace.applyRetainSnapshot(retainInput(first, 1, []), () => []);
+    await workspace.applyRetainSnapshot(retainInput(first, 1, []), async () => []);
 
     expect(fs.existsSync(other)).toBe(true);
   });

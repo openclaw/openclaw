@@ -153,10 +153,9 @@ describe("ownerless reservation and manual completion", () => {
       let runId: string | undefined;
       if (mode === "manual") {
         const ack = await enqueueRun(state, job.id, "force");
-        if (!ack.ok || !("enqueued" in ack) || !ack.enqueued) {
-          throw new Error("Expected an acknowledged manual run");
-        }
-        runId = ack.runId;
+        expect(ack).toEqual({ ok: true, ran: false, reason: "ownerless" });
+        runId = events.find((event) => event.action === "finished")?.runId;
+        expect(runId).toEqual(expect.any(String));
         await finished.promise;
         await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0));
       } else {
@@ -204,7 +203,7 @@ describe("ownerless reservation and manual completion", () => {
     },
   );
 
-  it("preserves the original scheduled slot when an ownerless manual run waits past it", async () => {
+  it("rejects an ownerless manual run before a blocked command lane without consuming its schedule", async () => {
     const scheduledAt = NOW + 1_000;
     const job = commandJob("ownerless-delayed-manual", scheduledAt);
     const { state, storePath, finished, execute } = await setupOwnerlessJob(job);
@@ -220,9 +219,8 @@ describe("ownerless reservation and manual completion", () => {
     try {
       await entered.promise;
       const ack = await enqueueRun(state, job.id, "force");
-      if (!ack.ok || !("enqueued" in ack) || !ack.enqueued) {
-        throw new Error("Expected an acknowledged delayed run");
-      }
+      expect(ack).toEqual({ ok: true, ran: false, reason: "ownerless" });
+      expect(getTotalQueueSize()).toBe(1);
       vi.setSystemTime(scheduledAt + 1);
       release.resolve();
       await blocker;
@@ -236,8 +234,8 @@ describe("ownerless reservation and manual completion", () => {
       });
       expect(persisted.state.nextRunAtMs).toBe(scheduledAt);
       expect(resolveCronJobConfigRevision(persisted)).toBe(revision);
-      expect(history(storePath, job.id, ack.runId)).toEqual([
-        expect.objectContaining({ runId: ack.runId, status: "skipped", nextRunAtMs: scheduledAt }),
+      expect(history(storePath, job.id)).toEqual([
+        expect.objectContaining({ status: "skipped", nextRunAtMs: scheduledAt }),
       ]);
       expect(execute).not.toHaveBeenCalled();
     } finally {

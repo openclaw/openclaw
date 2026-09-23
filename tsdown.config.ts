@@ -1,8 +1,8 @@
 // tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
-import { isBuiltin } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
-import type { DtsOptions, UserConfig } from "tsdown";
+import type { DtsOptions, TsdownPlugin, UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
   collectChannelConfigDoctorBuildEntries,
@@ -173,6 +173,45 @@ function buildInputOptions(
   };
 }
 
+function createBashParserAssetsPlugin(): TsdownPlugin {
+  const runtimePath = fs.realpathSync(
+    path.resolve("src/infra/command-explainer/tree-sitter-runtime.ts"),
+  );
+  const grammarResolution = 'require.resolve("tree-sitter-bash/tree-sitter-bash.wasm")';
+  return {
+    name: "openclaw:bash-parser-assets",
+    transform(code, id) {
+      if (path.normalize(id) !== runtimePath) {
+        return undefined;
+      }
+      if (!code.includes(grammarResolution)) {
+        this.error("tree-sitter bootstrap changed; update the packaged grammar transform");
+      }
+      const require = createRequire(import.meta.url);
+      const grammarPath = require.resolve("tree-sitter-bash/tree-sitter-bash.wasm");
+      const licensePath = path.join(path.dirname(grammarPath), "LICENSE");
+      this.addWatchFile(grammarPath);
+      this.addWatchFile(licensePath);
+      const grammar = this.emitFile({
+        type: "asset",
+        fileName: "tree-sitter-bash.wasm",
+        source: fs.readFileSync(grammarPath),
+      });
+      this.emitFile({
+        type: "asset",
+        fileName: "tree-sitter-bash.LICENSE",
+        source: fs.readFileSync(licensePath),
+      });
+      // Let the bundler relocate the asset for root and nested chunks. Source
+      // checkouts still resolve the dev dependency; sealed workers inline it.
+      return {
+        code: code.replace(grammarResolution, `new URL(import.meta.ROLLUP_FILE_URL_${grammar})`),
+        map: null,
+      };
+    },
+  };
+}
+
 function nodeBuildConfig(
   config: UserConfig,
   declarations: UserConfig["dts"] = TSDOWN_DECLARATIONS,
@@ -183,7 +222,14 @@ function nodeBuildConfig(
     target: "node22",
     dts: declarations,
     hooks: createDeclarationBoundaryHooks(config.hooks),
+    plugins: [
+      typeof declarations === "object" && declarations.emitDtsOnly
+        ? undefined
+        : createBashParserAssetsPlugin(),
+      config.plugins,
+    ],
     env,
+    define: { WORKER_DEPLOY_BUILD: "false", ...config.define },
     outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
     fixedExtension: false,
     sourcemap: OUTPUT_SOURCE_MAPS,
@@ -191,10 +237,10 @@ function nodeBuildConfig(
   };
 }
 
-function workerDeployBuildConfig(): UserConfig {
+function workerDeployBuildConfig(entry: Record<string, string>): UserConfig {
   return {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
-    entry: { "worker/worker": "src/worker/worker-deploy-entry.ts" },
+    entry,
     outDir: "dist",
     dts: false,
     env,
@@ -227,33 +273,17 @@ function workerDeployBuildConfig(): UserConfig {
   };
 }
 
-function workerRsyncReceiverBuildConfig(): UserConfig {
+function workerHelperBuildConfig(
+  entry: Record<string, string>,
+  define?: UserConfig["define"],
+): UserConfig {
   return {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
-    entry: { "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts" },
+    entry,
     outDir: "dist",
     dts: false,
     env,
-    deps: {
-      alwaysBundle: (id) => !isBuiltin(id),
-      onlyBundle: false,
-    },
-    fixedExtension: false,
-    outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
-    outputOptions: { codeSplitting: false },
-    shims: true,
-    sourcemap: OUTPUT_SOURCE_MAPS,
-    inputOptions: (options) => buildInputOptions(options, { bundleAllDependencies: true }),
-  };
-}
-
-function workerGitHubExecLauncherBuildConfig(): UserConfig {
-  return {
-    name: TSDOWN_UNIFIED_CONFIG_GROUP,
-    entry: { "worker/github-exec-launcher": "src/agents/github-exec-launcher.ts" },
-    outDir: "dist",
-    dts: false,
-    env,
+    define,
     deps: {
       alwaysBundle: (id) => !isBuiltin(id),
       onlyBundle: false,
@@ -427,7 +457,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
-    "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "config/sessions/disk-budget.worker": "src/config/sessions/disk-budget.worker.ts",
     "config/sessions/session-transcript-reconcile":
@@ -647,6 +676,8 @@ function buildUnifiedDistEntries(): Record<string, string> {
   return {
     ...coreDistEntries,
     ...dockerE2eHarnessEntries,
+    // Private app protocol entry shares chunks with the SDK needed by node-host plugins.
+    "mac-node-worker": "src/node-host/mac-worker-entry.ts",
     ...Object.fromEntries(
       Object.entries(buildPackageDistEntriesFromExports("normalization-core")).map(
         ([entry, source]) => [`normalization-core/${entry}`, source],
@@ -689,6 +720,7 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
     "extensions/browser/relay-daemon-entry": "extensions/browser/relay-daemon-entry.ts",
+    "extensions/browser/setup-entry": "extensions/browser/setup-entry.ts",
     ...bundledHookEntries,
   };
 }
@@ -932,7 +964,22 @@ const configs: UserConfig[] = [
       false,
     ),
   ),
-  workerDeployBuildConfig(),
+  nodeBuildConfig(
+    {
+      name: TSDOWN_UNIFIED_CONFIG_GROUP,
+      entry: { "node-host-launcher-bootstrap": "src/node-host/launcher-bootstrap.ts" },
+      deps: unifiedDeps,
+      outputOptions: { codeSplitting: false },
+    },
+    false,
+  ),
+  workerDeployBuildConfig({ "worker/worker": "src/worker/worker-deploy-entry.ts" }),
+  workerDeployBuildConfig({
+    "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
+  }),
+  workerDeployBuildConfig({
+    "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
+  }),
   { ...createManagedHandoffBuildConfig(), name: TSDOWN_UNIFIED_CONFIG_GROUP, env },
   nodeBuildConfig(
     {
@@ -945,8 +992,16 @@ const configs: UserConfig[] = [
     },
     false,
   ),
-  workerRsyncReceiverBuildConfig(),
-  workerGitHubExecLauncherBuildConfig(),
+  workerHelperBuildConfig({
+    "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
+  }),
+  workerHelperBuildConfig({ "worker/github-exec-launcher": "src/agents/github-exec-launcher.ts" }),
+  ...["service-child-relay", "service-child-group-anchor"].map((name) =>
+    workerHelperBuildConfig(
+      { [`worker/${name}`]: `src/process/supervisor/${name}.ts` },
+      { WORKER_DEPLOY_BUILD: "true", SEALED_RUNTIME_BUILD: "true" },
+    ),
+  ),
   ...(TSDOWN_DECLARATIONS
     ? buildUnifiedDeclarationPartitions(unifiedDistEntries).map(({ name, sources }) =>
         nodeBuildConfig(

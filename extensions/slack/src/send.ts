@@ -1,4 +1,3 @@
-// Slack plugin module implements send behavior.
 import { createHash, createHmac } from "node:crypto";
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
@@ -27,7 +26,7 @@ import {
   normalizeOptionalString as normalizeSlackApiString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe, truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
@@ -475,56 +474,6 @@ function resolveSlackDelivery(params: {
   });
 }
 
-function resolveSlackTextChunkLimit(params: {
-  cfg: OpenClawConfig;
-  accountId?: string;
-  textLimit?: number;
-}): number {
-  const configuredLimit =
-    params.textLimit ??
-    resolveTextChunkLimit(params.cfg, "slack", params.accountId, {
-      fallbackLimit: SLACK_TEXT_LIMIT,
-    });
-  return Math.min(configuredLimit, SLACK_TEXT_LIMIT);
-}
-
-function resolveSlackTextChunks(params: {
-  cfg: OpenClawConfig;
-  accountId?: string;
-  text: string;
-  textLimit?: number;
-  textIsSlackMrkdwn?: boolean;
-  preservePlainText?: boolean;
-}): string[] {
-  const text = params.preservePlainText ? params.text : params.text.trim();
-  const chunkLimit = resolveSlackTextChunkLimit(params);
-  if (params.preservePlainText) {
-    const chunks: string[] = [];
-    let remaining = text;
-    while (remaining) {
-      const chunk = sliceUtf16Safe(remaining, 0, chunkLimit) || truncateCodePoints(remaining, 1);
-      chunks.push(chunk);
-      remaining = remaining.slice(chunk.length);
-    }
-    return chunks;
-  }
-  if (params.textIsSlackMrkdwn) {
-    return resolveTextChunksWithFallback(text, chunkSlackMrkdwnText(text, chunkLimit));
-  }
-  const tableMode = resolveMarkdownTableMode({
-    cfg: params.cfg,
-    channel: "slack",
-    ...(params.accountId ? { accountId: params.accountId } : {}),
-  });
-  const chunkMode = resolveChunkMode(params.cfg, "slack", params.accountId);
-  const markdownChunks =
-    chunkMode === "newline" ? chunkMarkdownTextWithMode(text, chunkLimit, chunkMode) : [text];
-  const chunks = markdownChunks.flatMap((markdown) =>
-    markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }),
-  );
-  return resolveTextChunksWithFallback(text, chunks);
-}
-
 function createSlackSendQueueKey(params: {
   accountId: string;
   token: string;
@@ -597,6 +546,49 @@ async function resolveChannelId(
   }
   cacheSlackDmChannelId(cacheParams, channelId);
   return { channelId, isDm: true, cacheHit: false };
+}
+
+function resolveSlackTextChunkLimit(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+  textLimit?: number;
+}): number {
+  const configuredLimit =
+    params.textLimit ??
+    resolveTextChunkLimit(params.cfg, "slack", params.accountId, {
+      fallbackLimit: SLACK_TEXT_LIMIT,
+    });
+  return Math.min(configuredLimit, SLACK_TEXT_LIMIT);
+}
+
+function resolveSlackTextChunks(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+  text: string;
+  textLimit?: number;
+  textIsSlackMrkdwn?: boolean;
+  preservePlainText?: boolean;
+}): string[] {
+  const text = params.preservePlainText ? params.text : params.text.trim();
+  const chunkLimit = resolveSlackTextChunkLimit(params);
+  if (params.preservePlainText) {
+    return text ? chunkTextForOutbound(text, chunkLimit, { preserveWhitespace: true }) : [];
+  }
+  if (params.textIsSlackMrkdwn) {
+    return resolveTextChunksWithFallback(text, chunkSlackMrkdwnText(text, chunkLimit));
+  }
+  const tableMode = resolveMarkdownTableMode({
+    cfg: params.cfg,
+    channel: "slack",
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+  });
+  const chunkMode = resolveChunkMode(params.cfg, "slack", params.accountId);
+  const markdownChunks =
+    chunkMode === "newline" ? chunkMarkdownTextWithMode(text, chunkLimit, chunkMode) : [text];
+  const chunks = markdownChunks.flatMap((markdown) =>
+    markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }),
+  );
+  return resolveTextChunksWithFallback(text, chunks);
 }
 
 export async function resolveSlackDmChannelId(params: {

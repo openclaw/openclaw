@@ -26,7 +26,6 @@ import type {
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
-import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import {
   sqliteLifecycleTargetSnapshotsEqual,
   sqliteSessionEntriesEqual,
@@ -40,7 +39,6 @@ import {
   readSqliteSessionGenerationClaim,
   readSqliteSessionGenerationWindows,
 } from "./session-accessor.sqlite-generation-copy.js";
-import { prepareCommittedSessionEntryRemovals } from "./session-accessor.sqlite-identity.js";
 import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
   deleteMaterializedSessionStatePlans,
@@ -49,16 +47,20 @@ import {
 import type {
   ReclamationDatabaseOptions,
   ReclamationDeleteParams,
+  SessionEntryMaintenanceInput,
   SessionEntryRemovalPlan,
   SqliteSessionDeletionScope,
+  SqliteSessionReclamationCallbacks,
   SqliteSessionReclamationPlan,
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
+import { reclaimSessionMaintenanceInTransaction } from "./session-accessor.sqlite-maintenance-transaction.js";
 import {
   deleteSessionDeliveryArtifacts,
   readSessionNodeArtifactFingerprint,
 } from "./session-accessor.sqlite-node-artifacts.js";
-import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
+import { prepareReclamationPublication } from "./session-accessor.sqlite-reclamation-publication.js";
+import { runPreparedSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import { withSqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
 import {
   collectSessionStateIdsForEntry,
@@ -68,6 +70,7 @@ import {
   cloneSessionEntry,
   getSessionKysely,
   runExclusiveSqliteSessionWrite,
+  withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -89,7 +92,7 @@ export function runExclusiveSqliteSessionReclamation<T>(run: () => Promise<T>): 
   return reclamationQueue.enqueue("session-reclamation", run);
 }
 
-function toWorkerDatabaseOptions(
+export function resolveSessionReclamationDatabaseOptions(
   options: OpenClawAgentDatabaseOptions,
 ): ReclamationDatabaseOptions {
   const sourceEnv = options.env ?? process.env;
@@ -254,11 +257,40 @@ function expectedEntryMismatchResult(): DeleteSessionEntryLifecycleResult {
 
 export function reclaimSqliteSessionInTransaction(
   plan: SqliteSessionReclamationPlan,
-  callbacks: {
-    beforeMutation?: () => void;
-    onCommit?: (database: OpenClawAgentDatabase) => void;
-  } = {},
+  callbacks: SqliteSessionReclamationCallbacks = {},
 ): SqliteSessionReclamationResult {
+  if (plan.kind === "maintenance-pages") {
+    const database = openOpenClawAgentDatabase(plan.databaseOptions);
+    return {
+      kind: plan.kind,
+      value: database.walMaintenance.reclaimFreePages({
+        maxPages: plan.maxPages,
+        beforeMutation: callbacks.beforeMutation,
+        onCommit: () => callbacks.onCommit?.(database),
+        afterCommit: callbacks.afterCommit,
+      }),
+    };
+  }
+  const result = reclaimSqliteRowsInTransaction(plan, callbacks);
+  callbacks.afterCommit?.();
+  if (result.kind === "history-eviction" && result.value.deleted) {
+    reclaimSqliteFreePagesBestEffort(plan.databaseOptions);
+  }
+  return result;
+}
+
+function reclaimSqliteRowsInTransaction(
+  plan: Exclude<SqliteSessionReclamationPlan, { kind: "maintenance-pages" }>,
+  callbacks: SqliteSessionReclamationCallbacks,
+): SqliteSessionReclamationResult {
+  if (
+    plan.kind === "maintenance-plan" ||
+    plan.kind === "maintenance-finalize" ||
+    plan.kind === "maintenance-statistics"
+  ) {
+    return reclaimSessionMaintenanceInTransaction(plan, callbacks);
+  }
+
   if (plan.kind === "entry") {
     const value = runSqliteSessionDeletionTransaction<DeleteSessionEntryLifecycleResult>(
       (transactionDb) => {
@@ -372,56 +404,16 @@ export function reclaimSqliteSessionInTransaction(
     }
     return { archivedTranscripts: deleted ? archivedTranscripts : [], deleted };
   }, plan.databaseOptions);
-  if (plan.kind === "history-eviction" && value.deleted) {
-    reclaimSqliteFreePagesBestEffort(plan.databaseOptions);
-  }
   return { kind: plan.kind, value };
 }
 
 function reclaimSqliteFreePagesBestEffort(databaseOptions: ReclamationDatabaseOptions): void {
   try {
     const database = openOpenClawAgentDatabase(databaseOptions);
-    // sqlite-allow-raw -- PASSIVE never waits for readers; cap page release per pass.
-    database.db.exec("PRAGMA wal_checkpoint(PASSIVE); PRAGMA incremental_vacuum(512);");
+    database.walMaintenance.reclaimFreePages({ checkpointMode: "PASSIVE" });
   } catch {
     // Deletion is already durable. The next budget pass can reclaim pages.
   }
-}
-
-function prepareReclamationWorkerTransferList(plan: SqliteSessionReclamationPlan): ArrayBuffer[] {
-  const buffers = new Set<ArrayBuffer>();
-  for (const materializedPlan of plan.materializedPlans) {
-    const archive = materializedPlan.archive;
-    if (!archive) {
-      continue;
-    }
-    const bytes = archive.bytes;
-    let owned = bytes;
-    let buffer: ArrayBuffer;
-    if (
-      bytes.buffer instanceof ArrayBuffer &&
-      bytes.byteOffset === 0 &&
-      bytes.byteLength === bytes.buffer.byteLength
-    ) {
-      buffer = bytes.buffer;
-    } else {
-      buffer = new ArrayBuffer(bytes.byteLength);
-      owned = new Uint8Array(buffer);
-      owned.set(bytes);
-    }
-    materializedPlan.archive = { ...archive, bytes: owned };
-    buffers.add(buffer);
-  }
-  return [...buffers];
-}
-
-function prepareReclamationPublication(
-  plan: SqliteSessionReclamationPlan,
-): (() => void) | undefined {
-  if (plan.kind === "lifecycle-artifacts") {
-    return prepareCommittedSessionEntryRemovals(plan.agentId, plan.entries);
-  }
-  return undefined;
 }
 
 export async function runSqliteSessionReclamation(params: {
@@ -429,6 +421,7 @@ export async function runSqliteSessionReclamation(params: {
   assertCommitAllowed?: () => void;
   forceInProcess: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
+  onWorkerResult?: (result: SqliteSessionReclamationResult) => void;
   plan: SqliteSessionReclamationPlan;
 }): Promise<SqliteSessionReclamationResult> {
   if (params.diagnostics) {
@@ -445,16 +438,23 @@ export async function runSqliteSessionReclamation(params: {
       params.plan.databaseOptions,
       async () => {
         params.assertCommitAllowed?.();
-        return reclaimSqliteSessionInTransaction(params.plan, {
-          beforeMutation: params.assertCommitAllowed,
-          onCommit: (database) => {
-            const publish = prepareReclamationPublication(params.plan);
-            if (publish) {
-              deferOpenClawAgentPostCommitPublication(database, publish);
-            }
-            params.onInProcessCommit?.(database);
+        return await withSqliteSessionDatabase(
+          params.plan.databaseOptions,
+          () => {
+            params.assertCommitAllowed?.();
+            return reclaimSqliteSessionInTransaction(params.plan, {
+              beforeMutation: params.assertCommitAllowed,
+              onCommit: (database, result) => {
+                const publish = prepareReclamationPublication(params.plan, result);
+                if (publish) {
+                  deferOpenClawAgentPostCommitPublication(database, publish);
+                }
+                params.onInProcessCommit?.(database);
+              },
+            });
           },
-        });
+          params.assertCommitAllowed,
+        );
       },
       "session.reclamation.in-process",
       params.diagnostics,
@@ -462,7 +462,7 @@ export async function runSqliteSessionReclamation(params: {
   }
   return await withSqliteMutationWorkerLifetime(
     params.plan.databaseOptions,
-    async ({ assertCurrent, commitGate }) => {
+    async ({ assertCurrent, commitGate, signal }) => {
       const assertRequestCurrent = () => {
         assertCurrent();
         params.assertCommitAllowed?.();
@@ -492,55 +492,19 @@ export async function runSqliteSessionReclamation(params: {
           plan.databaseOptions,
           claim,
           async (worker) => {
-            const assertCommitAllowed = () => {
-              worker.assertCurrent(plan.databaseOptions, claim);
-              assertRequestCurrent();
-            };
-            assertCommitAllowed();
-            let publishCommitted: (() => void) | undefined;
-            const result = await withSqliteReclamationAuthorization(
-              commitGate,
-              database.db,
-              () => {
-                assertCommitAllowed();
-                // A blocked writer may authorize before the Worker's queued request.
-                publishCommitted = prepareReclamationPublication(plan);
+            return runPreparedSqliteSessionReclamation(
+              { ...params, plan },
+              {
+                database,
+                claim,
+                worker,
+                assertRequestCurrent,
+                commitGate,
               },
-              (authorize) =>
-                worker.run({
-                  claim,
-                  validationOwner: { database, isCurrent: claim.isCurrent },
-                  commitGate,
-                  plan,
-                  diagnostics: params.diagnostics,
-                  onCommitRequest: authorize,
-                  withWriteAdmission: async (run, reclamationAdmission) =>
-                    await runExclusiveSqliteSessionWrite(
-                      plan.databaseOptions,
-                      async () => {
-                        let refusal: { error: unknown } | undefined;
-                        try {
-                          assertCommitAllowed();
-                        } catch (error) {
-                          refusal = { error };
-                        }
-                        const completed = await run(refusal);
-                        if (completed) {
-                          // Publish captured identities after transaction settlement, before releasing the writer.
-                          publishSessionEntryCacheInvalidation(database);
-                          publishCommitted?.();
-                        }
-                      },
-                      "session.reclamation.worker-commit",
-                      { ...params.diagnostics, reclamationAdmission },
-                      "worker",
-                    ),
-                  transferList: prepareReclamationWorkerTransferList(plan),
-                }),
             );
-            return result;
           },
           assertRequestCurrent,
+          signal,
         );
       } finally {
         claim.release();
@@ -564,7 +528,7 @@ export function createSessionEntryReclamationPlan(params: {
   preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
 }): Extract<SqliteSessionReclamationPlan, { kind: "entry" }> {
   return {
-    databaseOptions: toWorkerDatabaseOptions(params.databaseOptions),
+    databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
     deleteParams: prepareReclamationDeleteParams(params.deleteParams),
     kind: "entry",
     materializedPlans: params.materializedPlans,
@@ -579,11 +543,46 @@ export function createLifecycleArtifactReclamationPlan(params: {
   materializedPlans: MaterializedSessionStateDeletePlan[];
 }): Extract<SqliteSessionReclamationPlan, { kind: "lifecycle-artifacts" }> {
   return {
-    databaseOptions: toWorkerDatabaseOptions(params.databaseOptions),
+    databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
     agentId: params.agentId,
     entries: params.entries,
     kind: "lifecycle-artifacts",
     materializedPlans: params.materializedPlans,
+  };
+}
+
+export function createSessionMaintenancePlanningOperation(params: {
+  databaseOptions: OpenClawAgentDatabaseOptions;
+  input: SessionEntryMaintenanceInput;
+}): Extract<SqliteSessionReclamationPlan, { kind: "maintenance-plan" }> {
+  return {
+    databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
+    input: params.input,
+    kind: "maintenance-plan",
+    materializedPlans: [],
+  };
+}
+
+export function createSessionMaintenanceStatisticsOperation(
+  databaseOptions: OpenClawAgentDatabaseOptions,
+): Extract<SqliteSessionReclamationPlan, { kind: "maintenance-statistics" }> {
+  return {
+    databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
+    kind: "maintenance-statistics",
+    materializedPlans: [],
+  };
+}
+
+export function createSessionMaintenanceFinalizationOperation(params: {
+  agentId: string;
+  databaseOptions: OpenClawAgentDatabaseOptions;
+  entries: SessionEntryRemovalPlan[];
+  materializedPlans: MaterializedSessionStateDeletePlan[];
+}): Extract<SqliteSessionReclamationPlan, { kind: "maintenance-finalize" }> {
+  return {
+    ...params,
+    databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
+    kind: "maintenance-finalize",
   };
 }
 
@@ -595,7 +594,7 @@ export function createHistoryEvictionReclamationPlan(params: {
   sessionId: string;
 }): Extract<SqliteSessionReclamationPlan, { kind: "history-eviction" }> {
   return {
-    databaseOptions: toWorkerDatabaseOptions(params.databaseOptions),
+    databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
     diskBudget: params.diskBudget,
     kind: "history-eviction",
     materializedPlans: params.materializedPlans,
@@ -613,7 +612,7 @@ export function createHistoricalGenerationReclamationPlan(params: {
   sessionId: string;
 }): Extract<SqliteSessionReclamationPlan, { kind: "historical-generation" }> {
   return {
-    databaseOptions: toWorkerDatabaseOptions(params.databaseOptions),
+    databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
     deleteParams: prepareReclamationDeleteParams(params.deleteParams),
     kind: "historical-generation",
     materializedPlans: params.materializedPlans,

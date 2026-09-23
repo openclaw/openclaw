@@ -29,6 +29,11 @@ on:
         description: Exact successful Full Release Validation run attempt for this tag/SHA
         required: false
         type: string
+      stable_soak_waiver:
+        description: Operator reason for publishing a stable tag from Full Release Validation evidence recorded without soak; leave empty to require soak.
+        required: false
+        default: ""
+        type: string
       release_evidence_mode:
         description: Publication evidence contract
         required: true
@@ -68,7 +73,7 @@ on:
         required: false
         type: string
       release_candidate_branch:
-        description: Canonical extended-stable branch when a trusted main workflow promotes its immutable tag
+        description: Canonical extended-stable branch when protected release tooling or trusted-main recovery promotes its immutable tag
         required: false
         default: ""
         type: string
@@ -139,6 +144,12 @@ jobs:
           filter: blob:none
           persist-credentials: false
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Validate npm release request
         env:
           BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
@@ -168,8 +179,8 @@ jobs:
             extended_stable_publish=true
           fi
           if [[ -n "${release_candidate_branch}" ]]; then
-            if [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" || "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
-              echo "release_candidate_branch is only valid for an extended-stable publish dispatched from main." >&2
+            if [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" ]] || { [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; }; then
+              echo "release_candidate_branch requires extended-stable publication from trusted main or protected release-publish tooling." >&2
               exit 1
             fi
             if [[ ! "${RELEASE_TAG}" =~ ^v([0-9]{4})\.([1-9][0-9]*)\.[1-9][0-9]*$ ]]; then
@@ -308,6 +319,8 @@ jobs:
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
 
   publish_openclaw_npm:
+    outputs:
+      stable_soak_waiver: ${{ steps.full_manifest.outputs.stable_soak_waiver }}
     # KEEP THE REAL RELEASE/PUBLISH PATH ON A GITHUB-HOSTED RUNNER.
     # npm trusted publishing + provenance requires this to stay on ubuntu-latest.
     needs: [validate_publish_request]
@@ -582,6 +595,8 @@ jobs:
           PLUGIN_NPM_RUN_ID: ${{ inputs.plugin_npm_run_id }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           EXPECTED_EXTENDED_STABLE_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}
+          EXPECTED_ORCHESTRATOR_BRANCH: ${{ inputs.release_candidate_branch != '' && startsWith(github.ref, 'refs/tags/release-publish/') && github.ref_name || '' }}
+          EXPECTED_ORCHESTRATOR_SHA: ${{ inputs.release_candidate_branch != '' && startsWith(github.ref, 'refs/tags/release-publish/') && github.workflow_sha || '' }}
           RUN_KIND: plugin
           WORKFLOW_REF: ${{ github.ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
@@ -864,8 +879,10 @@ jobs:
           echo "tarball_path=$ARTIFACT_TARBALL_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Verify full release validation target
+        id: full_manifest
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
         env:
+          STABLE_SOAK_WAIVER: ${{ inputs.stable_soak_waiver }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
@@ -876,21 +893,8 @@ jobs:
             ls -la full-release-validation >&2 || true
             exit 1
           fi
-          RERUN_GROUP="$(jq -r '.rerunGroup // ""' "$MANIFEST_FILE")"
-          RUN_RELEASE_SOAK="$(jq -r '.runReleaseSoak // ""' "$MANIFEST_FILE")"
-          PERFORMANCE_BLOCKING="$(jq -r '.controls.performanceBlocking // false' "$MANIFEST_FILE")"
-          if [[ "$RERUN_GROUP" != "all" ]]; then
-            echo "Full release validation must run rerun_group=all before npm publish; got $RERUN_GROUP" >&2
-            exit 1
-          fi
-          if [[ "$RELEASE_NPM_DIST_TAG" != "beta" && "$PERFORMANCE_BLOCKING" != "true" ]]; then
-            echo "Full release validation manifest does not record blocking product performance evidence." >&2
-            exit 1
-          fi
-          if [[ "$RELEASE_TAG" != *"-alpha."* && "$RELEASE_TAG" != *"-beta."* && "$RUN_RELEASE_SOAK" != "true" ]]; then
-            echo "Stable releases require Full Release Validation with runReleaseSoak=true." >&2
-            exit 1
-          fi
+          node trusted-workflow/scripts/lib/release-publish-gates.mts \
+            --consumer core-npm --manifest "$MANIFEST_FILE"
 
       - name: Recheck npm release request
         env:

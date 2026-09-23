@@ -49,9 +49,17 @@ public final class OpenClawChatViewModel {
     public internal(set) var showsThinkingPicker = false
     public internal(set) var preferredVerboseLevel: String
     var prefersExplicitVerboseLevel: Bool
-    public private(set) var modelSelectionID: String = "__default__"
+    private var requestedModelSelectionID: String = "__default__"
+
+    public private(set) var modelSelectionID: String {
+        get { self.projectedModelSelectionID(self.requestedModelSelectionID) }
+        set { self.requestedModelSelectionID = newValue }
+    }
+
     public internal(set) var modelChoices: [OpenClawChatModelChoice] = []
     var modelAvailabilityIsSessionScoped = false
+    var modelSelectionPolicy: OpenClawChatModelSelectionPolicy?
+    var modelCatalogInvalidated = false
     public internal(set) var modelCatalogMessage: String?
     var agentCatalog: OpenClawChatAgentsListResponse?
     var isLoadingAgents = false
@@ -145,7 +153,7 @@ public final class OpenClawChatViewModel {
 
     public private(set) var streamingAssistantText: String?
 
-    public private(set) var pendingToolCalls: [OpenClawChatPendingToolCall] = []
+    public private(set) var toolActivities: [OpenClawChatPendingToolCall] = []
     var subagentActivities: [ChatSubagentActivity] = []
     var hiddenWorkingSubagentCount = 0
     private(set) var timelineRevision: UInt64 = 0
@@ -490,12 +498,10 @@ public final class OpenClawChatViewModel {
         var scope: RunMessageScope
     }
 
-    var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
+    var turnToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
         didSet {
-            guard self.pendingToolCallsById != oldValue else { return }
-            reportToolActivityChanges(from: oldValue, to: self.pendingToolCallsById)
-            self.pendingToolCalls = self.pendingToolCallsById.values
-                .sorted { ($0.startedAt ?? 0) < ($1.startedAt ?? 0) }
+            guard self.turnToolCallsById != oldValue else { return }
+            self.toolActivities = prepareToolActivities(from: oldValue)
             markTimelineChanged()
         }
     }
@@ -746,13 +752,6 @@ public final class OpenClawChatViewModel {
     public var showsModelPicker: Bool {
         !self.modelChoices.isEmpty
     }
-
-    public var defaultModelLabel: String {
-        guard let defaultModelID = normalizedModelSelectionID(sessionDefaults?.model) else {
-            return "Default"
-        }
-        return "Default: \(modelLabel(for: defaultModelID))"
-    }
 }
 
 extension OpenClawChatViewModel {
@@ -889,7 +888,7 @@ extension OpenClawChatViewModel {
         self.invalidateOutboxBranchReconciliation()
         self.healthOK = false
         clearPendingRuns(reason: nil)
-        self.pendingToolCallsById = [:]
+        self.turnToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         self.sessionId = nil
@@ -1011,7 +1010,7 @@ extension OpenClawChatViewModel {
             if refresh.sessionHasActiveRun,
                Self.hasUnansweredLatestUser(in: self.messages)
             {
-                self.pendingToolCallsById = [:]
+                self.turnToolCallsById = [:]
                 self.updateStreamingAssistantText(nil)
                 // Keep a known run ID authoritative so its stream and terminal
                 // events still route here. Synthesize activity only after the
@@ -1022,7 +1021,7 @@ extension OpenClawChatViewModel {
                 clearPendingRuns(
                     reason: nil,
                     hapticEvent: assistantHapticEventAfterLatestUser())
-                self.pendingToolCallsById = [:]
+                self.turnToolCallsById = [:]
                 self.updateStreamingAssistantText(nil)
             }
         }
@@ -1267,7 +1266,8 @@ extension OpenClawChatViewModel {
         self.invalidateComposerCapabilities()
         self.modelSelectionID = Self.defaultModelSelectionID
         self.modelAvailabilityIsSessionScoped = false
-        self.modelChoices = []
+        self.invalidateModelChoices()
+        self.modelSelectionPolicy = nil
         self.modelCatalogMessage = nil
         replaceMessages([])
         self.isShowingCachedTranscript = false
@@ -1277,7 +1277,7 @@ extension OpenClawChatViewModel {
         self.provisionalFinalMessagesByID.removeAll()
         resetOutboxPresentationForSessionSwitch()
         self.sessionId = nil
-        self.pendingToolCallsById = [:]
+        self.turnToolCallsById = [:]
         self.clearSubagentActivities()
         self.updateStreamingAssistantText(nil)
         self.clearProgressCard()
@@ -1539,9 +1539,8 @@ extension OpenClawChatViewModel {
         let explicitModelID = self.normalizedModelSelectionID(
             currentSession?.model,
             provider: currentSession?.modelProvider)
-        let defaultModelID = self.normalizedModelSelectionID(
-            self.sessionDefaults?.model,
-            provider: self.sessionDefaults?.modelProvider)
+        let defaults = self.modelPickerDefault
+        let defaultModelID = self.normalizedModelSelectionID(defaults.model, provider: defaults.provider)
         if self.lastSuccessfulModelSelectionIDsByTarget[target] == Self.defaultModelSelectionID,
            explicitModelID == defaultModelID
         {
@@ -1563,7 +1562,7 @@ extension OpenClawChatViewModel {
         return trimmed
     }
 
-    private func normalizedModelSelectionID(_ modelID: String?, provider: String? = nil) -> String? {
+    func normalizedModelSelectionID(_ modelID: String?, provider: String? = nil) -> String? {
         guard let modelID else { return nil }
         let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -1593,11 +1592,6 @@ extension OpenClawChatViewModel {
             return nil
         }
         return normalized
-    }
-
-    private func modelLabel(for modelID: String) -> String {
-        self.modelChoices.first(where: { $0.selectionID == modelID || $0.modelID == modelID })?.displayLabel ??
-            modelID
     }
 
     private func applySuccessfulModelSelection(

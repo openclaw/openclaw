@@ -84,15 +84,11 @@ export async function commitMainSessionRecovery(params: {
     update: (entries) => {
       // Recheck after entering write admission: shutdown can begin while this
       // recovery owner is waiting, including between exact and moved-key lookups.
-      if (params.shouldContinue?.() === false) {
-        return {
-          result: {
-            transition: { kind: "rejected", reason: "stale_generation" },
-          },
-        };
-      }
       const expectedGeneration = currentGenerationRequiredBy(params.command);
-      if (expectedGeneration && expectedGeneration !== getAgentEventLifecycleGeneration()) {
+      if (
+        params.shouldContinue?.() === false ||
+        (expectedGeneration && expectedGeneration !== getAgentEventLifecycleGeneration())
+      ) {
         return {
           result: {
             transition: { kind: "rejected", reason: "stale_generation" },
@@ -132,12 +128,19 @@ export async function commitMainSessionRecovery(params: {
       } else if (params.scanAliases && params.expectedSessionId) {
         candidate = entries.find(({ entry }) => entry.sessionId === params.expectedSessionId);
       }
+      if (
+        !candidate &&
+        !params.scanAliases &&
+        (reservationCleanup ||
+          recoveryAdmission ||
+          exactOwnerClaim ||
+          ownerClaim ||
+          params.command.kind === "inspect")
+      ) {
+        // Discover moved identities only after the exact key misses.
+        return { result: undefined };
+      }
       if (reservationCleanup || recoveryAdmission || exactOwnerClaim) {
-        if (!candidate && !params.scanAliases) {
-          // A recovery identity has one row owner. Only a missing exact identity needs
-          // inventory discovery; ordinary refresh/release must not hydrate every session.
-          return { result: undefined };
-        }
         candidate ??= selected;
       }
       if (!candidate) {
@@ -151,20 +154,13 @@ export async function commitMainSessionRecovery(params: {
       }
       const entry = candidate.entry as SessionEntry;
       const previousRecoveryState = entry.mainRestartRecovery;
-      let command: MainSessionRecoveryCommand;
-      if (ownerClaim) {
-        command =
-          ownerClaim.sessionKey === candidate.sessionKey
-            ? ownerClaim
-            : { ...ownerClaim, sessionKey: candidate.sessionKey };
-      } else if (
-        (params.command.kind === "observe" || params.command.kind === "inspect") &&
+      const command =
+        (params.command.kind === "claim_foreground" ||
+          params.command.kind === "observe" ||
+          params.command.kind === "inspect") &&
         params.command.sessionKey !== candidate.sessionKey
-      ) {
-        command = { ...params.command, sessionKey: candidate.sessionKey };
-      } else {
-        command = params.command;
-      }
+          ? { ...params.command, sessionKey: candidate.sessionKey }
+          : params.command;
       const transition = transitionMainSessionRecovery(entry, command);
       const changed =
         previousRecoveryState !== entry.mainRestartRecovery ||
@@ -214,28 +210,19 @@ export async function claimMainSessionRecoveryOwner(params: {
   runId?: string;
   target: MainSessionRecoveryStoreTarget;
 }) {
-  const command = {
-    kind: "claim_foreground" as const,
-    cycleId: randomUUID(),
-    lifecycleGeneration: params.lifecycleGeneration,
-    sessionId: params.sessionId,
-    sessionKey: params.target.sessionKey,
-    claimId: randomUUID(),
-    ...(params.runId ? { runId: params.runId } : {}),
-  };
-  let claim = await commitMainSessionRecovery({
-    command,
+  const claim = await commitMainSessionRecovery({
+    command: {
+      kind: "claim_foreground",
+      cycleId: randomUUID(),
+      lifecycleGeneration: params.lifecycleGeneration,
+      sessionId: params.sessionId,
+      sessionKey: params.target.sessionKey,
+      claimId: randomUUID(),
+      ...(params.runId ? { runId: params.runId } : {}),
+    },
     requireWriteSuccess: true,
     target: params.target,
   });
-  if (claim.transition.kind === "rejected" && claim.transition.reason === "session_replaced") {
-    claim = await commitMainSessionRecovery({
-      command,
-      requireWriteSuccess: true,
-      scanAliases: true,
-      target: params.target,
-    });
-  }
   if (claim.transition.kind === "foreground_claimed") {
     if (!claim.entry || !claim.sessionKey) {
       return { kind: "invalidated", reason: "state_changed" } as const;
@@ -284,26 +271,16 @@ export async function inspectMainSessionRecoveryRequired(params: {
   lifecycleGeneration: string;
   target: MainSessionRecoveryStoreTarget;
 }) {
-  const command = {
-    kind: "inspect" as const,
-    lifecycleGeneration: params.lifecycleGeneration,
-    sessionKey: params.target.sessionKey,
-  };
-  let result = await commitMainSessionRecovery({
-    command,
+  const result = await commitMainSessionRecovery({
+    command: {
+      kind: "inspect",
+      lifecycleGeneration: params.lifecycleGeneration,
+      sessionKey: params.target.sessionKey,
+    },
     expectedSessionId: params.expectedSessionId,
     requireWriteSuccess: true,
     target: params.target,
   });
-  if (result.transition.kind === "rejected" && result.transition.reason === "session_replaced") {
-    result = await commitMainSessionRecovery({
-      command,
-      expectedSessionId: params.expectedSessionId,
-      requireWriteSuccess: true,
-      scanAliases: true,
-      target: params.target,
-    });
-  }
   if (result.transition.kind === "observed") {
     return result.transition.view.status === "inactive"
       ? { kind: "not_required" }

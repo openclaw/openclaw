@@ -6,14 +6,20 @@ import * as records from "./session-row-projection-record.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 
+export type SessionRowPreparationOptions = { includeAncestors?: boolean };
+
 export type SessionRowReadView = {
   describe(query: records.Lookup, captured?: records.Row): records.MaterializedRow | undefined;
   present(
     record: records.MaterializedRow,
     options?: records.SnapshotOptions,
   ): ReturnType<typeof records.present>;
-  select(query: { key: string }): records.MaterializedRow[];
-  readonly state: { cfg: OpenClawConfig; rowContext: SessionListRowContext };
+  selectEntries(query: { key: string }): records.EntryRow[];
+  readonly state: {
+    cfg: OpenClawConfig;
+    policyConfig: OpenClawConfig;
+    rowContext: SessionListRowContext;
+  };
 };
 
 export async function withPreparedSessionRows<T>(
@@ -31,6 +37,30 @@ export async function withPreparedSessionRows<T>(
   });
 }
 
+/** Reenter the same synchronous consumer after canonical readiness finishes. */
+export async function withReadySessionRows<T>(
+  owner: {
+    withPreparedExactRows<U>(
+      queries: (config: OpenClawConfig) => readonly records.Lookup[],
+      consume: (read: SessionRowReadView) => U,
+      options?: SessionRowPreparationOptions,
+    ): ReturnType<typeof withPreparedSessionRows<U>>;
+  },
+  queries: (config: OpenClawConfig) => readonly records.Lookup[],
+  consume: (read: SessionRowReadView) => T,
+  options?: SessionRowPreparationOptions,
+): Promise<T> {
+  while (true) {
+    const prepared = await owner.withPreparedExactRows(queries, consume, options);
+    if (prepared.kind === "complete") {
+      return prepared.value;
+    }
+    const { certifySessionCanonicalValidationPending } =
+      await import("../config/sessions/session-canonical-validation-readiness.js");
+    await certifySessionCanonicalValidationPending(prepared.database);
+  }
+}
+
 /** Private rows belong only to this synchronous consumer, never to the resident roster. */
 function consumePreparedSessionRows<T>(
   owner: SessionRowReadView & { isCurrent(row: records.Row): boolean },
@@ -41,7 +71,7 @@ function consumePreparedSessionRows<T>(
 ): T {
   let state = initialState;
   const privateRows = new Map<string, records.MaterializedRow | undefined>();
-  const childSelections = new Map<string, records.MaterializedRow[]>();
+  const childSelections = new Map<string, records.EntryRow[]>();
   const privateKey = (query: records.Lookup) => {
     const key = resolveStoredSessionKeyForAgentStore({
       cfg: state.cfg,
@@ -60,7 +90,7 @@ function consumePreparedSessionRows<T>(
     for (const group of row?.materialized.row.swarm?.groups ?? []) {
       for (const child of group.children ?? []) {
         if (!childSelections.has(child.sessionKey)) {
-          childSelections.set(child.sessionKey, owner.select({ key: child.sessionKey }));
+          childSelections.set(child.sessionKey, owner.selectEntries({ key: child.sessionKey }));
         }
       }
     }
@@ -71,7 +101,11 @@ function consumePreparedSessionRows<T>(
   }
   // Targeted materialization may refresh the owner's metadata context. Capture its final facts.
   const preparedState = owner.state;
-  state = { cfg: preparedState.cfg, rowContext: preparedState.rowContext };
+  state = {
+    cfg: preparedState.cfg,
+    policyConfig: preparedState.policyConfig,
+    rowContext: preparedState.rowContext,
+  };
   let active = true;
   const assertActive = () => {
     if (!active || !isActive()) {
@@ -95,7 +129,7 @@ function consumePreparedSessionRows<T>(
       assertActive();
       return owner.present(record, options);
     },
-    select(query) {
+    selectEntries(query) {
       assertActive();
       if (privateRows.size > 0) {
         const rows = childSelections.get(query.key);
@@ -104,7 +138,7 @@ function consumePreparedSessionRows<T>(
         }
         return rows;
       }
-      return owner.select(query);
+      return owner.selectEntries(query);
     },
     get state() {
       assertActive();

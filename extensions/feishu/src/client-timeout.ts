@@ -1,4 +1,3 @@
-// Feishu plugin module implements client timeout behavior.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { FeishuConfig } from "./types.js";
 

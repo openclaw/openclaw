@@ -16,6 +16,7 @@ import {
   taskFinishedDuration,
 } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+import { renderBackgroundTasksError } from "./chat-background-tasks-render.ts";
 import {
   backgroundTaskStatusLabel,
   backgroundTaskIsExecuting,
@@ -44,16 +45,35 @@ export function renderTaskDetailPanel(params: {
   backgroundTasks: BackgroundTasksProps;
   host: TaskDetailHost;
   task: TaskSummary | undefined;
+  taskId?: string;
   loadFullAssistantMessage?: SidebarFullMessageLoader | null;
+  onBack?: () => void;
 }): TemplateResult {
-  const { backgroundTasks, task } = params;
+  const { backgroundTasks, task, taskId } = params;
   if (!task) {
     resetTaskDetail(params.host);
+    const error = taskId ? backgroundTasks.taskDetailErrors.get(taskId) : undefined;
+    if (
+      !error &&
+      (backgroundTasks.loading ||
+        (backgroundTasks.connected && backgroundTasks.tasks === null && !backgroundTasks.error) ||
+        (taskId && backgroundTasks.taskDetailLoadingIds.has(taskId)))
+    ) {
+      return html`
+        <div class="sidebar-panel chat-task-detail" data-task-detail-panel>
+          ${renderTaskHeader(t("chat.backgroundTasks.taskDetailTitle"), undefined, undefined, params.onBack)}
+          ${renderBackgroundTasksError(backgroundTasks.error)}
+          ${renderPanelLoadingSkeleton("tasks", t("chat.backgroundTasks.detailLoading"))}
+        </div>
+      `;
+    }
     return html`
       <div class="sidebar-panel chat-task-detail" data-task-detail-panel>
-        ${renderTaskHeader(t("chat.backgroundTasks.taskDetailTitle"))}
+        ${renderTaskHeader(t("chat.backgroundTasks.taskDetailTitle"), undefined, undefined, params.onBack)}
+        ${renderBackgroundTasksError(backgroundTasks.error)}
         <div class="sidebar-content chat-task-detail__state">
-          ${t("chat.backgroundTasks.taskUnavailable")}
+          ${error ?? backgroundTasks.error ?? t("chat.backgroundTasks.taskUnavailable")}
+          ${error && taskId && backgroundTasks.onLoadDetail ? html`<button type="button" @click=${() => backgroundTasks.onLoadDetail?.({ id: taskId })}>${t("chat.backgroundTasks.detailRetry")}</button>` : nothing}
         </div>
       </div>
     `;
@@ -90,19 +110,19 @@ export function renderTaskDetailPanel(params: {
     : renderTaskFallback(currentTask, backgroundTasks, params.host);
   return html`
     <div class="sidebar-panel chat-task-detail" data-task-detail-panel>
-      ${renderTaskHeader(taskDisplayTitle(currentTask, detailedTask), currentTask, backgroundTasks)}
+      ${renderTaskHeader(taskDisplayTitle(currentTask, detailedTask), currentTask, backgroundTasks, params.onBack)}
+      ${renderBackgroundTasksError(backgroundTasks.error)}
       ${renderTaskObservation(currentTask, backgroundTasks)} ${content}
     </div>
   `;
 }
 
-// No close button here on purpose: the sidebar region header owns the
-// "Close Details" control for every detail-slot panel (the classic panel is
-// embedded with its own header hidden); a second X 40px away duplicated it.
+// The shared panel header owns closing; this action returns to the task list.
 function renderTaskHeader(
   title: string,
   task?: TaskSummary,
   backgroundTasks?: BackgroundTasksProps,
+  onBack?: () => void,
 ): TemplateResult {
   const active = task ? isActiveTask(task) : false;
   const startedMs = task ? taskTimestampMs(task.startedAt ?? task.createdAt) : 0;
@@ -111,6 +131,7 @@ function renderTaskHeader(
   return html`
     <div class="sidebar-header chat-task-detail__header">
       <div class="chat-task-detail__heading">
+        ${onBack ? html`<button class="btn btn--ghost btn--sm" type="button" @click=${onBack}>${icons.arrowLeft} ${t("chat.backgroundTasks.backToTasks")}</button>` : nothing}
         <div class="sidebar-title" title=${title}>${title}</div>
         ${
           task

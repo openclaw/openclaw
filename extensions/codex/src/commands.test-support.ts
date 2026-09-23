@@ -1,4 +1,6 @@
+import path from "node:path";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
@@ -7,6 +9,7 @@ import {
   buildCodexSupervisionTestConnectionFingerprint,
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
+import { handleCodexCommand as dispatchCodexCommand } from "./command-dispatch.js";
 import type { CodexCommandDepsOverride } from "./command-handlers.js";
 
 export function createContext(
@@ -146,4 +149,41 @@ export function expectedDiagnosticsTargetBlock(params: {
     `Codex thread id: \`${params.threadId}\``,
     `Inspect locally: \`codex resume ${params.threadId}\``,
   ];
+}
+
+export async function createCodexRuntimeContextOverrides(
+  tempDir: string,
+  sessionKey = "agent:main:test:codex-compact",
+): Promise<{
+  config: PluginCommandContext["config"];
+  sessionKey: string;
+  sessionTarget: NonNullable<PluginCommandContext["sessionTarget"]>;
+}> {
+  const storePath = path.join(tempDir, "codex-runtime-sessions.json");
+  await upsertSessionEntry({
+    storePath,
+    sessionKey,
+    entry: {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      agentHarnessId: "codex",
+    },
+  });
+  return {
+    config: { session: { store: storePath } },
+    sessionKey,
+    sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
+  };
+}
+
+export function runCommand(
+  args: string,
+  deps: Partial<CodexCommandDeps> = {},
+  context: Partial<PluginCommandContext> = {},
+  options: Omit<Parameters<typeof dispatchCodexCommand>[1], "deps"> = {},
+) {
+  return dispatchCodexCommand(createContext(args, undefined, context), {
+    ...options,
+    deps: createDeps(deps),
+  });
 }

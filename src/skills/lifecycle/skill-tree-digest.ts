@@ -51,3 +51,34 @@ export async function digestClawHubSkillTree(skillDir: string): Promise<string> 
   const entries = await collectEntries(skillDir);
   return `sha256:${sha256Hex(JSON.stringify(entries))}`;
 }
+
+/** File fingerprints captured before a ClawHub update or removal. */
+export type ClawHubSkillFileState = {
+  slug: string;
+  skillFilePath: string;
+  skillFileSha256: string;
+  fileTreeSha256: string;
+};
+
+export async function checkClawHubSkillPlanAtPath(
+  plan: ClawHubSkillFileState,
+  skillDir: string,
+  readFile: typeof fs.readFile = fs.readFile,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const stat = await fs.lstat(skillDir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during update.` };
+    }
+    const content = await readFile(path.join(skillDir, plan.skillFilePath));
+    if (
+      sha256Hex(content) !== plan.skillFileSha256 ||
+      (await digestClawHubSkillTree(skillDir)) !== plan.fileTreeSha256
+    ) {
+      return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during update.` };
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: String(error) };
+  }
+}

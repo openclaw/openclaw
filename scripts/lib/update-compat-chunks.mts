@@ -7,6 +7,12 @@ import {
   isUpdateCompatibilityChunk,
   UPDATE_COMPATIBILITY_CHUNK_HEADER,
 } from "./update-compat-contract.mjs";
+import {
+  ModuleGraph,
+  parseModule,
+  type UpdateCompatibilityOrigin,
+} from "./update-compat-module-graph.mts";
+import { isUpdateSourceScriptImport } from "./update-compat-source-imports.mts";
 
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
 export const UPDATE_COMPATIBILITY_INVENTORY_FILE = "update-compat-inventory.json";
@@ -50,7 +56,6 @@ const COALESCED_REGISTRY_RELEASES = [
   },
 ];
 
-type UpdateCompatibilityOrigin = { module: string; symbol: string };
 type UpdateCompatibilityChunk = {
   path: string;
   imports: Array<{ importer: string; owner: string; exports: string[] }>;
@@ -66,19 +71,6 @@ export type UpdateCompatibilityRelease = {
 export type UpdateCompatibilityInventory = {
   schemaVersion: 1;
   releases: UpdateCompatibilityRelease[];
-};
-
-type Binding = { file: string; symbol: string } | { local: string };
-type ModuleBinding = {
-  file: string;
-  symbol: string;
-  origin: UpdateCompatibilityOrigin | undefined;
-};
-type ModuleInfo = {
-  imports: Map<string, Binding>;
-  exports: Map<string, Binding>;
-  stars: string[];
-  declarations: Map<string, UpdateCompatibilityOrigin | undefined>;
 };
 
 function portable(value: string): string {
@@ -113,216 +105,6 @@ function ownerAt(source: string, offset: number): string | undefined {
     owner = match[1];
   }
   return owner;
-}
-
-function parseModule(file: string, source: string): ts.SourceFile {
-  const ts = getTypeScript();
-  return ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-}
-
-function namedBinding(node: ts.BindingName): string[] {
-  const ts = getTypeScript();
-  if (ts.isIdentifier(node)) {
-    return [node.text];
-  }
-  return node.elements.flatMap((element) =>
-    ts.isBindingElement(element) ? namedBinding(element.name) : [],
-  );
-}
-
-function inspectModule(file: string, source: string, sourceModule?: string): ModuleInfo {
-  const ts = getTypeScript();
-  const info: ModuleInfo = {
-    imports: new Map(),
-    exports: new Map(),
-    stars: [],
-    declarations: new Map(),
-  };
-  const target = (specifier: string) => {
-    const resolved = path.resolve(path.dirname(file), specifier);
-    return sourceModule === undefined
-      ? resolved
-      : resolved.replace(/\.js$/, ".ts").replace(/\.mjs$/, ".mts");
-  };
-  const regions = [...source.matchAll(/^\/\/#region (.+)$/gm)];
-  let regionIndex = 0;
-  let regionOwner: string | undefined;
-  for (const statement of parseModule(file, source).statements) {
-    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
-      const clause = statement.importClause;
-      const importedFile = target(statement.moduleSpecifier.text);
-      if (clause?.name) {
-        info.imports.set(clause.name.text, { file: importedFile, symbol: "default" });
-      }
-      if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
-        for (const element of clause.namedBindings.elements) {
-          info.imports.set(element.name.text, {
-            file: importedFile,
-            symbol: (element.propertyName ?? element.name).text,
-          });
-        }
-      }
-    }
-    if (ts.isExportDeclaration(statement)) {
-      const from =
-        statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)
-          ? target(statement.moduleSpecifier.text)
-          : undefined;
-      if (!statement.exportClause && from) {
-        info.stars.push(from);
-      }
-      if (statement.exportClause && ts.isNamedExports(statement.exportClause)) {
-        for (const element of statement.exportClause.elements) {
-          const symbol = (element.propertyName ?? element.name).text;
-          info.exports.set(element.name.text, from ? { file: from, symbol } : { local: symbol });
-        }
-      }
-    }
-    const names = ts.isVariableStatement(statement)
-      ? statement.declarationList.declarations.flatMap((declaration) =>
-          namedBinding(declaration.name),
-        )
-      : (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name
-        ? [statement.name.text]
-        : [];
-    while (regionIndex < regions.length) {
-      const region = regions[regionIndex];
-      if (!region || region.index >= statement.getStart()) {
-        break;
-      }
-      regionOwner = region[1];
-      regionIndex += 1;
-    }
-    const owner = sourceModule ?? regionOwner;
-    for (const symbol of names) {
-      info.declarations.set(symbol, owner ? { module: owner, symbol } : undefined);
-      if (
-        ts.canHaveModifiers(statement) &&
-        ts
-          .getModifiers(statement)
-          ?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
-      ) {
-        info.exports.set(symbol, { local: symbol });
-      }
-    }
-    if (ts.isExportAssignment(statement) && ts.isIdentifier(statement.expression)) {
-      info.exports.set("default", { local: statement.expression.text });
-    }
-  }
-  return info;
-}
-
-class ModuleGraph {
-  private modules = new Map<string, ModuleInfo>();
-  private sourceDir: string | undefined;
-
-  constructor(sourceDir?: string) {
-    this.sourceDir = sourceDir;
-  }
-
-  info(file: string): ModuleInfo {
-    let info = this.modules.get(file);
-    if (!info) {
-      info = inspectModule(
-        file,
-        fs.readFileSync(file, "utf8"),
-        this.sourceDir === undefined ? undefined : portable(path.relative(this.sourceDir, file)),
-      );
-      this.modules.set(file, info);
-    }
-    return info;
-  }
-
-  private exportedNames(file: string, seen = new Set<string>()): string[] {
-    if (seen.has(file)) {
-      return [];
-    }
-    seen.add(file);
-    const info = this.info(file);
-    return [
-      ...new Set([
-        ...info.exports.keys(),
-        ...info.stars.flatMap((star) =>
-          this.exportedNames(star, seen).filter((name) => name !== "default"),
-        ),
-      ]),
-    ].toSorted();
-  }
-
-  names(file: string): string[] {
-    return this.exportedNames(file).filter((name) => this.resolveExport(file, name).length === 1);
-  }
-
-  private resolveLocal(file: string, symbol: string, seen: Set<string>): ModuleBinding[] {
-    const key = `local:${file}:${symbol}`;
-    if (seen.has(key)) {
-      return [];
-    }
-    const next = new Set(seen).add(key);
-    const info = this.info(file);
-    const imported = info.imports.get(symbol);
-    if (imported && "file" in imported) {
-      return this.resolveExport(imported.file, imported.symbol, next);
-    }
-    return info.declarations.has(symbol)
-      ? [{ file, symbol, origin: info.declarations.get(symbol) }]
-      : [];
-  }
-
-  private resolveExport(file: string, symbol: string, seen = new Set<string>()): ModuleBinding[] {
-    const key = `export:${file}:${symbol}`;
-    if (seen.has(key)) {
-      return [];
-    }
-    const next = new Set(seen).add(key);
-    const info = this.info(file);
-    const binding = info.exports.get(symbol);
-    if (binding && "file" in binding) {
-      return this.resolveExport(binding.file, binding.symbol, next);
-    }
-    if (binding && "local" in binding) {
-      return this.resolveLocal(file, binding.local, next);
-    }
-    if (symbol === "default") {
-      return [];
-    }
-    const matches = new Map<string, ModuleBinding>();
-    for (const star of info.stars) {
-      for (const resolved of this.resolveExport(star, symbol, next)) {
-        // ESM compares declaration bindings, not their source-map annotations.
-        matches.set(`${resolved.file}:${resolved.symbol}`, resolved);
-      }
-    }
-    return [...matches.values()];
-  }
-
-  private singleBinding(
-    file: string,
-    symbol: string,
-    bindings: ModuleBinding[],
-  ): ModuleBinding | undefined {
-    if (bindings.length > 1) {
-      throw new Error(
-        `Ambiguous export ${file}:${symbol}; conflicting sources: ${bindings
-          .map((binding) => `${binding.file}:${binding.symbol}`)
-          .toSorted()
-          .join(", ")}`,
-      );
-    }
-    return bindings[0];
-  }
-
-  binding(file: string, symbol: string): ModuleBinding | undefined {
-    return this.singleBinding(file, symbol, this.resolveExport(file, symbol));
-  }
-
-  origin(file: string, symbol: string): UpdateCompatibilityOrigin | undefined {
-    return this.binding(file, symbol)?.origin;
-  }
-
-  localOrigin(file: string, symbol: string): UpdateCompatibilityOrigin | undefined {
-    return this.singleBinding(file, symbol, this.resolveLocal(file, symbol, new Set()))?.origin;
-  }
 }
 
 function consumedExports(node: ts.CallExpression): string[] | undefined {
@@ -416,6 +198,9 @@ export function recordUpdateCompatibilityRelease(params: {
         if (owner && POST_SWAP_OWNER.test(owner) && owner !== "src/cli/update-cli/wizard.ts") {
           const specifier = node.arguments[0];
           if (!specifier || !ts.isStringLiteralLike(specifier)) {
+            if (isUpdateSourceScriptImport(owner, node)) {
+              return;
+            }
             throw new Error(`Nonliteral post-swap import in ${file}: ${node.getText()}`);
           }
           if (specifier.text.startsWith(".")) {
@@ -697,7 +482,7 @@ export function writeUpdateCompatibilityChunks(params: {
     for (const exported of graph.names(file)) {
       const binding = graph.binding(file, exported);
       const origin = binding?.origin;
-      if (!binding || !origin) {
+      if (!binding || binding.kind !== "file" || !origin) {
         continue;
       }
       const key = `${origin.module}:${origin.symbol}`;

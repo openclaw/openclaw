@@ -3,6 +3,12 @@ import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
 import { expect, it } from "vitest";
 
+const components = [
+  "scripts/pr",
+  "scripts/pr-lib",
+  ...readFileSync("scripts/pr-lib/wrapper-components.txt", "utf8").trim().split("\n"),
+];
+
 it.each([
   "src/infra/sqlite-coordinator.ts",
   "src/plugins/discovery.ts",
@@ -11,11 +17,6 @@ it.each([
   "retains %s and its relative ESM runtime dependencies in the wrapper inventory",
   (entrypoint) => {
     const root = process.cwd();
-    const components = [
-      "scripts/pr",
-      "scripts/pr-lib",
-      ...readFileSync("scripts/pr-lib/wrapper-components.txt", "utf8").trim().split("\n"),
-    ];
     const pending = [entrypoint];
     const visited = new Set<string>();
     const missing = new Set<string>();

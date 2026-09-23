@@ -8,7 +8,7 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
-  resolveAgentExplicitModelPrimary,
+  resolveAgentNativeModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
@@ -293,7 +293,7 @@ export async function modelsStatusCommand(
   const agentId = explicitAgentId ? workspaceAgentId : undefined;
   const workspaceDir =
     resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
-  const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
+  const agentModelPrimary = agentId ? resolveAgentNativeModelPrimary(cfg, agentId) : undefined;
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)
     : undefined;

@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import * as cli from "./cli-shared.js";
-import { resolveMatrixAccount } from "./matrix/accounts.js";
+import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
 import type { MatrixDirectRoomCandidate } from "./matrix/direct-management.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
@@ -113,7 +113,7 @@ async function repairMatrixDirectRoom(params: {
   userId: string;
 }): Promise<MatrixCliDirectRoomRepair> {
   const cfg = getMatrixRuntime().config.current() as CoreConfig;
-  const account = resolveMatrixAccount({ cfg, accountId: params.accountId });
+  const accountConfig = resolveMatrixAccountConfig({ cfg, accountId: params.accountId });
   const [{ withStartedActionClient }, { repairMatrixDirectRooms }] = await Promise.all([
     loadMatrixActionClientModule(),
     loadMatrixDirectManagementModule(),
@@ -122,7 +122,7 @@ async function repairMatrixDirectRoom(params: {
     const repaired = await repairMatrixDirectRooms({
       client,
       remoteUserId: params.userId,
-      encrypted: account.config.encryption === true,
+      encrypted: accountConfig.encryption === true,
     });
     return {
       accountId: params.accountId,
@@ -132,7 +132,7 @@ async function repairMatrixDirectRoom(params: {
       mappedRooms: repaired.mappedRooms.map(toCliDirectRoomCandidate),
       discoveredStrictRoomIds: repaired.discoveredStrictRoomIds,
       activeRoomId: repaired.activeRoomId,
-      encrypted: account.config.encryption === true,
+      encrypted: accountConfig.encryption === true,
       createdRoomId: repaired.createdRoomId,
       changed: repaired.changed,
       directContentBefore: repaired.directContentBefore,

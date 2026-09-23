@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements tool coverage report behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   isRecord,

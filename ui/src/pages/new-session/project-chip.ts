@@ -1,10 +1,12 @@
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import type {
   ProjectRecord,
   ProjectRecent,
   RemoteProject,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../components/icons.ts";
+import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { renderSessionMenuItem } from "./cloud-target.ts";
@@ -84,6 +86,7 @@ export function resolveProjectChip(params: {
 }
 
 export function renderProjectChip(params: {
+  idPrefix?: string;
   state: ProjectChipState;
   browseAvailable: boolean;
   isAdmin: boolean;
@@ -166,7 +169,7 @@ export function renderProjectChip(params: {
   return html`
     <span class="new-session-page__select">
       <button
-        id="new-session-project-trigger"
+        id=${(params.idPrefix ?? "new-session") + "-project-trigger"}
         type="button"
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
@@ -195,8 +198,9 @@ export function renderProjectChip(params: {
       </button>
     </span>
     <wa-popover
+      ${ref(syncPopoverLabel)}
       class="new-session-page__select new-session-page__project-popover new-session-page__picker-popover"
-      for="new-session-project-trigger"
+      for=${(params.idPrefix ?? "new-session") + "-project-trigger"}
       placement="bottom-start"
       without-arrow
       @wa-show=${params.onPopoverShow}
@@ -207,7 +211,7 @@ export function renderProjectChip(params: {
         params.browserOpen
           ? renderPlaceBrowser({
               browser: params.browser,
-              id: "new-session-place-browser",
+              id: (params.idPrefix ?? "new-session") + "-place-browser",
               label: params.gatewayLabel,
               registerProjectPath: params.registerProjectPath,
               registeringProject: params.registeringProject,

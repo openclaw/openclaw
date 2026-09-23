@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements qa channel transport behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaBusState } from "./bus-state.js";
 import { getQaProvider } from "./providers/index.js";

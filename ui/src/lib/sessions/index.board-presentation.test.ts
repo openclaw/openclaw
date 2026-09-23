@@ -40,6 +40,7 @@ function acknowledgement(
     entry: {
       sessionId,
       updatedAt: 20,
+      boardFace: "dashboard",
       ...(presentation ? { boardPresentation: presentation } : {}),
     },
   };
@@ -90,14 +91,14 @@ function createPresentationHarness(row = initial) {
 }
 
 describe("session capability dashboard default acknowledgements", () => {
-  it("publishes acknowledged presentation to primary and dashboard lists without changing pin/read fields", async () => {
-    const h = createPresentationHarness();
+  it("publishes the acknowledged opening face and presentation to primary and dashboard lists", async () => {
+    const h = createPresentationHarness({ ...initial, boardFace: "chat" });
     const query = { agentId: "main", hasBoard: true, archivedFilter: "all" as const };
     await h.sessions.refresh({ agentId: "main", force: true });
     await h.sessions.refreshList({ ...query, force: true });
     const operation = h.sessions.patch(
       key,
-      { boardPresentation: "expanded" },
+      { boardFace: "dashboard", boardPresentation: "expanded" },
       {
         agentId: "main",
         expectedSessionId: sessionId,
@@ -111,6 +112,7 @@ describe("session capability dashboard default acknowledgements", () => {
       key,
       agentId: "main",
       expectedSessionId: sessionId,
+      boardFace: "dashboard",
       boardPresentation: "expanded",
     });
     h.patchReply.resolve(acknowledgement("expanded"));
@@ -118,6 +120,7 @@ describe("session capability dashboard default acknowledgements", () => {
     for (const result of [h.sessions.state.result, h.sessions.listSnapshot(query).result]) {
       expect(result?.sessions[0]).toMatchObject({
         sessionId,
+        boardFace: "dashboard",
         boardPresentation: "expanded",
         pinned: true,
         pinnedAt: 5,
@@ -198,12 +201,16 @@ describe("session capability dashboard default acknowledgements", () => {
       },
     );
     expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
-    h.sessions.reconcileChanged({
-      ...initial,
-      sessionKey: key,
-      reason: "patch",
-      updatedAt: 30,
-      boardPresentation: "split",
+    h.emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        ...initial,
+        sessionKey: key,
+        reason: "patch",
+        updatedAt: 30,
+        boardPresentation: "split",
+      },
     });
     h.patchReply.resolve(acknowledgement("expanded"));
     await operation;

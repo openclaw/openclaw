@@ -49,18 +49,11 @@ describe("buildControlUiCspHeader", () => {
     expect(invalid).not.toContain("https://example.test");
   });
 
-  it("limits image loading to local sources and the Gravatar fallback origin", () => {
+  it("allows HTTPS image previews alongside local sources", () => {
     const csp = buildControlUiCspHeader();
     const imgSrc = csp.split("; ").find((directive) => directive.startsWith("img-src "));
-    expect(imgSrc?.split(" ")).toEqual([
-      "img-src",
-      "'self'",
-      "data:",
-      "blob:",
-      "https://gravatar.com",
-      "https://avatars.githubusercontent.com",
-    ]);
-    expect(imgSrc?.split(" ")).not.toContain("https:");
+    expect(imgSrc?.split(" ")).toEqual(["img-src", "'self'", "data:", "blob:", "https:"]);
+    expect(imgSrc?.split(" ")).not.toContain("http:");
   });
 
   it("allows same-origin and inline audio/video playback", () => {

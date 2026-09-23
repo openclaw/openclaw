@@ -1,5 +1,9 @@
 // Covers gateway restart process and supervisor paths.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  isGatewayWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { captureFullEnv, withEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
@@ -37,9 +41,11 @@ vi.mock("../config/paths.js", () => ({
 const { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
   await import("./restart-stale-pids.js");
 const {
+  consumeGatewayRestartAuthorization,
   normalizeGatewayRestartDelayMs,
+  requestGatewayRestartWithSignalAdmission,
   resetGatewayRestartStateForInProcessRestart,
-  scheduleGatewaySigusr1Restart,
+  scheduleGatewayRestart,
   triggerOpenClawRestart,
 } = await import("./restart.js");
 
@@ -264,7 +270,33 @@ describe("triggerOpenClawRestart", () => {
   });
 });
 
-describe("gateway restart delay normalization", () => {
+describe("gateway restart delivery and delay", () => {
+  it.each(["linux", "darwin"] as const)(
+    "rejects restart without signaling an embedded %s host that has no restart handler",
+    (platform) => {
+      mockProcessPlatform(platform);
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const listeners = process.listeners("SIGUSR2");
+      process.removeAllListeners("SIGUSR2");
+      resetGatewayRestartStateForInProcessRestart();
+      resetGatewayWorkAdmission();
+      try {
+        expect(requestGatewayRestartWithSignalAdmission("embedded-host")).toEqual({
+          status: "failed",
+        });
+        expect(killSpy).not.toHaveBeenCalled();
+        expect(consumeGatewayRestartAuthorization()).toBe(false);
+        expect(isGatewayWorkAdmissionClosed()).toBe(false);
+      } finally {
+        for (const listener of listeners) {
+          process.on("SIGUSR2", listener);
+        }
+        resetGatewayRestartStateForInProcessRestart();
+        resetGatewayWorkAdmission();
+      }
+    },
+  );
+
   it.each([
     { requested: undefined, effective: 2000 },
     { requested: Number.NaN, effective: 2000 },
@@ -280,7 +312,7 @@ describe("gateway restart delay normalization", () => {
     vi.useFakeTimers();
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     try {
-      const restart = scheduleGatewaySigusr1Restart({
+      const restart = scheduleGatewayRestart({
         delayMs: 2_147_153_648,
         skipCooldown: true,
       });

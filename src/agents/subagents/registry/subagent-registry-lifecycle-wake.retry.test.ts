@@ -35,6 +35,7 @@ vi.mock("./subagent-registry-lifecycle-delivery.js", () => ({
 }));
 vi.mock("../completion/subagent-completion-admission.store.js", () => ({
   blockSubagentCompletionDelivery: vi.fn(),
+  settleRequesterCompletionBatch: vi.fn(),
 }));
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntimeForSessionKey: vi.fn(),
@@ -44,9 +45,6 @@ vi.mock("../../internal-session-effects.js", () => ({
 }));
 vi.mock("../requester-cron-authority.js", () => ({
   revokeRequesterCronAuthorityBatch: vi.fn(),
-}));
-vi.mock("./subagent-registry-memory.js", () => ({
-  subagentRuns: { confirmRetirement: vi.fn() },
 }));
 vi.mock("../../../runtime.js", () => ({ defaultRuntime: { log: vi.fn() } }));
 vi.mock("../../../logging/subsystem.js", () => ({
@@ -82,7 +80,12 @@ describe("requester settle retry lifetime", () => {
         createdAt: 1_000,
         execution: { status: "terminal", endedAt: 4_000 },
         expectsCompletionMessage: false,
-        requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          rearmGeneration: 1,
+          progressOperationId: "retained-progress-receipt",
+        },
       };
       const runs = new Map([[entry.runId, entry]]);
       const persistedWakes: Array<SubagentRunRecord["requesterSettleWake"]> = [];
@@ -139,7 +142,13 @@ describe("requester settle retry lifetime", () => {
           expect(getActiveGatewayRootWorkCount()).toBe(0);
         });
         expect(persistedWakes).toEqual([
-          { status: "pending", attemptCount: 1, nextAttemptAt: 11_000, rearmGeneration: 1 },
+          {
+            status: "pending",
+            attemptCount: 1,
+            nextAttemptAt: 11_000,
+            rearmGeneration: 1,
+            progressOperationId: "retained-progress-receipt",
+          },
         ]);
         await origin.drain();
         expect(origin.signal.aborted).toBe(true);

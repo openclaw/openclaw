@@ -10,6 +10,10 @@ import {
   readWorkerProjectSetupRecipe,
   readWorkerProjectSnapshot,
 } from "./project-preparation.js";
+import {
+  createProjectPreparationFixture,
+  runProjectScriptWithGitProbe,
+} from "./project-preparation.test-support.js";
 import { createProjectSetupScript } from "./project-setup-script.js";
 import { prepareWorkerProjectSnapshot, workerProjectSeedKey } from "./workspace-git-base.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
@@ -25,88 +29,8 @@ function expectSetupProcessStopped(pid: number) {
   expect(state === "" || state.startsWith("Z")).toBe(true);
 }
 
-async function fixture(setup?: string, symlink = false) {
-  const root = await fs.realpath(tempDirs.make("project-preparation-"));
-  const repository = path.join(root, "repository");
-  const home = path.join(root, "worker-home");
-  await fs.mkdir(repository);
-  await fs.mkdir(home);
-  await requireGit(repository, ["init", "--quiet"]);
-  await requireGit(repository, ["config", "user.name", "Project Test"]);
-  await requireGit(repository, ["config", "user.email", "project@example.invalid"]);
-  await requireGit(repository, ["config", "commit.gpgsign", "false"]);
-  await fs.writeFile(path.join(repository, "input.txt"), "prepared base\n");
-  if (symlink) {
-    await fs.symlink("input.txt", path.join(repository, "linked-input"));
-  }
-  if (setup) {
-    await fs.mkdir(path.join(repository, ".openclaw"));
-    await fs.writeFile(path.join(repository, ".openclaw", "worktree-setup.sh"), setup, {
-      mode: 0o755,
-    });
-    await fs.writeFile(path.join(repository, ".gitignore"), "build/\n");
-  }
-  await requireGit(repository, ["add", "."]);
-  await requireGit(repository, ["commit", "--quiet", "-m", "base"]);
-  const project = (await prepareWorkerProjectSnapshot({
-    localPath: repository,
-    namespace: "gateway",
-  }))!;
-  const runScript = vi.fn(async (script: string) =>
-    execFileSync("sh", ["-c", script], {
-      env: { ...process.env, HOME: home, PREPARATION_UNRELATED_ENV: "must-not-forward" },
-      encoding: "utf8",
-      timeout: 30_000,
-      stdio: ["ignore", "pipe", "pipe"],
-    }),
-  );
-  const upload = vi.fn(async (source: string, destination: string) => {
-    uploadBytes.push((await fs.stat(source)).size);
-    await fs.copyFile(source, destination);
-  });
-  const uploadBytes: number[] = [];
-  const operation = (requireCurrent = () => {}) =>
-    createWorkerProjectPreparation({ project, namespace: "gateway", requireCurrent });
-  const seed = path.join(
-    home,
-    ".openclaw-worker",
-    "git-seeds",
-    "gateway",
-    workerProjectSeedKey(project),
-  );
-  const preparedOperation = async (
-    requireCurrent = () => {},
-    options: { project?: typeof project; key?: string; cacheKey?: string } = {},
-  ) => {
-    const snapshot = options.project ?? project;
-    return createWorkerProjectPreparation({
-      project: snapshot,
-      namespace: "gateway",
-      preparation: {
-        purpose: "session",
-        demandAtMs: 1_000,
-        key: options.key ?? "a".repeat(64),
-        cacheKey: options.cacheKey ?? "c".repeat(64),
-        setupRecipe: await readWorkerProjectSetupRecipe(snapshot),
-      },
-      setupAuthorized: true,
-      requireCurrent,
-    });
-  };
-  return {
-    repository,
-    home,
-    project,
-    seed,
-    operation,
-    preparedOperation,
-    runScript,
-    runScriptWithBudget(createScript: (timeoutMs: number) => string) {
-      return this.runScript(createScript(30_000));
-    },
-    upload,
-    uploadBytes,
-  };
+function fixture(setup?: string, symlink = false) {
+  return createProjectPreparationFixture(tempDirs.make("project-preparation-"), setup, symlink);
 }
 
 describe("project checkout preparation", () => {
@@ -324,6 +248,25 @@ printf 'setup\\n' >> "$HOME/count"
     expect(manifest.entries.some((entry) => entry.path.startsWith("build/"))).toBe(false);
     const second = await f.preparedOperation();
     f.runScript.mockClear();
+    const slowVerification = vi.fn<Parameters<typeof runProjectScriptWithGitProbe>[2]>(
+      (args, options) => {
+        if (args[2] === "fsck" && (options.timeout ?? Infinity) < 45_000) {
+          return {
+            pid: 0,
+            output: [],
+            stdout: "",
+            stderr: "",
+            status: null,
+            signal: "SIGTERM" as const,
+            error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }),
+          };
+        }
+        return undefined;
+      },
+    );
+    f.runScript.mockImplementationOnce((script) =>
+      runProjectScriptWithGitProbe(script, f.home, slowVerification),
+    );
     expect(result.captureRequired).toBe(true);
     const reused = await second.project.prepare(f);
     expect(reused).toEqual({
@@ -334,10 +277,54 @@ printf 'setup\\n' >> "$HOME/count"
     expect(reused.captureRequired).toBeUndefined();
     second.close();
     expect(f.runScript).toHaveBeenCalledTimes(1);
+    expect(slowVerification.mock.calls.some(([args]) => args[2] === "fsck")).toBe(true);
     expect(await fs.readFile(path.join(prepared.homeDir, "count"), "utf8")).toBe("setup\n");
     expect(f.upload).toHaveBeenCalledTimes(1);
     await fs.writeFile(path.join(prepared.workspaceDir, "linked-input"), "session edit\n");
     expect(await fs.readFile(path.join(f.seed, "input.txt"), "utf8")).toBe("prepared base\n");
+  });
+
+  it("reports Git failure causes without exposing command output or paths", async () => {
+    const f = await fixture();
+    const first = await f.preparedOperation();
+    await first.project.prepare(f);
+    first.close();
+    for (const [failure, detail] of [
+      [
+        { status: null, error: Object.assign(new Error("private command"), { code: "ETIMEDOUT" }) },
+        "timed out after 600000 ms",
+      ],
+      [
+        { error: Object.assign(new Error("private command"), { code: "ENOBUFS" }) },
+        "output exceeded 262144 bytes",
+      ],
+      [{ error: Object.assign(new Error("private command"), { code: "ENOENT" }) }, "ENOENT"],
+      [{ status: 128 }, "exit 128"],
+      [{ status: null, signal: "SIGKILL" as const }, "signal SIGKILL"],
+    ] as const) {
+      const operation = await f.preparedOperation();
+      f.runScript.mockImplementationOnce((script) =>
+        runProjectScriptWithGitProbe(script, f.home, (args) =>
+          args[2] === "fsck"
+            ? {
+                pid: 0,
+                output: [],
+                status: 0,
+                signal: null,
+                stdout: "private output",
+                stderr: "private repository path",
+                ...failure,
+              }
+            : undefined,
+        ),
+      );
+      await expect(operation.project.prepare(f)).rejects.toThrow(
+        new Error(`Prepared project Git verification failed (git fsck: ${detail})`),
+      );
+      expect(operation.getPreparedWorkspace()).toBeUndefined();
+      operation.close();
+    }
+    expect(f.upload).toHaveBeenCalledTimes(1);
   });
 
   it("inspects enrolled completion without repeating setup, transfer, or blessing later edits", async () => {
@@ -444,9 +431,19 @@ cat input.txt >> "$HOME/count"
     await requireGit(f.repository, ["add", "generated"]);
     await requireGit(f.repository, ["commit", "--quiet", "-am", "B"]);
     const b = await snapshot();
+    const retainedChecks: string[] = [];
+    f.runScript.mockImplementation((script) =>
+      runProjectScriptWithGitProbe(script, f.home, (args) => {
+        if (args[1] === preparedA.workspaceDir && args[2] === "fsck") {
+          retainedChecks.push(args.at(-1)!);
+        }
+        return undefined;
+      }),
+    );
     const second = await f.preparedOperation(undefined, { project: b, key: "b".repeat(64) });
     const preparedB = (await second.project.prepare(f)).preparedWorkspace!;
     second.close();
+    expect(retainedChecks).toEqual([a.baseCommit]);
     expect(preparedB).toMatchObject({
       workspaceDir: preparedA.workspaceDir,
       homeDir: preparedA.homeDir,
@@ -485,6 +482,7 @@ cat input.txt >> "$HOME/count"
     const third = await f.preparedOperation(undefined, { project: a });
     expect((await third.project.prepare(f)).preparedWorkspace).toEqual(preparedA);
     third.close();
+    expect(retainedChecks).toEqual([a.baseCommit, b.baseCommit]);
     expect(f.uploadBytes).toHaveLength(2);
     expect(await fs.readFile(path.join(preparedA.homeDir, "count"), "utf8")).toBe(
       "prepared base\nchanged B\nprepared base\n",

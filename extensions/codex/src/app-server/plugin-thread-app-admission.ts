@@ -98,7 +98,7 @@ export function collectCodexPluginOwnedAppIds(inventory: CodexPluginInventory): 
 export function collectCodexReservedPluginAppIds(params: {
   policy: ResolvedCodexPluginsPolicy;
   inventory: CodexPluginInventory;
-  accountApps: readonly v2.AppInfo[];
+  accountApps: CodexAppInventorySnapshot["apps"];
 }): Set<string> {
   const reserved = new Set(
     params.inventory.records
@@ -140,7 +140,8 @@ export async function readCodexThreadAdmissibleAccountApps(
   params: CodexPluginThreadAppAdmissionParams,
   appCache: CodexAppInventoryCache,
 ): Promise<{
-  apps: v2.AppInfo[];
+  apps: CodexAppInventorySnapshot["apps"];
+  installedApps: CodexAppInventorySnapshot["installedApps"];
   diagnostic?: CodexPluginThreadAppAdmissionDiagnostic;
 }> {
   // Account-wide policy must use a complete snapshot; a targeted plugin read
@@ -163,6 +164,7 @@ export async function readCodexThreadAdmissibleAccountApps(
   if (!snapshot) {
     return {
       apps: [],
+      installedApps: [],
       diagnostic: {
         code: "account_app_inventory_unavailable",
         message: "Codex account app inventory was unavailable; account apps were not exposed.",
@@ -175,21 +177,25 @@ export async function readCodexThreadAdmissibleAccountApps(
       .filter(
         (app) =>
           resolveCodexInstalledAppThreadAdmission(
-            toCodexPluginOwnedAccountApp(app),
+            toCodexPluginOwnedAccountApp(app, installedAppsById.get(app.id)),
             installedAppsById.get(app.id),
           ) !== "blocked",
       )
       .toSorted((left, right) => left.id.localeCompare(right.id)),
+    installedApps: snapshot.installedApps,
   };
 }
 
-export function toCodexPluginOwnedAccountApp(app: v2.AppInfo): CodexPluginOwnedApp {
+export function toCodexPluginOwnedAccountApp(
+  app: CodexAppInventorySnapshot["apps"][number],
+  installedApp: v2.InstalledApp | undefined,
+): CodexPluginOwnedApp {
   return {
     id: app.id,
     name: app.name,
-    accessible: app.isAccessible,
-    enabled: app.isEnabled,
-    needsAuth: !app.isAccessible,
+    accessible: true,
+    enabled: installedApp?.enabled ?? false,
+    needsAuth: false,
     ...resolveOwnedAppApprovalOverrideKeys(app),
   };
 }

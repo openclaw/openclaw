@@ -3,6 +3,19 @@ import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
+export {
+  EnvironmentsSessionCreateParamsSchema,
+  EnvironmentsSessionStatusParamsSchema,
+  EnvironmentsSessionDestroyParamsSchema,
+  type EnvironmentsSessionCreateParams,
+  type EnvironmentsSessionStatusParams,
+  type EnvironmentsSessionDestroyParams,
+} from "./environments-session.js";
+export {
+  EnvironmentsSessionExecParamsSchema,
+  type EnvironmentsSessionExecParams,
+} from "./environments-session-exec.js";
+
 /**
  * Environment inventory protocol schemas.
  *
@@ -150,11 +163,24 @@ function createEnvironmentSummarySchema() {
 export const EnvironmentSummarySchema = closedObject({
   ...createEnvironmentSummaryProperties(),
   requiredNodeCommand: Type.Optional(RequiredNodeCommandSchema),
+  desktopSetup: Type.Optional(
+    closedObject({
+      state: Type.Union([
+        Type.Literal("ready"),
+        Type.Literal("needs-server"),
+        Type.Literal("unsupported"),
+        Type.Literal("managed"),
+      ]),
+      detail: Type.Optional(NonEmptyString),
+    }),
+  ),
 });
 
-/** Optional runtime scope for listing known environments. */
+/** Optional runtime scope or profile-only projection for environment discovery. */
 export const EnvironmentsListParamsSchema = closedObject({
   runtimeId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  projection: Type.Optional(Type.Literal("profiles")),
+  includeDesktopSetup: Type.Optional(Type.Boolean()),
 });
 
 /** Provider-authored machine choice for one configured worker profile. */
@@ -190,6 +216,9 @@ export const WorkerExecutionModeSchema = Type.Union([
 const WorkerEnvironmentProfileSummarySchema = closedObject({
   id: NonEmptyString,
   providerId: NonEmptyString,
+  providerDisplayId: Type.Optional(
+    Type.String({ pattern: "^[a-z][a-z0-9-]{0,63}(?![\\s\\S])", maxLength: 64 }),
+  ),
   trust: Type.Optional(EnvironmentTrustSchema),
   executionMode: Type.Optional(WorkerExecutionModeSchema),
   executionModes: Type.Optional(
@@ -204,7 +233,7 @@ const WorkerEnvironmentProfileSummarySchema = closedObject({
   ),
 });
 
-/** List response containing all gateway-visible environment summaries. */
+/** Profile-only requests leave environments empty without reading inventory. */
 export const EnvironmentsListResultSchema = closedObject({
   environments: Type.Array(EnvironmentSummarySchema),
   profiles: Type.Optional(Type.Array(WorkerEnvironmentProfileSummarySchema)),

@@ -208,10 +208,11 @@ function resolveScheduledMessageActionAccess(params: {
   if (!authority) {
     return undefined;
   }
-  authority.assertCurrent();
+  const assertCurrent = authority.assertSourceCurrent ?? authority.assertCurrent;
+  assertCurrent();
   const policy = authority.policy;
   if (policy.mode === "trusted") {
-    return { kind: "trusted-operator", assertCurrent: authority.assertCurrent };
+    return { kind: "trusted-operator", assertCurrent };
   }
   if (!params.accountId || normalizeAccountId(params.accountId) !== policy.ownerAccountId) {
     throw new Error(
@@ -231,7 +232,7 @@ function resolveScheduledMessageActionAccess(params: {
         "Scheduled Discord channel-edit requires its authenticated requester account and channel.",
       );
     }
-    return { kind: "account", channelRequester: requester, assertCurrent: authority.assertCurrent };
+    return { kind: "account", channelRequester: requester, assertCurrent };
   }
   const origin = policy.ownerOrigin;
   if (
@@ -243,7 +244,7 @@ function resolveScheduledMessageActionAccess(params: {
       `Scheduled ${params.channel}:${params.action} requires matching recorded creator origin.`,
     );
   }
-  return { kind: "account", assertCurrent: authority.assertCurrent };
+  return { kind: "account", assertCurrent };
 }
 
 function resolveMessageActionReadEnforcement(params: {
@@ -532,10 +533,10 @@ function enforceMessageActionConversationReadGate(
   );
 }
 
-function prepareScheduledMessageWriteContext(
+async function prepareScheduledMessageWriteContext(
   ctx: ChannelMessageActionDispatchContext,
   prepared: PreparedMessageActionReadContext,
-): ChannelMessageActionContext | undefined {
+): Promise<ChannelMessageActionContext | undefined> {
   const action = prepared.actionContext.action;
   const policy = SCHEDULED_MESSAGE_WRITE_POLICIES.get(action);
   if (!policy || !ctx.messageActionAuthorization?.scheduled) {
@@ -593,16 +594,16 @@ function prepareScheduledMessageWriteContext(
 }
 
 /** Admit provider preparation before resolving an external target. */
-export function prepareExternalMessageActionTargetForResolution(
+export async function prepareExternalMessageActionTargetForResolution(
   ctx: ChannelMessageActionDispatchContext,
-): {
+): Promise<{
   params: Record<string, unknown>;
   accountId?: string | null;
   assertReadAuthorityCurrent?: () => void;
   assertTargetAuthorityCurrent?: () => void;
-} {
+}> {
   const prepared = prepareMessageActionReadContext(ctx);
-  const scheduledWrite = prepared && prepareScheduledMessageWriteContext(ctx, prepared);
+  const scheduledWrite = prepared && (await prepareScheduledMessageWriteContext(ctx, prepared));
   if (scheduledWrite) {
     return {
       params: ctx.params,
@@ -674,7 +675,11 @@ export async function dispatchChannelMessageAction(
   if (!prepared) {
     return null;
   }
-  const scheduledWrite = prepareScheduledMessageWriteContext(ctx, prepared);
+  const scheduledWrite =
+    ctx.messageActionAuthorization?.scheduled &&
+    SCHEDULED_MESSAGE_WRITE_POLICIES.has(prepared.actionContext.action)
+      ? await prepareScheduledMessageWriteContext(ctx, prepared)
+      : undefined;
   const run = (actionContext: ChannelMessageActionContext) =>
     withChannelReadAuthority(prepared.assertReadAuthorityCurrent, async () => {
       const { plugin } = prepared;

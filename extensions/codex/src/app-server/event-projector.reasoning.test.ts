@@ -71,6 +71,34 @@ function commandItem(phase: "started" | "completed", id = "cmd-1"): ProjectorNot
 }
 
 describe("CodexAppServerEventProjector reasoning and guardian projection", () => {
+  it("preserves successful statusless native search results", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+    const item = {
+      id: "search-statusless",
+      type: "webSearch",
+      query: "sample",
+      action: { type: "search", query: "sample" },
+    };
+    await projector.handleNotification(forCurrentTurn("item/started", { item }));
+    await projector.handleNotification(forCurrentTurn("item/completed", { item }));
+    const events = onAgentEvent.mock.calls.map(([event]) => event);
+    expect(
+      events.find((event) => event.stream === "tool" && event.data.phase === "result")?.data,
+    ).toMatchObject({
+      isError: false,
+      result: { status: "completed", query: "sample" },
+    });
+    expect(
+      events.find(
+        (event) =>
+          event.stream === "item" &&
+          event.data.itemId === "tool:search-statusless" &&
+          event.data.phase === "end",
+      )?.data,
+    ).toMatchObject({ status: "completed" });
+  });
+
   it("projects guardian review lifecycle details into agent events", async () => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
@@ -509,6 +537,9 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
     const projector = await createProjector(params, { onContextCompacted });
 
     await projector.handleNotification(
+      forCurrentTurn("item/started", { item: { type: "reasoning", id: "reason-1" } }),
+    );
+    await projector.handleNotification(
       forCurrentTurn("item/reasoning/textDelta", { itemId: "reason-1", delta: "thinking" }),
     );
     await projector.handleNotification(
@@ -551,6 +582,31 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
       isReasoningSnapshot: true,
     });
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+    for (const itemId of ["reason-1", "compact-1"]) {
+      expect(onAgentEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stream: "item",
+          data: expect.objectContaining({
+            itemId,
+            kind: "analysis",
+            phase: "start",
+            hideFromChannelProgress: true,
+          }),
+        }),
+      );
+    }
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "item",
+        data: expect.objectContaining({
+          itemId: "compact-1",
+          kind: "analysis",
+          phase: "end",
+          status: "completed",
+          hideFromChannelProgress: true,
+        }),
+      }),
+    );
     expect(
       findPlanEventWithSteps(onAgentEvent, [{ step: "inspect", status: "pending" }]).steps,
     ).toEqual([{ step: "inspect", status: "pending" }]);

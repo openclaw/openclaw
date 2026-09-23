@@ -1,4 +1,3 @@
-// Slack plugin module implements context behavior.
 import type { App } from "@slack/bolt";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
@@ -12,7 +11,6 @@ import type {
   GroupPolicy,
 } from "openclaw/plugin-sdk/config-contracts";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { logVerbose, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -142,7 +140,6 @@ export type CreateSlackMonitorContextParams = {
 
 function createSlackMonitorContextFields(params: CreateSlackMonitorContextParams) {
   let identity = { teamId: params.teamId, apiAppId: params.apiAppId };
-  const channelHistories = new Map<string, HistoryEntry[]>();
   const logger = getChildLogger({ module: "slack-auto-reply" });
   const channelCache = new Map<string, SlackChannelCacheEntry>();
   const userCache = new Map<string, { name?: string; imageUrl?: string }>();
@@ -348,12 +345,12 @@ function createSlackMonitorContextFields(params: CreateSlackMonitorContextParams
       runtime: params.runtime,
     });
     if (!updated.ok || p.status !== "processing" || !p.threadTs || p.title === undefined) {
-      return;
+      return updated.ok;
     }
     const title = truncateUtf16Safe(p.title, 200);
     // A user rename received while the status request was in flight wins.
     if (readLruMapEntry(sessionTitles, key) !== previousTitle) {
-      return;
+      return true;
     }
     // setStatus only names newly created sessions. Rename existing sessions once
     // per display-name change; inbound user renames update this same cache.
@@ -372,6 +369,7 @@ function createSlackMonitorContextFields(params: CreateSlackMonitorContextParams
         recordSlackSessionTitle({ ...p, threadTs: p.threadTs, title });
       }
     }
+    return true;
   };
 
   const setSlackSuggestedPrompts = (input: SlackSuggestedPromptsInput) =>
@@ -534,7 +532,6 @@ function createSlackMonitorContextFields(params: CreateSlackMonitorContextParams
     },
     historyLimit: params.historyLimit,
     dmHistoryLimit: Math.max(0, params.dmHistoryLimit ?? 0),
-    channelHistories,
     sessionScope: params.sessionScope,
     mainKey: params.mainKey,
     dmEnabled: params.dmEnabled,

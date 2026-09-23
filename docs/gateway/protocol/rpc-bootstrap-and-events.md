@@ -88,8 +88,7 @@ count.
   The optional `sessionId` and opaque `lifecycleRevision` identify the session
   lifecycle; `lifecycleRevision` can be absent before the first reset. Revisions
   increase across runs within that lifecycle but can restart after a reset.
-  Critical notice history starts fresh when the identity pair changes, including
-  when `/clear` preserves `sessionId` and changes `lifecycleRevision`.
+  `/clear` preserves `sessionId` and changes `lifecycleRevision`.
   Clients show its headline or inspector link only while the digest's exact `runId`
   is present in `activeRunIds`.
 - `sessions.changed`: session index or metadata changed. Keyed changes carry the
@@ -105,9 +104,37 @@ count.
   remain event receipts, including explicit clearing values. When a nested row
   omits an optional field, honor its top-level clearing tombstone; nested values
   take precedence when present. Merge an existing
-  roster member's snapshot locally; refresh the list when a row is missing or
-  the event is a broad, keyless invalidation. Profile identity, runner
+  roster member's snapshot locally when the query's membership and pagination
+  window remain valid. The Control UI reuses lifecycle and ordinary `patch`,
+  `send`, `steer`, `agent.run.started`, `agent.input.settled`, `run-capacity`, and
+  `chat.title` snapshots for held rows with unchanged identity, archive,
+  pin, owner, and parent facts and nondecreasing recency. Keyed `sessions.changed`
+  and `session.message` publications also carry `ancestorSessions`, an array of
+  refreshed full rows for the affected navigation, control, requester, and swarm
+  ancestors. The projection walks existing parent references up to the roots,
+  deduplicates physical row identities, and stops cycles. Each ancestor passes
+  the same per-viewer visibility filter and presentation as `sessions.list`;
+  invisible intermediates do not prevent delivery of visible ancestors above them.
+  The array contains at most 64 ancestors. If an ancestor cannot be resolved or the traversal exceeds that bound,
+  the field is omitted so clients retain authoritative refresh behavior. An empty
+  array certifies that there are no visible ancestors. This is an additive
+  protocol-v4 field; it does not change subscription scope or list membership.
+  Clients apply the child and held ancestor rows together, honoring each row's
+  identity and clock. In these complete snapshots, omitted optional row facts
+  clear previously held values, including child links, swarm summaries, and
+  descendant-running flags. Non-null legacy top-level row fields do not fill
+  omissions in a complete, viewer-filtered row. Explicit null clearing receipts
+  and separate lifecycle receipts remain effective. The existing optional title/preview enrichment and
+  thinking-metadata preservation rules still apply.
+  The Control UI coalesces an authoritative
+  refresh for missing rows or snapshots, broad/keyless changes, `catalogChanged`,
+  membership filters, incomplete ancestor snapshots, and uncertain boundaries (including owner-first rows
+  promoted into the shared page). Events overlapping a roster read retain a
+  trailing refresh so its response cannot lose an update. A retained list with a
+  read error also refreshes on the next relevant event. Profile identity, runner
   availability, and loaded cron bindings can produce broad invalidations.
+  Activity-summary-only publications update opted-in Activity consumers; shared
+  session and agent rosters do not refetch for those recap-only changes.
   Authorized incognito descriptions and events use the same row presentation from
   transient process-local state. Incognito rows remain excluded from the session
   roster, and queued events cannot cross a reset or database replacement.

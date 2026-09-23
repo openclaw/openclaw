@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { clearBootstrapSnapshotOnSessionRollover } from "../agents/bootstrap-cache.js";
 import {
   listActiveEmbeddedRunSessionKeys,
   resolveActiveEmbeddedRunSessionId,
@@ -70,6 +71,7 @@ import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+import { deferSessionEventWakePoll } from "./session-event-wake.js";
 
 const CRON_COMMAND_LANE: string = CommandLane.Cron;
 
@@ -188,9 +190,26 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     return skippedHeartbeatStage(preflight.skipReason, startedAt);
   }
 
+  const skippedBusyStage = (reason: string) => {
+    // Only pre-execution guards can retire an event-free monitor occurrence.
+    // Missing preflight, coalesced work, and previously admitted turns retain their retry.
+    if (preflight?.pendingEventEntries.length === 0 && scheduledTasks.length === 0) {
+      deferSessionEventWakePoll();
+    }
+    return skippedHeartbeatStage(reason, startedAt);
+  };
+
+  // A command result belongs to its waiting session, not the agent's ambient
+  // monitor. Unrelated work must not starve it; target-session fences still apply.
+  const isSessionExecCompletion =
+    normalizeOptionalString(opts.sessionKey) !== undefined &&
+    preflight?.isExecEventWake === true &&
+    !preflight.authoritativeScheduledTick &&
+    scheduledTasks.length === 0 &&
+    preflight.pendingEventEntries.some((event) => isExecCompletionEvent(event.text));
   const getSize = opts.deps?.getQueueSize ?? getQueueSize;
-  if (getSize(CommandLane.Main) > 0) {
-    return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
+  if (!isSessionExecCompletion && getSize(CommandLane.Main) > 0) {
+    return skippedBusyStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT);
   }
 
   // Cron executions awaiting heartbeat settlement are idle owners, not competing work.
@@ -215,11 +234,12 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     cronLaneDepth > owningCronLaneTaskIds.size ||
     getSize(CommandLane.CronNested) > 0 ||
     getSize(CommandLane.HookDispatch) > 0;
-  if (cronBusy || cronLaneBusy) {
-    return skippedHeartbeatStage(HEARTBEAT_SKIP_CRON_IN_PROGRESS, startedAt);
+  if (!isSessionExecCompletion && (cronBusy || cronLaneBusy)) {
+    return skippedBusyStage(HEARTBEAT_SKIP_CRON_IN_PROGRESS);
   }
 
-  const shouldHonorActiveReplyRuns = opts.intent !== "immediate" && opts.intent !== "manual";
+  const shouldHonorActiveReplyRuns =
+    !isSessionExecCompletion && opts.intent !== "immediate" && opts.intent !== "manual";
   const listActiveReplyRuns =
     opts.deps?.listActiveReplyRunSessionKeys ?? listActiveReplyRunSessionKeys;
   const listActiveEmbeddedRuns =
@@ -232,7 +252,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     (hasActiveRunForAgent(agentId, listActiveReplyRuns) ||
       hasActiveRunForAgent(agentId, listActiveEmbeddedRuns))
   ) {
-    return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
+    return skippedBusyStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT);
   }
 
   // Phase 2: Stronger heartbeat deferral while a final delivery replay is pending.
@@ -273,7 +293,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
         mainSessionRecovery.view.status === "recoverable")) ||
     hasCurrentRestartRecoveryDelivery
   ) {
-    return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
+    return skippedBusyStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT);
   }
   const HEARTBEAT_DEFER_WINDOW_MS = 30_000;
   const pendingFinalDeliveryText =
@@ -289,7 +309,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     recentSessionEntry?.updatedAt &&
     startedAt - recentSessionEntry.updatedAt < HEARTBEAT_DEFER_WINDOW_MS
   ) {
-    return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
+    return skippedBusyStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT);
   }
 
   // Preflight centralizes trigger classification, event inspection, and monitor-scratch gating.
@@ -307,15 +327,14 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     ? (key: string) => hasActiveRunForSession(key, listActiveEmbeddedRuns)
     : (key: string) => resolveActiveEmbeddedRunSessionId(key) !== undefined;
   if (isReplyRunActive(sessionKey) || isEmbeddedRunActive(sessionKey)) {
-    return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
+    return skippedBusyStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT);
   }
 
-  // Check the resolved session lane — if it is busy, skip to avoid interrupting
-  // an active streaming turn.  The wake-layer retry (heartbeat-wake.ts) will
-  // re-schedule this wake automatically.  See #14396 (closed without merge).
+  // Do not interrupt an active streaming turn. Payload/admitted work retries;
+  // an event-free, never-started monitor poll waits for its next persisted tick.
   const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey);
   if (getSize(sessionLaneKey) > 0) {
-    return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
+    return skippedBusyStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT);
   }
 
   return {
@@ -508,7 +527,12 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
               agentId,
               nowMs: startedAt,
               forceNew: true,
+              lifecycleTimestamps: {},
               store: currentEntry ? { [isolatedSessionKey]: currentEntry } : {},
+            });
+            clearBootstrapSnapshotOnSessionRollover({
+              sessionKey: isolatedSessionKey,
+              previousSessionId: cronSession.previousSessionId,
             });
             const nextEntry = {
               ...cronSession.sessionEntry,

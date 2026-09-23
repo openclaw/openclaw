@@ -8,13 +8,15 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
-  SQLITE_WORKER_TRANSFER_FRAME_BYTES,
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
 import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
-import type { SqliteWorkerTransferFrame } from "./sqlite-worker-transfer.js";
+import {
+  SQLITE_WORKER_TRANSFER_FRAME_BYTES,
+  type SqliteWorkerTransferFrame,
+} from "./sqlite-worker-transfer.js";
 
 const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -247,7 +249,7 @@ describe("SQLite worker staged input", () => {
         { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
       ]);
       stores.delete(store);
-      await expect(store.close()).rejects.toMatchObject({ code: "unavailable" });
+      await expect(store.close()).resolves.toBeUndefined();
       const recovered = await open(file);
       await expectRows(recovered, []);
       expect(await append(recovered, value)).toMatchObject({ writes: 1 });

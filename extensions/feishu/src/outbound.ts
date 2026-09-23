@@ -1,4 +1,3 @@
-// Feishu plugin module implements outbound behavior.
 import path from "node:path";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {

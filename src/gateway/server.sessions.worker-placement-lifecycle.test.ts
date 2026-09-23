@@ -5,6 +5,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
@@ -33,7 +34,8 @@ import { resolveSessionWorkerPlacementMutationError } from "./worker-environment
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -372,7 +374,6 @@ test("sessions.delete retains failed placement when worker cleanup is unavailabl
           get: () => ({ state: "failed", leaseId: "lease-1" }),
           hasInferenceForSession: () => false,
           cancelInferenceForSession: () => [],
-          resolveInferenceSessionForRunId: () => undefined,
         } as never,
         workerSessionPlacementService: placementService,
       },
@@ -440,7 +441,6 @@ test.each([
         workerEnvironmentService: {
           get: getWorkerEnvironment,
           hasInferenceForSession: () => false,
-          resolveInferenceSessionForRunId: () => undefined,
         } as never,
         workerSessionPlacementService: placementService,
       },
@@ -812,47 +812,6 @@ test.each(["generation", "claim"] as const)(
   },
 );
 
-test("sessions.compaction.restore rechecks worker placement inside the lifecycle fence", async () => {
-  await createSessionStoreDir();
-  const sessionKey = "discord:group:worker-restore";
-  const sessionId = "sess-worker-restore";
-  const checkpointId = "checkpoint-worker-restore";
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry(sessionId, {
-        compactionCheckpoints: [
-          {
-            checkpointId,
-            sessionKey,
-            sessionId,
-            createdAt: 1,
-            reason: "manual",
-            preCompaction: { sessionId },
-            postCompaction: { sessionId },
-          },
-        ],
-      }),
-    },
-  });
-  const placementReader = sequencedPlacementReader([
-    placementRecord(sessionId, "local"),
-    placementRecord(sessionId, "active"),
-  ]);
-
-  const restored = await directSessionReq(
-    "sessions.compaction.restore",
-    { key: sessionKey, checkpointId },
-    {
-      context: { workerSessionPlacementService: placementReader },
-    },
-  );
-
-  expect(restored.ok).toBe(false);
-  expect(restored.error?.message).toContain("cloud worker placement is active");
-  expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
-  expect(embeddedRunMock.abortCalls).toEqual([]);
-});
-
 test.each(["worker-turn", "remote-exec"] as const)(
   "sessions.delete safely reclaims an active %s placement before committing deletion",
   async (executionMode) => {
@@ -942,7 +901,6 @@ test.each(["worker-turn", "remote-exec"] as const)(
             ...harness.environments,
             hasInferenceForSession: () => false,
             cancelInferenceForSession: () => [],
-            resolveInferenceSessionForRunId: () => undefined,
           },
           workerPlacementDispatchService: harness.service,
           workerSessionPlacementService: placementStore,

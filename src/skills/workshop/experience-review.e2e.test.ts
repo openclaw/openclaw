@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import { text as readText } from "node:stream/consumers";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   writeOpenAiResponsesSse,
@@ -23,7 +24,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { readSkillReviewOutcomes } from "./collection-review-state.js";
+import { readSkillCuratorReviewStatus } from "./collection-review-state.js";
 import { assertExperienceReviewDecision } from "./experience-review-decision.test-support.js";
 import { readExperienceReviewMessageText } from "./experience-review-message-text.test-support.js";
 import { observeExperienceReview } from "./experience-review-observation.test-support.js";
@@ -74,12 +75,17 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-function writeToolCall(response: ServerResponse, args: Record<string, unknown>): void {
+function writeToolCall(
+  response: ServerResponse,
+  name: "tool_search" | "tool_call",
+  args: Record<string, unknown>,
+  sequence: number,
+): void {
   const item = {
     type: "function_call",
-    id: "fc_workshop_contract",
-    call_id: "call_workshop_contract",
-    name: "skill_workshop",
+    id: `fc_workshop_contract_${name}_${sequence}`,
+    call_id: `call_workshop_contract_${name}_${sequence}`,
+    name,
     arguments: JSON.stringify(args),
     status: "completed",
   };
@@ -99,7 +105,7 @@ function writeToolCall(response: ServerResponse, args: Record<string, unknown>):
     {
       type: "response.completed",
       response: {
-        id: "resp_workshop_contract_tool",
+        id: `resp_workshop_contract_${name}_${sequence}`,
         status: "completed",
         output: [item],
         usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
@@ -190,8 +196,9 @@ describe("Workshop draft-only review through the real provider and tool owners",
             config: candidate.config,
             source,
           });
+          const laterSession = SessionManager.open(target);
           for (const message of laterMessages) {
-            SessionManager.appendMessageToTranscript(target, message, {
+            laterSession.appendMessage(message, {
               config: candidate.config,
             });
           }
@@ -268,14 +275,51 @@ describe("Workshop draft-only review through the real provider and tool owners",
               return;
             }
             requests.push(JSON.parse(await readText(request)) as Request);
-            if (scenario === "failed" || requests.length > 2) {
+            if (scenario === "failed" || requests.length > 4) {
               response.writeHead(400, { "content-type": "application/json" });
               response.end(JSON.stringify({ error: { message: "Controlled provider rejection" } }));
               return;
             }
-            if (requests.length === 1 && (scenario === "proposed" || scenario === "rejected")) {
-              writeToolCall(response, scenario === "proposed" ? createArgs : { action: "create" });
-              return;
+            if (scenario === "proposed" || scenario === "rejected") {
+              if (requests.length === 1) {
+                writeToolCall(response, "tool_search", { query: "skill_workshop", limit: 1 }, 1);
+                return;
+              }
+              if (requests.length === 2 || (scenario === "proposed" && requests.length === 3)) {
+                const searchOutput = requests[1]?.input?.find(
+                  (item) =>
+                    item.type === "function_call_output" &&
+                    item.call_id === "call_workshop_contract_tool_search_1",
+                )?.output;
+                if (typeof searchOutput !== "string") {
+                  throw new Error("Workshop discovery did not return a provider-visible result");
+                }
+                const candidates: unknown = JSON.parse(searchOutput);
+                expect(candidates).toEqual(
+                  expect.arrayContaining([
+                    expect.objectContaining({ name: "skill_workshop", source: "openclaw" }),
+                  ]),
+                );
+                const workshop = Array.isArray(candidates)
+                  ? candidates.find(
+                      (entry: unknown) => isRecord(entry) && entry.name === "skill_workshop",
+                    )
+                  : undefined;
+                if (!isRecord(workshop) || typeof workshop.id !== "string") {
+                  throw new Error("Tool Search did not return the Workshop capability.");
+                }
+                writeToolCall(
+                  response,
+                  "tool_call",
+                  scenario === "proposed"
+                    ? requests.length === 2
+                      ? { id: workshop.id, args: JSON.stringify({ action: "list" }) }
+                      : { id: workshop.id, ...createArgs }
+                    : { id: workshop.id, args: { action: "create" } },
+                  requests.length,
+                );
+                return;
+              }
             }
             writeOpenAiResponsesText(response, {
               text: "NO_REPLY",
@@ -307,7 +351,9 @@ describe("Workshop draft-only review through the real provider and tool owners",
           });
           // Load the real provider plugin before entering the review lane, as the live proof does.
           loadAgentRuntimePluginRegistryHandle({ config: candidate.config, workspaceDir });
-          const outcomesBefore = new Set(Object.keys(readSkillReviewOutcomes().experienceReviews));
+          const outcomesBefore = new Set(
+            Object.keys(readSkillCuratorReviewStatus().experienceReviews),
+          );
           const database = openOpenClawAgentDatabase({ agentId: "main" });
           const foregroundFingerprint = () => {
             const hash = createHash("sha256");
@@ -336,7 +382,7 @@ describe("Workshop draft-only review through the real provider and tool owners",
               await expect(run).rejects.toThrow(
                 scenario === "failed"
                   ? "provider rejected the request schema or tool payload"
-                  : "Skill Workshop failed",
+                  : "Tool Call failed",
               );
             } else {
               observation = await run;
@@ -349,11 +395,14 @@ describe("Workshop draft-only review through the real provider and tool owners",
           expect(foregroundFingerprint()).toBe(storedBefore);
 
           expect(handlerErrors).toEqual([]);
-          expect(requests).toHaveLength(scenario === "proposed" || scenario === "rejected" ? 2 : 1);
+          expect(requests).toHaveLength(
+            scenario === "proposed" ? 4 : scenario === "rejected" ? 3 : 1,
+          );
           expect(requests[0]?.model).toBe(modelId);
           expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual(
-            expect.arrayContaining(["exec", "read", "skill_workshop"]),
+            expect.arrayContaining(["exec", "read", "tool_search", "tool_describe", "tool_call"]),
           );
+          expect(requests[0]?.tools?.map((tool) => tool.name)).not.toContain("skill_workshop");
           // Request IDs are rewritten for provider replay. Compare the actual output bodies.
           expect(
             requests[0]?.input
@@ -376,7 +425,7 @@ describe("Workshop draft-only review through the real provider and tool owners",
             agentId: "main",
             runId,
           });
-          const outcomes = Object.entries(readSkillReviewOutcomes().experienceReviews).filter(
+          const outcomes = Object.entries(readSkillCuratorReviewStatus().experienceReviews).filter(
             ([key]) => !outcomesBefore.has(key),
           );
           expect(outcomes).toHaveLength(1);
@@ -396,9 +445,10 @@ describe("Workshop draft-only review through the real provider and tool owners",
               code: "ENOENT",
             });
             expect(outcome).toMatchObject({ outcome: "proposed", proposalId: proposal.id });
-            const toolOutput = requests[1]?.input?.find(
+            const toolOutput = requests[3]?.input?.find(
               (item) =>
-                item.type === "function_call_output" && item.call_id === "call_workshop_contract",
+                item.type === "function_call_output" &&
+                item.call_id === "call_workshop_contract_tool_call_3",
             );
             expect(toolOutput?.output).toContain(proposal.id);
           } else {
@@ -408,9 +458,10 @@ describe("Workshop draft-only review through the real provider and tool owners",
               outcome: failedReview ? "failed" : "nothing",
             });
             if (scenario === "rejected") {
-              const toolOutput = requests[1]?.input?.find(
+              const toolOutput = requests[2]?.input?.find(
                 (item) =>
-                  item.type === "function_call_output" && item.call_id === "call_workshop_contract",
+                  item.type === "function_call_output" &&
+                  item.call_id === "call_workshop_contract_tool_call_2",
               );
               expect(toolOutput?.output).toContain("required");
             }

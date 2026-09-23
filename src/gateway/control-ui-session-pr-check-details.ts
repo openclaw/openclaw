@@ -1,19 +1,18 @@
 import { createRetainedCache } from "../infra/retained-cache.js";
-import type { ControlUiSessionPullRequestCheckDetails } from "./control-ui-contract.js";
-import {
-  ControlUiGitHubError,
-  fetchGitHubApi,
-  readGitHubJsonResponse,
-  withOptionalGitHubAuth,
-  formatControlUiGitHubPreviewError,
-  resolveGitHubApiCredentialScope,
-} from "./control-ui-github-api.js";
+import type {
+  ControlUiSessionPullRequestCheckDetails,
+  ControlUiSessionPullRequests,
+} from "./control-ui-contract.js";
 import {
   fetchSessionPullRequestCheckDetails,
   sessionPullRequestRepositoryApiUrl,
   type SessionPullRequestCheckTarget,
 } from "./control-ui-session-prs-checks.js";
-import { loadControlUiSessionPullRequests, parsePullListItem } from "./control-ui-session-prs.js";
+import {
+  parsePullListItem,
+  type ControlUiSessionPullRequestsParams,
+} from "./control-ui-session-prs.js";
+import { gitHubPublicApi } from "./github-public-api.js";
 
 const checkDetailsCache = createRetainedCache<{
   expiresAt: number;
@@ -34,7 +33,10 @@ type LoadSessionCheckDetailsDeps = {
   sessionScope: string;
   assertCurrent: () => void;
   fetchImpl?: typeof fetch;
-  loadPullRequests?: typeof loadControlUiSessionPullRequests;
+  loadPullRequests: (
+    params: ControlUiSessionPullRequestsParams,
+    deps: { fetchImpl?: typeof fetch },
+  ) => Promise<ControlUiSessionPullRequests>;
 };
 
 /** The only details admission path: clients select a PR already resolved for this session. */
@@ -52,14 +54,17 @@ export async function loadControlUiSessionPullRequestChecks(
     error,
   });
   deps.assertCurrent();
-  const credential = resolveGitHubApiCredentialScope();
+  const credential = gitHubPublicApi.resolveGitHubApiCredentialScope();
   const assertCurrent = () => {
     deps.assertCurrent();
-    if (resolveGitHubApiCredentialScope().cacheScope !== credential.cacheScope) {
-      throw new ControlUiGitHubError(409, "GitHub identity changed; reopen CI details");
+    if (gitHubPublicApi.resolveGitHubApiCredentialScope().cacheScope !== credential.cacheScope) {
+      throw new gitHubPublicApi.ControlUiGitHubError(
+        409,
+        "GitHub identity changed; reopen CI details",
+      );
     }
   };
-  const loadPullRequests = deps.loadPullRequests ?? loadControlUiSessionPullRequests;
+  const { loadPullRequests } = deps;
   const snapshot = await loadPullRequests(
     { sessionKey: params.sessionKey, agentId: params.agentId },
     { fetchImpl: deps.fetchImpl },
@@ -102,24 +107,32 @@ export async function loadControlUiSessionPullRequestChecks(
       const signal = AbortSignal.timeout(25_000);
       let requests = 0;
       const request = async (url: string, maxBytes?: number) => {
-        if (resolveGitHubApiCredentialScope().cacheScope !== credential.cacheScope) {
-          throw new ControlUiGitHubError(409, "GitHub identity changed; reopen CI details");
+        if (
+          gitHubPublicApi.resolveGitHubApiCredentialScope().cacheScope !== credential.cacheScope
+        ) {
+          throw new gitHubPublicApi.ControlUiGitHubError(
+            409,
+            "GitHub identity changed; reopen CI details",
+          );
         }
         if (++requests > 64 || Date.now() > deadline) {
-          throw new ControlUiGitHubError(
+          throw new gitHubPublicApi.ControlUiGitHubError(
             502,
             "CI details exceeded the request budget; open the job on GitHub",
           );
         }
-        return withOptionalGitHubAuth(credential.token, async (token) =>
-          readGitHubJsonResponse(
-            await fetchGitHubApi(
+        return gitHubPublicApi.withOptionalGitHubAuth(credential.token, async (token) =>
+          gitHubPublicApi.readGitHubJsonResponse(
+            await gitHubPublicApi.fetchGitHubApi(
               url,
               fetchImpl,
               token,
               async () => {
                 // A renamed/transferred repository is not the session's admitted repository.
-                throw new ControlUiGitHubError(409, "GitHub repository changed; reopen CI details");
+                throw new gitHubPublicApi.ControlUiGitHubError(
+                  409,
+                  "GitHub repository changed; reopen CI details",
+                );
               },
               undefined,
               undefined,
@@ -141,14 +154,22 @@ export async function loadControlUiSessionPullRequestChecks(
           value.headSha?.toLowerCase() !== headSha ||
           (value.state !== "open" && value.state !== "draft")
         ) {
-          throw new ControlUiGitHubError(409, "The pull request head changed; reopen CI details");
+          throw new gitHubPublicApi.ControlUiGitHubError(
+            409,
+            "The pull request head changed; reopen CI details",
+          );
         }
       };
       try {
         await assertHead();
         const details = await fetchSessionPullRequestCheckDetails(target, request);
         // Do not label old-head job steps as current after a push during the request.
-        if (!(details.error instanceof ControlUiGitHubError && details.error.statusCode === 429)) {
+        if (
+          !(
+            details.error instanceof gitHubPublicApi.ControlUiGitHubError &&
+            details.error.statusCode === 429
+          )
+        ) {
           await assertHead();
         }
         const result: ControlUiSessionPullRequestCheckDetails = {
@@ -158,29 +179,32 @@ export async function loadControlUiSessionPullRequestChecks(
           rateLimited: false,
         };
         if (Buffer.byteLength(JSON.stringify(result), "utf8") > 512 * 1024) {
-          throw new ControlUiGitHubError(
+          throw new gitHubPublicApi.ControlUiGitHubError(
             502,
             "CI details exceeded the response limit; open the job on GitHub",
           );
         }
         if (details.error) {
-          const formatted = formatControlUiGitHubPreviewError(details.error);
+          const formatted = gitHubPublicApi.formatControlUiGitHubPreviewError(details.error);
           result.error = formatted.message;
           result.rateLimited =
-            details.error instanceof ControlUiGitHubError && details.error.statusCode === 429;
+            details.error instanceof gitHubPublicApi.ControlUiGitHubError &&
+            details.error.statusCode === 429;
           result.retryAfterMs = formatted.retryAfterMs;
         }
         pending.lastGood = result;
         return result;
       } catch (error) {
-        const formatted = formatControlUiGitHubPreviewError(error);
-        const changed = error instanceof ControlUiGitHubError && error.statusCode === 409;
-        const rateLimited = error instanceof ControlUiGitHubError && error.statusCode === 429;
+        const formatted = gitHubPublicApi.formatControlUiGitHubPreviewError(error);
+        const changed =
+          error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 409;
+        const rateLimited =
+          error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429;
         // Permission loss and changed bindings must not revive previously private details.
         const retain =
           !changed &&
           previous &&
-          error instanceof ControlUiGitHubError &&
+          error instanceof gitHubPublicApi.ControlUiGitHubError &&
           (error.retryable || error.statusCode === 502);
         if (!retain) {
           pending.lastGood = undefined;

@@ -1,11 +1,15 @@
 import { ok, type Result } from "@openclaw/normalization-core/result";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
-import { executeOpenClawStateWorker } from "./openclaw-state-worker-store.js";
+import {
+  executeOpenClawStateWorker,
+  runOpenClawStateWorkerOperation,
+} from "./openclaw-state-worker-store.js";
 import {
   ensureUserPreferencesSchema,
   readUserPreferences,
@@ -29,13 +33,17 @@ export function getUserPreferences(
 export function setUserPreferences(
   profileId: string,
   entries: Record<string, unknown>,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { expectedEntries?: Record<string, unknown> } = {},
 ): Result<void, UserPreferenceError> {
-  const prepared = prepareUserPreferenceUpdate(entries);
+  const prepared = prepareUserPreferenceUpdate(entries, options.expectedEntries);
   if (!prepared.ok) {
     return prepared;
   }
-  if (prepared.value.serialized.length === 0 && prepared.value.deletionKeys.length === 0) {
+  if (
+    prepared.value.serialized.length === 0 &&
+    prepared.value.deletionKeys.length === 0 &&
+    prepared.value.expected.length === 0
+  ) {
     return ok(undefined);
   }
   ensureUserPreferencesSchema(options);
@@ -60,14 +68,36 @@ export function getCanonicalUserPreferences(
 export async function setCanonicalUserPreferences(
   profileId: string,
   entries: Record<string, unknown>,
-  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
+    assertCurrent?: () => void;
+    expectedEntries?: Record<string, unknown>;
+  } = {},
 ): Promise<Result<{ profileId: string }, UserPreferenceError> | undefined> {
-  const prepared = prepareUserPreferenceUpdate(entries);
+  const prepared = prepareUserPreferenceUpdate(entries, options.expectedEntries);
   if (!prepared.ok) {
     return prepared;
   }
-  return executeOpenClawStateWorker(captureOpenClawStateWorkerContext(options), {
-    type: "userPreferences.write",
-    input: { profileId, update: prepared.value },
-  });
+  const context = captureOpenClawStateWorkerContext(options);
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({
+        type: "userPreferences.write",
+        input: { profileId, update: prepared.value },
+      }),
+    {
+      assertCurrent: options.assertCurrent,
+      createAdmission: () => ({
+        nativeLocations: [context.admission.databasePath],
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          if (request.stage !== "transaction" && request.stage !== "commit") {
+            throw new Error("Profile preference mutation requires transaction admission");
+          }
+          context.admission.assertCurrent();
+          options.assertCurrent?.();
+          grant();
+        }),
+      }),
+    },
+  );
 }

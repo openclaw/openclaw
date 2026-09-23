@@ -14,21 +14,50 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
+During `initialize`, OpenClaw uses `capabilities.optOutNotificationMethods` to
+suppress unused app-server notifications before they reach the transport and JSON
+decoder. This includes cumulative turn diffs; file-change items still carry the
+individual changes. The plugin's notification policy owns the exact method list.
+Turn and item lifecycle, transcript, usage, approval, and catalog notifications
+remain enabled. Some events whose payloads are not projected still carry progress:
+MCP progress, streamed patch updates, reasoning section markers, and model metadata
+keep native work from appearing stalled. Terminal interaction also informs process
+cleanup. These notifications remain enabled. Older app-servers that do not recognize
+the optional capability ignore it; the normal minimum-version check still applies.
+
 The native session catalog keeps one resident index per Codex home, shared across
 agents, working-directory filters, searches, and pages. Lists normally filter and page
 bounded display rows in memory. They do not expire or restart native discovery
-on the normal sidebar polling interval. This memory-only boundary is the local
+on the normal sidebar polling interval. The sorted view retains only eligible
+display rows and is invalidated by resident row changes. Complete, unfiltered
+queries reuse it directly; live status and workspace settings still apply per page.
+This memory-only boundary is the local
 resident query. The Gateway also reads session entries from its resident session-row
 projection once ready; mutations can require exact-key refreshes before delivery.
 Native adoption bindings still use their storage owner, and paired-node enumeration
 can use network I/O. Previews remain limited to 500 characters;
 native hydration and catalog pages remain limited to 64 rows each. Native `thread/list` has no bounded metadata projection, so wire JSON can still be
-large. Immediately after decoding, catalog responses discard unused native fields
-and detach bounded metadata before the response promise settles. Each native page
-contains at most 64 rows (less than 6 MiB of serialized catalog metadata even at
-all field limits). Unchanged background rows reuse resident previews at this
-boundary without sanitizing them again; new or changed rows retain the prefix-first
-preview selector. Native wire parsing remains a transient allocation cost. Recency, native position within exposed timestamp ties, and thread ID form the
+large. Complete catalog `thread/list` pages and metadata-only `thread/read` responses
+up to 64 KiB are parsed and projected inline, avoiding worker startup for small
+catalog refreshes. Larger responses use a worker owned by their app-server client.
+Both paths apply the same projection. The stdout reader waits for the compact result
+before delivering later responses or notifications. It transfers larger responses
+as bytes, admits one worker task at a time, and pauses the transport while that task runs.
+Incomplete-frame recovery stays in the worker, including when a malformed
+frame hides its routing header until a later line; its decoded ID selects the catalog
+projection and the captured row admission. Native control reads, normal streaming notifications,
+and full-history reads keep their in-process decoder. Control reads preserve complete
+native metadata, including model selection and direct-input capability; transcript
+consumers require complete native raw items.
+Each native list page contains at most 64 rows (less than 6 MiB of serialized
+catalog metadata even at all field limits). Both paths apply the existing
+prefix-first preview selector and 500-character display bound. Unchanged
+background rows can reuse resident previews before delivery. Large native payloads
+and their temporary objects stay in the worker. Metadata reads preserve exact
+working directories and the native history paging mode.
+Ephemeral threads are excluded as soon as native metadata acknowledges them, so
+closing a short-lived helper cannot lose the exclusion while a background refresh is pending.
+Recency, native position within exposed timestamp ties, and thread ID form the
 stable ordering and opaque continuation key. Initial native positions preserve
 the sub-second order that the protocol rounds to seconds. Unchanged rows keep
 their positions across background refreshes, so existing cursors do not repeat
@@ -68,8 +97,14 @@ walk the home to completion without consuming a foreground request's budget.
 Explicit homes hydrate in the background when the plugin activates. An implicit
 process home waits for an authorized catalog request. A home without a valid,
 complete saved snapshot walks native `thread/list` pages once, yielding between
-pages. Its first list waits for a usable native page or confirmed empty inventory,
-within the existing app-server request timeout. That single request budget also
+pages. Progressive lists serve resident rows immediately. If a local home is still
+loading after 250 ms, the list returns that host as pending, preserving previously
+displayed rows; the existing progress callback publishes its page or error when ready.
+The page producer and publication remain owned by the list's background completion.
+One-shot lists, host-specific lookups, and pagination wait for a usable native
+page or confirmed empty inventory for at most five seconds (or the configured
+app-server request timeout when shorter).
+That single request budget also
 covers loading saved state and draining earlier cache writes after a configuration
 reload. A timed-out caller leaves the shared write drain running. Partial results carry an opaque continuation cursor;
 a continuation that catches up with discovery waits for the next page within its
@@ -84,7 +119,7 @@ Snapshot restoration waits for earlier cache writes, and mutations received duri
 restoration fence stale saved rows from publication. Background work then
 reconciles changed files and native metadata. A
 database-only native metadata walk recovers changes made while the Gateway was
-stopped and repeats every 30 seconds, including renames, Git branch and other displayed metadata, and the selected rollout
+stopped. A full safety walk repeats every 15 minutes, including renames, Git branch and other displayed metadata, and the selected rollout
 path after a native revert. Metadata changes and explicit clears are applied even
 when native activity timestamps do not change. Newer Gateway observations fence
 older background pages. These coalesced background walks reuse previews for
@@ -113,15 +148,39 @@ restores the stored metadata. Resume publication uses
 the response's current cwd, which can differ from the thread's persisted cwd.
 For remote app-servers without local filesystem access, the saved snapshot is
 available immediately and a background native walk reconciles changes made while
-the Gateway was stopped or its app-server connection was unavailable. Every
-30 seconds, a database-only walk reconciles remote membership and metadata.
-Unchanged display rows reuse their bounded previews; only new or changed rows
-need preview projection. Unchanged rows are not rewritten to SQLite.
+the Gateway was stopped or its app-server connection was unavailable. The full
+15-minute safety walk reconciles remote membership and metadata.
+Unchanged display rows reuse their bounded resident previews before delivery.
+Unchanged rows are not rewritten to SQLite.
+
+Native starts, metadata refreshes, renames, archives, deletions, and changed file
+fingerprints coalesce an incremental native check on the next 30-second tick.
+It reads database-only pages in descending recency order and stops after a whole
+page leaves the resident metadata unchanged, or at the 20,000-row retained limit.
+The comparison includes timestamps, selected path, fingerprint, and bounded display
+metadata; exposed timestamp ties keep their existing ordering. An unvisited tail
+is never treated as deleted. With no activity, ticks issue no native requests or
+file scans between safety walks. These checks reuse the existing preview cache
+after JSON decoding; they reduce wire parsing by requesting fewer pages.
+
+Silent changes outside the checked prefix, including timestamp-preserving metadata
+edits and remote deletions or archives, appear at the next successful full safety
+walk. Local file disappearance is checked on the same cycle; native database
+omission alone still cannot delete a local row. Safety cycles start 15 minutes
+apart, subject to timer scheduling, in-flight work, and
+scan/walk duration. A failed background check records its error and waits for new
+activity or the next safety cycle, subject to source backoff. It does not retry on
+every idle tick. File scans keep an independent deadline, so native failures
+neither repeat the scan nor postpone its next check.
+Notifications and acknowledged catalog actions continue to update rows immediately.
 
 Native lifecycle notifications update affected threads, and successful catalog
 archives immediately hide their rows. Turn starts and completions coalesce
 single-thread metadata refreshes, so a running turn advances recency before it
-finishes. A 30-second stat-only scan discovers external rollout changes; no
+finishes. When an observing client closes, queued reads against that client stop;
+an interrupted read records that metadata recovery is deferred to the current
+catalog owner. Observations do not keep retired clients alive. A startup scan and
+the 15-minute stat-only safety scan discover external rollout changes; no
 recursive filesystem watcher retains a directory inventory. The scan streams
 directory entries and retains at most 20,000 file fingerprints while separately
 checking the presence of resident paths. Only changed or
@@ -153,7 +212,7 @@ Each home retains at most 20,000 display rows, 20,000 live-status records,
 managed-thread ceiling; eviction drops the oldest archived rows first, then the
 oldest remaining rows. Row eviction preserves independently bounded live status and
 settings while their supporting native connections remain open. Eviction removes only cached metadata: older sessions remain
-discoverable through native paging/search and readable by ID. Background native walks finish pagination, but rows beyond the
+discoverable through native paging/search and readable by ID. Initial and full safety walks finish pagination, but rows beyond the
 resident limit are discarded before native-response metadata projection or preview
 sanitization. The native page size stays 64, and pagination continues to completion.
 At most 20,000 detached native cursors are remembered during a walk.
@@ -266,6 +325,16 @@ unless you opt into the experimental sandbox exec-server path. The effective
 tool profile must allow all native shell and filesystem capabilities: `coding`
 and `full` do, while `messaging` and `minimal` disable the native surface. Agent
 and provider profile overrides and explicit tool restrictions still apply.
+When sandboxing disables the native surface, allowed shell commands remain available
+through `sandbox_exec`. Denying `process` removes `sandbox_process` and background
+continuation, while `sandbox_exec` runs to completion under the existing timeout,
+sandbox backend, and workspace-access policy.
+
+Sandbox turns also use these tools when Codex allows only managed hooks and cannot
+install the native process-admission hook. OpenClaw selects this existing execution
+path before preparing the tool catalog and prompt. Existing policies that require
+other enforcing native hooks still require their normal preflight to pass.
+
 The sandbox exec-server option does not bypass those tool restrictions. Node-backed
 `remote-exec` on a paired device or cloud worker instead uses its
 placement-owned environment without that experimental flag. A dedicated cloud worker with a completed project preparation keeps the bound workspace and `HOME` paths, so native commands can reuse setup caches. The node exec-server still uses a separate temporary `CODEX_HOME` for each connection. Ending the connection removes that Codex state and preserves the prepared project home.
@@ -294,9 +363,18 @@ to the Gateway host and follows OpenClaw exec policy. `gateway_process` uses the
 existing per-session OpenClaw process scope for background follow-up. Prefer
 Codex native shell for ordinary local work.
 
-Stopping an active Codex run interrupts its turn, then stops the native background
-terminals listed on that Codex thread before releasing the run. Other Codex
-threads and deliberately backgrounded `gateway_process` jobs are unaffected.
+Stopping an active Codex run interrupts its turn. With the OpenClaw sandbox
+exec-server, cleanup stops the concrete processes admitted by that turn and
+preserves independent background work in the same reused thread. Each process
+retains its original source until settlement, including after foreground
+completion. Visitor Access expiry and revocation stop the guest's retained
+processes without interrupting a later maintainer turn. Native command admission and subsequent
+process input recheck the original source; cleanup remains available after
+revocation.
+
+Other native execution modes retain thread-wide background-terminal cleanup.
+Other Codex threads and deliberately backgrounded `gateway_process` jobs are
+unaffected.
 If native terminal cleanup fails, the run reports an error instead of silently
 claiming cleanup succeeded. Inspect that thread's running terminals before
 starting more work. This uses Codex's terminal ownership. It does not guarantee
@@ -328,8 +406,9 @@ Store environment values never enter the Codex app-server process, native
 shell, sandbox exec-server, ACP children, sandbox exec, or node exec.
 
 This Codex-native feature is separate from
-[OpenClaw Code Mode](/tools/code-mode), an opt-in QuickJS-WASI runtime
-for generic OpenClaw runs with a different `exec` input shape. For the
+[OpenClaw Code Mode](/tools/code-mode), a separate JavaScript runtime with its
+own automatic per-model activation and explicit overrides. It has a different
+`exec` input shape. For the
 broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes): `openai/gpt-6-astra` is the model
 ref, `codex` is the runtime, and Telegram, Discord, Slack, or another
@@ -397,8 +476,8 @@ same child result after the parent replies.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.154.0`. The plugin ships and manages
-  `@openai/codex` `0.154.0` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.155.1`. The plugin ships and manages
+  `@openai/codex` `0.155.1` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime
@@ -500,6 +579,23 @@ Neither Codex command is provider-response telemetry. `/codex models` lists
 the live Codex app-server catalog for the harness and account. If `/status` is
 surprising, see
 [Troubleshooting](/plugins/codex-harness/troubleshooting).
+
+## Luna Reserve and credit usage
+
+Ordinary `gpt-5.6-luna` and Luna Reserve (`gpt-reserve`) are separate routes.
+Selecting ordinary Luna does not consume Reserve merely because its quota has
+capacity. Turning Fast off changes the requested service tier, not the model route.
+
+OpenClaw currently reports the Reserve bucket when Codex returns it, but does not
+implement the backend-authorized Reserve transition and recovery flow. Do not
+force the hidden Reserve model or treat an unused counter as authorization.
+Account and client eligibility remain backend decisions.
+
+After included usage is exhausted, ordinary requests may consume credits under
+your account settings. Check the provider’s usage and spending controls before
+continuing high-volume automation. Account balances and quota percentages are
+not per-request billing receipts; `/status` and `/codex binding` do not establish
+the service tier or charge actually applied to a completed request.
 
 ## Where each section moved
 

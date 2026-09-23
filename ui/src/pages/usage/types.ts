@@ -41,6 +41,7 @@ export type UsageRouteData = {
     scope: "instance" | "family";
     timeZone: "local" | "utc";
     agentId: string | null;
+    creatorKey?: string;
   };
   result: SessionsUsageResult | null;
   costSummary: CostUsageSummary | null;
@@ -78,6 +79,7 @@ type UsageDataState = {
   error: string | null;
   sessions: UsageSessionEntry[];
   agents: string[];
+  creatorOptions: NonNullable<SessionsUsageResult["creatorOptions"]>;
   sessionsLimitReached: boolean; // True if 1000 session cap was hit
   totals: UsageTotals | null;
   aggregates: UsageAggregates | null;
@@ -97,6 +99,7 @@ type UsageFilterState = {
   selectedDays: string[]; // Support multiple day selection
   selectedHours: number[]; // Support multiple hour selection
   agentId: string | null;
+  creatorKey: string | null;
   query: string;
   queryDraft: string;
   timeZone: "local" | "utc";
@@ -141,10 +144,11 @@ type UsageCallbacks = {
     onEndDateChange: (date: string) => void;
     onScopeChange: (scope: "instance" | "family") => void;
     onAgentChange: (agentId: string | null) => void;
+    onCreatorChange: (creatorKey: string | null) => void;
     onRefresh: () => void;
     onTimeZoneChange: (zone: "local" | "utc") => void;
     onToggleHeaderPinned: () => void;
-    onSelectDay: (day: string, shiftKey: boolean) => void; // Support shift-click
+    onSelectDay: (day: string, shiftKey: boolean, orderedDays: string[]) => void;
     onSelectHour: (hour: number, shiftKey: boolean) => void;
     onClearDays: () => void;
     onClearHours: () => void;

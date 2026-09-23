@@ -1,10 +1,17 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
-import { listAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";
+import {
+  listAgentProvenance,
+  readAgentProvenanceForDisplay,
+  recordAgentProvenance,
+} from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -53,6 +60,50 @@ function instrumentParentSql() {
   }
 }
 
+function instrumentProvenanceWorkerRequests() {
+  const commands: string[] = [];
+  // oxlint-disable-next-line typescript/unbound-method -- Every intercepted call supplies the original Worker receiver.
+  const originalPostMessage = Worker.prototype.postMessage;
+  const spy = vi
+    .spyOn(Worker.prototype, "postMessage")
+    .mockImplementation(function (this: Worker, message, transferList) {
+      if (isRecord(message) && message.type === "execute" && message.input instanceof Uint8Array) {
+        const command: unknown = deserialize(message.input);
+        if (
+          isRecord(command) &&
+          typeof command.type === "string" &&
+          command.type.startsWith("agentProvenance.")
+        ) {
+          commands.push(command.type);
+        }
+      }
+      originalPostMessage.call(this, message, transferList);
+    });
+  return { commands, restore: () => spy.mockRestore() };
+}
+
+it("does not create provenance storage for an empty JSON roster", async () => {
+  await withOpenClawTestState(
+    { layout: "state-only", label: "provenance-empty-roster" },
+    async (state) => {
+      state.applyEnv();
+      config = { agents: { ownership: "explicit", entries: {} } };
+      recordAgentDatabaseAdmissions([], { env: state.env });
+      const runtime = { ...createTestRuntime(), writeStdout: vi.fn(), writeJson: vi.fn() };
+      const requests = instrumentProvenanceWorkerRequests();
+      try {
+        await agentsListCommand({ json: true }, runtime);
+        expect(runtime.writeJson.mock.calls[0]?.[0]).toEqual([]);
+        expect(requests.commands).toEqual([]);
+        expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
+      } finally {
+        requests.restore();
+        await closeOpenClawStateDatabaseAsync();
+      }
+    },
+  );
+});
+
 it("creates an empty provenance database on the worker and closes without parent SQL", async () => {
   await withOpenClawTestState({ layout: "state-only", label: "provenance-cold" }, async (state) => {
     const databasePath = resolveOpenClawStateSqlitePath(state.env);
@@ -60,7 +111,9 @@ it("creates an empty provenance database on the worker and closes without parent
     const counters = instrumentParentSql();
     try {
       const options = { env: { ...state.env }, path: databasePath };
-      const reading = listAgentProvenance(options);
+      const ids = ["main"];
+      const reading = readAgentProvenanceForDisplay(ids, options);
+      ids.push("later");
       const laterPath = path.join(state.stateDir, "later.sqlite");
       options.path = laterPath;
       options.env.OPENCLAW_STATE_DIR = path.join(state.stateDir, "later");
@@ -104,6 +157,7 @@ it("serves actual JSON and tree command output from worker provenance through re
       writeJson: vi.fn<(value: unknown) => void>(),
     };
     const counters = instrumentParentSql();
+    const requests = instrumentProvenanceWorkerRequests();
     try {
       await agentsListCommand({ json: true }, runtime);
       expect(runtime.writeJson.mock.calls[0]?.[0]).toEqual([
@@ -120,6 +174,7 @@ it("serves actual JSON and tree command output from worker provenance through re
       if (Array.isArray(output)) {
         expect(output[2]).not.toHaveProperty("createdVia");
       }
+      expect(requests.commands).toHaveLength(1);
       await agentsListCommand({ tree: true }, runtime);
       expect(runtime.log).toHaveBeenCalledWith("Agents:\n- main\n  - child\n- legacy");
       await closeOpenClawStateDatabaseAsync();
@@ -131,8 +186,46 @@ it("serves actual JSON and tree command output from worker provenance through re
       await closeOpenClawStateDatabaseAsync();
       expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0, 0]);
     } finally {
+      requests.restore();
       counters.forEach((counter) => counter.mockRestore());
       await closeOpenClawStateDatabaseAsync();
     }
   });
+});
+
+it("enriches a growing configured roster with bounded worker requests in configured order", async () => {
+  await withOpenClawTestState(
+    { layout: "state-only", label: "provenance-large-roster" },
+    async (state) => {
+      state.applyEnv();
+      const ids = Array.from({ length: 300 }, (_, index) => `worker-${299 - index}`);
+      config = {
+        agents: {
+          ownership: "explicit",
+          entries: Object.fromEntries(
+            ids.map((id) => [id, { workspace: path.join(state.root, id) }]),
+          ),
+        },
+      };
+      recordAgentDatabaseAdmissions([], { env: state.env });
+      for (const [index, id] of ids.entries()) {
+        recordAgentProvenance(id, { createdVia: "operator" }, { env: state.env, nowMs: index });
+      }
+      await closeOpenClawStateDatabaseAsync();
+      const runtime = { ...createTestRuntime(), writeStdout: vi.fn(), writeJson: vi.fn() };
+      const requests = instrumentProvenanceWorkerRequests();
+      try {
+        await agentsListCommand({ json: true }, runtime);
+        expect(runtime.writeJson.mock.calls[0]?.[0]).toEqual(
+          ids.map((id, index) =>
+            expect.objectContaining({ id, createdVia: "operator", createdAt: index }),
+          ),
+        );
+        expect(requests.commands).toHaveLength(2);
+      } finally {
+        requests.restore();
+        await closeOpenClawStateDatabaseAsync();
+      }
+    },
+  );
 });

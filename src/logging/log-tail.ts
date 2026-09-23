@@ -1,4 +1,5 @@
 // Log tail helpers read recent log lines with optional parsing and redaction.
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -40,20 +41,23 @@ type ParsedLogTailPayload = Omit<LogTailPayload, "lines"> & {
   lines: ParsedLogLine[];
 };
 
+type ResolvedLogFile = { file: string; stat: Stats | null };
+
 /** Resolves a rolling daily log path to the newest existing rolling log when needed. */
-async function resolveLogFile(file: string, options?: { rolling?: boolean }): Promise<string> {
+async function resolveLogFile(
+  file: string,
+  options?: { rolling?: boolean },
+): Promise<ResolvedLogFile> {
   const stat = await fs.stat(file).catch(missingPathToNull);
-  if (stat) {
-    return file;
-  }
-  if (!(options?.rolling ?? isRollingLogFilePath(file))) {
-    return file;
+  const source = { file, stat };
+  if (stat || !(options?.rolling ?? isRollingLogFilePath(file))) {
+    return source;
   }
 
   const dir = path.dirname(file);
   const entries = await fs.readdir(dir, { withFileTypes: true }).catch(missingPathToNull);
   if (!entries) {
-    return file;
+    return source;
   }
 
   const candidates = await Promise.all(
@@ -62,24 +66,29 @@ async function resolveLogFile(file: string, options?: { rolling?: boolean }): Pr
       .map(async (entry) => {
         const fullPath = path.join(dir, entry.name);
         const fileStat = await fs.stat(fullPath).catch(missingPathToNull);
-        return fileStat ? { path: fullPath, mtimeMs: fileStat.mtimeMs } : null;
+        return fileStat ? { file: fullPath, stat: fileStat } : null;
       }),
   );
   const sorted = candidates
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-    .toSorted((a, b) => b.mtimeMs - a.mtimeMs);
-  return sorted[0]?.path ?? file;
+    .toSorted((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+  return sorted[0] ?? source;
 }
 
-async function readLogSlice(params: {
-  file: string;
-  cursor?: number;
-  limit: number;
-  maxBytes: number;
-  filter?: (line: string) => boolean;
-  redaction: ReturnType<typeof resolveRedactOptions>;
-}): Promise<Omit<LogTailPayload, "file">> {
-  const size = (await fs.stat(params.file).catch(missingPathToNull))?.size ?? 0;
+async function readLogSlice(
+  params: ResolvedLogFile & {
+    cursor?: number;
+    limit: number;
+    maxBytes: number;
+    filter?: (line: string) => boolean;
+    redaction: ReturnType<typeof resolveRedactOptions>;
+  },
+): Promise<Omit<LogTailPayload, "file">> {
+  const { stat } = params;
+  if (stat && !stat.isFile()) {
+    throw new Error(`Log path is not a regular file: ${params.file}`);
+  }
+  const size = stat?.size ?? 0;
   const maxBytes = clamp(params.maxBytes, 1, MAX_BYTES);
   const limit = clamp(params.limit, 1, MAX_LIMIT);
   let cursor =
@@ -273,9 +282,10 @@ export async function readConfiguredLogTail(
   filter?: (line: string) => boolean,
 ): Promise<LogTailPayload> {
   const target = getResolvedLoggerFileTarget();
-  const file = await resolveLogFile(target.file, { rolling: target.rolling });
+  const { file, stat } = await resolveLogFile(target.file, { rolling: target.rolling });
   const result = await readLogSlice({
     file,
+    stat,
     cursor: params?.cursor,
     limit: params?.limit ?? DEFAULT_LIMIT,
     maxBytes: params?.maxBytes ?? DEFAULT_MAX_BYTES,

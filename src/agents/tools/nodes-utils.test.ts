@@ -11,7 +11,7 @@ vi.mock("./gateway.js", () => ({
 }));
 
 import type { NodeListNode } from "./nodes-utils.js";
-import { listNodes, resolveNodeIdFromList } from "./nodes-utils.js";
+import { listNodes, resolveNodeIdFromList, selectDefaultNodeFromList } from "./nodes-utils.js";
 
 function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string }): NodeListNode {
   return {
@@ -27,6 +27,38 @@ beforeEach(() => {
 });
 
 describe("resolveNodeIdFromList defaults", () => {
+  it("selects a default in one comparison per remaining candidate", () => {
+    const nodes = Array.from({ length: 512 }, (_, index) =>
+      node({ nodeId: `node-${String((index * 197) % 512).padStart(4, "0")}`, connectedAtMs: 1 }),
+    );
+    const original = nodes.slice();
+    const compare = vi.spyOn(String.prototype, "localeCompare");
+    let selected: NodeListNode | null;
+    let comparisons: number;
+    try {
+      selected = selectDefaultNodeFromList(nodes, { fallback: "first" });
+      comparisons = compare.mock.calls.length;
+    } finally {
+      compare.mockRestore();
+    }
+    expect(selected).toBe(nodes[0]);
+    expect(nodes).toEqual(original);
+    expect(comparisons).toBeLessThanOrEqual(nodes.length - 1);
+  });
+
+  it("preserves the first equal-ranked object and skips sparse inventory holes", () => {
+    const first = node({ nodeId: "same-node", connected: false, lastSeenAtMs: 5 });
+    const second = { ...first, displayName: "second record" };
+    const nodes: NodeListNode[] = [];
+    nodes[3] = first;
+    nodes[7] = second;
+    const original = nodes.slice();
+
+    expect(selectDefaultNodeFromList(nodes, { fallback: "first" })).toBe(first);
+    expect(nodes).toEqual(original);
+    expect(0 in nodes).toBe(false);
+  });
+
   it("keeps compact display-name matching opt-in", () => {
     const nodes = [node({ nodeId: "mac-1", displayName: "Mac Studio" })];
 

@@ -17,7 +17,6 @@ import type {
   CodexConfigWriteResponse,
   CodexExperimentalFeatureListParams,
   CodexExperimentalFeatureListResponse,
-  CodexHooksListParams,
   CodexHooksListResponse,
   CodexInstalledApp,
   CodexPluginDetail,
@@ -572,6 +571,11 @@ export type CodexErrorNotification = {
     message?: string;
     codexErrorInfo?: "misalignmentPolicyViolation" | (string & {}) | JsonObject | null;
     additionalDetails?: string | null;
+    misalignment?: {
+      errorType?: string | null;
+      detailedExplanation?: string | null;
+      steer?: { message: string } | null;
+    } | null;
     [key: string]: unknown;
   };
   willRetry?: boolean;
@@ -606,8 +610,12 @@ export type CodexModelListResponse = {
 };
 
 export type CodexGetAccountResponse = {
-  account?: JsonValue;
-  requiresOpenaiAuth?: boolean;
+  account?:
+    | { type: "apiKey" }
+    | { type: "chatgpt"; email: string | null; planType: string }
+    | { type: "amazonBedrock"; usesCodexManagedCredentials?: boolean }
+    | null;
+  requiresOpenaiAuth: boolean;
 };
 
 type CodexModelProviderCapabilitiesReadResponse = {
@@ -640,8 +648,6 @@ export declare namespace v2 {
   export type AppInfo = CodexAppInfo;
   export type AppSummary = CodexAppSummary;
   export type AppsInstalledResponse = CodexAppsInstalledResponse;
-  export type HooksListParams = CodexHooksListParams;
-  export type HooksListResponse = CodexHooksListResponse;
   export type InstalledApp = CodexInstalledApp;
   export type PluginDetail = CodexPluginDetail;
   export type PluginInstalledParams = CodexPluginInstalledParams;

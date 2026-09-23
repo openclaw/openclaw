@@ -4,10 +4,9 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import type { AdmittedRunContext } from "../../admitted-run-context.js";
-import { createAdmittedGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
-import type { EmbeddedRunTrigger, RunEmbeddedAgentParams } from "./params.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptToolRunFacts = Pick<
@@ -124,39 +123,4 @@ export function buildEmbeddedAttemptToolRunContext(
     // rewrite the facts attached to tool calls already in flight.
     ...(params.trace ? { trace: freezeDiagnosticTraceContext(params.trace) } : {}),
   };
-}
-
-/** Project the original turn's source and current caller into its admitted Gateway tools. */
-export function createEmbeddedGatewayToolCallerIdentity(params: {
-  run: Pick<
-    RunEmbeddedAgentParams,
-    | "cronCreatorAuthorityCapability"
-    | "messageChannel"
-    | "messageProvider"
-    | "currentMessagingTarget"
-    | "currentChannelId"
-    | "agentAccountId"
-    | "currentThreadTs"
-  >;
-  admittedRunContext: AdmittedRunContext;
-  agentId: string;
-  sessionKey: string;
-}) {
-  const { run } = params;
-  return createAdmittedGatewayToolCallerIdentity({
-    admittedRunContext: params.admittedRunContext,
-    cronAuthorityCheck: run.cronCreatorAuthorityCapability?.isCurrent,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    turnSourceChannel: run.messageChannel ?? run.messageProvider,
-    turnSourceLocal:
-      !run.messageChannel &&
-      !run.messageProvider &&
-      run.cronCreatorAuthorityCapability?.callerOrigin.kind === "local"
-        ? true
-        : undefined,
-    turnSourceTo: run.currentMessagingTarget ?? run.currentChannelId,
-    turnSourceAccountId: run.agentAccountId,
-    turnSourceThreadId: run.currentThreadTs,
-  });
 }

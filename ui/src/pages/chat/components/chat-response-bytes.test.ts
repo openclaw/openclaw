@@ -2,6 +2,25 @@ import { describe, expect, it, vi } from "vitest";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
 describe("readResponseBytesWithinLimit", () => {
+  it.each(["advertised", "streamed"])(
+    "retains a bounded prefix of an %s oversized response for an excerpt",
+    async (sizeSource) => {
+      const cancel = vi.fn();
+      const response = new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(Uint8Array.of(1, 2, 3, 4, 5, 6));
+          },
+          cancel,
+        }),
+        { headers: sizeSource === "advertised" ? { "Content-Length": "6" } : {} },
+      );
+      const bytes = await readResponseBytesWithinLimit(response, 4, { truncate: true });
+      expect(bytes && [...new Uint8Array(bytes)]).toEqual([1, 2, 3, 4]);
+      expect(cancel).toHaveBeenCalledOnce();
+    },
+  );
+
   it("rejects Content-Length above the budget without reading the body", async () => {
     const pull = vi.fn();
     const cancel = vi.fn();

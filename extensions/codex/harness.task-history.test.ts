@@ -197,6 +197,38 @@ function stampHistoryOwner(f: Awaited<ReturnType<typeof fixture>>, lifecycleRevi
 }
 
 describe("native subagent history through the harness", () => {
+  it.each([
+    { type: "collabAgentToolCall", tool: "wait", status: "completed", expected: undefined },
+    { type: "collabAgentToolCall", tool: "wait", status: "failed", expected: "failed" },
+    { type: "collabAgentToolCall", tool: "wait", status: "interrupted", expected: "failed" },
+    {
+      type: "dynamicToolCall",
+      tool: "process",
+      arguments: { action: "poll" },
+      status: "completed",
+      expected: "completed",
+    },
+    { type: "commandExecution", status: "declined", expected: "blocked" },
+    { type: "commandExecution", status: "completed", exitCode: 2, expected: "failed" },
+  ])(
+    "preserves native $type $status presentation while paging raw results",
+    async ({ expected, ...nativeItem }) => {
+      const f = await fixture();
+      f.items.push(item("older", { text: "Older answer" }), item("operation", nativeItem));
+      const page = await f.read({ limit: 2 });
+      expect(page.messages).toHaveLength(2);
+      expect(page.activity).toEqual(
+        messageIds(page.messages).map((messageId) => ({
+          messageId,
+          items: expected ? [expect.objectContaining({ status: expected, phase: "end" })] : [],
+        })),
+      );
+      expect(page.messages[1]).toMatchObject({ role: "toolResult", toolCallId: "operation" });
+      const older = await f.read({ cursor: page.nextCursor, limit: 2 });
+      expect(older.activity).toEqual([]);
+      expect(older.messages).toMatchObject([{ content: [{ text: "Older answer" }] }]);
+    },
+  );
   it("renders user, reasoning, tool call/result, and active assistant content in chronological order", async () => {
     const f = await fixture();
     f.items.push(
@@ -230,6 +262,12 @@ describe("native subagent history through the harness", () => {
     const ids = messageIds(page.messages);
     expect(ids.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
     expect(new Set(ids).size).toBe(page.messages.length);
+    expect(page.activity).toMatchObject(
+      ids.slice(2, 4).map((messageId) => ({
+        messageId,
+        items: [{ name: "bash", status: "completed", phase: "end" }],
+      })),
+    );
     expect(native.acquire).toHaveBeenCalledWith(
       expect.objectContaining({ agentDir: expect.any(String) }),
     );

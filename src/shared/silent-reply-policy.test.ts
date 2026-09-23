@@ -37,7 +37,7 @@ describe("classifySilentReplyConversationType", () => {
 describe("silent reply default policy resolution", () => {
   it("uses defaults when no overrides exist", () => {
     expect(resolveSilentReplyPolicyFromPolicies({ conversationType: "direct" })).toBe("disallow");
-    expect(resolveSilentReplyPolicyFromPolicies({ conversationType: "group" })).toBe("allow");
+    expect(resolveSilentReplyPolicyFromPolicies({ conversationType: "group" })).toBe("disallow");
   });
 });
 

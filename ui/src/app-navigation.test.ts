@@ -111,8 +111,8 @@ describe("navigationIconForRoute", () => {
       tasks: "listChecks",
       "agents-home": "bot",
       agents: "bot",
-      skills: "zap",
-      "skill-settings": "zap",
+      skills: "bookOpenText",
+      "skill-settings": "bookOpenText",
       plugins: "plug",
       "plugin-settings": "plug",
       "skill-workshop": "wrench",
@@ -125,6 +125,7 @@ describe("navigationIconForRoute", () => {
       automation: "terminal",
       mcp: "wrench",
       memory: "book",
+      search: "search",
       talk: "mic",
       infrastructure: "globe",
       labs: "flaskConical",
@@ -174,13 +175,18 @@ describe("formatDocumentTitle", () => {
   });
 
   it("names the disconnected gateway without implying internet loss", () => {
-    expect(
-      formatDocumentTitle({ context: "Usage", gatewayDisconnected: true, queuedCount: 0 }),
-    ).toBe("(Disconnected) Usage — OpenClaw");
+    expect(formatDocumentTitle({ context: "Usage", gatewayDisconnected: true })).toBe(
+      "(Disconnected) Usage — OpenClaw",
+    );
   });
 
-  it("ignores a queued count while online", () => {
-    expect(formatDocumentTitle({ context: "Usage", queuedCount: 3 })).toBe("Usage — OpenClaw");
+  it("shows attention separately from the disconnected state", () => {
+    expect(formatDocumentTitle({ context: "Usage", attentionCount: 3 })).toBe(
+      "(3) Usage — OpenClaw",
+    );
+    expect(
+      formatDocumentTitle({ context: "Usage", attentionCount: 3, gatewayDisconnected: true }),
+    ).toBe("(Disconnected) Usage — OpenClaw");
   });
 });
 
@@ -232,6 +238,7 @@ describe("titleForRoute", () => {
       automation: "Automation",
       mcp: "MCP",
       memory: "Memory",
+      search: "Search",
       talk: "Talk",
       infrastructure: "Infrastructure",
       labs: "Labs",
@@ -290,6 +297,7 @@ describe("subtitleForRoute", () => {
       automation: "Commands, hooks, automations, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
       memory: "Memory engine, search, and dreaming.",
+      search: "Choose how agents search the web and check provider health.",
       talk: "Realtime voice: provider, model, and speaker voice.",
       infrastructure: "Gateway, browser, node host, discovery, and ACP settings.",
       labs: "Experimental agent and tool capabilities.",
@@ -323,6 +331,7 @@ describe("pathForRoute", () => {
     expect(pathForRoute("logs")).toBe("/logs");
     expect(pathForRoute("plugins")).toBe("/plugins");
     expect(pathForRoute("plugin-settings")).toBe("/settings/plugins");
+    expect(pathForRoute("search")).toBe("/settings/search");
     expect(pathForRoute("skill-settings")).toBe("/settings/skills");
     expect(pathForRoute("approvals")).toBe("/settings/approvals");
     expect(pathForRoute("labs")).toBe("/settings/labs");
@@ -365,6 +374,7 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/dreaming")).toBeNull();
     expect(routeIdFromPath("/dreams")).toBeNull();
     expect(routeIdFromPath("/settings/plugins")).toBe("plugin-settings");
+    expect(routeIdFromPath("/settings/search")).toBe("search");
     expect(routeIdFromPath("/settings/skills")).toBe("skill-settings");
     expect(routeIdFromPath("/skills")).toBe("skills");
     expect(routeIdFromPath("/skills/workshop")).toBe("skill-workshop");
@@ -650,6 +660,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "cloud-workers",
       "agents",
       "model-providers",
+      "search",
       "plugin-settings",
       "skill-settings",
       "mcp",

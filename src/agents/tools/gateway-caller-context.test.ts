@@ -26,6 +26,38 @@ import {
 } from "./gateway-caller-context.js";
 
 describe("gateway caller context wrapper", () => {
+  it("preserves every delegated tool restriction through same-run wrappers", async () => {
+    const identity = { agentId: "main", sessionKey: "agent:main:preview" };
+    await withGatewayToolCallerIdentity(
+      {
+        ...identity,
+        assertToolAllowed: (name) => {
+          if (name === "exec") {
+            throw new Error("exec denied");
+          }
+        },
+      },
+      () =>
+        withGatewayToolCallerIdentity(
+          {
+            ...identity,
+            assertToolAllowed: (name) => {
+              if (name === "process") {
+                throw new Error("process denied");
+              }
+            },
+          },
+          () =>
+            withGatewayToolCallerIdentity(identity, () => {
+              const caller = getGatewayToolCallerIdentity();
+              expect(() => caller?.assertToolAllowed?.("exec")).toThrow("exec denied");
+              expect(() => caller?.assertToolAllowed?.("process")).toThrow("process denied");
+              expect(() => caller?.assertToolAllowed?.("read")).not.toThrow();
+            }),
+        ),
+    );
+  });
+
   it("preserves tool metadata used by policy and presentation layers", () => {
     const tool: AnyAgentTool = {
       name: "plugin_tool",

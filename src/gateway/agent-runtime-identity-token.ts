@@ -143,6 +143,7 @@ const spawnModelAutoSelectionSchema = z.object({
 });
 const sessionSpawnContextSchema = z
   .object({
+    requesterProfileId: normalizedRequiredStringSchema.optional(),
     completionOwnerSessionKey: normalizedRequiredStringSchema.optional(),
     resolvedModel: z
       .object({
@@ -158,6 +159,7 @@ const sessionSpawnContextSchema = z
     spawnModelAutoSelection: spawnModelAutoSelectionSchema.optional(),
   })
   .transform((context): AgentRuntimeSessionSpawnContext => ({
+    ...(context.requesterProfileId ? { requesterProfileId: context.requesterProfileId } : {}),
     ...(context.completionOwnerSessionKey
       ? { completionOwnerSessionKey: context.completionOwnerSessionKey }
       : {}),

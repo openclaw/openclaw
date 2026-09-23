@@ -7,6 +7,7 @@ import {
   getAsyncWorkSignal,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { hasModelFallbackStop } from "../failover-error.js";
 import { executePreparedCompactionSession } from "./compaction-session-execution.js";
 import {
   prepareDirectCompactionAttempt,
@@ -47,6 +48,9 @@ export async function compactEmbeddedAgentSessionDirectOnce(
       });
       return await executePreparedCompactionSession(runtime);
     } catch (err) {
+      if (hasModelFallbackStop(err)) {
+        throw err;
+      }
       return preparation.value.fail(formatErrorMessage(err), err);
     } finally {
       cleanup?.restoreSkillEnvironment();

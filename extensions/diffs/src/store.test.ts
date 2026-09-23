@@ -2,12 +2,16 @@
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
-import type { PluginBlobStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginBlobStore, PluginBlobEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiffsHttpHandler } from "./http.js";
 import { DiffArtifactStore } from "./store.js";
-import { createDiffStoreHarness, ensureCuratedViewerRuntimeForTests } from "./test-helpers.js";
+import {
+  createDiffStoreHarness,
+  ensureCuratedViewerRuntimeForTests,
+  expireDiffArtifactForTest,
+} from "./test-helpers.js";
 import type { DiffArtifactBlobMetadata } from "./types.js";
 
 beforeAll(async () => {
@@ -28,13 +32,42 @@ describe("DiffArtifactStore", () => {
       blobStore,
       reopen: reopenStore,
       cleanup: cleanupRootDir,
-    } = await createDiffStoreHarness("openclaw-diffs-store-"));
+    } = await createDiffStoreHarness("openclaw-diffs-store-", { nativeKernel: true }));
   });
 
   afterEach(async () => {
     vi.useRealTimers();
     await cleanupRootDir();
   });
+
+  async function mockDateBoundaryBlob() {
+    await store.stopCleanup();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const maximum = 8_640_000_000_000_000;
+    vi.setSystemTime(maximum - 1_000);
+    let entry: PluginBlobEntry<DiffArtifactBlobMetadata> | undefined;
+    const register = vi
+      .spyOn(blobStore, "registerIfAbsent")
+      .mockImplementation(async (key, bytes, metadata) => {
+        entry = {
+          key,
+          bytes,
+          metadata,
+          sizeBytes: bytes.byteLength,
+          createdAt: maximum - 1_000,
+          expiresAt: maximum,
+        };
+        return true;
+      });
+    const lookup = vi.spyOn(blobStore, "lookup").mockImplementation(async () => entry);
+    return {
+      register,
+      restore() {
+        lookup.mockRestore();
+        register.mockRestore();
+      },
+    };
+  }
 
   it("stores compressed viewer bytes and retrieves them with one authorized lookup", async () => {
     const lookup = vi.spyOn(blobStore, "lookup");
@@ -76,18 +109,26 @@ describe("DiffArtifactStore", () => {
   });
 
   it("caps artifact expiry instead of throwing near the Date boundary", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000 - 1_000));
+    const boundary = await mockDateBoundaryBlob();
+    try {
+      const artifact = await store.createArtifact({
+        html: "<html>demo</html>",
+        title: "Demo",
+        inputKind: "patch",
+        fileCount: 1,
+        ttlMs: 60_000,
+      });
 
-    const artifact = await store.createArtifact({
-      html: "<html>demo</html>",
-      title: "Demo",
-      inputKind: "patch",
-      fileCount: 1,
-      ttlMs: 60_000,
-    });
-
-    expect(artifact.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
+      expect(artifact.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
+      expect(boundary.register).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(Uint8Array),
+        expect.any(Object),
+        { ttlMs: 1_000 },
+      );
+    } finally {
+      boundary.restore();
+    }
   });
 
   it("serves viewer artifacts after reopening the shared SQLite store", async () => {
@@ -97,21 +138,14 @@ describe("DiffArtifactStore", () => {
       inputKind: "patch",
       fileCount: 1,
     });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
-    ({ store, blobStore } = reopenStore());
+    ({ store, blobStore } = await reopenStore());
 
     const loaded = await store.readAuthorizedViewer(artifact.id, artifact.token);
     expect(Buffer.from(loaded!.html).toString("utf8")).toBe("<html>persisted</html>");
   });
 
   it("expires artifacts after the ttl", async () => {
-    vi.useFakeTimers();
-    const now = new Date("2026-02-27T16:00:00Z");
-    vi.setSystemTime(now);
-
+    vi.useFakeTimers({ toFake: ["Date"] });
     const artifact = await store.createArtifact({
       html: "<html>demo</html>",
       title: "Demo",
@@ -120,7 +154,8 @@ describe("DiffArtifactStore", () => {
       ttlMs: 1_000,
     });
 
-    vi.setSystemTime(new Date(now.getTime() + 2_000));
+    await store.stopCleanup();
+    await expireDiffArtifactForTest(rootDir, artifact.id, 1_000);
     const loaded = await store.readAuthorizedViewer(artifact.id, artifact.token);
     expect(loaded).toBeNull();
     await expect(blobStore.deleteExpired()).resolves.toEqual([]);
@@ -149,19 +184,24 @@ describe("DiffArtifactStore", () => {
   });
 
   it("caps standalone file expiry instead of throwing near the Date boundary", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000 - 1_000));
+    const boundary = await mockDateBoundaryBlob();
+    try {
+      const standalone = await store.createStandaloneFileArtifact({ ttlMs: 60_000 });
 
-    const standalone = await store.createStandaloneFileArtifact({ ttlMs: 60_000 });
-
-    expect(standalone.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
+      expect(standalone.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
+      expect(boundary.register).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(Uint8Array),
+        expect.any(Object),
+        { ttlMs: 1_000 },
+      );
+    } finally {
+      boundary.restore();
+    }
   });
 
   it("expires standalone file artifacts using ttl metadata", async () => {
-    vi.useFakeTimers();
-    const now = new Date("2026-02-27T16:00:00Z");
-    vi.setSystemTime(now);
-
+    vi.useFakeTimers({ toFake: ["Date"] });
     const standalone = await store.createStandaloneFileArtifact({
       format: "png",
       ttlMs: 1_000,
@@ -169,7 +209,8 @@ describe("DiffArtifactStore", () => {
     await fs.writeFile(standalone.filePath, Buffer.from("png"));
     await store.completeFileArtifact(standalone.id);
 
-    vi.setSystemTime(new Date(now.getTime() + 2_000));
+    await store.stopCleanup();
+    await expireDiffArtifactForTest(rootDir, standalone.id, 1_000);
     await store.cleanupExpired();
 
     const error = await fs.stat(path.dirname(standalone.filePath)).then(
@@ -199,8 +240,7 @@ describe("DiffArtifactStore", () => {
   });
 
   it("removes only expired file rows and leaves live materializations", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-27T16:00:00Z"));
+    vi.useFakeTimers({ toFake: ["Date"] });
     const expired = await store.createStandaloneFileArtifact({ ttlMs: 1_000 });
     const live = await store.createStandaloneFileArtifact({ ttlMs: 60_000 });
     await fs.writeFile(expired.filePath, "expired");
@@ -208,7 +248,10 @@ describe("DiffArtifactStore", () => {
     await store.completeFileArtifact(expired.id);
     await store.completeFileArtifact(live.id);
 
-    vi.setSystemTime(new Date("2026-02-27T16:00:02Z"));
+    await store.stopCleanup();
+    vi.setSystemTime(Date.parse(expired.expiresAt) + 1);
+    await expect(blobStore.lookup(expired.id)).resolves.toBeUndefined();
+    await expireDiffArtifactForTest(rootDir, expired.id, 1_000);
     await store.cleanupExpired();
 
     await expect(fs.stat(path.dirname(expired.filePath))).rejects.toMatchObject({ code: "ENOENT" });
@@ -216,13 +259,13 @@ describe("DiffArtifactStore", () => {
   });
 
   it("keeps expired file metadata claimable across later blob writes", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-27T16:00:00Z"));
+    vi.useFakeTimers({ toFake: ["Date"] });
     const expired = await store.createStandaloneFileArtifact({ ttlMs: 1_000 });
     await fs.writeFile(expired.filePath, "expired");
     await store.completeFileArtifact(expired.id);
 
-    vi.setSystemTime(new Date("2026-02-27T16:00:02Z"));
+    await store.stopCleanup();
+    await expireDiffArtifactForTest(rootDir, expired.id, 1_000);
     await blobStore.register(
       "later-write",
       new Uint8Array(),
@@ -337,6 +380,8 @@ describe("DiffArtifactStore", () => {
     await fs.writeFile(artifact.filePath, "rendering");
     const oldTime = new Date(now.getTime() - 25 * 60 * 60 * 1_000);
     await fs.utimes(path.dirname(artifact.filePath), oldTime, oldTime);
+    await store.stopCleanup();
+    await expireDiffArtifactForTest(rootDir, artifact.id, 1_000);
     vi.setSystemTime(new Date(now.getTime() + 2_000));
 
     await store.cleanupExpired();
@@ -348,7 +393,7 @@ describe("DiffArtifactStore", () => {
   });
 
   it("throttles cleanup sweeps across repeated artifact creation", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     const now = new Date("2026-02-27T16:00:00Z");
     vi.setSystemTime(now);
     store = new DiffArtifactStore({
@@ -616,7 +661,7 @@ describe("createDiffsHttpHandler", () => {
   });
 
   it("slides the remote failure window across the original window boundary", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     const startedAt = new Date("2026-08-19T12:00:00Z").getTime();
     vi.setSystemTime(startedAt);
     const handler = createDiffsHttpHandler({ store, allowRemoteViewer: true });

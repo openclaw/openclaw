@@ -1,4 +1,3 @@
-// Memory Core plugin module implements manager vector write behavior.
 import type { SQLInputValue } from "node:sqlite";
 import { vectorToBlob } from "./vector-blob.js";
 

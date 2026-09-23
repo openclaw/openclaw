@@ -15,7 +15,7 @@ import {
   readConfigFileSnapshot,
   resolveOpenClawPackageRoot,
   runCommandWithTimeout,
-  runGatewayUpdate,
+  updateCommand,
 } from "./doctor.e2e-harness.js";
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
@@ -39,7 +39,7 @@ describe("doctor database schema preflight", () => {
     );
 
     expect(confirm).not.toHaveBeenCalled();
-    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(updateCommand).not.toHaveBeenCalled();
     expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(fs.readFileSync(statePath)).toEqual(original);
@@ -53,7 +53,7 @@ describe("doctor database schema preflight", () => {
 
     await expect(doctorCommand(createDoctorRuntime())).resolves.toBeUndefined();
 
-    expect(runGatewayUpdate).toHaveBeenCalledOnce();
+    expect(updateCommand).toHaveBeenCalledOnce();
     expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
   });
@@ -67,7 +67,7 @@ describe("doctor database schema preflight", () => {
       /Doctor refused to continue.*database schema.*newer than this build/iu,
     );
 
-    expect(runGatewayUpdate).toHaveBeenCalledOnce();
+    expect(updateCommand).toHaveBeenCalledOnce();
     expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
   });
@@ -82,7 +82,7 @@ describe("doctor database schema preflight", () => {
       /Doctor refused to continue.*database schema.*newer than this build/iu,
     );
 
-    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(updateCommand).not.toHaveBeenCalled();
     expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(fs.readFileSync(statePath)).toEqual(original);
@@ -128,12 +128,14 @@ function mockInteractiveGitUpdate(
     signal: null,
     killed: false,
   });
-  runGatewayUpdate.mockResolvedValue({
-    ...outcome,
-    mode: "git",
-    root: "/repo",
-    steps: [],
-    durationMs: 0,
+  updateCommand.mockImplementation(async ({ onResult }) => {
+    onResult?.({
+      ...outcome,
+      mode: "git",
+      root: "/repo",
+      steps: [],
+      durationMs: 0,
+    });
   });
 }
 

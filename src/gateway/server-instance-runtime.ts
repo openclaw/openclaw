@@ -13,6 +13,8 @@ import type {
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+// HTTP agent ingress can finish before the lazy agent.wait handler loads its recorder.
+import "./agent-turn/agent-job.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { InternalAgentTurnPrincipalOptions } from "./agent-turn/internal-facade.types.js";
 import {

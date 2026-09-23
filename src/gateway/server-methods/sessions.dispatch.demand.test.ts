@@ -49,7 +49,7 @@ function connectedNode(deviceId: string): NodeWorkerSupervisorNodeProof {
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: GATEWAY_CLIENT_MODES.NODE,
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
+    workerHost: { enabled: true, capacity: { total: 2, available: 2 }, capturedExecPolicy: true },
     commands: ["system.run"],
   };
 }

@@ -103,6 +103,7 @@ async function fetchEndpoint(params: {
   ssrfPolicy: ReturnType<typeof resolveOpenRouterSsrfPolicy>;
   dispatcherPolicy: ReturnType<typeof resolveProviderHttpRequestConfig>["dispatcherPolicy"];
   timeoutMs: number;
+  signal?: AbortSignal;
   fetchFn: typeof fetch;
 }): Promise<EndpointResult> {
   let guardedResponse: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
@@ -118,6 +119,7 @@ async function fetchEndpoint(params: {
         redirect: "error",
       },
       timeoutMs: params.timeoutMs,
+      signal: params.signal,
       // The shared guard controls redirects manually; zero hops preserves fail-closed usage auth.
       maxRedirects: 0,
       policy: params.ssrfPolicy,
@@ -150,6 +152,7 @@ export async function fetchOpenRouterUsage(params: {
   baseUrl?: string;
   request?: ModelProviderConfig["request"];
   timeoutMs: number;
+  signal?: AbortSignal;
   fetchFn: typeof fetch;
 }): Promise<ProviderUsageSnapshot> {
   const requestConfig = resolveProviderHttpRequestConfig({
@@ -169,6 +172,7 @@ export async function fetchOpenRouterUsage(params: {
     ssrfPolicy: resolveOpenRouterSsrfPolicy(requestConfig, params.request),
     dispatcherPolicy: requestConfig.dispatcherPolicy,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
     fetchFn: params.fetchFn,
   };
   const [creditsResult, keyResult] = await Promise.all([

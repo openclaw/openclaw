@@ -12,6 +12,7 @@ import { createManagedHandoffLeaseStore } from "../../infra/update-managed-servi
 import { finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -22,8 +23,13 @@ import * as oneShotExit from "../one-shot-exit.js";
 import { invokeUpdateCli } from "../update-cli-invocation.test-support.js";
 import { registerUpdateCli } from "../update-cli.js";
 import * as shared from "./shared.js";
+import * as databaseContext from "./update-command-database-context.js";
 import * as execution from "./update-command-execution.js";
 import * as executorOwner from "./update-command-executor.js";
+import {
+  captureFreshManagedServiceAdmission,
+  freshManagedServiceRuntimeCases,
+} from "./update-command-fresh-preview.test-support.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as initialization from "./update-command-initialization.js";
 import * as packageUpdate from "./update-command-package.js";
@@ -505,7 +511,16 @@ describe("update command admission with fresh state", () => {
       ).rejects.toMatchObject({ code: 1 });
 
       expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({ status: "error", reason: "target-metadata-preflight" }),
+        expect.objectContaining({
+          status: "error",
+          reason: "target-metadata-preflight",
+          mode: "npm",
+          steps: [
+            expect.objectContaining({
+              failureFacts: [expect.objectContaining({ code: "target-registry-dist-tag" })],
+            }),
+          ],
+        }),
       );
       expectFreshStatePreserved();
     },
@@ -531,6 +546,37 @@ describe("update command admission with fresh state", () => {
       );
       expect(defaultRuntime.error).toHaveBeenCalledWith(
         expect.stringContaining("registry unavailable"),
+      );
+      expectFreshStatePreserved();
+    },
+  );
+
+  it.each(freshManagedServiceRuntimeCases)(
+    "limits fresh-state Node recovery ($name)",
+    async (testCase) => {
+      const { owned, writable, restart, discovered, expectedFallback, expectedRecovery } = testCase;
+      fixture.managedServiceNodeRunner = discovered ? "/service/node" : undefined;
+      vi.spyOn(shared, "resolveNodeRunner").mockReturnValue("/current/node");
+      vi.mocked(databaseContext.inspectUpdateDatabaseContexts).mockImplementation(() =>
+        captureFreshManagedServiceAdmission({ root: fixture.root, owned, writable, restart }),
+      );
+      const runtimePreflight = vi
+        .spyOn(servicePlan, "resolvePackageRuntimePreflight")
+        .mockResolvedValue({ ok: false, error: "fixture-stop" });
+
+      await expect(
+        updateCommand({ tag: "2026.9.2", yes: true, json: true, restart }),
+      ).rejects.toMatchObject({ code: 1 });
+
+      expect(runtimePreflight).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          nodeRunner: discovered ? "/service/node" : undefined,
+          fallbackNodeRunner: expectedFallback,
+          runtimeRecovery: expectedRecovery ? expect.any(Object) : undefined,
+        }),
+      );
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "error", reason: "node-runtime-preflight" }),
       );
       expectFreshStatePreserved();
     },
@@ -752,15 +798,19 @@ it("fresh local artifact reaches compatible target staging without creating pare
   expect(outcome).toBe("artifact-staged");
 });
 
-it.each([16, undefined] as const)(
-  "inspects artifact schema %s before canonical initialization and history",
-  async (schema) => {
+it.each([
+  { schema: 16, version: "2026.9.2", code: undefined },
+  { schema: undefined, version: "2026.9.2", code: "target-schema-metadata" },
+  { schema: 16, version: "invalid", code: "target-version-resolution" },
+])(
+  "inspects artifact version $version and schema $schema before canonical initialization and history",
+  async ({ schema, version, code }) => {
     const candidate = dirs.make("openclaw-artifact-candidate-");
     fs.writeFileSync(
       path.join(candidate, "package.json"),
       JSON.stringify({
         name: "openclaw",
-        version: "2026.9.2",
+        version,
         engines: { node: ">=22" },
         ...(schema === undefined
           ? {}
@@ -809,12 +859,25 @@ it.each([16, undefined] as const)(
     expect(staged.close).toHaveBeenCalledOnce();
     expect(privateState).toBeDefined();
     expect(fs.existsSync(path.dirname(privateState!))).toBe(false);
-    if (schema === undefined) {
+    if (code) {
       expect(doctor).not.toHaveBeenCalled();
       expect(admission).not.toHaveBeenCalled();
       expect(fs.existsSync(fixture.databasePath)).toBe(false);
       expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "target-metadata-preflight" }),
+        expect.objectContaining({
+          reason: "target-metadata-preflight",
+          mode: "npm",
+          steps: [
+            expect.objectContaining({
+              failureFacts: [
+                expect.objectContaining({
+                  code,
+                  message: expect.stringContaining("openclaw update --tag"),
+                }),
+              ],
+            }),
+          ],
+        }),
       );
     } else {
       expect(outcome).toBe("artifact-admitted");
@@ -919,7 +982,7 @@ it("requires confirmation for an inspected older artifact without a TTY", async 
   expect(fs.existsSync(fixture.databasePath)).toBe(false);
 });
 
-it.each([17, 18])(
+it.each([OPENCLAW_STATE_SCHEMA_VERSION, OPENCLAW_STATE_SCHEMA_VERSION + 1])(
   "admits compatible parent history before artifact schema %s migration",
   async (schema) => {
     const candidate = dirs.make("artifact-forward-");
@@ -958,7 +1021,9 @@ it.each([17, 18])(
         assert(run);
         const db = new DatabaseSync(fixture.databasePath, { readOnly: true });
         try {
-          expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
+          expect(db.prepare("PRAGMA user_version").get()).toEqual({
+            user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+          });
         } finally {
           db.close();
         }

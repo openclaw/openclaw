@@ -5,6 +5,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -324,6 +325,7 @@ export function installSignalToolResultTestHooks() {
     signalToolResultIngressMonitor.current = undefined;
     signalToolResultIngressQueue = undefined;
     setSignalRuntime({
+      channel: createPluginRuntimeMock().channel,
       logging: {
         getChildLogger: () => ({
           debug: vi.fn(),

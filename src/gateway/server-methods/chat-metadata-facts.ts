@@ -10,7 +10,7 @@ import type { GatewayModelCatalogContext } from "./models-list-context.js";
 
 export type PreparedAgentFacts = ChatMetadataProjectionFacts & {
   authStoreRevision: string;
-  catalogStatusKey: string;
+  catalogRefreshFailed: boolean;
   skillsVersion: number;
 };
 
@@ -59,7 +59,7 @@ export function generationFactsMatch(
       candidate.owner === agent.owner &&
       candidate.authStoreRevision === agent.authStoreRevision &&
       candidate.modelCatalog === agent.modelCatalog &&
-      candidate.catalogStatusKey === agent.catalogStatusKey &&
+      candidate.catalogRefreshFailed === agent.catalogRefreshFailed &&
       candidate.skillsVersion === agent.skillsVersion
     );
   });

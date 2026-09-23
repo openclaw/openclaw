@@ -14,25 +14,58 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { toErrorObject } from "../../scripts/lib/error-format.mts";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { formatShimResult, withShimFixture } from "./direct-run-entrypoints.test-support.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
+
+const preparedRunnerModules = [
+  [
+    new URL("../../scripts/run-node.mts", import.meta.url),
+    resolveRuntimeWorkerUrl(toolingMtsEntrypoints.runNode),
+  ],
+  [
+    new URL("../../scripts/watch-node.mts", import.meta.url),
+    resolveRuntimeWorkerUrl(scriptModuleEntrypoints.watchNode),
+  ],
+] as const;
+
+function prepareRunnerEnv(env: NodeJS.ProcessEnv, implementations: string[] = []) {
+  const modules: Array<readonly [URL, URL]> = [...preparedRunnerModules];
+  for (const implementation of implementations) {
+    // These generated fixtures are already JavaScript; prepare their bytes before the guard.
+    const prepared = `${implementation}.mjs`;
+    copyFileSync(implementation, prepared);
+    modules.push([pathToFileURL(implementation), pathToFileURL(prepared)]);
+  }
+  return preparedScriptWrapperEnv(modules, env);
+}
 
 it.runIf(process.platform !== "win32")(
   "stops gateway watch when a compile-cache respawn child dies from a signal",
   async () => {
+    const nodeArgs = resolveVitestNodeArgs();
     await withShimFixture("scripts/run-node.mjs", async (fixture) => {
       const { checkoutRoot, fixtureRoot, implementationPath } = fixture;
       const childPidPath = path.join(fixtureRoot, "child.pid");
+      const childArgsPath = path.join(fixtureRoot, "child-args.json");
       const launcherPidPath = path.join(fixtureRoot, "launcher.pid");
       const invocationsPath = path.join(fixtureRoot, "invocations.jsonl");
       const releasePath = path.join(fixtureRoot, "release");
       for (const filename of [
         "openclaw.mjs",
+        "node-host-launcher.mjs",
         "node-version.mjs",
         "node-runtime-update.mjs",
         "node-runtime-recovery.mjs",
+        "cli-root-options.mjs",
+        "gateway-run-argv.mjs",
+        "gateway-shutdown-budget.mjs",
         "node-sqlite.mjs",
       ]) {
         copyFileSync(filename, path.join(checkoutRoot, filename));
@@ -46,6 +79,7 @@ it.runIf(process.platform !== "win32")(
         path.join(checkoutRoot, "dist/entry.js"),
         `import fs from "node:fs";
 if (fs.existsSync(${JSON.stringify(releasePath)})) process.exit(0);
+fs.writeFileSync(${JSON.stringify(childArgsPath)}, JSON.stringify(process.execArgv));
 fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));
 setInterval(() => {
   if (fs.existsSync(${JSON.stringify(releasePath)})) process.exit(0);
@@ -63,8 +97,8 @@ fs.appendFileSync(${JSON.stringify(invocationsPath)}, JSON.stringify(process.arg
 if (fs.existsSync(${JSON.stringify(childPidPath)})) process.exit(0);
 const outcome = await runNodeMain({
   spawn: (command, args, options) => {
-    if (!args.includes("openclaw.mjs")) return spawn(process.execPath, ["--eval", ""], options);
-    const child = spawn(command, args, options);
+    if (!args.includes("openclaw.mjs")) return spawn(process.execPath, [...${JSON.stringify(nodeArgs)}, "--eval", ""], options);
+    const child = spawn(command, [...${JSON.stringify(nodeArgs)}, ...args], options);
     fs.writeFileSync(${JSON.stringify(launcherPidPath)}, String(child.pid));
     return child;
   },
@@ -78,8 +112,10 @@ else process.exit(outcome);
       const watcherUrl = pathToFileURL(path.resolve("scripts/watch-node.mts")).href;
       writeFileSync(
         path.join(checkoutRoot, "scripts/watch-node.mts"),
-        `import { runWatchMain } from ${JSON.stringify(watcherUrl)};
+        `import { spawn } from "node:child_process";
+import { runWatchMain } from ${JSON.stringify(watcherUrl)};
 const outcome = await runWatchMain({
+  spawn: (command, args, options) => spawn(command, [...${JSON.stringify(nodeArgs)}, ...args], options),
   createWatcher: () => ({ on() {}, close() {} }),
 });
 if (typeof outcome === "string") process.kill(process.pid, outcome);
@@ -103,8 +139,15 @@ else process.exit(outcome);
       delete env.NODE_OPTIONS;
       delete env.NODE_DISABLE_COMPILE_CACHE;
       delete env.OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED;
+      Object.assign(
+        env,
+        prepareRunnerEnv(env, [
+          implementationPath,
+          path.join(checkoutRoot, "scripts/watch-node.mts"),
+        ]),
+      );
       let observedExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
-      const command = runNodeScript([watchWrapper, "gateway"], env, 10_000, {
+      const command = runNodeScript([...nodeArgs, watchWrapper, "gateway"], env, 10_000, {
         cwd: checkoutRoot,
         requireProcessTreeExit: true,
         onReady(child) {
@@ -120,6 +163,10 @@ else process.exit(outcome);
           expect(childPid, "the launcher must respawn before the signal is sent").not.toBe(
             launcherPid,
           );
+          expect(
+            JSON.parse(readFileSync(childArgsPath, "utf8")),
+            "the respawned fixture child retains the Node shutdown policy",
+          ).toContain("--no-concurrent-sparkplug");
           process.kill(childPid, "SIGKILL");
           const result = await command;
           expect(result.error, formatShimResult(result)).toBeUndefined();
@@ -179,7 +226,7 @@ it.runIf(process.platform !== "win32").each(["runner", "watch"] as const)(
       mode === "watch" ? "watch-node.mjs" : "run-node.mjs",
     );
     let observedExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
-    const command = runNodeScript([entrypoint, "gateway"], env, 10_000, {
+    const command = runNodeScript([entrypoint, "gateway"], prepareRunnerEnv(env), 10_000, {
       cwd: checkout,
       onReady(child) {
         child.once("exit", (code, signal) => {
@@ -275,7 +322,11 @@ else process.exit(outcome);
         ),
       };
       delete env.NODE_OPTIONS;
-      const command = runNode([wrapperPath], env, checkoutRoot);
+      const command = runNode(
+        [wrapperPath],
+        prepareRunnerEnv(env, [implementationPath]),
+        checkoutRoot,
+      );
       try {
         const childPid = await waitForPidFile(childPidPath, 5_000);
         const wrapperPid = await waitForPidFile(wrapperPidPath, 5_000);

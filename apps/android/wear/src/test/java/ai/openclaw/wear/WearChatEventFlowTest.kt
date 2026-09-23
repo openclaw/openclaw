@@ -59,6 +59,76 @@ import org.robolectric.shadows.ShadowTextToSpeech
 @RunWith(RobolectricTestRunner::class)
 @Config(application = WearApplication::class, sdk = [35])
 class WearChatEventFlowTest {
+  @Test
+  @Config(qualifiers = "en-rUS-w227dp-h227dp-round-xhdpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun refreshRetainsIncompatibleDiagnosisAndRecoversFromUpgrade() =
+    withFlow { flow ->
+      flow.observeMainActivity(WearLaunchTarget.Chat)
+      flow.gatewayConnected = false
+      flow.connectionFailure = "incompatible"
+      flow.connection(false)
+      flow.settleApp()
+      assertEquals(WearConversationFailure.INCOMPATIBLE, flow.state.failure)
+      flow.scrollAppTo(5)
+      flow.captureApp("diagnosis-before-refresh")
+      flow.vm.refresh()
+      flow.settleApp()
+      flow.scrollAppTo(4)
+      flow.captureApp("diagnosis-after-refresh")
+      assertEquals(WearConversationFailure.INCOMPATIBLE, flow.state.failure)
+      assertTrue(flow.hasAppText("Update OpenClaw on both phone and watch."))
+      flow.gatewayConnected = true
+      flow.connectionFailure = null
+      flow.connection(true)
+      flow.settleApp()
+      assertTrue(flow.state.connected)
+      assertNull(flow.state.failure)
+    }
+
+  @Test
+  fun refreshUsesCurrentDiagnosisInsteadOfRetainingThePreviousFailure() {
+    for ((failure, status, expected) in listOf(
+      Triple(null, "Update OpenClaw", WearConversationFailure.INCOMPATIBLE),
+      Triple("incompatible", "Versions differ", WearConversationFailure.INCOMPATIBLE),
+      Triple("gateway_offline", "Offline", WearConversationFailure.GATEWAY_OFFLINE),
+    )) {
+      withFlow { flow ->
+        flow.gatewayConnected = false
+        flow.connectionFailure = "incompatible"
+        flow.connection(false)
+        flow.connectionFailure = failure
+        flow.connectionStatus = status
+        flow.vm.refresh()
+        flow.idle()
+        assertEquals(expected, flow.state.failure)
+      }
+    }
+  }
+
+  @Test
+  fun disconnectCancelsStaleIncompatibleStatusBeforeCompatibleReconnect() =
+    withFlow { flow ->
+      flow.gatewayConnected = false
+      flow.connectionFailure = "incompatible"
+      flow.connection(false)
+      val gate = CompletableDeferred<Unit>()
+      flow.statusGate = gate
+      flow.vm.refresh()
+      flow.idle()
+      flow.connectionFailure = "gateway_offline"
+      flow.connection(false)
+      gate.complete(Unit)
+      flow.idle()
+      assertEquals(WearConversationFailure.GATEWAY_OFFLINE, flow.state.failure)
+      flow.statusGate = null
+      flow.gatewayConnected = true
+      flow.connectionFailure = null
+      flow.connection(true)
+      assertTrue(flow.state.connected)
+      assertNull(flow.state.failure)
+    }
+
   private val terminalHistoryOutcomes =
     listOf(
       "settled-finalization-fallback" to WearReplyOutcome.Final,
@@ -2702,6 +2772,9 @@ class WearChatEventFlowTest {
     var sendErrorCode = "internal_error"
     var sendAck: JsonObject? = null
     var gatewayConnected = true
+    var connectionFailure: String? = null
+    var connectionStatus = "Offline"
+    var statusGate: CompletableDeferred<Unit>? = null
     var statusFails = false
     var historyErrorCode = "internal_error"
     var abortFails = false
@@ -2939,12 +3012,17 @@ class WearChatEventFlowTest {
       val result =
         when (request.method) {
           WearRpcMethod.ProxyStatus -> {
-            buildJsonObject {
-              put("connected", gatewayConnected)
-              put("activeAgentId", "main")
-              put("activeSessionKey", "agent:main:proof")
-              if (sessionSearchList != null) put("capabilities", Json.parseToJsonElement("""["session-search-pagination"]"""))
-            }
+            val snapshot =
+              buildJsonObject {
+                put("connected", gatewayConnected)
+                put("status", connectionStatus)
+                connectionFailure?.let { put("failure", it) }
+                put("activeAgentId", "main")
+                put("activeSessionKey", "agent:main:proof")
+                if (sessionSearchList != null) put("capabilities", Json.parseToJsonElement("""["session-search-pagination"]"""))
+              }
+            statusGate?.await()
+            snapshot
           }
 
           WearRpcMethod.SessionsList -> {
@@ -3032,7 +3110,11 @@ class WearChatEventFlowTest {
             WearMessage.Event(
               sequence = sequence,
               event = WearEventType.Connection,
-              payload = buildJsonObject { put("connected", connected) },
+              payload =
+                buildJsonObject {
+                  put("connected", connected)
+                  connectionFailure?.let { put("failure", it) }
+                },
               streamId = "epoch-a",
             ),
           ),

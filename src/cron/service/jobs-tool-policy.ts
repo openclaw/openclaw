@@ -22,18 +22,29 @@ import type {
 } from "../types.js";
 import type { CronAddOptions, CronUpdateOptions } from "./state.js";
 
-/** Snapshots the normalized permissions used by scheduled message access. */
-export function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
+function resolveCronJobScheduledMessagePolicy(job: CronStoredJob) {
   const policy = resolveCronScheduledToolPolicy({
     toolsAllow: job.payload.toolsAllow,
     scheduledToolPolicy: job.scheduledToolPolicy,
     owner: job.owner,
   });
-  if (
-    !cronJobUsesToolRuntime(job) ||
-    !policy ||
-    !isRuntimeToolAllowed("message", job.payload.toolsAllow)
-  ) {
+  return cronJobUsesToolRuntime(job) &&
+    policy &&
+    isRuntimeToolAllowed("message", job.payload.toolsAllow)
+    ? policy
+    : undefined;
+}
+
+/** Snapshots the permissions used by all scheduled message actions. */
+export function resolveCronJobMessageToolAuthorityInputs(job: CronStoredJob) {
+  const policy = resolveCronJobScheduledMessagePolicy(job);
+  return policy ? { policy } : undefined;
+}
+
+/** Snapshots the normalized permissions used by scheduled message access. */
+export function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
+  const policy = resolveCronJobScheduledMessagePolicy(job);
+  if (!policy) {
     return undefined;
   }
   const channelRequester = resolveCronAuthenticatedChannelRequester(job);
@@ -54,6 +65,16 @@ export function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
         }
       : {}),
   };
+}
+
+export function cronJobMessageToolAuthorityInputsEqual(
+  previous: CronStoredJob,
+  next: CronStoredJob,
+): boolean {
+  return isDeepStrictEqual(
+    resolveCronJobMessageToolAuthorityInputs(previous),
+    resolveCronJobMessageToolAuthorityInputs(next),
+  );
 }
 
 export function cronJobMessageActionAuthorityInputsEqual(

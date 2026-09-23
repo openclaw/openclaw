@@ -37,3 +37,27 @@ export type MeetingSessionRuntimeJoinContext<
     tab?: TTab;
   }): TTab | undefined;
 };
+
+export type MeetingSessionRuntimeMessages<TSpeechBlockedReason extends string> = {
+  previousBrowserLeaveFailed: string;
+  reassignedSessionNote: string;
+  reusedSessionNote: string;
+  replacementBrowserLeaveFailed: string;
+  speechBlockedFallback: string;
+  speech: {
+    audioBridgeUnavailable: string;
+    browserUnverified: string;
+    microphoneMuted: string;
+    microphoneMutedReason: TSpeechBlockedReason;
+    notInCall: string;
+    notInCallReason: TSpeechBlockedReason;
+    browserUnverifiedReason: TSpeechBlockedReason;
+    audioBridgeUnavailableReason: TSpeechBlockedReason;
+  };
+};
+
+export type MeetingSessionLeaveResult<TSession> = {
+  found: boolean;
+  session?: TSession;
+  browserLeft?: boolean;
+};

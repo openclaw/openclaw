@@ -201,7 +201,7 @@ export async function sendMessageZalo(
           {
             chat_id: context.chatId,
             photo: photoUrl,
-            caption: caption !== undefined ? truncateUtf16Safe(caption, 2000) : undefined,
+            caption,
           },
           context.fetcher,
           assertCurrent,

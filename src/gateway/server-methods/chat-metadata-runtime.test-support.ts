@@ -139,6 +139,7 @@ export function createChatMetadataOwner(
       routeVariants: api ? [model] : [],
     },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores() {
       throw new Error("Chat metadata must not create executable model stores");

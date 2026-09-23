@@ -16,7 +16,7 @@ import {
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
-import { withEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   openClawStateDatabaseCache,
   recordOpenClawStateDatabaseOpenFailure,
@@ -126,8 +126,8 @@ describe("unpublished state database acquisition", () => {
     }
   });
 
-  it("records and reports SQLite errors from scheduled shared-state checkpoints", () => {
-    withEnv({ OPENCLAW_LOG_LEVEL: undefined }, () => {
+  it("records and reports SQLite errors from scheduled shared-state checkpoints", async () => {
+    await withEnvAsync({ OPENCLAW_LOG_LEVEL: undefined }, async () => {
       const previousLogging = { ...loggingState };
       const warn = vi.fn<(line: string) => void>();
       try {
@@ -147,7 +147,7 @@ describe("unpublished state database acquisition", () => {
         });
         try {
           warn.mockClear();
-          vi.advanceTimersByTime(30 * 60 * 1000);
+          await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
           expect(database.walMaintenance.health).toMatchObject({
             state: "error",
             error: "checkpoint storage unavailable",
@@ -164,7 +164,7 @@ describe("unpublished state database acquisition", () => {
             }),
           );
           intercepted.mockRestore();
-          vi.advanceTimersByTime(30 * 60 * 1000);
+          await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
           expect(database.walMaintenance.health).toMatchObject({
             state: "complete",
             warning: false,

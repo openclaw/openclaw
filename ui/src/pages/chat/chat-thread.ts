@@ -117,6 +117,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.text === next.text &&
         previous.label === next.label &&
         previous.startsTurn === next.startsTurn &&
+        previous.boundaryId === next.boundaryId &&
         previous.timestamp === next.timestamp
       );
     case "divider":
@@ -127,9 +128,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.label === next.label &&
         previous.metric === next.metric &&
         previous.description === next.description &&
-        previous.timestamp === next.timestamp &&
-        previous.action?.kind === next.action?.kind &&
-        previous.action?.label === next.action?.label
+        previous.timestamp === next.timestamp
       );
     case "stream":
       return (
@@ -137,6 +136,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.text === next.text &&
         previous.startedAt === next.startedAt &&
         previous.isStreaming === next.isStreaming &&
+        JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
         previous.runId === next.runId &&
         previous.boundaryId === next.boundaryId
       );
@@ -144,6 +144,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
       return (
         previous.kind === "reading-indicator" &&
         previous.startedAt === next.startedAt &&
+        previous.preamble === next.preamble &&
         previous.runId === next.runId &&
         previous.boundaryId === next.boundaryId
       );

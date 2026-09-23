@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements channel actions behavior.
 import {
   listWhatsAppAccountIds,
   resolveWhatsAppAccount,

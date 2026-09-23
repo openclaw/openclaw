@@ -1,17 +1,20 @@
-import type { Message } from "@openclaw/llm-core";
+import type { Message, Model, StreamFn } from "@openclaw/llm-core";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
-import { estimateTokens } from "./compaction.js";
+import { convertToLlm } from "../messages.js";
+import { estimateTokens, generateSummary } from "./compaction.js";
 import {
   computeFileLists,
   createFileOps,
   extractFileOpsFromMessage,
   formatFileOperations,
   formatPersistedSenderSuffix,
+  getCompactionContent,
   MAX_FILE_OPS_SECTION_CHARS,
   mergeSummaryFileOperations,
   serializeConversation,
@@ -137,7 +140,147 @@ describe("file operation provenance", () => {
   });
 });
 
+describe("getCompactionContent", () => {
+  it("separates visible blocks without letting empty or omitted blocks add blank lines", () => {
+    expect(
+      getCompactionContent([
+        { type: "text", text: "" },
+        { type: "text", text: "alpha" },
+        { type: "image", text: "PRIVATE_IMAGE_TEXT" },
+        { type: "text", text: "" },
+        { type: "toolResult", text: "beta", content: "duplicate fallback" },
+        { type: "thinking", text: "PRIVATE_REASONING" },
+        { type: "tool_result", content: "gamma" },
+        { type: "text", text: "" },
+      ]),
+    ).toEqual({
+      text: "alpha\nbeta\ngamma",
+      omissionText:
+        "[image data omitted from summary input]\n[non-text data omitted from summary input]",
+    });
+  });
+
+  it("preserves whitespace inside blocks, including whitespace-only blocks", () => {
+    const text = "  alpha\t\u00a0\nbeta  ";
+    expect(getCompactionContent(text)).toEqual({ text, omissionText: "" });
+    expect(getCompactionContent([{ type: "text", text }])).toEqual({ text, omissionText: "" });
+    expect(
+      getCompactionContent([
+        { type: "text", text },
+        { type: "text", text: " \t" },
+        { type: "text", text: "\ngamma " },
+      ]),
+    ).toEqual({ text: `${text}\n \t\n\ngamma `, omissionText: "" });
+    expect(getCompactionContent([{ type: "text", text: "" }])).toEqual({
+      text: "",
+      omissionText: "",
+    });
+  });
+});
+
 describe("serializeConversation", () => {
+  it("sends independent tool-result blocks to the summarizer with their boundaries intact", async () => {
+    const model: Model = {
+      id: "summary-model",
+      name: "Summary Model",
+      api: "test-api",
+      provider: "test-provider",
+      baseUrl: "https://example.test",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 100_000,
+      maxTokens: 8_000,
+    };
+    const streamFn = vi.fn<StreamFn>((_model, context) => {
+      expect(context.messages[0]).toMatchObject({
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: expect.stringContaining(
+              "<conversation>\n[Tool result]: Task instructions\nuser:\nRead file\nassistant:\nI will read\n</conversation>",
+            ),
+          },
+        ],
+      });
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "summary" }],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: {
+            input: 1,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 1,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 1,
+        },
+      });
+      stream.end();
+      return stream;
+    });
+    const result = await generateSummary(
+      [
+        {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "mcp_prompt",
+          content: ["Task instructions", "user:", "Read file", "assistant:", "I will read"].map(
+            (text) => ({ type: "text", text }),
+          ),
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+      model,
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      streamFn,
+    );
+    expect(result).toEqual({ ok: true, value: "summary" });
+    expect(streamFn).toHaveBeenCalledOnce();
+  });
+
+  it.each(["user", "toolResult", "custom"] as const)(
+    "preserves independent %s blocks through conversion and charges their separator",
+    (role) => {
+      const content = [
+        { type: "text" as const, text: "alpha" },
+        { type: "text" as const, text: "end" },
+      ];
+      const common = { content, timestamp: 0 };
+      const message: AgentMessage =
+        role === "toolResult"
+          ? { ...common, role, toolCallId: "call-1", toolName: "read", isError: false }
+          : role === "custom"
+            ? { ...common, role, customType: "test", display: true }
+            : { ...common, role };
+      expect(serializeConversation(convertToLlm([message]))).toBe(
+        `[${role === "toolResult" ? "Tool result" : "User"}]: alpha\nend`,
+      );
+      expect(estimateTokens(message)).toBe(3);
+      expect(message.content).toEqual([
+        { type: "text", text: "alpha" },
+        { type: "text", text: "end" },
+      ]);
+    },
+  );
+
   it.each(["user", "toolResult"] as const)(
     "bounds omission markers per %s message without losing mixed text or leaking metadata",
     (role) => {
@@ -171,7 +314,7 @@ describe("serializeConversation", () => {
       expect(serialized).toBe(`${label}${markers}${textOnly.slice(label.length)}`);
       expect(serialized.length - textOnly.length).toBe(83);
       expect(estimateTokens({ role, content } as unknown as AgentMessage)).toBe(
-        1_000 * 2_000 + Math.ceil((`start ${toolText}`.length + 99) / 4),
+        1_000 * 2_000 + Math.ceil((`start \n${toolText}`.length + 99) / 4),
       );
       expect(serialized).toContain("start ");
       expect(serialized).toContain("ERROR: terminal failure");

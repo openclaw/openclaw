@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 // Control UI chat module implements message extract behavior.
 import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
 import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantPhaseText } from "../../../../src/shared/chat-message-content.js";
@@ -37,7 +38,7 @@ export function extractText(message: unknown): string | null {
   if (message == null) {
     return null;
   }
-  const projected = projectImportedMessageForDisplay(message);
+  const projected = projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message));
   const m = projected as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
   const raw =
@@ -128,6 +129,7 @@ export function readTranscriptMediaEntries(message: unknown): Array<{
   path: string;
   mediaType: string | undefined;
   fileName: string | undefined;
+  origin?: "paste" | "file";
   sizeBytes?: number;
   durationMs?: number;
   width?: number;
@@ -145,6 +147,7 @@ export function readTranscriptMediaEntries(message: unknown): Array<{
             path,
             mediaType: fact.contentType ?? fact.kind,
             fileName: fact.fileName,
+            ...(fact.origin ? { origin: fact.origin } : {}),
             ...(fact.sizeBytes !== undefined ? { sizeBytes: fact.sizeBytes } : {}),
             ...(fact.durationMs !== undefined ? { durationMs: fact.durationMs } : {}),
             ...(fact.width !== undefined ? { width: fact.width } : {}),

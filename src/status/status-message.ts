@@ -64,7 +64,7 @@ import type { MediaUnderstandingDecision } from "../media-understanding/types.js
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
-import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import {
   estimateAggregateUsageCost,
   formatTokenCount,

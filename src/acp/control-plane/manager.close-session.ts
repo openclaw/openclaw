@@ -38,6 +38,7 @@ export async function runManagerCloseSession(params: {
   if (!params.isCurrentActor()) {
     throw createSupersededActorError(sessionKey);
   }
+  input.assertActive?.();
   const resolution = params.resolveSession({
     cfg: input.cfg,
     sessionKey,
@@ -63,6 +64,7 @@ export async function runManagerCloseSession(params: {
   let runtimeClosed = false;
   let runtimeNotice: string | undefined;
   if (shouldSkipRuntimeClose) {
+    input.assertActive?.();
     await tryPrepareFreshManagerRuntimeSession({
       deps: params.deps,
       cfg: input.cfg,
@@ -78,6 +80,7 @@ export async function runManagerCloseSession(params: {
   } else {
     try {
       const { runtime: ensuredRuntime, handle } = await params.ensureRuntimeHandle({
+        assertActive: input.assertActive,
         cfg: input.cfg,
         sessionKey,
         agentId,
@@ -87,6 +90,7 @@ export async function runManagerCloseSession(params: {
       if (!params.isCurrentActor()) {
         throw createSupersededActorError(sessionKey);
       }
+      input.assertActive?.();
       await ensuredRuntime.close({
         handle,
         reason: input.reason,
@@ -106,6 +110,7 @@ export async function runManagerCloseSession(params: {
       if (!params.isCurrentActor()) {
         throw acpError;
       }
+      input.assertActive?.();
       if (
         !isAcpOwnerRepairRequired(acpError) &&
         input.allowBackendUnavailable &&
@@ -116,6 +121,7 @@ export async function runManagerCloseSession(params: {
           isRecoverableManagerAcpxExitError(acpError.message))
       ) {
         if (input.discardPersistentState) {
+          input.assertActive?.();
           await tryPrepareFreshManagerRuntimeSession({
             deps: params.deps,
             cfg: input.cfg,

@@ -473,6 +473,7 @@ export async function runToolSearchGatewayLane(params: {
     prompt?: string;
     toolOutput?: string;
     plannedToolName?: string;
+    plannedWireToolName?: string;
   }>;
   const lastRequest = laneRequests.at(-1) ?? {};
   // The last provider request contains the terminal target result, while earlier
@@ -482,7 +483,7 @@ export async function runToolSearchGatewayLane(params: {
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n");
   const toolCallRequestIndex = laneRequests.findIndex(
-    (request) => request.plannedToolName === "tool_call",
+    (request) => (request.plannedWireToolName ?? request.plannedToolName) === "tool_call",
   );
   const providerToolSearchResult = parseJson(
     toolCallRequestIndex >= 0 ? laneRequests[toolCallRequestIndex]?.toolOutput : undefined,
@@ -533,7 +534,7 @@ export async function runToolSearchGatewayLane(params: {
       providerPromptText.includes("### Deferred Tool Schemas") &&
       providerPromptText.includes(`- ${targetTool}`),
     providerPlannedTools: laneRequests
-      .map((request) => request.plannedToolName)
+      .map((request) => request.plannedWireToolName ?? request.plannedToolName)
       .filter((name): name is string => typeof name === "string"),
     gatewayOutputToolNames: outputToolNames(response),
     gatewayOutputText: outputText(response),

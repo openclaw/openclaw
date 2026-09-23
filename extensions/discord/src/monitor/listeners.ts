@@ -1,4 +1,3 @@
-// Discord plugin module implements listeners behavior.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";

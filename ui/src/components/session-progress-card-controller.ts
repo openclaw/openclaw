@@ -19,6 +19,7 @@ export class SessionProgressCardController implements ReactiveController {
   private target: ProgressCardGetParams | undefined;
   private client: ApplicationGateway["snapshot"]["client"] = null;
   private hello: ApplicationGateway["snapshot"]["hello"] = null;
+  private presentation?: ReturnType<SessionProgressCardController["readPresentation"]>;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -29,6 +30,10 @@ export class SessionProgressCardController implements ReactiveController {
 
   get card(): ProgressCard | null {
     return this.target ? (this.store?.get(this.target) ?? null) : null;
+  }
+
+  get lifetime(): object | undefined {
+    return this.target ? this.store?.getLifetime(this.target) : undefined;
   }
 
   get loading(): boolean {
@@ -44,6 +49,21 @@ export class SessionProgressCardController implements ReactiveController {
   get error() {
     return this.target ? this.store?.getError(this.target) : undefined;
   }
+
+  get refreshState() {
+    return this.target ? this.store?.getRefreshState(this.target) : undefined;
+  }
+
+  refresh = (card: ProgressCard): void => {
+    if (!this.connected) {
+      return;
+    }
+    // A click retained across a route/connection change must not use the old watch.
+    this.synchronize();
+    if (this.target) {
+      this.store?.refresh(this.target, card);
+    }
+  };
 
   dismiss = (card: ProgressCard): Promise<boolean> =>
     this.target
@@ -67,6 +87,38 @@ export class SessionProgressCardController implements ReactiveController {
     this.release();
   }
 
+  private readPresentation() {
+    const snapshot = this.options.gateway()?.snapshot;
+    return this.target
+      ? {
+          card: this.store?.get(this.target),
+          error: this.error,
+          refreshState: this.refreshState,
+          client: snapshot?.client,
+          hello: snapshot?.hello,
+          phase: snapshot?.phase,
+        }
+      : undefined;
+  }
+
+  private readonly handleStoreUpdate = () => {
+    const previous = this.presentation;
+    const next = this.readPresentation();
+    this.presentation = next;
+    if (
+      next &&
+      (!previous ||
+        next.card !== previous.card ||
+        next.error !== previous.error ||
+        next.refreshState !== previous.refreshState ||
+        next.client !== previous.client ||
+        next.hello !== previous.hello ||
+        next.phase !== previous.phase)
+    ) {
+      this.host.requestUpdate();
+    }
+  };
+
   private synchronize(): void {
     const gateway = this.options.gateway() ?? null;
     const target = this.options.target() ?? undefined;
@@ -76,7 +128,7 @@ export class SessionProgressCardController implements ReactiveController {
     if (nextStore !== this.store) {
       this.release();
       this.store = nextStore;
-      this.stopUpdates = nextStore?.subscribe(() => this.host.requestUpdate()) ?? null;
+      this.stopUpdates = nextStore?.subscribe(this.handleStoreUpdate) ?? null;
     }
     if (
       target?.sessionKey === this.target?.sessionKey &&
@@ -101,6 +153,7 @@ export class SessionProgressCardController implements ReactiveController {
         );
       },
     });
+    this.presentation = this.readPresentation();
   }
 
   private release(): void {
@@ -111,5 +164,6 @@ export class SessionProgressCardController implements ReactiveController {
     this.target = undefined;
     this.client = null;
     this.hello = null;
+    this.presentation = undefined;
   }
 }

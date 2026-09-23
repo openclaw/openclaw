@@ -23,6 +23,7 @@ import type { ContextVisibilityMode } from "../../config/types.base.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-channel-context.types.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
+import { copyConversationBindingRouteFacts } from "../conversation-binding-route-facts.js";
 import type { InboundImplicitMentionKind } from "../mention-gating.js";
 import type {
   ChannelIngressCommandAccess,
@@ -591,6 +592,7 @@ function buildChannelInboundEventContextValue(
     ConversationRouteContextObserved: params.conversation.routePeer ? true : undefined,
     ...params.extra,
   };
+  copyConversationBindingRouteFacts(params.route, context);
   const finalizeParams = {
     finalize: params.finalize,
     finalizeOptions: params.finalizeOptions,

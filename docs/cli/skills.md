@@ -175,6 +175,19 @@ Notes:
 | `curator status --json`          | Reports live Workshop skill usage recorded from trusted `skill.used` events, collection review outcomes per agent, and experience review outcomes per agent and workspace.                                                                                                                                                        |
 | `curator pin`/`unpin`/`restore`  | Retired commands remain registered but return an error explaining that weekly collection review manages the skill collection.                                                                                                                                                                                                     |
 
+### Workshop inventory and upgrades
+
+`openclaw skills curator status` requests current Workshop inventory from the
+selected Gateway. With a compatible Gateway, JSON includes
+`"inventory": "live-workshop"`. Local status uses the current configuration too.
+Missing usage displays as `not recorded`, not proof that a skill was never used.
+
+An older Gateway can return an unmarked legacy response. The CLI accepts it
+without switching to local state and prints a limited-coverage notice in text
+output. JSON preserves the absence of the marker. See
+[Workshop inventory and usage](/tools/skill-workshop/reference#workshop-inventory-and-usage)
+for membership, tracking limits, unknown dates, and upgrade behavior.
+
 On servers supporting full scanner reports, verification JSON includes `security.scannerReports.aig` (the full upstream SARIF report)
 and `security.scannerReports.skillspector` (the full upstream JSON report) when ClawHub
 has retained them. Nested scanner fields pass through unchanged, including

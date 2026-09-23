@@ -29,6 +29,7 @@ import {
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import {
   bindApprovalRequesterMetadata,
   bindApprovalReviewerDeviceIds,
@@ -54,17 +55,18 @@ export function createPluginApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: PluginApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   return {
-    "plugin.approval.list": async ({ respond, client, context }) => {
-      respond(
-        true,
-        listVisiblePendingApprovalRequests({
-          manager,
-          client,
-          approvalKind: "plugin",
-          ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
-        }),
-        undefined,
-      );
+    "plugin.approval.list": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { respond, client, context } = options;
+      const approvals = await listVisiblePendingApprovalRequests({
+        authority,
+        manager,
+        client,
+        approvalKind: "plugin",
+        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+      });
+      authority.assertCurrent();
+      respond(true, approvals, undefined);
     },
     "plugin.approval.request": async ({ params, client, respond, context }) => {
       if (
@@ -228,14 +230,14 @@ export function createPluginApprovalHandlers(
         });
       }
 
-      const decisionPromise = registerPendingApprovalRecord({
+      const registration = await registerPendingApprovalRecord({
         manager,
         record,
         timeoutMs,
         respond,
         context,
       });
-      if (!decisionPromise) {
+      if (!registration) {
         return;
       }
 
@@ -252,17 +254,22 @@ export function createPluginApprovalHandlers(
       });
     },
 
-    "plugin.approval.waitDecision": async ({ params, respond, client, context }) => {
+    "plugin.approval.waitDecision": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client, context } = options;
       await handleApprovalWaitDecision({
+        authority,
         manager,
         inputId: (params as { id?: string }).id,
         client,
-        ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         respond,
       });
     },
 
-    "plugin.approval.resolve": async ({ params, respond, client, context }) => {
+    "plugin.approval.resolve": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client, context } = options;
       const resolveParams = resolveApprovalDecisionParams({
         rawParams: params,
         validate: validatePluginApprovalResolveParams,
@@ -275,6 +282,7 @@ export function createPluginApprovalHandlers(
       const { inputId, decision, reviewer } = resolveParams;
       await handleApprovalResolve({
         approvalKind: "plugin",
+        authority,
         manager,
         inputId,
         decision,

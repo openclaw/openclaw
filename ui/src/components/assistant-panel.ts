@@ -59,7 +59,7 @@ type AssistantDock = Exclude<DockPanelSide, "left">;
 export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   @property({ attribute: false })
-  context: ApplicationContext<RouteId> | undefined;
+  context: ApplicationContext | undefined;
   @property({ type: Boolean }) custodianAvailable = false;
   @property({ type: Boolean }) homeAvailable = false;
   @property({ type: Boolean }) custodianSuppressed = false;

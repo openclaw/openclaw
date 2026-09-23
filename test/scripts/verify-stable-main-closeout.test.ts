@@ -528,9 +528,111 @@ describe("verify-stable-main-closeout", () => {
       `Recorded release asset changed or disappeared: ${evidence.name}`,
     );
   });
+
+  it("keeps 2026.9.6 closeout pending without thin feeds and replays with published feeds", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-thin-closeout-"));
+    tempDirs.push(dir);
+    const version = "2026.9.6";
+    const tag = `v${version}`;
+    for (const name of ["main", "tag"]) {
+      const root = path.join(dir, name);
+      mkdirSync(root);
+      execFileSync("git", ["init", "--quiet", root]);
+      writeFileSync(path.join(root, ".git/HEAD"), `${"a".repeat(40)}\n`);
+      writeFileSync(path.join(root, "package.json"), JSON.stringify({ version }));
+      writeFileSync(
+        path.join(root, "CHANGELOG.md"),
+        `# Changelog\n\n## ${version}\n\n- Released.\n`,
+      );
+      writeFileSync(path.join(root, "appcast.xml"), "<rss>older app release</rss>");
+    }
+    const releasePath = path.join(dir, "release.json");
+    const outputPath = path.join(dir, "closeout.json");
+    const originalPath = path.join(dir, "original.json");
+    const release: {
+      tagName: string;
+      isDraft: boolean;
+      isPrerelease: boolean;
+      assets: Array<{ name: string; digest: string }>;
+    } = { tagName: tag, isDraft: false, isPrerelease: false, assets: [] };
+    writeFileSync(releasePath, JSON.stringify(release));
+    const args = [
+      "--tag",
+      tag,
+      "--main-dir",
+      path.join(dir, "main"),
+      "--tag-dir",
+      path.join(dir, "tag"),
+      "--release-json",
+      releasePath,
+      "--full-release-validation-run-id",
+      "11",
+      "--full-release-validation-run-attempt",
+      "2",
+      "--release-publish-run-id",
+      "12",
+      "--rollback-drill-id",
+      "synthetic-drill",
+      "--rollback-drill-date",
+      new Date().toISOString().slice(0, 10),
+      "--output",
+      outputPath,
+      "--allow-failed-publish-recovery",
+      "true",
+    ];
+
+    const initial = runCli(...args);
+    expect(initial.status, initial.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
+      appcast: "pending",
+      appPlatforms: { macos: "pending" },
+    });
+    writeFileSync(originalPath, readFileSync(outputPath));
+
+    release.assets = ["", "-arm64", "-x86_64"]
+      .flatMap((suffix) =>
+        ["zip", "dmg", "dSYM.zip"].map((extension) => `OpenClaw-${version}${suffix}.${extension}`),
+      )
+      .map((name) => ({ name, digest: `sha256:${"c".repeat(64)}` }));
+    writeFileSync(releasePath, JSON.stringify(release));
+    const publishedFeedSpecs: Array<[string, string, string]> = [
+      ["--published-appcast", "appcast.xml", `OpenClaw-${version}.zip`],
+      ["--published-appcast-arm64", "appcast-arm64.xml", `OpenClaw-${version}-arm64.zip`],
+      ["--published-appcast-x86-64", "appcast-x86_64.xml", `OpenClaw-${version}-x86_64.zip`],
+    ];
+    const publishedArgs = publishedFeedSpecs.flatMap(([flag, name, asset]) => {
+      const appcastPath = path.join(dir, name);
+      writeFileSync(
+        appcastPath,
+        `https://github.com/openclaw/openclaw/releases/download/${tag}/${asset}`,
+      );
+      return [flag, appcastPath];
+    });
+    const replay = runCli(...args, "--existing-manifest", originalPath, ...publishedArgs);
+    expect(replay.status, replay.stderr).toBe(0);
+    expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
+  });
 });
 
 describe("stable closeout workflow publication routing", () => {
+  it("treats thin replay appcasts as optional until publication", () => {
+    const workflow = readFileSync(".github/workflows/openclaw-stable-main-closeout.yml", "utf8");
+    const closeoutStep = workflow
+      .split("      - name: Verify stable state and write closeout manifest\n", 2)[1]
+      ?.split("\n      - name:", 1)[0];
+
+    expect(closeoutStep).toContain(
+      'if gh_with_retry api "repos/$GITHUB_REPOSITORY/contents/${appcast}?ref=main"',
+    );
+    expect(closeoutStep).toContain("Thin appcast is not published yet: $appcast");
+    expect(closeoutStep).toContain(
+      'existing_manifest_args+=(--published-appcast-arm64 "$published")',
+    );
+    expect(closeoutStep).toContain(
+      'existing_manifest_args+=(--published-appcast-x86-64 "$published")',
+    );
+  });
+
   it.each([
     {
       name: "ordinary successful parent",

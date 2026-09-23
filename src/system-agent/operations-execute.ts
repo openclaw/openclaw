@@ -458,10 +458,20 @@ export async function executeSystemAgentOperation(
         run: async (ctx) => {
           const createAgentForOperation =
             ctx.deps?.createAgent ?? (await import("../agents/agent-create.js")).createAgent;
+          const { createAgentIdentityConfig } = await import("../agents/identity-file.js");
           const result = await ctx.commit(() =>
             createAgentForOperation({
-              name: operation.agentId,
+              entry: {
+                id: operation.agentId,
+                ...(operation.name
+                  ? {
+                      name: operation.name,
+                      identity: createAgentIdentityConfig({ name: operation.name }),
+                    }
+                  : {}),
+              },
               ...(operation.role ? { role: operation.role } : {}),
+              ...(operation.purpose ? { purpose: operation.purpose } : {}),
               ...(operation.workspace ? { workspace: operation.workspace } : {}),
               ...(ctx.assertPersistentApply
                 ? { beforePersistentApply: ctx.assertPersistentApply }

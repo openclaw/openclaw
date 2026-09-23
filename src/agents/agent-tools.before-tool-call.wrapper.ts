@@ -64,10 +64,7 @@ import {
   createInternalExecutionPreparer,
   readInternalExecutionControl,
 } from "./agent-tools.execution-preparer.js";
-import {
-  readInternalToolExecutionValidation,
-  validateToolExecutionParams,
-} from "./agent-tools.execution-validation.js";
+import { validateToolExecutionParams } from "./agent-tools.execution-validation.js";
 import {
   bindBeforeToolCallMetadata,
   clearBeforeToolCallWrappedMarker,
@@ -322,13 +319,6 @@ export function wrapToolWithBeforeToolCallHook(
       if (prepareControl) {
         executionArgs.pop();
       }
-      const onUpdateValidation = readInternalToolExecutionValidation(onUpdate);
-      const internalValidation =
-        onUpdateValidation ?? readInternalToolExecutionValidation(executionArgs.at(-1));
-      const forwardedOnUpdate = onUpdateValidation ? undefined : onUpdate;
-      if (!onUpdateValidation && internalValidation) {
-        executionArgs.pop();
-      }
       const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.(toolCallId);
       const preExecutionStartedAt = Date.now();
       const normalizedToolName = normalizeToolPolicyName(toolName || "tool");
@@ -496,9 +486,6 @@ export function wrapToolWithBeforeToolCallHook(
         // Hooks can repair or rewrite arguments; only the final execution
         // shape is safe to validate, after vetoes but before side effects.
         await validateToolExecutionParams(toolCallId, executeParams);
-        if (internalValidation?.toolCallId === toolCallId) {
-          await internalValidation.validate(executeParams);
-        }
         await reconcileLoopCallExecutionParams({
           ctx,
           toolName: normalizedToolName,
@@ -548,7 +535,7 @@ export function wrapToolWithBeforeToolCallHook(
       try {
         let result: Awaited<ReturnType<ForwardedToolExecution>>;
         try {
-          const args = [toolCallId, executeParams, signal, forwardedOnUpdate, ...executionArgs];
+          const args = [toolCallId, executeParams, signal, onUpdate, ...executionArgs];
           const invoke = () => liveness.run(() => (execute as ForwardedToolExecution)(...args));
           result = outcome.ownerDecision
             ? await invoke()
@@ -582,12 +569,13 @@ export function wrapToolWithBeforeToolCallHook(
         if (!signal?.aborted) {
           rememberPendingTerminalPresentation(preparedTerminalPresentation, ctx?.runId, toolCallId);
         }
+        const terminalDiagnostic = resolveToolResultTerminalDiagnostic(result, durationMs);
         const skillMatch = findSkillUsageMatch({
           toolName: normalizedToolName,
           toolParams: executeParams,
           ctx,
         });
-        if (skillMatch) {
+        if (skillMatch && terminalDiagnostic.type === "tool.execution.completed") {
           recordRunSkillUsage({
             runId: ctx?.runId,
             name: skillMatch.skillName,
@@ -595,20 +583,18 @@ export function wrapToolWithBeforeToolCallHook(
             activation: skillMatch.activation,
             ...(skillMatch.skillFile ? { skillFile: skillMatch.skillFile } : {}),
           });
+          emitSkillUsedDiagnostic({
+            ctx,
+            match: skillMatch,
+            toolName: normalizedToolName,
+            toolCallId,
+          });
         }
         if (hookOptions.emitDiagnostics) {
-          if (skillMatch) {
-            emitSkillUsedDiagnostic({
-              ctx,
-              match: skillMatch,
-              toolName: normalizedToolName,
-              toolCallId,
-            });
-          }
           emitTrustedDiagnosticEventWithPrivateData(
             {
               ...eventBase,
-              ...resolveToolResultTerminalDiagnostic(result, durationMs),
+              ...terminalDiagnostic,
             },
             buildToolContentPrivateData(toolContentPolicy, {
               input: executeParams,

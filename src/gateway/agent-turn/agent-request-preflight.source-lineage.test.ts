@@ -21,7 +21,7 @@ it.each([
   async ({ kind, location, expectedRole }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg: OpenClawConfig = {
-        agents: { entries: { main: {}, worker: {} } },
+        agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
         session: { store: path.join(state.root, "configured", "{agentId}", "sessions.json") },
       };
       await state.writeConfig(cfg);
@@ -69,6 +69,7 @@ it.each([
         dedupe: new Map(),
         deps: {},
         getRuntimeConfig: () => cfg,
+        trackExecution: async (work) => await work(),
         getSessionEventSubscriberConnIds: () => new Set(),
         loadGatewayModelCatalog: vi.fn(async () => []),
         loadGatewayModelCatalogSnapshot: vi.fn(),

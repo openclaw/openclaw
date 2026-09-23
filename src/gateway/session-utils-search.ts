@@ -9,7 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunActive } from "../shared/session-run-state.js";
-import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import type { SessionListTargetLookup } from "./session-list-target.js";
@@ -73,6 +73,12 @@ function shouldResolveDerivedSessionModelSearchFields(search: string): boolean {
   return !search.startsWith("agent:");
 }
 
+// Selection facts are replaced with the resident entry; weak keys release retired revisions.
+const staticSearchFields = new WeakMap<
+  NonNullable<ReturnType<SessionListTargetLookup>>["selection"],
+  string[]
+>();
+
 export function createSessionListSearchMatcher(params: {
   cfg: OpenClawConfig;
   search: string;
@@ -89,18 +95,26 @@ export function createSessionListSearchMatcher(params: {
   return (key: string, entry: SessionEntry): boolean => {
     const target = expectDefined(params.getTarget(key), "search row owner");
     const storeKey = target.storeKey ?? key;
-    const fields = [
-      storeKey,
-      entry.label,
-      entry.subject,
-      entry.sessionId,
-      entry.category,
-      resolveSessionListSearchDisplayName(storeKey, entry),
-      resolveGatewaySessionDisplayName(storeKey, entry),
-      resolveGatewaySessionKind(storeKey, entry),
-    ];
-    addSessionListSearchModelFields(fields, { provider: entry.modelProvider, model: entry.model });
-    if (matchesSessionListSearch(fields, search)) {
+    let fields = staticSearchFields.get(target.selection);
+    if (!fields) {
+      const rawFields = [
+        storeKey,
+        entry.label,
+        entry.subject,
+        entry.sessionId,
+        entry.category,
+        resolveSessionListSearchDisplayName(storeKey, entry),
+        resolveGatewaySessionDisplayName(storeKey, entry),
+        resolveGatewaySessionKind(storeKey, entry),
+      ];
+      addSessionListSearchModelFields(rawFields, {
+        provider: entry.modelProvider,
+        model: entry.model,
+      });
+      fields = rawFields.map(normalizeLowercaseStringOrEmpty);
+      staticSearchFields.set(target.selection, fields);
+    }
+    if (fields.some((field) => field.includes(search))) {
       return true;
     }
     const agentId = target.agentId;
@@ -140,7 +154,10 @@ export function createSessionListSearchMatcher(params: {
     if (matchesSessionListSearch([identityNames.get(agentId)], search)) {
       return true;
     }
-    const source = expectDefined(target.materialized, "prepared search row").source;
+    const source = expectDefined(
+      target.materialized?.source ?? target.getModelFacts?.(),
+      "prepared search row model facts",
+    );
     if (shouldResolveDerivedSessionModelSearchFields(search)) {
       const subagentRun = context().subagentRuns.getDisplaySubagentRun(storeKey);
       const resolvedModel = resolveSessionModelIdentityRef(

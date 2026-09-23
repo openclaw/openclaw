@@ -4,6 +4,8 @@
  * Shared by registry read/write helpers for active in-memory run state.
  */
 import { isDeepStrictEqual } from "node:util";
+import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -73,8 +75,146 @@ type SubagentRetirementScope = {
   isSuccessor: (candidate: SubagentRunRecord) => boolean;
 };
 
+type CompletionAuthority = NonNullable<
+  ReturnType<typeof captureOperatorToolGatewayContinuationContext>
+>;
+type CompletionCustody = {
+  authority: CompletionAuthority;
+  entry: SubagentRunRecord;
+  stop: () => void;
+};
+
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
   private readonly retirementScopes = new Set<SubagentRetirementScope>();
+  private readonly completionAuthorities = new Map<SubagentRunRecord, CompletionCustody>();
+  // A tombstone rejects stale callbacks without retaining closed Gateway/source contexts.
+  private readonly operatorCompletionEntries = new WeakSet<SubagentRunRecord>();
+
+  bindCompletionAuthority(entry: SubagentRunRecord, authority: CompletionAuthority): void {
+    this.releaseCompletionAuthority(entry);
+    const custody: CompletionCustody = {
+      authority,
+      entry,
+      stop: () => authority.signal.removeEventListener("abort", revoked),
+    };
+    const revoked = () => this.releaseCompletionAuthority(custody.entry);
+    this.completionAuthorities.set(entry, custody);
+    this.operatorCompletionEntries.add(entry);
+    authority.signal.addEventListener("abort", revoked, { once: true });
+    if (authority.signal.aborted) {
+      revoked();
+    }
+  }
+
+  releaseCompletionAuthority(entry: SubagentRunRecord): void {
+    const custody = this.completionAuthorities.get(entry);
+    this.completionAuthorities.delete(entry);
+    custody?.stop();
+    custody?.authority.release();
+  }
+
+  runWithCompletionAuthority<T>(entry: SubagentRunRecord, run: () => T): T {
+    const custody = this.completionAuthorities.get(entry);
+    if (this.operatorCompletionEntries.has(entry) && this.get(entry.runId) !== entry) {
+      throw new Error("Subagent completion authority is no longer active");
+    }
+    // Cancellation notices belong to the admitted cancellation caller, not its revoked target.
+    // Keep that caller's existing dispatch restrictions; never turn a successful result into a notice.
+    if (
+      entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+      entry.execution.outcome?.status === "error"
+    ) {
+      return run();
+    }
+    if (this.operatorCompletionEntries.has(entry) && !custody) {
+      throw new Error("Subagent completion authority is no longer active");
+    }
+    return custody ? custody.authority.run(run) : run();
+  }
+
+  runWithCompletionBatchAuthority<T>(batch: readonly SubagentRunRecord[], run: () => T): T {
+    for (const entry of batch) {
+      if (this.operatorCompletionEntries.has(entry) && this.get(entry.runId) !== entry) {
+        throw new Error("Subagent completion authority is no longer active");
+      }
+    }
+    const resultEntry = batch.find(
+      (entry) =>
+        !(
+          entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+          entry.execution.outcome?.status === "error"
+        ),
+    );
+    // Only a cancellation-only batch can use the independently admitted cancellation caller.
+    if (!resultEntry) {
+      return run();
+    }
+    const first = this.completionAuthorities.get(resultEntry)?.authority.operatorAuthority;
+    // Mixed waves must still prove the cancelled member's original source is live and identical.
+    // A revoked or unrelated cancellation cannot borrow a successful sibling's authority.
+    for (const entry of batch) {
+      const source = this.completionAuthorities.get(entry)?.authority.operatorAuthority;
+      if (this.operatorCompletionEntries.has(entry) && !source) {
+        throw new Error("Subagent completion authority is no longer active");
+      }
+      source?.assertCurrent();
+      if (source?.source !== first?.source || !isDeepStrictEqual(source?.scopes, first?.scopes)) {
+        throw new Error("Subagent completion batch has incompatible operator authority");
+      }
+    }
+    return this.runWithCompletionAuthority(resultEntry, run);
+  }
+
+  /** Same-task replacement stages custody before publication and can restore it on rollback. */
+  transferCompletionAuthority(previous: SubagentRunRecord, next: SubagentRunRecord): () => void {
+    if (this.operatorCompletionEntries.has(previous)) {
+      this.operatorCompletionEntries.add(next);
+    }
+    const custody = this.completionAuthorities.get(previous);
+    if (!custody) {
+      return () => {};
+    }
+    this.completionAuthorities.delete(previous);
+    custody.entry = next;
+    this.completionAuthorities.set(next, custody);
+    this.operatorCompletionEntries.add(next);
+    return () => {
+      if (this.completionAuthorities.get(next) === custody) {
+        this.completionAuthorities.delete(next);
+        custody.entry = previous;
+        this.completionAuthorities.set(previous, custody);
+      }
+    };
+  }
+
+  /** Only acknowledged registry state retires custody; tentative map writes can roll back. */
+  settleCompletionAuthorities(
+    committed: ReadonlyMap<string, SubagentRunRecord>,
+    changedRunIds?: readonly string[],
+  ): void {
+    const changed = changedRunIds && new Set(changedRunIds);
+    for (const entry of this.completionAuthorities.keys()) {
+      if (changed && !changed.has(entry.runId)) {
+        continue;
+      }
+      const record = committed.get(entry.runId);
+      if (
+        !record ||
+        this.get(entry.runId) !== entry ||
+        record.generation !== entry.generation ||
+        record.execution.suppressSessionEffects === true ||
+        (!record.requesterTurnRunId &&
+          !record.requesterSettleWake &&
+          record.pauseReason !== "sessions_yield" &&
+          (record.cleanupCompletedAt !== undefined ||
+            record.delivery?.status === "suspended" ||
+            record.delivery?.status === "discarded" ||
+            record.suppressCompletionDelivery === true))
+      ) {
+        this.releaseCompletionAuthority(entry);
+      }
+    }
+  }
 
   /** A cancellation borrows retirement evidence only for its own lexical lifetime. */
   captureRetirement(
@@ -102,7 +242,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     };
   }
 
-  /** Publish only accepted ownership, after synchronous registration/recovery rollback decisions. */
+  /** Publish only accepted ownership, after synchronous registration/replacement rollback decisions. */
   commitOwnership(entry: SubagentRunRecord): void {
     if (this.get(entry.runId) !== entry) {
       return;
@@ -115,20 +255,9 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         previous.childSessionKey === entry.childSessionKey &&
         scope.isSuccessor(entry)
       ) {
-        const receipt = previous.execution.restartRecovery;
-        // Follow only the committed receipt handoff. An ordinary displacement closes
-        // this operation permanently, even if its row disappears before Stop resumes.
-        scope.observation =
-          receipt?.phase === "accepted" &&
-          receipt.idempotencyKey === entry.runId &&
-          entry.execution.restartRecovery === receipt
-            ? {
-                entry,
-                generation: entry.generation,
-                createdAt: entry.createdAt,
-                state: "selected",
-              }
-            : { state: "superseded" };
+        // New work supersedes the selected execution, even if the replacement
+        // is retired before the pending Stop resumes.
+        scope.observation = { state: "superseded" };
       }
     }
     publishSubagentRunChanges([entry.childSessionKey]);
@@ -187,6 +316,9 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   }
 
   override clear(): void {
+    for (const entry of this.completionAuthorities.keys()) {
+      this.releaseCompletionAuthority(entry);
+    }
     for (const scope of this.retirementScopes) {
       scope.observation = { state: "superseded" };
     }

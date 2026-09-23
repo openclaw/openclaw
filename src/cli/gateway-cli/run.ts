@@ -6,7 +6,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { triageAfterFailure } from "../../commands/triage-failure.js";
 import type {
   ConfigFileSnapshot,
   GatewayAuthMode,
@@ -86,6 +85,7 @@ import type { GatewayRunOpts } from "./run-options.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
 import { resolveGatewayStartupMaintenanceReason } from "./startup-maintenance.js";
 import { createGatewayCliStartupTrace } from "./startup-trace.js";
+import { triageGatewayStartupFailure } from "./startup-triage.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 
@@ -989,16 +989,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       return;
     }
     triageAttempted = true;
-    await triageAfterFailure(
-      defaultRuntime,
-      {
-        kind: "gateway-startup",
-        phase: "startup",
-        error: formatErrorMessage(error),
-        gateway: "verify-running",
-      },
-      signal,
-    );
+    await triageGatewayStartupFailure(defaultRuntime, error, signal);
   };
   const beginBoot = async (startedAtMs: number) => {
     // run-loop calls beginBoot before every startGatewayServer invocation, so

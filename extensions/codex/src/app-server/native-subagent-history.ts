@@ -2,7 +2,12 @@ import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
-import { itemToolArgs, itemTranscriptResultText } from "./event-projector-tool-items.js";
+import { itemStatus } from "./event-projector-items.js";
+import {
+  itemToolArgs,
+  itemTranscriptResultText,
+  projectCodexToolActivity,
+} from "./event-projector-tool-items.js";
 import {
   codexNativeSubagentHistoryConnectionFingerprint,
   readCodexNativeSubagentHistoryOwner,
@@ -192,24 +197,40 @@ export async function readCodexNativeSubagentHistory(
       },
       {
         project: (entries) =>
-          entries.map((entry) =>
-            projectCodexThreadHistoryItem(thread, entry, taskHistoryToolItems).map((message) => {
-              const messageIdentity = readMirrorIdentity(message);
-              if (!messageIdentity) {
-                throw new Error("Subagent history message is missing its native identity.");
-              }
-              // The shared transcript reader uses messageId to merge live and older pages.
-              return Object.assign(message, {
-                messageId: JSON.stringify([threadId, messageIdentity]),
-              });
-            }),
-          ),
+          entries.map((entry) => {
+            const item = projectCodexToolActivity(
+              entry.item,
+              itemStatus(entry.item) === "running" ? "start" : "result",
+            );
+            const messages = projectCodexThreadHistoryItem(thread, entry, taskHistoryToolItems).map(
+              (message) => {
+                const messageIdentity = readMirrorIdentity(message);
+                if (!messageIdentity) {
+                  throw new Error("Subagent history message is missing its native identity.");
+                }
+                return Object.assign(message, {
+                  messageId: JSON.stringify([threadId, messageIdentity]),
+                });
+              },
+            );
+            return {
+              messages,
+              activity: item
+                ? messages.map(({ messageId }) => ({
+                    messageId,
+                    items: item.hideFromChannelProgress ? [] : [item],
+                  }))
+                : [],
+            };
+          }),
         fits: (result) => Buffer.byteLength(JSON.stringify(result), "utf8") <= 512 * 1024,
       },
     );
     assertCurrent();
+    const rows = page.items.toReversed();
     return {
-      messages: page.items.toReversed().flat(),
+      messages: rows.flatMap((row) => row.messages),
+      activity: rows.flatMap((row) => row.activity),
       ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
     };
   } finally {

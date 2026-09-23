@@ -10,6 +10,15 @@ import {
 import { startUpdateRunWatcher, wakeUpdateRunWatcher } from "./update-run-watcher.js";
 
 vi.mock("./update-run-notice.runtime.js", () => ({ notifyUpdateRunPhase: vi.fn() }));
+vi.mock("../infra/update-run-interruption.js", () => ({
+  // Hold unrelated native I/O pending while fake time exercises publication and shutdown.
+  reconcileInterruptedUpdateRuns: async ({ signal }: { signal: AbortSignal }) => {
+    await new Promise<void>((resolve) => {
+      signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    return [];
+  },
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const now = Date.parse("2026-09-07T12:00:00Z");

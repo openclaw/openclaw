@@ -22,6 +22,7 @@ const CAPABILITY_COMPLETION_GRACE_MS = 60_000;
 type ScheduledMessageActionAuthority = {
   policy: ScheduledToolPolicyContext;
   assertCurrent: () => void;
+  assertSourceCurrent?: () => void;
   channelRequester?: CronAuthenticatedChannelRequester;
 };
 
@@ -224,6 +225,7 @@ export function mintMessageActionTurnCapability(params: {
   };
   const scheduled = params.scheduled;
   if (scheduled) {
+    const assertSourceCurrent = scheduled.assertSourceCurrent;
     capability.scheduled = {
       policy: structuredClone(scheduled.policy),
       ...(scheduled.channelRequester
@@ -235,6 +237,19 @@ export function mintMessageActionTurnCapability(params: {
         }
         scheduled.assertCurrent();
       },
+      ...(assertSourceCurrent
+        ? {
+            assertSourceCurrent: () => {
+              if (
+                capabilitiesByToken.get(token) !== capability ||
+                Date.now() >= capability.expiresAtMs
+              ) {
+                throw new Error("message action turn capability is no longer active");
+              }
+              assertSourceCurrent();
+            },
+          }
+        : {}),
     };
   }
   const assertDashboardReadCurrent = params.assertDashboardReadCurrent;

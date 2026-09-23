@@ -642,11 +642,13 @@ describe("recent session prefetch", () => {
     appendChatMessageToCache(cache, snapshotHost, { sessionKey }, liveMessage, liveEvent);
     const deltaMessage = {
       role: "assistant",
-      content: "delta reply",
+      content: [{ type: "toolCall", id: "wait", name: "sessions_yield", arguments: {} }],
       __openclaw: { id: "delta-assistant", seq: 7 },
     };
+    const preparedDeltaMessage = { ...deltaMessage, activity: [] };
     const request = vi.fn(async () => ({
       kind: "delta",
+      activity: [{ messageId: "delta-assistant", items: [] }],
       messages: [
         liveEvent,
         {
@@ -676,7 +678,7 @@ describe("recent session prefetch", () => {
     );
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })).toEqual({
       deltaCursor: "cursor-2",
-      messages: [...priorMessages, liveMessage, deltaMessage],
+      messages: [...priorMessages, liveMessage, preparedDeltaMessage],
       pagination: { hasMore: false, completeSnapshot: true },
       sessionId: "session-delta",
     });
@@ -684,7 +686,7 @@ describe("recent session prefetch", () => {
     await store.flush();
     expect(await new SessionSnapshotStore().read(sessionKey)).toEqual({
       deltaCursor: "cursor-2",
-      messages: [...priorMessages, liveMessage, deltaMessage],
+      messages: [...priorMessages, liveMessage, preparedDeltaMessage],
       pagination: { hasMore: false, completeSnapshot: true },
       sessionId: "session-delta",
     });

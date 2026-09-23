@@ -613,7 +613,7 @@ describe("AppSidebar session attention", () => {
     const parentKey = "agent:main:parent";
     const childKeys = Array.from(
       { length: 6 },
-      (_, index) => `agent:main:subagent:child-${index + 1}`,
+      (_, index) => `agent:main:dashboard:child-${index + 1}`,
     );
     const sessionsHarness = createSessionsHarness("main", [parentKey]);
     sessionsHarness.list.mockResolvedValue({

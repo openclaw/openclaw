@@ -40,7 +40,7 @@ function sessionActionPresentation(button: Locator) {
 }
 
 suite.define(() => {
-  it.each([false, true])("nests and manages child sessions (pinned: %s)", async (pinned) => {
+  it.each([false, true])("nests and manages spawned sessions (pinned: %s)", async (pinned) => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const parentKey = "agent:main:release-plan";
     const childOneKey = "agent:main:research-sources";
@@ -148,7 +148,7 @@ suite.define(() => {
 
       const childRows = page.locator(".sidebar-recent-session--child");
       await expect.poll(() => childRows.count()).toBe(4);
-      expect(await childRows.getByRole("button", { name: "Open session menu" }).count()).toBe(4);
+      expect(await childRows.locator("[data-sidebar-session-archive]").count()).toBe(4);
       await childRows.nth(0).getByRole("img", { name: "Active run" }).waitFor();
       await childRows.nth(1).getByRole("img", { name: "Done" }).waitFor();
 
@@ -193,18 +193,18 @@ suite.define(() => {
         };
       });
       expect(nesting.childLeft - nesting.parentLeft).toBeGreaterThan(8);
-      expect(nesting.guide).not.toBe("none");
+      expect(nesting.guide).toBe("none");
 
       const completedChild = childRows.nth(1);
-      const childMenuButton = completedChild.getByRole("button", {
-        name: "Open session menu: Verify tests",
+      const childArchiveButton = completedChild.getByRole("button", {
+        name: "Archive session: Verify tests",
         exact: true,
       });
       await completedChild.hover();
-      await expect.poll(() => actionOpacity(childMenuButton)).toBe("1");
-      await expect.poll(() => actionPointerEvents(childMenuButton)).toBe("auto");
-      await childMenuButton.focus();
-      await page.keyboard.press("Enter");
+      await expect.poll(() => actionOpacity(childArchiveButton)).toBe("1");
+      await expect.poll(() => actionPointerEvents(childArchiveButton)).toBe("auto");
+      await completedChild.locator(".sidebar-recent-session__link").focus();
+      await page.keyboard.press("Shift+F10");
       const childMenu = page.getByRole("menu", { name: "Actions for Verify tests" });
       await childMenu.waitFor({ state: "visible" });
       await page.getByRole("menuitem", { name: "Mark as unread" }).waitFor();
@@ -268,8 +268,8 @@ suite.define(() => {
 
       const openSessionMenu = async () => {
         // Keep dismissal setup independent of hover while the sidebar expands.
-        await row.getByRole("button", { name: "Open session menu" }).focus();
-        await page.keyboard.press("Enter");
+        await row.locator(".sidebar-recent-session__link").focus();
+        await page.keyboard.press("Shift+F10");
         await page
           .getByRole("menu", { name: "Actions for Research notes" })
           .waitFor({ state: "visible" });
@@ -381,7 +381,7 @@ suite.define(() => {
     }
   });
 
-  it("names session-row actions and tabs from their menu into the next visible session", async () => {
+  it("names session-row actions and tabs from their context menu through the row controls", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
@@ -407,17 +407,19 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const researchRow = page.locator('[data-session-key="agent:main:research"]');
       const followUpRow = page.locator('[data-session-key="agent:main:follow-up"]');
-      const researchMenu = researchRow.getByRole("button", {
-        name: "Open session menu: Research notes",
+      const researchLink = researchRow.locator(".sidebar-recent-session__link");
+      const researchArchive = researchRow.getByRole("button", {
+        name: "Archive session: Research notes",
         exact: true,
       });
       await researchRow.getByRole("button", { name: "Pin session", exact: true }).waitFor();
       await followUpRow
-        .getByRole("button", { name: "Open session menu: Follow-up work", exact: true })
+        .getByRole("button", { name: "Archive session: Follow-up work", exact: true })
         .waitFor();
+      expect(await researchRow.locator("[data-sidebar-session-menu]").isVisible()).toBe(false);
 
-      await researchMenu.focus();
-      await page.keyboard.press("Enter");
+      await researchLink.focus();
+      await page.keyboard.press("ContextMenu");
       const menu = page.getByRole("menu", { name: "Actions for Research notes" });
       await menu.waitFor({ state: "visible" });
 
@@ -434,11 +436,22 @@ suite.define(() => {
       await expect.poll(() => menu.count()).toBe(0);
       await expect
         .poll(() =>
-          followUpRow
-            .locator(".sidebar-recent-session__link")
+          researchRow
+            .getByRole("button", { name: "Pin session", exact: true })
             .evaluate((element) => element === document.activeElement),
         )
         .toBe(true);
+
+      await page.keyboard.press("Tab");
+      expect(await researchArchive.evaluate((element) => element === document.activeElement)).toBe(
+        true,
+      );
+      await page.keyboard.press("Tab");
+      expect(
+        await followUpRow
+          .locator(".sidebar-recent-session__link")
+          .evaluate((element) => element === document.activeElement),
+      ).toBe(true);
 
       await researchRow.locator(".sidebar-recent-session__link").focus();
       await page.keyboard.press("Shift+F10");
@@ -456,8 +469,8 @@ suite.define(() => {
       await expect.poll(() => menu.count()).toBe(0);
       await expect
         .poll(() =>
-          followUpRow
-            .locator(".sidebar-recent-session__link")
+          researchRow
+            .getByRole("button", { name: "Pin session", exact: true })
             .evaluate((element) => element === document.activeElement),
         )
         .toBe(true);
@@ -677,7 +690,7 @@ suite.define(() => {
       await expect.poll(() => chatsGroup.locator(".sidebar-recent-session").count()).toBe(0);
       await expect.poll(() => page.locator(".sidebar-recent-session--active").count()).toBe(1);
       const pin = pinnedEntry.getByRole("button", { name: "Unpin session" });
-      const menu = pinnedEntry.getByRole("button", { name: "Open session menu" });
+      const menu = pinnedEntry.locator("[data-sidebar-session-archive]");
       await pinnedEntry.hover();
       await captureUiProof(suite, page, "pinned-session-icon.png");
       const revealedPin = await sessionActionPresentation(pin);
@@ -1053,12 +1066,12 @@ suite.define(() => {
         .filter({ hasText: "Research notes" });
       await row.waitFor({ state: "visible", timeout: 10_000 });
       const pin = row.getByRole("button", { name: "Pin session" });
-      const menu = row.getByRole("button", { name: "Open session menu" });
+      const archive = row.locator("[data-sidebar-session-archive]");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionPointerEvents(pin)).toBe("auto");
-      await expect.poll(() => actionOpacity(menu)).toBe("1");
-      await expect.poll(() => actionPointerEvents(menu)).toBe("auto");
-      await menu.click();
+      await expect.poll(() => actionOpacity(archive)).toBe("1");
+      await expect.poll(() => actionPointerEvents(archive)).toBe("auto");
+      await row.locator("[data-sidebar-session-menu]").tap();
       await page.getByRole("menuitem", { name: "Archive session" }).waitFor({ state: "visible" });
     } finally {
       await context.close();

@@ -7,7 +7,7 @@ import type {
   ChannelOutboundTargetMode,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
-import { listRouteBindings } from "../../config/bindings.js";
+import { isRouteBinding, listConfiguredBindings } from "../../config/bindings.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
@@ -275,8 +275,9 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     route.sessionKey === route.baseSessionKey &&
     route.sessionKey === canonicalMainSessionKey &&
     globalDmScope === "main" &&
-    !listRouteBindings(params.cfg).some(
+    !listConfiguredBindings(params.cfg).some(
       (binding) =>
+        isRouteBinding(binding) &&
         binding.session?.dmScope !== undefined &&
         binding.session.dmScope !== "main" &&
         normalizeRouteBindingChannelId(binding.match.channel) === resolvedChannel,

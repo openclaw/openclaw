@@ -187,7 +187,6 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const runtimeConfig = context.getRuntimeConfig();
         const target = requestedSessionKey
           ? requirePreparedTalkSessionTarget(sessionMutationAuthorization?.talkSessionTarget)
           : undefined;
@@ -197,9 +196,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           respondInvalidRequest(respond, "Session rows are initializing; try again");
           return;
         }
-        const resolvedSession = await resolveSessionKeyFromResolveParams({
+        const resolvedSession = resolveSessionKeyFromResolveParams({
           projection,
-          cfg: runtimeConfig,
           client,
           p: {
             key: target?.canonicalKey,

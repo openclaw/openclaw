@@ -479,7 +479,7 @@ describe("resolveSlackThreadContextData", () => {
     expect(result.threadHistoryBody).not.toContain("current message");
   });
 
-  it("keeps third-party bot starter text in a new thread session", async () => {
+  it("keeps explicitly allowlisted third-party bot starter text in a new thread session", async () => {
     const { result } = await resolveAllowlistedThreadContext({
       repliesMessages: [
         { text: "other bot starter", bot_id: "B2", ts: "100.000" },
@@ -491,7 +491,7 @@ describe("resolveSlackThreadContextData", () => {
         botId: "B2",
         ts: "100.000",
       },
-      allowFromLower: ["u1"],
+      allowFromLower: ["u1", "b2"],
       allowNameMatching: false,
     });
 

@@ -63,7 +63,10 @@ function createConfig(): OpenClawConfig {
 }
 
 async function createDockerExecBackend() {
-  dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
+  dockerMocks.ensureSandboxContainer.mockResolvedValueOnce({
+    containerName: "sandbox-container",
+    containerId: "a".repeat(64),
+  });
   return createDockerSandboxBackend({
     sessionKey: "agent:coder:main",
     scopeKey: "agent:coder:main",
@@ -75,7 +78,9 @@ async function createDockerExecBackend() {
 
 describe("docker sandbox backend manager", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    for (const mock of Object.values(dockerMocks)) {
+      mock.mockReset();
+    }
     dockerMocks.containerState.mockResolvedValue({
       exists: true,
       running: true,
@@ -84,9 +89,11 @@ describe("docker sandbox backend manager", () => {
       code: 0,
       stdout: args.includes('{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}')
         ? JSON.stringify({ Mounts: [], Tmpfs: null })
-        : args.includes("/proc/self/mountinfo")
-          ? "1 1 0:1 / / rw - overlay overlay rw\n2 1 8:1 /workspace /workspace rw - ext4 /dev/root rw\n"
-          : "unused-image",
+        : args.includes("{{.Id}}")
+          ? "a".repeat(64)
+          : args.includes("/proc/self/mountinfo")
+            ? "1 1 0:1 / / rw - overlay overlay rw\n2 1 8:1 /workspace /workspace rw - ext4 /dev/root rw\n"
+            : "unused-image",
       stderr: "",
     }));
     dockerMocks.resolvePodmanSandboxRuntimeInfo.mockResolvedValue({
@@ -96,8 +103,148 @@ describe("docker sandbox backend manager", () => {
     });
   });
 
+  it("rechecks runtime authority after awaited engine validation before filesystem exec", async () => {
+    let current = true;
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce({
+      containerName: "sandbox-container",
+      containerId: "a".repeat(64),
+    });
+    const backend = await createDockerSandboxBackend({
+      sessionKey: "agent:coder:main",
+      scopeKey: "agent:coder:main",
+      workspaceDir: "/workspace",
+      agentWorkspaceDir: "/workspace",
+      cfg: resolveSandboxConfigForAgent(createConfig()),
+      assertRuntimeCurrent: () => {
+        if (!current) {
+          throw new Error("runtime revoked");
+        }
+      },
+    });
+    dockerMocks.validateSandboxContainerEngineTarget.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      current = false;
+    });
+    await expect(backend.runShellCommand({ script: "write should not run" })).rejects.toThrow(
+      "runtime revoked",
+    );
+    expect(dockerMocks.execContainerRaw).not.toHaveBeenCalled();
+  });
+
+  it.each(["allocation", "mount inspection"] as const)(
+    "does not execute a mount probe after authority retires during %s",
+    async (stage) => {
+      let current = true;
+      const execute = dockerMocks.execContainer.getMockImplementation()!;
+      dockerMocks.execContainer.mockImplementation(async (engine, args, options) => {
+        const result = await execute(engine, args, options);
+        if (
+          stage === "mount inspection" &&
+          args[0] === "inspect" &&
+          args.some((arg: string) => arg.includes("Mounts"))
+        ) {
+          current = false;
+        }
+        return result;
+      });
+      dockerMocks.ensureSandboxContainer.mockImplementationOnce(async () => {
+        if (stage === "allocation") {
+          current = false;
+        }
+        return { containerName: "sandbox-container", containerId: "a".repeat(64) };
+      });
+      await expect(
+        createDockerSandboxBackend({
+          sessionKey: "agent:coder:main",
+          scopeKey: "agent:coder:main",
+          workspaceDir: "/workspace",
+          agentWorkspaceDir: "/workspace",
+          cfg: resolveSandboxConfigForAgent(createConfig()),
+          assertRuntimeCurrent: () => {
+            if (!current) {
+              throw new Error("runtime retired");
+            }
+          },
+        }),
+      ).rejects.toThrow("runtime retired");
+      expect(dockerMocks.execContainer.mock.calls.some(([, args]) => args[0] === "exec")).toBe(
+        false,
+      );
+    },
+  );
+
+  it("pins retained termination when the name is replaced after allocation", async () => {
+    const execute = dockerMocks.execContainer.getMockImplementation()!;
+    dockerMocks.execContainer.mockImplementation(async (engine, args, options) => {
+      if (args.includes("{{.Id}}") && args.at(-1) === "sandbox-container") {
+        return { code: 0, stdout: "b".repeat(64), stderr: "" };
+      }
+      return execute(engine, args, options);
+    });
+    const backend = await createDockerExecBackend();
+    const cleanup = backend.prepareProcessCleanup!({});
+    dockerMocks.execContainerRaw.mockResolvedValueOnce({
+      code: 0,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+    });
+    // Allocation returned A, while any later lookup of its stable name finds B.
+    await cleanup.terminate();
+    expect(dockerMocks.execContainerRaw.mock.calls.at(-1)?.[1]?.[2]).toBe("a".repeat(64));
+  });
+
+  it.each(["removed", "stopped", "paused", "unreachable", "still present"] as const)(
+    "settles retained cleanup only for confirmed generation termination: %s",
+    async (state) => {
+      const backend = await createDockerExecBackend();
+      const cleanup = backend.prepareProcessCleanup!({});
+      dockerMocks.execContainerRaw.mockResolvedValueOnce({
+        code: 125,
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.from("exec failed"),
+      });
+      dockerMocks.execContainer.mockResolvedValueOnce({
+        code: state === "removed" || state === "unreachable" ? 1 : 0,
+        stdout: JSON.stringify({
+          Running: state === "still present",
+          Paused: state === "paused",
+          Pid: state === "stopped" ? 0 : 123,
+        }),
+        stderr:
+          state === "removed" ? `Error: No such object: ${"a".repeat(64)}` : "engine unreachable",
+      });
+      if (state === "removed" || state === "stopped") {
+        await expect(cleanup.terminate()).resolves.toBeUndefined();
+      } else if (state === "unreachable") {
+        await expect(cleanup.terminate()).rejects.toThrow("engine unreachable");
+      } else {
+        await expect(cleanup.terminate()).rejects.toThrow("exec failed");
+      }
+      expect(dockerMocks.execContainer.mock.calls.at(-1)?.[1]).toEqual([
+        "inspect",
+        "-f",
+        "{{json .State}}",
+        "a".repeat(64),
+      ]);
+    },
+  );
+
+  it("pins ordinary filesystem dispatch to the same prepared generation", async () => {
+    const backend = await createDockerExecBackend();
+    dockerMocks.execContainerRaw.mockResolvedValueOnce({
+      code: 0,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+    });
+    await backend.runShellCommand({ script: "true" });
+    expect(dockerMocks.execContainerRaw.mock.calls.at(-1)?.[1]?.[2]).toBe("a".repeat(64));
+  });
+
   it("forwards the canonical scope key to container provisioning", async () => {
-    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce({
+      containerName: "sandbox-container",
+      containerId: "a".repeat(64),
+    });
     const scopeKey = `agent:poly:workspace:${"a".repeat(32)}`;
     const readOnlyResourceMounts = [
       { hostPath: "/host/attachments", containerPath: "/openclaw/attachments" },
@@ -337,7 +484,10 @@ describe("docker sandbox backend manager", () => {
   });
 
   it("binds Podman provisioning and later execs to the resolved target", async () => {
-    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-podman");
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce({
+      containerName: "sandbox-podman",
+      containerId: "a".repeat(64),
+    });
     const podmanTarget = {
       key: `machine:${"a".repeat(32)}`,
       globalArgs: [
@@ -374,7 +524,7 @@ describe("docker sandbox backend manager", () => {
     );
     expect(dockerMocks.execContainer).toHaveBeenCalledWith(
       expect.objectContaining({ id: "podman", globalArgs: podmanTarget.globalArgs }),
-      expect.arrayContaining(["inspect", "sandbox-podman"]),
+      expect.arrayContaining(["inspect", "a".repeat(64)]),
       expect.anything(),
     );
     expect(dockerMocks.validateSandboxContainerEngineTarget).toHaveBeenCalledWith(
@@ -409,7 +559,7 @@ describe("docker sandbox backend manager", () => {
     expect(execSpec.argv).toContain("-t");
     expect(execSpec.argv).toContain("-w");
     expect(execSpec.argv).toContain("/workspace/project");
-    expect(execSpec.argv.slice(-4, -1)).toEqual(["sandbox-container", "/bin/sh", "-lc"]);
+    expect(execSpec.argv.slice(-4, -1)).toEqual(["a".repeat(64), "/bin/sh", "-lc"]);
     expect(execSpec.argv.at(-1)).toBe(
       'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; printf ready',
     );

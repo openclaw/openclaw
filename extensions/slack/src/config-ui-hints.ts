@@ -1,7 +1,20 @@
 import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
+const observedGroupHistoryHint = {
+  help: "Automatic observed-message context uses a default of 50 and a maximum of 200 messages; 0 disables automatic injection. The JSON integer maximum selects the 50-message default. Session transcript trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
+};
+const observedDmHistoryHint = {
+  help: "Automatic observed-DM context uses a default of 0 and a maximum of 200 messages; 0 disables that extra context. The JSON integer maximum selects the 0-message default. Session transcript trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
+};
+
 export const slackChannelConfigUiHints = {
+  historyLimit: observedGroupHistoryHint,
+  "accounts.*.historyLimit": observedGroupHistoryHint,
+  dmHistoryLimit: observedDmHistoryHint,
+  "accounts.*.dmHistoryLimit": observedDmHistoryHint,
+  "dms.*.historyLimit": observedDmHistoryHint,
+  "accounts.*.dms.*.historyLimit": observedDmHistoryHint,
   "": {
     label: "Slack",
     help: "Slack channel provider configuration for bot/app tokens, streaming behavior, and DM policy controls. Keep token handling and thread behavior explicit to avoid noisy workspace interactions.",

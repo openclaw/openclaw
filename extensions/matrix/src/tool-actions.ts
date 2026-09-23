@@ -1,4 +1,3 @@
-// Matrix plugin module implements tool actions behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   createActionGate,
@@ -36,6 +35,7 @@ import {
   listMatrixVerifications,
   mismatchMatrixVerificationSas,
   pinMatrixMessage,
+  readMatrixMessage,
   readMatrixMessages,
   requestMatrixVerification,
   restoreMatrixRoomKeyBackup,
@@ -314,11 +314,22 @@ export async function handleMatrixAction(
     const before = readStringParam(params, "before");
     const after = readStringParam(params, "after");
     const threadId = readStringParam(params, "threadId");
+    const messageId = readStringParam(params, "messageId");
     const { clientOpts, withReadTarget } = prepareAction({
       name: "messages",
       disabledMessage: "Matrix messages are disabled.",
     });
     const result = await withReadTarget(roomId, async (target) => {
+      if (messageId) {
+        const message = await readMatrixMessage(target.roomId, messageId, {
+          ...clientOpts,
+          client: target.client,
+        });
+        return {
+          messages: projectMatrixMessagesForDisplay([message]),
+          roomId: target.roomId,
+        };
+      }
       const messages = await readMatrixMessages(target.roomId, {
         limit: limit ?? undefined,
         before: before ?? undefined,

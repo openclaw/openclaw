@@ -10,12 +10,17 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { runPluginReleasePretagPackCheck } from "../../scripts/plugin-release-pretag-pack-check.ts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeJsonFile } from "../helpers/temp-repo.js";
+import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const posixIt = process.platform === "win32" ? it.skip : it;
@@ -91,11 +96,14 @@ function createProofRepo(): {
     `import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 
-const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-  stdio: "ignore",
+const descendant = spawn(process.execPath, ["-e", 'setInterval(() => {}, 1000); process.send("ready");'], {
+  stdio: ["ignore", "ignore", "ignore", "ipc"],
 });
-writeFileSync(${JSON.stringify(directPidFile)}, String(process.pid));
-writeFileSync(${JSON.stringify(descendantPidFile)}, String(descendant.pid));
+descendant.once("message", () => {
+  writeFileSync(${JSON.stringify(directPidFile)}, String(process.pid));
+  writeFileSync(${JSON.stringify(descendantPidFile)}, String(descendant.pid));
+  descendant.disconnect();
+});
 setInterval(() => {}, 1000);
 `,
     "utf8",
@@ -108,29 +116,38 @@ describe("scripts/plugin-release-pretag-pack-check.ts process-tree proof", () =>
     "bounds a stalled runtime build and leaves no process-tree descendant alive",
     async () => {
       const { descendantPidFile, directPidFile, repoDir } = createProofRepo();
-      const timeoutMs = 2_000;
+      const timeoutMs = 100;
       let descendantPid = 0;
       let directPid = 0;
+      const startedAt = Date.now();
+      const releaseAndWait = startProcessWatchdogFixture(() => {
+        const command = runPluginReleasePretagPackCheck(repoDir, { timeoutMs });
+        void command.catch(() => {});
+        return command;
+      });
       try {
-        const startedAt = Date.now();
+        await waitFor(() => readPid(directPidFile) > 1 && readPid(descendantPidFile) > 1);
+        directPid = readPid(directPidFile);
+        descendantPid = readPid(descendantPidFile);
+        expect(isProcessAlive(directPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+        const readyAt = Date.now();
         let thrown: unknown;
         try {
-          await runPluginReleasePretagPackCheck(repoDir, { timeoutMs });
+          await releaseAndWait();
         } catch (error) {
           thrown = error;
         }
         const elapsedMs = Date.now() - startedAt;
+        const completionMs = Date.now() - readyAt;
 
         expect(thrown).toMatchObject({
           code: "ETIMEDOUT",
           message:
-            "plugin runtime build for @openclaw/demo-plugin timed out after 2000ms: node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package extensions/demo-plugin",
+            "plugin runtime build for @openclaw/demo-plugin timed out after 100ms: node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package extensions/demo-plugin",
         });
-        expect(elapsedMs).toBeGreaterThanOrEqual(1_500);
-        expect(elapsedMs).toBeLessThan(7_500);
-        await waitFor(() => existsSync(directPidFile) && existsSync(descendantPidFile));
-        directPid = readPid(directPidFile);
-        descendantPid = readPid(descendantPidFile);
+        expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs * 0.75);
+        expect(completionMs).toBeLessThan(7_500);
         expect(Number.isInteger(directPid) && directPid > 1).toBe(true);
         expect(Number.isInteger(descendantPid) && descendantPid > 1).toBe(true);
         await waitFor(() => !isProcessAlive(directPid) && !isProcessAlive(descendantPid));
@@ -138,7 +155,8 @@ describe("scripts/plugin-release-pretag-pack-check.ts process-tree proof", () =>
         const proof = {
           timeoutCode: (thrown as { code?: string }).code,
           elapsedMs,
-          completionBounded: elapsedMs < 7_500,
+          completionMs,
+          completionBounded: completionMs < 7_500,
           directExited: !isProcessAlive(directPid),
           descendantExited: !isProcessAlive(descendantPid),
         };
@@ -150,6 +168,7 @@ describe("scripts/plugin-release-pretag-pack-check.ts process-tree proof", () =>
           descendantExited: true,
         });
       } finally {
+        await releaseAndWait().catch(() => {});
         directPid ||= readPid(directPidFile);
         descendantPid ||= readPid(descendantPidFile);
         killProcessIfAlive(directPid);
@@ -201,11 +220,7 @@ descendant.once("message", () => {
 function startProofCli(repoDir: string) {
   const child = spawn(
     process.execPath,
-    [
-      "--import",
-      "tsx",
-      fileURLToPath(new URL("../../scripts/plugin-release-pretag-pack-check.ts", import.meta.url)),
-    ],
+    resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(toolingTsEntrypoints.pluginPretagPackCheck)),
     {
       cwd: repoDir,
       env: { PATH: process.env.PATH, HOME: repoDir, TMPDIR: repoDir },

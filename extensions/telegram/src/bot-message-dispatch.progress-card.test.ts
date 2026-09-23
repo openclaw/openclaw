@@ -3,79 +3,38 @@ import {
   createBot,
   createContext,
   createDirectSessionPayload,
-  createSequencedDraftStream,
   createTelegramDraftStream,
   deliverReplies,
   describeTelegramDispatch,
+  emitToolStart,
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
 } from "./bot-message-dispatch.test-harness.js";
+import type { DispatchReplyWithBufferedBlockDispatcherArgs } from "./bot-message-dispatch.test-harness.js";
+import type * as TelegramDeliveryModule from "./bot/delivery.replies.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
+import type * as TelegramDraftModule from "./draft-stream.js";
+import type * as TelegramEditModule from "./send-edit.js";
 
 describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
-  it.each(["progress", "partial", "block"] as const)(
-    "retains the plan across an answer-to-tool transition in %s mode",
-    async (mode) => {
-      const draft = createSequencedDraftStream();
-      createTelegramDraftStream.mockReturnValue(draft);
-      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-        async ({ dispatcherOptions, replyOptions }) => {
-          await replyOptions?.onAssistantMessageStart?.();
-          await replyOptions?.onPlanUpdate?.({
-            phase: "update",
-            explanation: "Checking the change",
-            steps: [{ step: "Verify delivery", status: "in_progress" }],
-          });
-          await replyOptions?.onToolStart?.({ name: "Read", phase: "start" });
-          if (mode === "partial") {
-            await replyOptions?.onPartialReply?.({ text: "Checking the result" });
-          } else {
-            await replyOptions?.onBlockReplyQueued?.({ text: "Checking the result" });
-            await dispatcherOptions.deliver({ text: "Checking the result" }, { kind: "block" });
-          }
-          await replyOptions?.onAssistantMessageStart?.();
-          await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-          return { queuedFinal: false };
-        },
-      );
-
-      await dispatchWithContext({
-        context: createContext(),
-        streamMode: mode,
-        telegramCfg: {
-          streaming: {
-            mode,
-            progress: { toolProgress: true, label: false },
-            preview: { toolProgress: true },
-          },
-        },
-      });
-      const preview = draft.updatePreview.mock.calls.at(-1)?.[0].text;
-      expect(preview).toContain("Verify delivery (in progress)");
-      expect(preview).toContain("Exec");
-      if (mode === "progress") {
-        expect(preview).toContain("Read");
-      } else {
-        expect(preview).not.toContain("Read");
-      }
-    },
-  );
-
   // The real compositor, renderer and transport expose short sends, stopped
   // streams and lifecycle resets at Telegram's stubbed network boundary.
-  it.each(["progress", "partial", "block"] as const)(
-    "replaces, clears and resumes a short card before the final reply in %s mode",
-    async (mode) => {
+  it.each([
+    { mode: "progress", finalDelivery: "dispatcher" },
+    { mode: "progress", finalDelivery: "message-tool" },
+  ] as const)(
+    "keeps cards and accepted answers across tool, final and queued transitions ($mode, $finalDelivery)",
+    async ({ mode, finalDelivery }) => {
       vi.useFakeTimers();
       try {
-        const actualDraft =
-          await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
-        const actualDelivery = await vi.importActual<typeof import("./bot/delivery.replies.js")>(
+        let queuedReplyOptions: DispatchReplyWithBufferedBlockDispatcherArgs["replyOptions"];
+        const actualDraft = await vi.importActual<typeof TelegramDraftModule>("./draft-stream.js");
+        const actualDelivery = await vi.importActual<typeof TelegramDeliveryModule>(
           "./bot/delivery.replies.js",
         );
-        const actualEdit = await vi.importActual<typeof import("./send-edit.js")>("./send-edit.js");
-        deliverReplies.mockImplementation(actualDelivery.deliverReplies);
+        const actualEdit = await vi.importActual<typeof TelegramEditModule>("./send-edit.js");
+        deliverReplies.mockImplementation(actualDelivery.deliverStructuredReplies);
         editMessageTelegram.mockImplementation(actualEdit.editMessageTelegram);
         let draft: TelegramDraftStream | undefined;
         createTelegramDraftStream.mockImplementation((params) => {
@@ -111,6 +70,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
         });
         dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
           async ({ dispatcherOptions, replyOptions }) => {
+            queuedReplyOptions = replyOptions;
             await replyOptions?.onAssistantMessageStart?.();
             await replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
             await draft?.flush();
@@ -168,6 +128,9 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
             expect([...visible.values()][0]).toContain("Progress Card");
             expect([...visible.values()][0]).toContain("blocked");
 
+            await replyOptions?.onBlockReplyQueued?.({ text: "Checking the result" });
+            await dispatcherOptions.deliver({ text: "Checking the result" }, { kind: "block" });
+
             await replyOptions?.onAssistantMessageStart?.();
             await replyOptions?.onToolStart?.({
               phase: "start",
@@ -175,23 +138,38 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
               toolCallId: "exec-proof",
               args: { command: "printf proof" },
             });
+            await replyOptions?.onItemEvent?.({
+              itemId: "tool:exec-proof",
+              toolCallId: "exec-proof",
+              name: "exec",
+              kind: "tool",
+              phase: "start",
+              status: "running",
+              title: "Exec",
+            });
             await replyOptions?.onReasoningEnd?.();
             await draft?.flush();
-            expect([...visible.values()][0]).toContain("Resume work (in progress)");
-            expect([...visible.values()][0]).toContain("blocked");
-            expect([...visible.values()][0]).toContain("Exec");
+            const resumedCard = [...visible.values()].find((text) => text.includes("Exec"));
+            expect(resumedCard).toContain("Resume work (in progress)");
+            expect(resumedCard).toContain("blocked");
 
             await replyOptions?.onAssistantMessageStart?.();
             await replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
             await draft?.flush();
-            expect([...visible.values()][0]).toContain("Exec");
-            expect([...visible.values()][0]).toContain("blocked");
-            expect([...visible.values()][0]).not.toContain("Resumed");
-            expect([...visible.values()][0]).not.toContain("Resume work");
-            expect(send).toHaveBeenCalledTimes(2);
+            const toolCard = [...visible.values()].find((text) => text.includes("Exec"));
+            expect(toolCard).not.toContain("Resumed");
+            expect(toolCard).not.toContain("Resume work");
 
             await replyOptions?.onAssistantMessageStart?.();
-            await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+            if (finalDelivery === "message-tool") {
+              await bot.api.sendMessage(123, "Done");
+              await replyOptions?.onObservedReplyDelivery?.();
+              await vi.advanceTimersByTimeAsync(4_000);
+              // NO_REPLY never enters the final dispatcher; retire before turn settlement.
+              expect.soft([...visible.values()]).toEqual(["Done"]);
+            } else {
+              await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+            }
             expect([...visible.values()]).toContain("Done");
             const finalMessages = [...visible.entries()];
             const sendsAfterFinal = send.mock.calls.length;
@@ -202,11 +180,25 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
               explanation: "Late card",
               steps: [],
             });
+            await replyOptions?.onToolStart?.({
+              name: "exec",
+              phase: "start",
+              toolCallId: "late-raw",
+            });
+            await replyOptions?.onItemEvent?.({
+              itemId: "tool:late-prepared",
+              toolCallId: "late-prepared",
+              kind: "tool",
+              name: "exec",
+              title: "Late prepared tool",
+              phase: "start",
+              status: "running",
+            });
             await draft?.flush();
             expect(send).toHaveBeenCalledTimes(sendsAfterFinal);
             expect(edit).toHaveBeenCalledTimes(editsAfterFinal);
             expect([...visible.entries()]).toEqual(finalMessages);
-            return { queuedFinal: true };
+            return { queuedFinal: finalDelivery === "dispatcher" };
           },
         );
 
@@ -232,6 +224,24 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
         });
         await vi.runOnlyPendingTimersAsync();
         expect([...visible.values()]).toEqual(["Done"]);
+        if (finalDelivery === "dispatcher") {
+          const finalMessageId = [...visible.keys()][0];
+          await queuedReplyOptions?.onQueuedFollowupAdmitted?.();
+          await emitToolStart(queuedReplyOptions, {
+            name: "exec",
+            toolCallId: "followup",
+            phase: "start",
+          });
+          await vi.advanceTimersByTimeAsync(1500);
+          await draft?.flush();
+          expect(visible.get(finalMessageId ?? -1)).toBe("Done");
+          expect([...visible.entries()].filter(([id]) => id !== finalMessageId)).toEqual([
+            [expect.any(Number), expect.stringContaining("Exec")],
+          ]);
+          await queuedReplyOptions?.onQueuedFollowupSettled?.();
+          await vi.runOnlyPendingTimersAsync();
+          expect([...visible.entries()]).toEqual([[finalMessageId, "Done"]]);
+        }
       } finally {
         vi.useRealTimers();
       }

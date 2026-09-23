@@ -207,7 +207,9 @@ openclaw gateway stop
 
 Use `openclaw gateway restart` for restarts. Do not chain `openclaw gateway stop` and `openclaw gateway start` as a restart substitute.
 
-On macOS, `gateway stop` uses `launchctl bootout` by default. This removes the LaunchAgent from the current boot session without persisting a disable, so KeepAlive auto-recovery still works after unexpected crashes and `gateway start` re-enables cleanly. To persistently suppress auto-respawn across reboots, pass `--disable`: `openclaw gateway stop --disable`.
+On macOS, `gateway stop` uses `launchctl bootout` and verifies that the LaunchAgent is unloaded and its process has exited before reporting success. This removes the LaunchAgent from the current boot session without persisting a disable, so KeepAlive auto-recovery still works after unexpected crashes and `gateway start` re-enables cleanly. To also persistently suppress auto-respawn across reboots, pass `--disable`: `openclaw gateway stop --disable`.
+
+If shutdown cannot be verified, the command fails with the exact `launchctl bootout gui/<uid>/<label>` command to run from an external terminal in the service owner's logged-in macOS session. A free Gateway port alone does not prove that the service is stopped.
 
 LaunchAgent labels are `ai.openclaw.gateway` (default) or `ai.openclaw.<profile>` (named profile). `openclaw doctor` audits and repairs service config drift.
 
@@ -216,6 +218,8 @@ LaunchAgent labels are `ai.openclaw.gateway` (default) or `ai.openclaw.<profile>
 OpenClaw installs and manages a per-user LaunchAgent. It does not install or manage system LaunchDaemons. If a custom LaunchDaemon already uses the same gateway label, OpenClaw refuses to write, start, restart, or repair a user LaunchAgent because two `KeepAlive` managers can repeatedly restart the same gateway.
 
 The ownership check reads `launchctl print system/<label>` and also checks installed plists under `/Library/LaunchDaemons`. It fails closed when system ownership cannot be verified, and `--force` does not bypass it. `openclaw gateway status` reports a loaded same-label system job; add `--deep` to scan installed system service files.
+
+The runtime and standalone updater parse captured plist bytes with the native parser. If endpoint protection denies pathname parsing during a detached restart, its ownership scan tries a bounded read and parses the captured bytes instead. Actual permission-denied reads are skipped, while malformed data and other read failures still block activation. Loaded same-label jobs remain blocked; an unloaded same-label plist hidden by read denial cannot be detected. The detached restart fallback uses macOS's `/usr/bin/perl`; if that reader is unavailable, the scan still refuses unverifiable activation. This does not change endpoint-protection policy or suppress its alerts.
 
 Choose one lifecycle owner before retrying:
 

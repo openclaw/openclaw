@@ -1,5 +1,25 @@
 import { vi } from "vitest";
 import type { PortListener, PortUsageStatus } from "../../infra/ports-types.js";
+import { defaultRuntime } from "../../runtime.js";
+import { printDaemonStatus } from "./status.print.js";
+
+export function capturePrintedDaemonStatus(
+  status: Parameters<typeof printDaemonStatus>[0],
+  options: Parameters<typeof printDaemonStatus>[1],
+): { logs: string; errors: string } {
+  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  try {
+    printDaemonStatus(status, options);
+    return {
+      logs: log.mock.calls.flat().join("\n"),
+      errors: error.mock.calls.flat().join("\n"),
+    };
+  } finally {
+    log.mockRestore();
+    error.mockRestore();
+  }
+}
 
 type PortConnections = Awaited<
   ReturnType<typeof import("../../infra/ports-inspect.js").inspectPortConnections>

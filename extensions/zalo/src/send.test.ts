@@ -1,5 +1,6 @@
 // Zalo tests cover send plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ZaloFetch } from "./api.js";
 
 const sendMessageMock = vi.fn();
 const sendPhotoMock = vi.fn();
@@ -192,22 +193,45 @@ describe("zalo send", () => {
       ok: true,
       result: { message_id: "z-msg-surrogate" },
     });
-    sendPhotoMock.mockResolvedValueOnce({
-      ok: true,
-      result: { message_id: "z-photo-surrogate" },
+    const api = await vi.importActual<typeof import("./api.js")>("./api.js");
+    const ssrf = await import("openclaw/plugin-sdk/ssrf-runtime");
+    const pinnedHost = await ssrf.resolvePinnedHostnameWithPolicy("example.com", {
+      lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
     });
+    const resolvePhotoHost = vi
+      .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
+      .mockResolvedValue(pinnedHost);
+    const fetcher = vi.fn<ZaloFetch>(async () =>
+      Response.json({ ok: true, result: { message_id: "z-photo-surrogate" } }),
+    );
+    sendPhotoMock.mockImplementationOnce(api.sendPhoto);
+    resolveZaloProxyFetchMock.mockReturnValue(fetcher);
     const boundaryText = `${"a".repeat(1999)}🐱`;
 
-    await sendMessageZalo("dm-chat-surrogate-text", boundaryText, {
-      token: "zalo-token",
-    });
-    await sendMessageZalo("dm-chat-surrogate-caption", boundaryText, {
-      token: "zalo-token",
-      mediaUrl: "https://example.com/photo.jpg",
-    });
+    try {
+      await sendMessageZalo("dm-chat-surrogate-text", boundaryText, {
+        token: "zalo-token",
+      });
+      const result = await sendMessageZalo("dm-chat-surrogate-caption", boundaryText, {
+        token: "zalo-token",
+        mediaUrl: "https://example.com/photo.jpg",
+      });
 
-    expect(sendMessageMock.mock.calls[0]?.[1]?.text).toBe("a".repeat(1999));
-    expect(sendPhotoMock.mock.calls[0]?.[1]?.caption).toBe("a".repeat(1999));
+      expect(sendMessageMock.mock.calls[0]?.[1]?.text).toBe("a".repeat(1999));
+      expect(fetcher).toHaveBeenCalledOnce();
+      expect(fetcher.mock.calls[0]?.[1]?.body).toBe(
+        JSON.stringify({
+          chat_id: "dm-chat-surrogate-caption",
+          photo: "https://example.com/photo.jpg",
+          caption: "a".repeat(1999),
+        }),
+      );
+      expect(requireSuccessfulSend(result, "z-photo-surrogate").receipt.platformMessageIds).toEqual(
+        ["z-photo-surrogate"],
+      );
+    } finally {
+      resolvePhotoHost.mockRestore();
+    }
   });
 
   it("sends cfg-backed media directly without hosted-media rewrites", async () => {

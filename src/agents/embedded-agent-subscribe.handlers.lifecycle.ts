@@ -3,7 +3,6 @@
  */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { projectChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
@@ -252,13 +251,6 @@ export function handleAgentEnd(
   };
 
   const finalizeAgentEnd = () => {
-    ctx.state.blockState.thinking = false;
-    ctx.state.blockState.final = false;
-    ctx.state.blockState.inlineCode = createInlineCodeState();
-    ctx.state.blockState.fence = undefined;
-    ctx.state.blockState.reasoningPendingFenceFragment = undefined;
-    ctx.state.blockState.pendingFenceFragment = undefined;
-
     if (ctx.state.pendingCompactionRetry > 0) {
       ctx.resolveCompactionRetry();
     } else {

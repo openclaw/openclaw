@@ -81,12 +81,16 @@ export async function prepareCandidate(params: {
   const packDir = join(params.outputDir, "package");
   mkdirSync(packDir, { recursive: true });
   const packJsonPath = join(packDir, "pack.json");
-  logPhase("prepare", "package-dist-inventory");
-  await writePackageDistInventoryForCandidate({
-    sourceDir: params.sourceDir,
-    logPath: join(params.logsDir, "pnpm-pack-dry-run.log"),
-  });
   const packCommand = resolvePackageCandidatePackCommand(params.sourceDir, packDir);
+  // Modern source helpers own inventory and bundled dependency preparation. A
+  // preliminary pnpm pack rejects their isolated workspace before that setup.
+  if (packCommand.kind === "pnpm-pack") {
+    logPhase("prepare", "package-dist-inventory");
+    await writePackageDistInventoryForCandidate({
+      sourceDir: params.sourceDir,
+      logPath: join(params.logsDir, "pnpm-pack-dry-run.log"),
+    });
+  }
   logPhase("prepare", packCommand.phase);
   const packResult = await runCommand(packCommand.command, packCommand.args, {
     cwd: params.sourceDir,

@@ -37,6 +37,54 @@ afterEach(() => {
 });
 
 describe("listChannelPlugins", () => {
+  it("sorts channel plugins by configured order", () => {
+    const orderedPlugins: Array<[string, number]> = [
+      ["demo-middle", 20],
+      ["demo-first", 10],
+      ["demo-last", 30],
+    ];
+    const registry = createTestRegistry(
+      orderedPlugins.map(([id, order]) => {
+        const plugin = createChannelTestPluginBase({ id });
+        return {
+          pluginId: id,
+          plugin: { ...plugin, meta: { ...plugin.meta, order } },
+          source: "test",
+        };
+      }),
+    );
+    setActivePluginRegistry(registry);
+
+    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual([
+      "demo-first",
+      "demo-middle",
+      "demo-last",
+    ]);
+  });
+
+  it("refreshes cached channel lookups when the same registry instance is re-activated", () => {
+    const registry = createTestRegistry([
+      {
+        pluginId: "demo-alpha",
+        plugin: createChannelTestPluginBase({ id: "demo-alpha" }),
+        source: "test",
+      },
+    ]);
+    setActivePluginRegistry(registry, "registry-test");
+    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["demo-alpha"]);
+
+    registry.channels = createTestRegistry([
+      {
+        pluginId: "demo-beta",
+        plugin: createChannelTestPluginBase({ id: "demo-beta" }),
+        source: "test",
+      },
+    ]).channels;
+    setActivePluginRegistry(registry, "registry-test");
+
+    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["demo-beta"]);
+  });
+
   it("appends unique gateway methods from both plugin dialects in channel order", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     const coreMethods = listGatewayMethods();

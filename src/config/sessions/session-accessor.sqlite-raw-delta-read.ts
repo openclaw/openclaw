@@ -1,9 +1,5 @@
 import { sql } from "kysely";
-import {
-  getNodeSqliteKysely,
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
+import { getNodeSqliteKysely, executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type {
@@ -12,11 +8,14 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import type { CurrentTranscriptProjection } from "./session-accessor.sqlite-projection-read.js";
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import { normalizeVisibleMessageLimit } from "./session-accessor.sqlite-visible-cursor.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 const RAW_TRANSCRIPT_CURSOR_VERSION = 1;
 const DEFAULT_RAW_TRANSCRIPT_MAX_EVENTS = 1_000;
@@ -134,17 +133,10 @@ export function readRawDeltaInTransaction(
   beforeEventSeq: number | undefined,
   snapshot?: { generation: string | undefined; indexedSeq: number },
 ): SessionTranscriptRawDeltaResult {
-  const db =
-    getNodeSqliteKysely<Pick<DB, "transcript_rewrite_watermarks" | "transcript_events">>(database);
-  const generation = snapshot
-    ? snapshot.generation
-    : executeSqliteQueryTakeFirstSync(
-        database,
-        db
-          .selectFrom("transcript_rewrite_watermarks")
-          .select("generation")
-          .where("session_id", "=", scope.sessionId),
-      )?.generation;
+  const watermark = snapshot
+    ? undefined
+    : readSessionTranscriptHotWatermark({ db: database }, scope.sessionId);
+  const generation = snapshot ? snapshot.generation : (watermark?.generation ?? undefined);
   if (generation === undefined) {
     return { kind: "missing" };
   }
@@ -168,15 +160,11 @@ export function readRawDeltaInTransaction(
   if (cursor.generation !== generation) {
     return reset("generation_mismatch");
   }
+  const db = getNodeSqliteKysely<Pick<DB, "transcript_events">>(database);
   const transcript = db.selectFrom("transcript_events").where("session_id", "=", scope.sessionId);
-  const frontier = snapshot
-    ? snapshot.indexedSeq
-    : executeSqliteQueryTakeFirstSync(
-        database,
-        transcript.select("seq").orderBy("seq", "desc").limit(1),
-      )?.seq;
+  const frontier = snapshot ? snapshot.indexedSeq : watermark?.maxSeq;
   const maxSeq = Math.min(
-    frontier === undefined ? -1 : sqliteNumber(frontier),
+    sqliteNumber(frontier ?? -1),
     beforeEventSeq === undefined ? Number.POSITIVE_INFINITY : beforeEventSeq - 1,
   );
   if (cursor.lastSeq > maxSeq) {
@@ -198,7 +186,7 @@ export function readRawDeltaInTransaction(
       .select([
         "seq",
         /* kysely-allow-raw: SQLite byte length avoids fetching or parsing excluded JSON. */
-        sql<number>`OCTET_LENGTH(event_json) + 1`.as("serialized_bytes"),
+        sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
       ])
       .$if(beforeEventSeq !== undefined, (query) => query.where("seq", "<", beforeEventSeq!))
       .orderBy("seq", "asc");
@@ -233,7 +221,7 @@ export function readRawDeltaInTransaction(
       : executeSqliteQuerySync(
           database,
           transcript
-            .select(["event_json", "seq"])
+            .select([transcriptEventJsonSql(database).as("event_json"), "seq"])
             .where("seq", ">", cursor.lastSeq)
             .where("seq", "<=", lastSeq)
             .orderBy("seq", "asc"),

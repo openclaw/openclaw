@@ -99,7 +99,26 @@ export function tooltipTitleText(item: Locator) {
   });
 }
 
+type HeldModuleContext = {
+  closing: boolean;
+  pages: Map<Page, Array<{ release: () => void; installed: ReturnType<Page["route"]> }>>;
+};
+const heldModuleContexts = new WeakMap<BrowserContext, HeldModuleContext>();
+
+function getHeldModuleContext(context: BrowserContext): HeldModuleContext {
+  let held = heldModuleContexts.get(context);
+  if (!held) {
+    held = { closing: false, pages: new Map() };
+    heldModuleContexts.set(context, held);
+  }
+  return held;
+}
+
 export async function holdModuleResponse(page: Page, module: RegExp) {
+  const held = getHeldModuleContext(page.context());
+  if (held.closing) {
+    throw new Error("Cannot hold a module after browser context cleanup begins");
+  }
   let release!: () => void;
   let requested!: (url: string) => void;
   const gate = new Promise<void>((resolve) => {
@@ -109,7 +128,7 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
     requested = resolve;
   });
   let requests = 0;
-  await page.route(module, async (route) => {
+  const installed = page.route(module, async (route) => {
     requests += 1;
     const response = await route.fetch();
     expect(response.status()).toBe(200);
@@ -117,6 +136,11 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
     await gate;
     await route.fulfill({ response });
   });
+  // Register before awaiting installation so teardown also owns a pending route().
+  const registrations = held.pages.get(page) ?? [];
+  registrations.push({ release, installed });
+  held.pages.set(page, registrations);
+  await installed;
   return { request, release, requests: () => requests };
 }
 
@@ -224,9 +248,26 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
   const closeBrowserContext = (context: BrowserContext): Promise<void> => {
     let closing = contextClosures.get(context);
     if (!closing) {
+      const held = getHeldModuleContext(context);
+      held.closing = true;
       // Playwright's second close can return while the first is still finalizing.
       closing = Promise.resolve().then(async () => {
-        await context.close();
+        const registrations = [...held.pages.values()].flat();
+        for (const registration of registrations) {
+          registration.release();
+        }
+        // Release all gates, then join registration and active page/context callbacks.
+        // A first request does not settle later fetches; wait mode preserves their errors.
+        await runQaGatewayFixture(
+          () => settleControlUiCleanup(registrations.map(({ installed }) => installed)),
+          () =>
+            settleControlUiCleanup([
+              ...[...held.pages.keys()].map((page) => page.unrouteAll({ behavior: "wait" })),
+              context.unrouteAll({ behavior: "wait" }),
+            ]),
+          () => context.close(),
+        );
+        held.pages.clear();
         // Requests outlive sockets; pending handlers must release their admission
         // roots before fixture cleanup. waitFor also works in afterAll.
         await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), {

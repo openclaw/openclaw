@@ -6,16 +6,18 @@ import {
   hasExecutionIdentityAdmissionSink,
 } from "../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../audit/runtime-action-decision.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Own one direct-process writer unless a surrounding runtime already owns it. */
 export function startAgentLocalAuditWriter(
+  config: OpenClawConfig,
   options: { stateDir?: string } = {},
 ): (() => Promise<void>) | undefined {
   if (hasExecutionIdentityAdmissionSink()) {
     return undefined;
   }
   const recorder = createAuditEventRecorder({
-    messageMode: "off",
+    getConfig: () => config,
     ...(options.stateDir ? { stateDir: options.stateDir } : {}),
   });
   const clearAdmissionSink = configureExecutionIdentityAdmissionSink(

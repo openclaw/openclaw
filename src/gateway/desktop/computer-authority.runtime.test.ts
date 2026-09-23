@@ -26,6 +26,8 @@ import { createGatewayAuxHandlers } from "../server-aux-handlers.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { computerHandlers } from "../server-methods/computer.js";
 import type { RespondFn } from "../server-methods/types.js";
+import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
+import { createTestRuntimeSecretsActivator } from "../server-startup-config.test-support.js";
 import { createGatewayComputerService } from "./computer-service.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -153,7 +155,7 @@ module.exports = {
     config.plugins!.allow = [pluginId];
     config.desktop = { host: { enabled: true, managed: true } };
     await state.writeConfig(config);
-    const sdkHost = createCompiledSdkHost(computerUseSdkEntrypoint, (prefix) =>
+    const sdkHost = createCompiledSdkHost([computerUseSdkEntrypoint], (prefix) =>
       tempDirs.make(prefix),
     );
     const env = {
@@ -214,6 +216,7 @@ module.exports = {
       getConfig: () => config,
       getPluginRegistry: () => registry,
       hostDesktopService: {
+        reconcileRuntimePolicy: async () => {},
         observe: async () => {
           throw new Error("Unexpected desktop observer");
         },
@@ -244,10 +247,11 @@ module.exports = {
     const aux = createGatewayAuxHandlers({
       log: {},
       getNativeApprovalRouteCoordinator: () => undefined,
-      activateRuntimeSecrets: async () => {
-        throw new Error("Unexpected secrets reload");
-      },
-      sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
+      sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+        current: undefined,
+        required: null,
+      }),
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       clients: [],
       channelManager: {

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   cleanupOwnedKeychain,
@@ -16,7 +16,8 @@ import {
 } from "../../scripts/mobile-release-intent.mjs";
 import { applyMobileReleasePlan, planMobileRelease } from "../../scripts/mobile-release-version.ts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
 
 const REPOSITORY = "openclaw/openclaw";
 const TARGET_REF = "release/2026.9.2-mobile";
@@ -44,6 +45,10 @@ const TOOLING_FILES = [
   "scripts/lib/release-version.mjs",
 ] as const;
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
+const repositoryTemplateRoots = useAutoCleanupTempDirTracker(afterAll);
+const repositoryTemplates = new Map<string, ReturnType<typeof createFixtureRepositories>>();
+const joinedObservationRoots: string[] = [];
+afterEach(() => cleanupTempDirs(joinedObservationRoots));
 
 type Platform = "ios" | "android";
 
@@ -461,22 +466,12 @@ if (endpoint.includes("/collaborators/")) {
   );
 }
 
-function createFixture(options: FixtureOptions = {}): Fixture {
+function createFixtureRepositories(root: string, options: FixtureOptions) {
   const platform = options.platform ?? "ios";
-  const root = tempRoots.make("openclaw-mobile-release-authority-");
   const source = path.join(root, "source");
   const trusted = path.join(root, "trusted");
   const workspace = path.join(root, "workspace");
-  const runnerTemp = path.join(root, "runner");
-  const stateDir = path.join(root, "state");
-  const binDir = path.join(root, "bin");
-  const outputPath = path.join(root, "output");
   fs.mkdirSync(source);
-  fs.mkdirSync(runnerTemp);
-  fs.mkdirSync(stateDir);
-  fs.mkdirSync(binDir);
-  fs.writeFileSync(outputPath, "");
-
   git(source, "init", "-b", "main");
   git(source, "config", "user.email", "ci@example.invalid");
   git(source, "config", "user.name", "Mobile Release Test");
@@ -542,6 +537,64 @@ function createFixture(options: FixtureOptions = {}): Fixture {
     workspace,
   );
   git(workspace, "checkout", "--detach", targetSha);
+
+  return { source, trusted, workspace, baseSha, targetSha };
+}
+
+function prepareFixtureRepositories(root: string, options: FixtureOptions) {
+  if (
+    options.mutateBase ||
+    options.beforeCandidate ||
+    options.buildCandidate ||
+    options.mutateCandidate
+  ) {
+    return createFixtureRepositories(root, options);
+  }
+  const key = JSON.stringify([
+    options.platform ?? "ios",
+    options.baseState ?? null,
+    options.emptyCandidate ?? false,
+    options.realFetch ?? false,
+  ]);
+  let template = repositoryTemplates.get(key);
+  if (!template) {
+    template = createFixtureRepositories(
+      repositoryTemplateRoots.make("openclaw-mobile-release-repositories-"),
+      options,
+    );
+    git(template.source, "repack", "-ad");
+    repositoryTemplates.set(key, template);
+  }
+  const source = path.join(root, "source");
+  const trusted = path.join(root, "trusted");
+  const workspace = path.join(root, "workspace");
+  // Ref, index, and object mutations stay private, including cold partial-clone faults.
+  const copyOptions = { recursive: true, mode: fs.constants.COPYFILE_FICLONE };
+  fs.cpSync(template.source, source, copyOptions);
+  fs.cpSync(template.trusted, trusted, copyOptions);
+  fs.cpSync(template.workspace, workspace, copyOptions);
+  for (const repository of [trusted, workspace]) {
+    git(repository, "remote", "set-url", "origin", source);
+  }
+  return { ...template, source, trusted, workspace };
+}
+
+function createFixture(options: FixtureOptions = {}): Fixture {
+  const platform = options.platform ?? "ios";
+  const root = tempRoots.make("openclaw-mobile-release-authority-");
+  const runnerTemp = path.join(root, "runner");
+  const stateDir = path.join(root, "state");
+  const binDir = path.join(root, "bin");
+  const outputPath = path.join(root, "output");
+  fs.mkdirSync(runnerTemp);
+  fs.mkdirSync(stateDir);
+  fs.mkdirSync(binDir);
+  fs.writeFileSync(outputPath, "");
+
+  const { source, trusted, workspace, baseSha, targetSha } = prepareFixtureRepositories(
+    root,
+    options,
+  );
 
   writeGitShim(binDir, options.realFetch === true);
   writeGhShim(binDir);
@@ -2096,7 +2149,7 @@ describe("mobile release authority", () => {
     expect(source).not.toContain("extraheader");
   });
 
-  it("keeps the Android emulator diagnostic manual, exact-SHA-bound, and secretless", () => {
+  it("keeps the Android emulator diagnostic manual, exact-SHA-bound, and secretless", async () => {
     const file = ".github/workflows/android-emulator-diagnostic.yml";
     const source = fs.readFileSync(file, "utf8");
     const workflow = parse(source) as {
@@ -2560,7 +2613,7 @@ describe("mobile release authority", () => {
       .replace("final_snapshot_lead_seconds=15", "final_snapshot_lead_seconds=4")
       .replace("snapshot_properties_max_bytes=65536", "snapshot_properties_max_bytes=64")
       .replace("snapshot_logcat_max_bytes=262144", "snapshot_logcat_max_bytes=128");
-    const runPostDeadlineObservation = (
+    const runPostDeadlineObservation = async (
       adbSource: string,
       options: {
         deadlineSeconds?: number;
@@ -2569,9 +2622,10 @@ describe("mobile release authority", () => {
         preObservationDelaySeconds?: number;
       } = {},
     ) => {
-      const root = tempRoots.make("openclaw-android-emulator-post-deadline-");
+      const root = makeTempDir([], "openclaw-android-emulator-post-deadline-");
       const bin = path.join(root, "bin");
       const diagnosticDir = path.join(root, "diagnostic");
+      const clockPath = path.join(root, "observation-clock.txt");
       const deadlineSeconds = options.deadlineSeconds ?? 12;
       const functions = options.functions ?? observationFunctions;
       const preObservationDelaySeconds = options.preObservationDelaySeconds ?? 0;
@@ -2579,12 +2633,24 @@ describe("mobile release authority", () => {
       fs.mkdirSync(diagnosticDir);
       fs.writeFileSync(path.join(bin, "adb"), adbSource, { mode: 0o755 });
       const startedAt = Date.now();
-      const result = spawnSync(
-        "/bin/bash",
-        [
+      const result = await runVitestShutdownCommand({
+        bin: "/bin/bash",
+        args: [
           "-c",
           [
             "set -euo pipefail",
+            // Observation waits use a clock; the timeout and cleanup probes below use real time.
+            "unset SECONDS",
+            "SECONDS=0",
+            "sleep() {",
+            '  if [[ -n "${probe_pid:-}" ]]; then',
+            // Join the short-lived adb fixture without racing its output or exit status.
+            '    wait "$probe_pid" 2>/dev/null || :',
+            "  else",
+            "    SECONDS=$((SECONDS + $1))",
+            "  fi",
+            "}",
+            `trap 'printf "%s\\n" "$SECONDS" >"$OBSERVATION_CLOCK_FILE"' EXIT`,
             "sample_owned_qemu() { :; }",
             functions,
             "readiness_failure_latched=0",
@@ -2596,31 +2662,37 @@ describe("mobile release authority", () => {
             'fail_after_readiness_timeout "latched readiness failure" "${INITIAL_SERIAL:-}"',
           ].join("\n"),
         ],
-        {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            DIAGNOSTIC_DIR: diagnosticDir,
-            INITIAL_SERIAL: options.initialSerial ?? "",
-            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-          },
-          timeout: 20_000,
+        env: {
+          ...process.env,
+          DIAGNOSTIC_DIR: diagnosticDir,
+          INITIAL_SERIAL: options.initialSerial ?? "",
+          OBSERVATION_CLOCK_FILE: clockPath,
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
         },
-      );
+        timeoutMs: 20_000,
+        maxBytes: 1024 * 1024,
+      }).catch((error: unknown) => {
+        throw new Error(`Android observation failed; fixture retained at ${root}`, {
+          cause: error,
+        });
+      });
+      // A rejected managed join leaves this root outside automatic cleanup.
+      joinedObservationRoots.push(root);
       const snapshotsRoot = path.join(diagnosticDir, "cold-boot-snapshots");
       return {
         durationMs: Date.now() - startedAt,
+        elapsedSeconds: Number(fs.readFileSync(clockPath, "utf8").trim()),
         observations: fs.readFileSync(
           path.join(diagnosticDir, "post-deadline-observations.log"),
           "utf8",
         ),
-        result,
+        result: { ...result, status: result.code },
         snapshots: fs.existsSync(snapshotsRoot) ? fs.readdirSync(snapshotsRoot).toSorted() : [],
         snapshotsRoot,
       };
     };
 
-    const lateReady = runPostDeadlineObservation(`#!/bin/bash
+    const lateReady = await runPostDeadlineObservation(`#!/bin/bash
 set -euo pipefail
 if [[ "\${1:-}" == "devices" ]]; then
   printf 'List of devices attached\\nemulator-5554\\tdevice product:sdk model:sdk\\n'
@@ -2647,7 +2719,7 @@ fi
       "final_snapshot_lead_seconds=4",
       "final_snapshot_lead_seconds=60",
     );
-    const lateReadyNearCeiling = runPostDeadlineObservation(
+    const lateReadyNearCeiling = await runPostDeadlineObservation(
       `#!/bin/bash
 set -euo pipefail
 if [[ "\${1:-}" == "devices" ]]; then
@@ -2665,8 +2737,9 @@ fi
     expect(lateReadyNearCeiling.observations).toContain("observation_stop=late-boot-completed");
     expect(lateReadyNearCeiling.snapshots).toEqual(["first-online"]);
 
-    const failedBootProbeNearCeiling = runPostDeadlineObservation(
-      `#!/bin/bash
+    const [failedBootProbeResult, boundedSnapshotsResult] = await Promise.allSettled([
+      runPostDeadlineObservation(
+        `#!/bin/bash
 set -euo pipefail
 if [[ "\${1:-}" == "devices" ]]; then
   printf 'List of devices attached\\nemulator-5554\\tdevice product:sdk model:sdk\\n'
@@ -2680,13 +2753,46 @@ elif [[ "\${1:-}" == "-s" && "\${3:-}" == "logcat" ]]; then
   printf 'system crash evidence line\\n'
 fi
 `,
-      { functions: lateReadyNearCeilingFunctions },
-    );
+        { functions: lateReadyNearCeilingFunctions },
+      ),
+      runPostDeadlineObservation(`#!/bin/bash
+set -euo pipefail
+if [[ "\${1:-}" == "devices" ]]; then
+  printf 'List of devices attached\\nemulator-5554\\tdevice product:sdk model:sdk\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "emu" ]]; then
+  printf '%s\\nOK\\n' "\${AVD_NAME:?}"
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "shell" && "\${5:-}" == "sys.boot_completed" ]]; then
+  printf '\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "shell" ]]; then
+  for _ in {1..40}; do printf '[init.svc.example]: [running]\\n'; done
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "logcat" ]]; then
+  for _ in {1..40}; do printf 'system crash evidence line\\n'; done
+fi
+`),
+    ]);
+    if (
+      failedBootProbeResult.status === "rejected" &&
+      boundedSnapshotsResult.status === "rejected"
+    ) {
+      throw new AggregateError(
+        [failedBootProbeResult.reason, boundedSnapshotsResult.reason],
+        "Android observation scenarios failed",
+      );
+    }
+    if (failedBootProbeResult.status === "rejected") {
+      throw failedBootProbeResult.reason;
+    }
+    if (boundedSnapshotsResult.status === "rejected") {
+      throw boundedSnapshotsResult.reason;
+    }
+    const failedBootProbeNearCeiling = failedBootProbeResult.value;
+    const boundedSnapshots = boundedSnapshotsResult.value;
     expect(failedBootProbeNearCeiling.result.status).toBe(1);
+    expect(failedBootProbeNearCeiling.elapsedSeconds).toBe(12);
     expect(failedBootProbeNearCeiling.observations).toContain("boot_status=7");
     expect(failedBootProbeNearCeiling.snapshots).toEqual(["first-online", "near-ceiling"]);
 
-    const unrelatedDevice = runPostDeadlineObservation(`#!/bin/bash
+    const unrelatedDevice = await runPostDeadlineObservation(`#!/bin/bash
 set -euo pipefail
 if [[ "\${1:-}" == "devices" ]]; then
   printf 'List of devices attached\\nemulator-5554\\tdevice product:sdk model:sdk\\n'
@@ -2702,7 +2808,7 @@ fi
     expect(unrelatedDevice.observations).not.toContain("late_boot_completed_at=");
     expect(unrelatedDevice.snapshots).toEqual([]);
 
-    const changedDevice = runPostDeadlineObservation(
+    const changedDevice = await runPostDeadlineObservation(
       `#!/bin/bash
 set -euo pipefail
 if [[ "\${1:-}" == "devices" ]]; then
@@ -2715,7 +2821,7 @@ fi
     expect(changedDevice.observations).toContain("observation_stop=unexpected-device-change");
     expect(changedDevice.snapshots).toEqual([]);
 
-    const capped = runPostDeadlineObservation(
+    const capped = await runPostDeadlineObservation(
       `#!/bin/bash
 set -euo pipefail
 if [[ "\${1:-}" == "devices" ]]; then
@@ -2725,11 +2831,12 @@ fi
       { deadlineSeconds: 2 },
     );
     expect(capped.result.status).toBe(1);
+    expect(capped.elapsedSeconds).toBe(2);
     expect(capped.result.stderr).toContain("::error::latched readiness failure");
     expect(capped.observations).toContain("observation_cap_seconds=900");
     expect(capped.observations).toContain("observation_stop=observation-cap-reached");
 
-    const absoluteCap = runPostDeadlineObservation(
+    const absoluteCap = await runPostDeadlineObservation(
       `#!/bin/bash
 set -euo pipefail
 if [[ "\${1:-}" == "devices" ]]; then
@@ -2739,24 +2846,12 @@ fi
       { deadlineSeconds: 3, preObservationDelaySeconds: 2 },
     );
     expect(absoluteCap.result.status).toBe(1);
+    expect(absoluteCap.elapsedSeconds).toBe(3);
     expect(absoluteCap.durationMs).toBeLessThan(5_000);
     expect(absoluteCap.observations).toContain("observation_stop=observation-cap-reached");
 
-    const boundedSnapshots = runPostDeadlineObservation(`#!/bin/bash
-set -euo pipefail
-if [[ "\${1:-}" == "devices" ]]; then
-  printf 'List of devices attached\\nemulator-5554\\tdevice product:sdk model:sdk\\n'
-elif [[ "\${1:-}" == "-s" && "\${3:-}" == "emu" ]]; then
-  printf '%s\\nOK\\n' "\${AVD_NAME:?}"
-elif [[ "\${1:-}" == "-s" && "\${3:-}" == "shell" && "\${5:-}" == "sys.boot_completed" ]]; then
-  printf '\\n'
-elif [[ "\${1:-}" == "-s" && "\${3:-}" == "shell" ]]; then
-  for _ in {1..40}; do printf '[init.svc.example]: [running]\\n'; done
-elif [[ "\${1:-}" == "-s" && "\${3:-}" == "logcat" ]]; then
-  for _ in {1..40}; do printf 'system crash evidence line\\n'; done
-fi
-`);
     expect(boundedSnapshots.result.status).toBe(1);
+    expect(boundedSnapshots.elapsedSeconds).toBe(12);
     expect(boundedSnapshots.observations).toContain("observation_stop=observation-cap-reached");
     expect(boundedSnapshots.snapshots).toEqual(["first-online", "near-ceiling"]);
     for (const snapshot of boundedSnapshots.snapshots) {
@@ -2810,9 +2905,19 @@ fi
         "-c",
         [
           "set -euo pipefail",
+          "unset SECONDS",
+          "SECONDS=0",
+          'mkfifo "$PROBE_READY_FILE"',
+          'exec 3<>"$PROBE_READY_FILE"',
+          // Expire only after the child has installed its TERM trap and recorded its PID.
+          "sleep() {",
+          "  read -r ready <&3",
+          '  [[ "$ready" == ready ]]',
+          "  SECONDS=1",
+          "}",
           probeFunction,
           'run_bounded_probe "$PROBE_OUTPUT" "$((SECONDS + 1))" /bin/bash -c ' +
-            '\'trap "" TERM; printf "%s\\n" "$$" >"$PROBE_PID_FILE"; exec sleep 30\'',
+            '\'trap "" TERM; printf "%s\\n" "$$" >"$PROBE_PID_FILE"; printf "ready\\n" >&3; exec sleep 30\'',
           'printf "status=%s timed_out=%s\\n" "$probe_status" "$probe_timed_out"',
         ].join("\n"),
       ],
@@ -2822,6 +2927,7 @@ fi
           ...process.env,
           PROBE_OUTPUT: path.join(probeTimeoutRoot, "probe.txt"),
           PROBE_PID_FILE: probePidFile,
+          PROBE_READY_FILE: path.join(probeTimeoutRoot, "probe.ready"),
         },
         timeout: 5_000,
       },
@@ -3261,7 +3367,7 @@ fi
         file: ".github/workflows/ios-beta-release.yml",
         name: "iOS Beta Release",
         platform: "ios",
-        releaseRunner: "macos-26",
+        releaseRunner: "xcode-27",
         signingCheckoutName: "Checkout encrypted iOS signing assets",
         signingCheckoutRevalidateName:
           "Revalidate release authority immediately before iOS signing checkout",
@@ -4470,7 +4576,7 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
       };
     };
     const releaseSteps = workflow.jobs.release.steps;
-    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode 26");
+    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode 27");
     const rustIndex = releaseSteps.findIndex(
       (step) => step.name === "Install Watch Rust toolchain",
     );

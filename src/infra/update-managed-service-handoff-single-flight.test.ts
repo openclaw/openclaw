@@ -10,6 +10,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   signalMockManagedUpdateHandoffReady,
+  registerPreparedCoordinatorAdmissionTest,
   type MockManagedUpdateHandoffLeaseFailure,
 } from "./update-managed-service-handoff.test-support.js";
 
@@ -141,6 +142,13 @@ const baseParams = {
 };
 
 describe("managed service update handoff single-flight", () => {
+  registerPreparedCoordinatorAdmissionTest({
+    spawnMock,
+    makeTempDir: (prefix) => tempRoots.make(prefix),
+    setCoordinator: (directory) => {
+      resolvePreferredOpenClawTmpDirMock.mockReturnValue(directory);
+    },
+  });
   it.each([false, true])(
     "awaits the pre-park notice and rechecks helper ownership (lost: %s)",
     async (lost) => {

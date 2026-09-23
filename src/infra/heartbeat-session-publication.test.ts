@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { buildEmbeddedRunPayloads } from "../agents/embedded-agent-runner/run/payloads.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
@@ -18,7 +19,11 @@ import {
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { persistInternalSourceReply } from "../gateway/internal-source-reply-persistence.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
-import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  onInternalSessionTranscriptUpdate,
+  onSessionTranscriptUpdate,
+  type InternalSessionTranscriptUpdate,
+} from "../sessions/transcript-events.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -83,14 +88,6 @@ async function withTarget(
   );
 }
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 describe("publishHeartbeatSessionReply", () => {
   it.each(["abort", "authority"] as const)(
     "accepts the committed occurrence before queued %s and publishes a later occurrence once",
@@ -100,8 +97,8 @@ describe("publishHeartbeatSessionReply", () => {
         const controller = new AbortController();
         let ownerActive = true;
         let cancellationQueued = false;
-        const updates: Array<{ messageId?: string }> = [];
-        const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+        const updates: InternalSessionTranscriptUpdate[] = [];
+        const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
         try {
           const first = await withOwnedSessionTranscriptWrites(
             {
@@ -154,6 +151,12 @@ describe("publishHeartbeatSessionReply", () => {
               .filter((message) => message?.role === "assistant"),
           ).toHaveLength(2);
           expect(updates.filter((update) => update.messageId)).toHaveLength(2);
+          expect(
+            updates.filter((update) => update.messageId).map((update) => update.lifecycleRevision),
+          ).toEqual([
+            params.expectedGeneration.lifecycleRevision,
+            params.expectedGeneration.lifecycleRevision,
+          ]);
         } finally {
           unsubscribe();
         }
@@ -528,8 +531,8 @@ describe("publishHeartbeatSessionReply", () => {
     "rejects %s after asynchronous preparation without a transcript write",
     async (change) => {
       await withTarget(async ({ params, scope, entry, events }) => {
-        const entered = deferred();
-        const release = deferred();
+        const entered = createDeferred();
+        const release = createDeferred();
         const controller = new AbortController();
         let ownerActive = true;
         const publication = withOwnedSessionTranscriptWrites(

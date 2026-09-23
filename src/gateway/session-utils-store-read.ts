@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { ok, type Result } from "@openclaw/normalization-core/result";
 import {
   listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
@@ -33,7 +34,7 @@ export type GatewaySessionStoreRead = {
   clone?: boolean;
   agentId?: string;
   options: NonNullable<Parameters<typeof loadGatewaySessionLookupStore>[3]>;
-  store?: Record<string, SessionEntry>;
+  result?: Result<Record<string, SessionEntry>, unknown>;
   readSource?: SessionEntryReadSource;
 };
 
@@ -41,22 +42,25 @@ export type GatewaySessionStoreRead = {
 export function readGatewaySessionStore(
   read: GatewaySessionStoreRead,
 ): Record<string, SessionEntry> {
-  if (read.store === undefined) {
+  if (read.result === undefined) {
     const loaded = loadGatewaySessionLookupStore(
       read.storePath,
       read.clone,
       read.agentId,
       read.options,
     );
-    read.store = loaded.store;
+    read.result = ok(loaded.store);
     read.readSource = loaded.readSource;
   }
-  return read.store;
+  if (!read.result.ok) {
+    throw read.result.error;
+  }
+  return read.result.value;
 }
 
 /** Populate exact logical lookups without materializing unrelated store entries. */
 export function loadGatewaySessionStoreReads(reads: readonly GatewaySessionStoreRead[]): void {
-  const pending = reads.filter((read) => read.store === undefined);
+  const pending = reads.filter((read) => read.result === undefined);
   const results = loadExactSessionEntryCandidatesReadOnlyBatch(
     pending.map((read) => ({
       agentId: read.agentId,
@@ -71,10 +75,10 @@ export function loadGatewaySessionStoreReads(reads: readonly GatewaySessionStore
   );
   for (const [index, read] of pending.entries()) {
     const result = expectDefined(results[index], "exact batch lookup result");
-    // Preserve the existing per-logical-target unreadable-store behavior.
-    read.store = result.ok
-      ? Object.fromEntries(result.value.map(({ sessionKey, entry }) => [sessionKey, entry]))
-      : {};
+    // Consume failures per logical target so prepared callers retain independent results.
+    read.result = result.ok
+      ? ok(Object.fromEntries(result.value.map(({ sessionKey, entry }) => [sessionKey, entry])))
+      : result;
     if (!result.ok) {
       read.readSource = undefined;
     }
@@ -121,45 +125,41 @@ function loadGatewaySessionLookupStoreUncached(
     readSource?: SessionEntryReadSource;
   } = {},
 ): GatewaySessionStoreView {
-  try {
-    if (options.exactKeys) {
-      // Borrowed listing views and probes never create stores; ordinary owned reads may.
-      let readSource: SessionEntryReadSource | undefined;
-      const target = options.readSource
-        ? { readSource: options.readSource, readOnly: true as const }
-        : {
-            ...(agentId ? { agentId } : {}),
-            storePath,
-            readOnly: options.readOnly !== false || clone === false,
-          };
-      const entries = loadExactSessionEntryCandidates({
-        ...target,
-        projection: options.projection,
-        sessionKeys: options.exactKeys,
-        onReadSource: (source) => {
-          readSource = source;
-        },
-      });
-      return {
-        store: Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
-        ...(readSource ? { readSource } : {}),
-      };
-    }
-    const listEntries = options.readOnly
-      ? listAccessorSessionEntriesReadOnly
-      : listAccessorSessionEntries;
-    return {
-      store: Object.fromEntries(
-        listEntries({
+  if (options.exactKeys) {
+    // Borrowed listing views and probes never create stores; ordinary owned reads may.
+    let readSource: SessionEntryReadSource | undefined;
+    const target = options.readSource
+      ? { readSource: options.readSource, readOnly: true as const }
+      : {
           ...(agentId ? { agentId } : {}),
-          ...(clone === false ? { clone: false } : {}),
-          ...(options.projection ? { projection: options.projection } : {}),
-          ...(options.listKeys ? { sessionKeys: options.listKeys } : {}),
           storePath,
-        }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-      ),
+          readOnly: options.readOnly !== false || clone === false,
+        };
+    const entries = loadExactSessionEntryCandidates({
+      ...target,
+      projection: options.projection,
+      sessionKeys: options.exactKeys,
+      onReadSource: (source) => {
+        readSource = source;
+      },
+    });
+    return {
+      store: Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+      ...(readSource ? { readSource } : {}),
     };
-  } catch {
-    return { store: {} };
   }
+  const listEntries = options.readOnly
+    ? listAccessorSessionEntriesReadOnly
+    : listAccessorSessionEntries;
+  return {
+    store: Object.fromEntries(
+      listEntries({
+        ...(agentId ? { agentId } : {}),
+        ...(clone === false ? { clone: false } : {}),
+        ...(options.projection ? { projection: options.projection } : {}),
+        ...(options.listKeys ? { sessionKeys: options.listKeys } : {}),
+        storePath,
+      }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    ),
+  };
 }

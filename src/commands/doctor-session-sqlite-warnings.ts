@@ -1,11 +1,9 @@
+import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
 import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
-} from "./doctor-session-sqlite-migration-run.js";
-import {
-  isSessionSqliteMigrationWarning,
-  type DoctorSessionSqliteTargetReport,
-} from "./doctor-session-sqlite-types.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 
 export function formatSessionSqliteMigrationWarnings(
   targets: readonly Pick<DoctorSessionSqliteTargetReport, "storePath" | "issues">[],

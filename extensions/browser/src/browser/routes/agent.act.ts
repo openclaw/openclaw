@@ -16,6 +16,7 @@ import {
   hoverChromeMcpElement,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  selectChromeMcpOption,
   type ChromeMcpOperationOptions,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
@@ -312,8 +313,6 @@ export function registerBrowserAgentActRoutes(
                       x: action.x,
                       y: action.y,
                       doubleClick: action.doubleClick ?? false,
-                      button: action.button as "left" | "right" | "middle" | undefined,
-                      delayMs: action.delayMs,
                     }),
                   );
                   return await jsonOk(undefined, { resolveCurrentTarget: true });
@@ -369,7 +368,7 @@ export function registerBrowserAgentActRoutes(
                   return await jsonOk(undefined, { resolveCurrentTarget: true });
                 case "select":
                   await runGuardedAction((target) =>
-                    fillChromeMcpElement({
+                    selectChromeMcpOption({
                       ...target,
                       uid: action.ref!,
                       value: action.values[0] ?? "",

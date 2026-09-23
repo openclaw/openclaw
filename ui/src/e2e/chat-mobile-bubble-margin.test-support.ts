@@ -181,24 +181,6 @@ export const marginCases = [
     selector: ".chat-bubble",
   },
   {
-    id: "question",
-    messages: [
-      message("assistant", "Which audience should the summary address?", {
-        openclawAsyncDelivery: {
-          itemId: "audience",
-          questions: [
-            {
-              title: "Which audience should the detailed release summary address?",
-              options: ["Engineers", "Everyone"],
-            },
-          ],
-        },
-      }),
-    ],
-    side: "left",
-    selector: ".chat-question-panel",
-  },
-  {
     id: "clawhub",
     messages: [
       message("assistant", [
@@ -278,6 +260,29 @@ export async function createMarginImage(
     return canvas.toDataURL("image/png").split(",")[1]!;
   }, size);
   return Buffer.from(encoded, "base64");
+}
+
+export async function resizeMarginViewport(page: Page, width: number): Promise<void> {
+  await page.setViewportSize({ width, height: 1200 });
+  // Excluded cases have no mobile measurement between resizes. Await native
+  // layout publication before issuing the desktop restore.
+  await page.evaluate(
+    (expectedWidth) =>
+      new Promise<void>((resolve) => {
+        const observer = new ResizeObserver(([entry]) => {
+          if (
+            window.innerWidth !== expectedWidth ||
+            entry?.borderBoxSize[0]?.inlineSize !== expectedWidth
+          ) {
+            return;
+          }
+          observer.disconnect();
+          resolve();
+        });
+        observer.observe(document.documentElement, { box: "border-box" });
+      }),
+    width,
+  );
 }
 
 export async function measureMargin(page: Page, testCase: MarginCase) {

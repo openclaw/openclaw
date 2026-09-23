@@ -916,75 +916,6 @@ describe("loadPluginManifestRegistry", () => {
     expect(warning?.message).toContain(path.join(configDir, "index.ts"));
   });
 
-  it("deduplicates compatibility diagnostics when a config plugin replaces a global candidate", () => {
-    const globalDir = makeTempDir();
-    const configDir = makeTempDir();
-    const manifest = {
-      id: "external-chat",
-      channels: ["external-chat"],
-      configSchema: { type: "object" },
-    };
-    writeManifest(globalDir, manifest);
-    writeManifest(configDir, manifest);
-
-    const registry = loadPluginManifestRegistryCore({
-      candidates: [
-        createPluginCandidate({
-          idHint: "external-chat",
-          rootDir: globalDir,
-          origin: "global",
-        }),
-        createPluginCandidate({
-          idHint: "external-chat",
-          rootDir: configDir,
-          origin: "config",
-        }),
-      ],
-      diagnostics: [globalDir, configDir, globalDir].map((source) => ({
-        level: "warn" as const,
-        pluginId: "external-chat",
-        source,
-        message: "extension entry unreadable (I/O error): ./index.js",
-      })),
-    });
-
-    expect(
-      registry.diagnostics
-        .filter((diagnostic) => diagnostic.message.includes("extension entry unreadable"))
-        .map((diagnostic) => diagnostic.source),
-    ).toEqual([globalDir, configDir]);
-    const channelConfigWarnings = registry.diagnostics.filter((diagnostic) =>
-      diagnostic.message.includes("without channelConfigs metadata"),
-    );
-    expect(channelConfigWarnings).toHaveLength(1);
-  });
-
-  it("suppresses missing channel config diagnostics for inactive external channel plugins", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "external-chat",
-      channels: ["external-chat"],
-      configSchema: { type: "object" },
-    });
-    const candidate = createPluginCandidate({
-      idHint: "external-chat",
-      rootDir: dir,
-      origin: "global",
-    });
-
-    const disabledRegistry = loadPluginManifestRegistryCore({
-      config: { plugins: { entries: { "external-chat": { enabled: false } } } },
-      candidates: [candidate],
-    });
-    expectNoRegistryDiagnosticContains(disabledRegistry, "without channelConfigs metadata");
-
-    const allowlistRegistry = loadPluginManifestRegistryCore({
-      config: { plugins: { allow: ["other-plugin"] } },
-      candidates: [candidate],
-    });
-    expectNoRegistryDiagnosticContains(allowlistRegistry, "without channelConfigs metadata");
-  });
-
   it("suppresses duplicate warnings for explicit installed globals overriding bundled plugins", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
@@ -2533,32 +2464,6 @@ describe("loadPluginManifestRegistry", () => {
       memory_store: {
         sideEffecting: true,
       },
-    });
-  });
-
-  it("preserves provider hook contracts from plugin manifests", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "acme-ai",
-      providers: ["acme-ai"],
-      contracts: {
-        externalAuthProviders: ["acme-ai"],
-        usageProviders: ["acme-ai"],
-        workerProviders: [" static-ssh ", ""],
-      },
-      configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "acme-ai",
-      rootDir: dir,
-      origin: "bundled",
-    });
-
-    expect(registry.plugins[0]?.contracts).toEqual({
-      externalAuthProviders: ["acme-ai"],
-      usageProviders: ["acme-ai"],
-      workerProviders: ["static-ssh"],
     });
   });
 

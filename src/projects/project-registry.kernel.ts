@@ -38,7 +38,7 @@ export const ensureProjectRegistrySchema = createOpenClawStateSchemaEnsurer({
   operationLabel: "projects.registry.schema.ensure",
 });
 
-export function rowToProject(row: ProjectRow): ProjectRegistryRecord {
+function rowToProject(row: ProjectRow): ProjectRegistryRecord {
   return {
     id: row.id,
     displayName: row.display_name,
@@ -111,6 +111,18 @@ export function listProjectRegistryInDatabase(database: DatabaseSync): ProjectRe
   );
 }
 
+export function resolveProjectRegistryInDatabase(
+  database: DatabaseSync,
+  id: string,
+): ProjectRegistryRecord | undefined {
+  const db = getNodeSqliteKysely<ProjectsDatabase>(database);
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    db.selectFrom("projects").selectAll().where("id", "=", id),
+  );
+  return row ? rowToProject(row) : undefined;
+}
+
 export function resolveRecordedProjectRootInDatabase(
   database: DatabaseSync,
   repoRoot: string,
@@ -163,4 +175,47 @@ export function removeProjectRegistryInDatabase(
     executeSqliteQuerySync(database, db.deleteFrom("projects").where("id", "=", project.id))
       .numAffectedRows === 1n
   );
+}
+
+export function removeProjectCheckoutReferenceInDatabase(
+  database: DatabaseSync,
+  project: Pick<ProjectRegistryIdentity, "id" | "repoRoot">,
+): "missing" | "changed" | "remaining" | "final" {
+  const db = getNodeSqliteKysely<ProjectsDatabase>(database);
+  const current = executeSqliteQueryTakeFirstSync(
+    database,
+    db.selectFrom("projects").selectAll().where("id", "=", project.id),
+  );
+  if (!current) {
+    return "missing";
+  }
+  if (current.source !== "cloned" || current.repo_root !== project.repoRoot) {
+    return "changed";
+  }
+  executeSqliteQuerySync(database, db.deleteFrom("projects").where("id", "=", project.id));
+  const sibling = executeSqliteQueryTakeFirstSync(
+    database,
+    db
+      .selectFrom("projects")
+      .selectAll()
+      .where("repo_root", "=", project.repoRoot)
+      .orderBy("id", "asc"),
+  );
+  if (!sibling) {
+    return "final";
+  }
+  if (sibling.source === "registered") {
+    executeSqliteQuerySync(
+      database,
+      db
+        .updateTable("projects")
+        .set({
+          source: "cloned",
+          origin_url: sibling.origin_url ?? current.origin_url,
+          updated_at_ms: Date.now(),
+        })
+        .where("id", "=", sibling.id),
+    );
+  }
+  return "remaining";
 }

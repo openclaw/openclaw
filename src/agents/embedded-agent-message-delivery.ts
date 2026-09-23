@@ -18,7 +18,14 @@ type EmbeddedMessageDeliveryFact = {
 const NON_DELIVERY_IDS = new Set(["skipped", "suppressed"]);
 const NON_DELIVERY_STATUSES = new Set(["failed", ...NON_DELIVERY_IDS]);
 const STATUSES = new Set(["settled", "suppressed", "dryRun", "failed"]);
-const PLUGIN_ENVELOPE_KEYS = ["details", "payload", "result", "results", "toolResult"];
+const PLUGIN_ENVELOPE_KEYS = [
+  "details",
+  "payload",
+  "result",
+  "results",
+  "sendResult",
+  "toolResult",
+];
 
 const EMPTY_DELIVERY_FACT: Pick<
   EmbeddedMessageDeliveryFact,
@@ -203,7 +210,7 @@ export function projectPluginMessageDeliveryFact(
   if (pluginEnvelopeHas(value, "nonDelivery")) {
     return { status: "suppressed", ...EMPTY_DELIVERY_FACT };
   }
-  if (pluginEnvelopeHas(value, "noOp")) {
+  if (pluginEnvelopeHas(value, "noOp") || pluginEnvelopeHas(value, "failure")) {
     return { status: "failed", ...EMPTY_DELIVERY_FACT };
   }
   if (!pluginEnvelopeHas(value, "delivery") && !pluginEnvelopeHas(value, "ok")) {
@@ -273,6 +280,10 @@ export function projectEmbeddedMessageDeliveryFact(
   result: MessageActionResult,
   currentSourceReply = false,
 ): EmbeddedMessageDeliveryFact | undefined {
+  const payloadDelivery = result.dryRun
+    ? undefined
+    : projectPluginMessageDeliveryFact(result.payload);
+  const partialDelivery = payloadDelivery?.partialDelivery ? payloadDelivery : undefined;
   if (currentSourceReply && result.handledBy === "plugin") {
     return result.dryRun
       ? { status: "dryRun", ...EMPTY_DELIVERY_FACT }
@@ -287,15 +298,15 @@ export function projectEmbeddedMessageDeliveryFact(
             partialDelivery: false,
             createdThreadIds: [],
           }
-        : undefined;
+        : partialDelivery;
   }
   if (result.kind === "poll") {
     return result.handledBy === "core" && result.pollResult
       ? projectPoll(result.pollResult)
-      : undefined;
+      : partialDelivery;
   }
   if (result.kind !== "broadcast") {
-    return undefined;
+    return partialDelivery;
   }
   const entries = result.payload.results.map((entry) => ({
     entry,

@@ -14,7 +14,9 @@ import {
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarMoreMenu } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar customization mocked Gateway E2E",
@@ -118,7 +120,10 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await waitForControlUiSettingsTakeover(page);
-      await gateway.waitForRequest("sessions.catalog.list");
+      const labelsRequest = await gateway.waitForRequest("sessions.catalog.list", {
+        match: { metadataOnly: true },
+      });
+      expect(labelsRequest.params).not.toHaveProperty("limitPerHost");
       const sidebarSettings = page.locator("#settings-appearance-sidebar");
       await sidebarSettings.getByRole("heading", { name: "Hidden session sections" }).waitFor();
       const recovery = sidebarSettings.locator(".settings-group", { hasText: "offline-catalog" });
@@ -490,7 +495,7 @@ suite.define(() => {
       const moreButton = sidebar.locator(".sidebar-nav__head-action");
       const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
-      await moreButton.click();
+      await openSidebarMoreMenu(page);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       // Enabled plugin tabs render directly in the sidebar body (#111995),
       // not inside the More menu.
@@ -534,7 +539,7 @@ suite.define(() => {
         .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins", "Tasks"]);
       // The More menu is transient: closed after reload, unpinned routes inside.
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
-      await moreButton.click();
+      await openSidebarMoreMenu(page);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       const editPersistedPinnedItems = moreMenu.getByRole("menuitem", {
         name: "Edit pinned items",
@@ -792,7 +797,7 @@ suite.define(() => {
           methodResponses: {
             "cron.list": {
               jobs: [
-                {
+                compactCronJobFixture({
                   id: "release-digest",
                   name: "Release digest",
                   enabled: true,
@@ -806,7 +811,7 @@ suite.define(() => {
                     lastRunStatus: "error",
                     lastError: "Provider request failed",
                   },
-                },
+                }),
               ],
               snapshotRevision: "sidebar-mobile-attention",
               total: 1,

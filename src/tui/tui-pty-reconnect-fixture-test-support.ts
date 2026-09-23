@@ -1,7 +1,38 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { PtyRun } from "./tui-pty-test-support.js";
+
+export function createTuiReconnectRelease(tempDir: string, holdReconnect = false) {
+  const releasePath = holdReconnect ? path.join(tempDir, "reconnect.release") : undefined;
+  let releasePromise: Promise<void> | undefined;
+  const releaseReconnect = () => {
+    releasePromise ??= releasePath ? writeFile(releasePath, "") : Promise.resolve();
+    return releasePromise;
+  };
+  return {
+    env: { OPENCLAW_TUI_PTY_RECONNECT_RELEASE_PATH: releasePath },
+    releaseReconnect,
+    wrapDispose(run: PtyRun) {
+      if (!releasePath) {
+        return;
+      }
+      const dispose = run.dispose;
+      run.dispose = async () => {
+        try {
+          await releaseReconnect();
+        } finally {
+          await dispose();
+        }
+      };
+    },
+  };
+}
+
 // Injects reconnect terminal outcomes into the generated real-runTui PTY backend.
 export const TUI_PTY_RECONNECT_FIXTURE = {
   variables: `
       const disconnectReason = process.env.OPENCLAW_TUI_PTY_DISCONNECT_REASON;
+      const reconnectReleasePath = process.env.OPENCLAW_TUI_PTY_RECONNECT_RELEASE_PATH;
       const reconnectOutcome = process.env.OPENCLAW_TUI_PTY_RECONNECT_OUTCOME;
       const reconnectMembership = process.env.OPENCLAW_TUI_PTY_RECONNECT_MEMBERSHIP;
       const replacementReconnect = ["replacement", "appeared", "gap"].includes(reconnectOutcome);
@@ -36,7 +67,18 @@ export const TUI_PTY_RECONNECT_FIXTURE = {
           }
           record("disconnect");
           this.onDisconnected?.(disconnectReason);
-          setTimeout(() => this.onConnected?.(), 50);
+          if (reconnectReleasePath) {
+            const reconnect = () => {
+              if (!existsSync(reconnectReleasePath)) return;
+              watcher.close();
+              this.onConnected?.();
+            };
+            const watcher = watch(dirname(reconnectReleasePath), reconnect);
+            // Register first so a release created before or during watch setup is observed.
+            reconnect();
+          } else {
+            setTimeout(() => this.onConnected?.(), 50);
+          }
         }
   `,
   sendChat: `

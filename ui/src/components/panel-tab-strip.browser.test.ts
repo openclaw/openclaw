@@ -31,6 +31,7 @@ function renderControlledStrip(params: {
   container: HTMLElement | DocumentFragment;
   tabs: PanelTabStripTab[];
   activeId: string;
+  ariaControls?: string | ((tab: PanelTabStripTab) => string);
   onSelect: (id: string) => void;
   onClose?: (id: string) => void | Promise<void>;
 }) {
@@ -38,7 +39,7 @@ function renderControlledStrip(params: {
     renderPanelTabStrip({
       tabs: params.tabs,
       activeId: params.activeId,
-      ariaControls: "browser-test-panel",
+      ariaControls: params.ariaControls ?? "browser-test-panel",
       onSelect: params.onSelect,
       onClose: params.onClose ?? vi.fn(),
       onNew: vi.fn(),
@@ -180,43 +181,68 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
     expect(activeRect.right).toBeLessThanOrEqual(navRect.right + 1);
   });
 
-  it("moves focus to the selected fallback when the focused tab is closed", async () => {
-    let container = document.createElement("div");
-    document.body.append(container);
-    const close = createDeferred();
-    let tabs = [tab("a"), tab("b")];
-    let activeId = "a";
-    const onSelect = vi.fn();
-    const onClose = vi.fn((closedId: string) =>
-      close.promise.then(() => {
-        (document.activeElement as HTMLElement | null)?.blur();
-        tabs = tabs.filter((entry) => entry.id !== closedId);
-        activeId = tabs[0]?.id ?? "";
-        const replacement = document.createElement("div");
-        container.replaceWith(replacement);
-        container = replacement;
-        renderControlledStrip({ container, tabs, activeId, onSelect, onClose });
-      }),
-    );
-    renderControlledStrip({ container, tabs, activeId, onSelect, onClose });
-    await expectControlledSelection(container, activeId);
-    const closeButton = container.querySelector<HTMLButtonElement>(".tabstrip-tab__close");
-    closeButton?.focus();
-    expect(document.activeElement).toBe(closeButton);
+  it.each(["shared", "per-tab"])(
+    "restores close focus with %s content targets",
+    async (targets) => {
+      const neighbor = document.createElement("div");
+      document.body.append(neighbor);
+      renderControlledStrip({
+        container: neighbor,
+        tabs: [
+          { ...tab("a"), domId: "neighbor-a" },
+          { ...tab("b"), domId: "neighbor-b" },
+        ],
+        activeId: "a",
+        ariaControls: "neighbor-panel",
+        onSelect: vi.fn(),
+      });
+      await expectControlledSelection(neighbor, "a");
+      let container = document.createElement("div");
+      document.body.append(container);
+      const close = createDeferred();
+      let tabs = [tab("a"), tab("b")];
+      let activeId = "a";
+      const onSelect = vi.fn();
+      const ariaControls =
+        targets === "shared"
+          ? "browser-test-panel"
+          : (entry: PanelTabStripTab) => `panel-${entry.id}`;
+      const onClose = vi.fn((closedId: string) =>
+        close.promise.then(() => {
+          (document.activeElement as HTMLElement | null)?.blur();
+          tabs = tabs.filter((entry) => entry.id !== closedId);
+          activeId = tabs[0]?.id ?? "";
+          const replacement = document.createElement("div");
+          container.replaceWith(replacement);
+          container = replacement;
+          renderControlledStrip({ container, tabs, activeId, ariaControls, onSelect, onClose });
+        }),
+      );
+      renderControlledStrip({ container, tabs, activeId, ariaControls, onSelect, onClose });
+      await expectControlledSelection(container, activeId);
+      expect(renderedTabs(container).map((entry) => entry.getAttribute("aria-controls"))).toEqual(
+        targets === "shared"
+          ? ["browser-test-panel", "browser-test-panel"]
+          : ["panel-a", "panel-b"],
+      );
+      const closeButton = container.querySelector<HTMLButtonElement>(".tabstrip-tab__close");
+      closeButton?.focus();
+      expect(document.activeElement).toBe(closeButton);
 
-    closeButton?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    closeButton?.blur();
-    closeButton?.click();
-    close.resolve();
-    await close.promise;
-    await Promise.resolve();
+      closeButton?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      closeButton?.blur();
+      closeButton?.click();
+      close.resolve();
+      await close.promise;
+      await Promise.resolve();
 
-    const fallback = await expectControlledSelection(container, activeId);
-    const group = container.querySelector<RenderedTabGroup & { updateComplete: Promise<boolean> }>(
-      "wa-tab-group",
-    );
-    await group?.updateComplete;
-    await new Promise(requestAnimationFrame);
-    expect(document.activeElement).toBe(fallback);
-  });
+      const fallback = await expectControlledSelection(container, activeId);
+      const group = container.querySelector<
+        RenderedTabGroup & { updateComplete: Promise<boolean> }
+      >("wa-tab-group");
+      await group?.updateComplete;
+      await new Promise(requestAnimationFrame);
+      expect(document.activeElement).toBe(fallback);
+    },
+  );
 });

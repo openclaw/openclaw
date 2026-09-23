@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
-import type { ModelAuthStatusResult } from "../api/types.ts";
+import type { GatewayClient } from "../../../src/gateway/client.ts";
+import { racePromiseWithAbortSignal } from "../../../src/infra/abort-signal.ts";
+import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
+import { createDeferred } from "../../../test/helpers/promise.ts";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import type { ModelAuthStatusResult, ModelCatalogResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -16,6 +21,36 @@ import {
 } from "./provider-browser-login.test-support.ts";
 
 let fixture: Awaited<ReturnType<typeof startProviderBrowserLoginFixture>>;
+let readback: { client: GatewayClient; nextPublication: () => Promise<void> };
+async function connectReadbackClient() {
+  let publication = createDeferred();
+  const client = await acquireGatewayTestClient(
+    {
+      url: fixture.instance.url,
+      token: fixture.instance.gatewayToken,
+      env: fixture.instance.env,
+      clientName: "cli",
+      mode: "cli",
+      scopes: ["operator.read", "operator.write"],
+      deviceIdentity: null,
+      deviceAuthScope: fixture.instance.url,
+      sharedStateMode: "read-only",
+      requestTimeoutMs: 10_000,
+      onEvent: ({ event }) => {
+        if (event === "chat.metadata.changed") {
+          publication.resolve();
+          publication = createDeferred();
+        }
+      },
+    },
+    {
+      timeoutMs: 10_000,
+      timeoutMessage: "Browser login readback client did not connect",
+      closeMessage: "Browser login readback client closed during connect",
+    },
+  );
+  return { client, nextPublication: () => publication.promise };
+}
 const browserArgs: string[] = [];
 const suite = createControlUiE2eSuite({
   name: "Provider browser login through real HTTPS Gateway",
@@ -27,37 +62,36 @@ const suite = createControlUiE2eSuite({
       ? (await import(pathToFileURL(optionsPath).href)).default
       : {};
     fixture = await startProviderBrowserLoginFixture(options);
+    try {
+      readback = await connectReadbackClient();
+    } catch (error) {
+      return await runQaGatewayFixture(
+        async (): Promise<never> => {
+          throw error;
+        },
+        () => fixture.close(),
+      );
+    }
     browserArgs.push(
       `--host-resolver-rules=MAP files.proxy.test:443 127.0.0.1:${fixture.edgePort}`,
       "--no-proxy-server",
     );
     return {
       baseUrl: fixture.baseUrl,
-      close: async () => {
-        try {
-          await fs.writeFile(path.join(suite.artifactDir, "gateway.log"), fixture.instance.logs());
-        } finally {
-          await fixture.close();
-        }
-      },
+      close: () =>
+        runQaGatewayFixture(
+          () => fs.writeFile(path.join(suite.artifactDir, "gateway.log"), fixture.instance.logs()),
+          () => readback.client.stopAndWait(),
+          () => fixture.close(),
+        ),
     };
   },
 });
 
 suite.define(() => {
   it("rejects cancelled and stale callbacks, then saves a fresh sign-in and serves an existing session", async () => {
-    const call = async (method: string, params: Record<string, unknown>) => {
-      const result = await fixture.instance.cli([
-        "gateway",
-        "call",
-        method,
-        "--json",
-        "--params",
-        JSON.stringify(params),
-      ]);
-      expect(result.code, result.stderr).toBe(0);
-      return JSON.parse(result.stdout);
-    };
+    const call = <T = unknown>(method: string, params: Record<string, unknown>) =>
+      readback.client.request<T>(method, params);
     const profile = async () => {
       const status: ModelAuthStatusResult = await call("models.authStatus", { agentId: "main" });
       return status.providers
@@ -95,6 +129,15 @@ suite.define(() => {
         viewport: { width: 1280, height: 900 },
       },
       async ({ page, context }) => {
+        let pagePreviewRequests = 0;
+        page.on("websocket", (socket) =>
+          socket.on("framesent", (frame) => {
+            const request: unknown = JSON.parse(String(frame.payload));
+            if (isRecord(request) && request.method === "controlUi.linkPreview") {
+              pagePreviewRequests++;
+            }
+          }),
+        );
         await page.goto(url.href);
         expect(await page.evaluate(() => window.isSecureContext)).toBe(true);
         await page
@@ -111,6 +154,7 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         const begin = async () => {
           await page.locator("[data-models-connect]").click();
+          await page.locator(`[data-models-login-provider="${loginProvider}"]`).click();
           await page
             .locator("openclaw-modal-dialog")
             .getByRole("button", { name: "Fixture browser sign-in", exact: true })
@@ -125,6 +169,8 @@ suite.define(() => {
         };
         const cancelledPage = await begin();
         await page.screenshot({ path: path.join(suite.artifactDir, "login-started.png") });
+        expect(pagePreviewRequests).toBe(0);
+        expect(await page.locator(".link-hovercard").count()).toBe(0);
         await page
           .locator("openclaw-modal-dialog")
           .getByRole("button", { name: "Cancel", exact: true })
@@ -165,8 +211,10 @@ suite.define(() => {
           .getByText("Fixture browser sign-in: Provider credentials saved.", { exact: true })
           .waitFor();
         await page.screenshot({ path: path.join(suite.artifactDir, "login-completed.png") });
+        await readback.client.stopAndWait();
         await fixture.instance.stopGateway();
         await fixture.instance.startGateway();
+        readback = await connectReadbackClient();
         await waitForControlUiGatewayReady(page);
         expect(await profile()).toMatchObject({
           type: "api_key",
@@ -175,12 +223,27 @@ suite.define(() => {
         expect(JSON.stringify(await call("chat.history", { sessionKey }))).toContain(
           loginHistoryMarker,
         );
-        const catalog = await call("models.list", {
-          agentId: "main",
-          sessionKey,
-          view: "configured",
-          includeDetails: true,
-        });
+        const catalog = await (async () => {
+          const signal = AbortSignal.timeout(10_000);
+          for (;;) {
+            signal.throwIfAborted();
+            // Subscribe before reading so publication during the RPC is not missed.
+            const publication = readback.nextPublication();
+            const result = await racePromiseWithAbortSignal(
+              call<ModelCatalogResult>("models.list", {
+                agentId: "main",
+                sessionKey,
+                view: "configured",
+                includeDetails: true,
+              }),
+              signal,
+            );
+            if (!result.pendingProviders?.length) {
+              return result;
+            }
+            await racePromiseWithAbortSignal(publication, signal);
+          }
+        })();
         expect(catalog.models).toContainEqual(
           expect.objectContaining({ provider: loginProvider, id: "ready", available: true }),
         );
@@ -198,6 +261,7 @@ suite.define(() => {
           .toContain("Signed-in fixture reply");
         expect(fixture.requests).toContain("/models");
         expect(fixture.requests).toContain("/chat/completions");
+        expect(pagePreviewRequests).toBe(0);
         await page.screenshot({ path: path.join(suite.artifactDir, "after-restart.png") });
         await fs.copyFile(fixture.edgeReceipt, path.join(suite.artifactDir, "edge-receipt.json"));
       },

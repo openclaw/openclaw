@@ -659,7 +659,7 @@ describe("Tooling bootstrap dependency ownership", () => {
       if (fallback) {
         expect(result.stdout.trim()).toBe("configured");
       } else {
-        expect(result.stderr).toContain("ERR_MODULE_NOT_FOUND");
+        expect(result.stderr).toContain("Cannot find package 'fixture-dependency'");
         expect(fs.existsSync(path.join(checkout, "node_modules"))).toBe(false);
       }
     },

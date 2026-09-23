@@ -385,20 +385,22 @@ function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): { deviceId: st
   }
 }
 
-function readLocalDeviceAuthTokens(deviceId: string, env: NodeJS.ProcessEnv = process.env) {
+async function readLocalDeviceAuthTokens(deviceId: string, env: NodeJS.ProcessEnv = process.env) {
   try {
-    return loadDeviceAuthTokens({ deviceId, env });
+    return await loadDeviceAuthTokens({ deviceId, env });
   } catch {
     return [];
   }
 }
 
-function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): LocalDeviceAuthIssue[] {
+async function collectLocalDeviceAuthIssues(
+  snapshot: DoctorPairingSnapshot,
+): Promise<LocalDeviceAuthIssue[]> {
   const identity = readLocalIdentity();
   if (!identity) {
     return [];
   }
-  const localTokens = readLocalDeviceAuthTokens(identity.deviceId);
+  const localTokens = await readLocalDeviceAuthTokens(identity.deviceId);
   const paired = snapshot.paired.find((device) => device.deviceId === identity.deviceId);
   if (!paired) {
     return [];
@@ -562,7 +564,7 @@ export async function collectDevicePairingHealthFindings(params: {
     ...legacyStoreFindings,
     ...collectPendingPairingIssues(snapshot).map(pendingPairingIssueToHealthFinding),
     ...collectPairedRecordIssues(snapshot).map(pairedRecordIssueToHealthFinding),
-    ...collectLocalDeviceAuthIssues(snapshot).map(localDeviceAuthIssueToHealthFinding),
+    ...(await collectLocalDeviceAuthIssues(snapshot)).map(localDeviceAuthIssueToHealthFinding),
   ];
 }
 

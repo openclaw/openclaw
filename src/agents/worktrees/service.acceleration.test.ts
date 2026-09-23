@@ -13,6 +13,7 @@ import * as commandExec from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -39,9 +40,10 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 describe("ManagedWorktreeService filesystem acceleration", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
+    afterEach(async () => {
       vi.restoreAllMocks();
       vi.unstubAllEnvs();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     }),
@@ -162,7 +164,9 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       expect(await git(repo, "branch", "--list", "openclaw/limited")).toBe("");
       expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("/limited");
       expect(
-        service.listRegistryRecords().some((record) => record.branch === "openclaw/limited"),
+        (await service.listRegistryRecords()).some(
+          (record) => record.branch === "openclaw/limited",
+        ),
       ).toBe(false);
     }
   });
@@ -182,7 +186,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       if (cache === "warm") {
         await service.create({ repoRoot: repo, name: "seed", baseRef: "HEAD" });
       }
-      const before = service.listRegistryRecords();
+      const before = await service.listRegistryRecords();
       const stats = fsSync.statfsSync(repo);
       let available = 16 * 1024 ** 3 + 24 * 1024 ** 2;
       vi.spyOn(fsSync, "statfsSync").mockImplementation(() => ({
@@ -212,7 +216,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       const params = { repoRoot: repo, name: "racing", baseRef: "origin/racing" };
       await expect(service.create(params)).rejects.toThrow(/disk space/i);
       expect(advanced).toBe(true);
-      expect(service.listRegistryRecords()).toEqual(before);
+      expect(await service.listRegistryRecords()).toEqual(before);
       expect(await git(repo, "branch", "--list", "openclaw/racing")).toBe("");
       expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("/racing");
       for (const template of listTemplates(env)) {
@@ -507,7 +511,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
           change === "redirected" ? "refs/heads/other-owner" : `refs/heads/${branch}`,
         );
       }
-      expect(service.listRegistryRecords()).toEqual([]);
+      expect(await service.listRegistryRecords()).toEqual([]);
     },
   );
 
@@ -575,12 +579,9 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     assert(creation);
     const created = await creation;
     expect((await collection).orphansDeleted).toBe(0);
-    expect(
-      service
-        .listRegistryRecords()
-        .map((record) => record.id)
-        .toSorted(),
-    ).toEqual([existing.id, created.id].toSorted());
+    expect((await service.listRegistryRecords()).map((record) => record.id).toSorted()).toEqual(
+      [existing.id, created.id].toSorted(),
+    );
     expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
     expect(await git(created.path, "status", "--porcelain")).toBe("");
   });
@@ -597,7 +598,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         .mockRejectedValue(new Error("allocation lease unavailable"));
 
       expect((await service.gc()).snapshotsPruned).toBe(0);
-      expect(service.listRegistryRecords()).toEqual([
+      expect(await service.listRegistryRecords()).toEqual([
         expect.objectContaining({ id: created.id, snapshotRef: removed.snapshotRef }),
       ]);
       expect(await git(repo, "rev-parse", removed.snapshotRef!)).toMatch(/^[a-f0-9]+$/u);
@@ -605,7 +606,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       allocation.mockRestore();
 
       expect((await service.gc()).snapshotsPruned).toBe(1);
-      expect(service.listRegistryRecords()).toEqual([]);
+      expect(await service.listRegistryRecords()).toEqual([]);
       await expect(git(repo, "show-ref", "--verify", removed.snapshotRef!)).rejects.toThrow();
       expect(listTemplates(env)).toEqual([]);
     },
@@ -784,7 +785,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         }
         expect(failedDestination).toBeDefined();
         expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("failed-fallback");
-        expect(service.listRegistryRecords()).toEqual([]);
+        expect(await service.listRegistryRecords()).toEqual([]);
         await expect(fs.access(failedDestination!)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
         release.resolve();
@@ -811,8 +812,10 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
         "irreplaceable worktree edit\n",
       );
-      expect(service.listRegistryRecords()).toEqual([expect.objectContaining({ id: created.id })]);
-      expect(service.listRegistryRecords()[0]?.removedAt).toBeUndefined();
+      expect(await service.listRegistryRecords()).toEqual([
+        expect.objectContaining({ id: created.id }),
+      ]);
+      expect((await service.listRegistryRecords())[0]?.removedAt).toBeUndefined();
     },
   );
 
@@ -930,7 +933,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     expect(await git(repo, "rev-parse", removed.snapshotRef!)).toBe(snapshot);
     expect(await git(repo, "branch", "--list", created.branch)).toBe("");
     await expect(fs.access(created.path)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(service.listRegistryRecords()[0]?.removedAt).toBeDefined();
+    expect((await service.listRegistryRecords())[0]?.removedAt).toBeDefined();
     const restored = await service.restore({ id: created.id });
     expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("saved edit\n");
     expect(await git(restored.path, "status", "--porcelain")).toBe("M README.md");

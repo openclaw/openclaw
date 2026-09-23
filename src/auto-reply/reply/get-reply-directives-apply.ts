@@ -5,6 +5,7 @@ import { resolveContextConfigProviderForRuntime } from "../../agents/openai-rout
 import { resolveStickyModelSelectionScope } from "../../agents/sticky-model-selection.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   isModelSelectionLocked,
@@ -40,22 +41,6 @@ const directiveImplLoader = createLazyImportLoader(() => import("./directive-han
 const directivePersistLoader = createLazyImportLoader(
   () => import("./directive-handling.persist.runtime.js"),
 );
-
-function loadCommandsStatus() {
-  return commandsStatusLoader.load();
-}
-
-function loadDirectiveLevels() {
-  return directiveLevelsLoader.load();
-}
-
-function loadDirectiveImpl() {
-  return directiveImplLoader.load();
-}
-
-function loadDirectivePersist() {
-  return directivePersistLoader.load();
-}
 
 function hasOnlyModelDirective(directives: InlineDirectives): boolean {
   return (
@@ -202,6 +187,7 @@ export async function applyInlineDirectiveOverrides(params: {
   let { contextTokens } = params;
   const directiveModelState = {
     modelPolicy: modelState.modelPolicy,
+    operatorAuthority: modelState.operatorAuthority,
     allowedModelKeys: modelState.allowedModelKeys,
     allowedModelCatalog: modelState.allowedModelCatalog,
     policyAliasIndex: modelState.policyAliasIndex,
@@ -246,7 +232,7 @@ export async function applyInlineDirectiveOverrides(params: {
         modelPolicyRepairConfigPath: modelState.modelPolicyRepairConfigPath,
       }),
       {
-        sessionKey,
+        sessionKey: resolveSystemEventQueueKey(sessionKey, agentId),
         contextKey: `model:reset:${initialModelLabel}`,
       },
     );
@@ -307,6 +293,7 @@ export async function applyInlineDirectiveOverrides(params: {
       defaultModel,
       aliasIndex,
       modelPolicy: modelState.modelPolicy,
+      operatorAuthority: modelState.operatorAuthority,
       allowedModelKeys: modelState.allowedModelKeys,
       allowedModelCatalog: modelState.allowedModelCatalog,
       provider,
@@ -368,7 +355,7 @@ export async function applyInlineDirectiveOverrides(params: {
   ) => {
     let rejected = false;
     const currentLevels = await (
-      await loadDirectiveLevels()
+      await directiveLevelsLoader.load()
     ).resolveCurrentDirectiveLevels({
       sessionEntry,
       agentEntry: persistenceState ? undefined : agentEntry,
@@ -380,7 +367,7 @@ export async function applyInlineDirectiveOverrides(params: {
     });
     const thinkingCatalog = await modelState.resolveThinkingCatalog();
     const reply = await (
-      await loadDirectiveImpl()
+      await directiveImplLoader.load()
     ).handleDirectiveOnly({
       ...createDirectiveHandlingBase(),
       ...currentLevels,
@@ -419,6 +406,7 @@ export async function applyInlineDirectiveOverrides(params: {
         defaultModel,
         aliasIndex,
         modelPolicy: modelState.modelPolicy,
+        operatorAuthority: modelState.operatorAuthority,
         allowedModelKeys: modelState.allowedModelKeys,
         allowedModelCatalog: modelState.allowedModelCatalog,
         provider,
@@ -442,7 +430,7 @@ export async function applyInlineDirectiveOverrides(params: {
           return directiveRejection("model-runtime-invalid", runtime.errorText);
         }
         const applied = await (
-          await loadDirectivePersist()
+          await directivePersistLoader.load()
         ).applySessionModelSelection({
           cfg,
           agentId,
@@ -455,6 +443,7 @@ export async function applyInlineDirectiveOverrides(params: {
           currentProvider: provider,
           currentModel: model,
           modelPolicy: modelState.modelPolicy,
+          operatorAuthority: modelState.operatorAuthority,
           modelCatalog: modelState.allowedModelCatalog,
           thinkingCatalog: modelState.allowedModelCatalog,
           canPersistStickyModelSelection,
@@ -463,7 +452,9 @@ export async function applyInlineDirectiveOverrides(params: {
           request: {
             ...modelSelection,
             profileOverride: modelResolution.profileOverride,
-            runtime,
+            // Preserve model-only intent so the service prepares the configured runtime
+            // after discarding an incompatible inherited pin.
+            runtime: directives.rawModelRuntime ? runtime : { kind: "unchanged" },
           },
           patchModel: effectiveModelDirective,
           markLiveSwitchPending: true,
@@ -517,7 +508,7 @@ export async function applyInlineDirectiveOverrides(params: {
     } = currentLevels;
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
-      const { buildStatusReply } = await loadCommandsStatus();
+      const { buildStatusReply } = await commandsStatusLoader.load();
       const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       statusReply = await buildStatusReply({
         cfg,

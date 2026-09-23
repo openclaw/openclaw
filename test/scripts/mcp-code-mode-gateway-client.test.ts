@@ -531,7 +531,6 @@ describe("MCP code-mode gateway Docker client result validation", () => {
               id: "mcp-code-mode-exec",
               name: "exec",
               arguments: {
-                language: "javascript",
                 code: 'return await MCP.fixture.lookupNote({ id: "alpha" });',
               },
             },

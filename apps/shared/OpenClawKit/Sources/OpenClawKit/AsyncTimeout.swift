@@ -10,10 +10,12 @@ private final class AsyncTimeoutRace<T: Sendable>: Sendable {
 
     private let state = Mutex<State>(.pending)
 
-    func wait(
+    func wait<C: Clock>(
         seconds: Double,
+        clock: C,
         onTimeout: @escaping @Sendable () -> Error,
         operation: @escaping @Sendable () async throws -> T) async throws -> T
+        where C.Duration == Duration
     {
         try await withCheckedThrowingContinuation { continuation in
             let cancelled = self.state.withLock { state in
@@ -37,7 +39,7 @@ private final class AsyncTimeoutRace<T: Sendable>: Sendable {
                     if seconds > 0 {
                         tasks.append(Task {
                             do {
-                                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                                try await clock.sleep(for: .seconds(seconds))
                                 self.resolveFailure(onTimeout())
                             } catch is CancellationError {
                                 // The operation or caller resolved the race first.
@@ -95,11 +97,26 @@ public enum AsyncTimeout {
         onTimeout: @escaping @Sendable () -> Error,
         operation: @escaping @Sendable () async throws -> T) async throws -> T
     {
+        try await self.withTimeout(
+            seconds: seconds,
+            clock: ContinuousClock(),
+            onTimeout: onTimeout,
+            operation: operation)
+    }
+
+    public static func withTimeout<T: Sendable, C: Clock>(
+        seconds: Double,
+        clock: C,
+        onTimeout: @escaping @Sendable () -> Error,
+        operation: @escaping @Sendable () async throws -> T) async throws -> T
+        where C.Duration == Duration
+    {
         // Unstructured racers avoid joining a cancellation-ignoring loser. Cancellation
         // marks every racer synchronously; callers still own cleanup and stale-result safety.
         let race = AsyncTimeoutRace<T>()
         return try await withTaskCancellationHandler {
-            try await race.wait(seconds: max(0, seconds), onTimeout: onTimeout, operation: operation)
+            try await race.wait(
+                seconds: max(0, seconds), clock: clock, onTimeout: onTimeout, operation: operation)
         } onCancel: {
             race.resolveFailure(CancellationError())
         }

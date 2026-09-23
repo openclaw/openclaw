@@ -9,12 +9,17 @@ import {
   resolveVitestWorkerDeclaration,
 } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { getVitestWorkerDescriptor } from "../../scripts/lib/vitest-worker-bootstrap.mts";
-import { vitestWorkerDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
+import {
+  nativeSchtasksIntegrationEnabled,
+  vitestWorkerDeclarationEntries,
+} from "../../scripts/lib/vitest-worker-declarations.mts";
 
 // Configs may be separately bundled per project. The Vitest instance, not a
 // module singleton or project globalSetup, owns their one preparation request.
 const declarationNames = new Set(
-  Object.values(vitestWorkerDeclarationEntries).map((source) => path.basename(source, ".ts")),
+  Object.values(vitestWorkerDeclarationEntries).map((source) =>
+    path.basename(source).replace(/\.[cm]?[jt]s$/u, ""),
+  ),
 );
 const ownerKey = Symbol.for("openclaw.vitest.compiled-subprocess-owner");
 const declarationPrefix = "\0openclaw:compiled-subprocess:";
@@ -39,9 +44,13 @@ export function compiledSubprocessesPlugin(): Plugin {
       }
       const instance = vitest as WorkerVitest;
       if (!instance[ownerKey]) {
-        // Source and compiled imports differ, but generations within this mode
-        // share parent transforms. Keep Vitest's source/config hashing intact.
-        defineCacheKeyGenerator(() => "openclaw:compiled-subprocesses");
+        // Declaration selection changes source versus compiled imports; generations
+        // with the same selection can share parent transforms.
+        defineCacheKeyGenerator(() =>
+          nativeSchtasksIntegrationEnabled
+            ? "openclaw:compiled-subprocesses:native-schtasks"
+            : "openclaw:compiled-subprocesses",
+        );
         const directory = supplied.directory;
         let preparation: Promise<string> | undefined;
         let failure: unknown;
@@ -88,7 +97,7 @@ export function compiledSubprocessesPlugin(): Plugin {
       if (
         !owner ||
         !importer ||
-        !declarationNames.has(path.basename(source).replace(/\.[jt]s$/u, ""))
+        !declarationNames.has(path.basename(source).replace(/\.[cm]?[jt]s$/u, ""))
       ) {
         return null;
       }

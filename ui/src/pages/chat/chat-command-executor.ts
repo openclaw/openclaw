@@ -48,7 +48,7 @@ type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
   content?: string;
   /** Side-effect action the caller should perform after displaying the result. */
-  action?: "refresh" | "export" | "new-session" | "reset" | "stop" | "clear" | "navigate-usage";
+  action?: "refresh" | "new-session" | "reset" | "stop" | "clear" | "navigate-usage";
   /** Model-dependent tools need refreshing after a confirmed selection. */
   modelChanged?: boolean;
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
@@ -164,8 +164,6 @@ export async function executeSlashCommand(
       return await executeFast(client, sessionKey, args, context);
     case "verbose":
       return await executeVerbose(client, sessionKey, args, context);
-    case "export-session":
-      return { content: t("chat.commandResults.exportingThread"), action: "export" };
     case "usage":
       return await executeUsage(sessionKey, context);
     case "agents":

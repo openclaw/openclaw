@@ -4,6 +4,10 @@ import {
   validateFullReleaseCandidateRequest,
 } from "./full-release-candidate-contract.mjs";
 import {
+  normalizeKnownFlakyJobs,
+  validateReleaseFlakeRecords,
+} from "./full-release-flake-policy.mjs";
+import {
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
   FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
   publicationIntentInputs,
@@ -66,6 +70,9 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
     candidateBinding: plan.candidate,
     publicationArtifacts: context.publicationArtifacts ?? { npmPreflight: null, docker: null },
     childEvidence,
+    ...(plan.knownFlakyJobs !== undefined
+      ? { knownFlakyJobs: plan.knownFlakyJobs, automaticRetries: drain?.automaticRetries ?? [] }
+      : {}),
     executionPlanSha256: plan.sha256,
     sourceParentRunAttempt: Number(plan.parentRunAttempt),
     ...(plan.sourceAdmissionContract
@@ -772,8 +779,11 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
         continue;
       }
       if (names.has(job.name)) {
-        throw new Error(
-          `release child attempt ${expectedAttempt} contains duplicate job identity: ${job.name}`,
+        throw Object.assign(
+          new Error(
+            `release child attempt ${expectedAttempt} contains duplicate job identity: ${job.name}`,
+          ),
+          { code: "FRV_DUPLICATE_JOB_IDENTITY", runAttempt: expectedAttempt },
         );
       }
       names.add(job.name);
@@ -1096,6 +1106,7 @@ function releaseExecutionPlanShape(payload) {
   const expectedPlanKeys = [
     ...new Set([
       ...basePlanKeys,
+      ...(Object.hasOwn(payload, "knownFlakyJobs") ? ["knownFlakyJobs"] : []),
       ...(Object.hasOwn(payload, "telegramWaiver") ? ["targetVersion", "telegramWaiver"] : []),
       ...(Object.hasOwn(payload, "coveragePolicy") ? ["targetVersion", "coveragePolicy"] : []),
       ...(Object.hasOwn(payload, "sourceAdmissionContract")
@@ -1111,6 +1122,7 @@ function releaseExecutionPlanShape(payload) {
     : HISTORICAL_EXECUTION_PLAN_CHILD_KEYS;
   if (
     (hasAttemptEvidence && ![2, 3].includes(attemptEvidenceVersion)) ||
+    (Object.hasOwn(payload, "knownFlakyJobs") && !hasAttemptEvidence) ||
     (Object.hasOwn(payload, "coveragePolicy") && attemptEvidenceVersion !== 3) ||
     !hasExactKeys(payload, expectedPlanKeys) ||
     !Array.isArray(payload.children) ||
@@ -1167,6 +1179,7 @@ function executionPlanDigestPayload(plan) {
     ...publication,
     ...waiver,
     ...coverage,
+    ...(plan.knownFlakyJobs !== undefined ? { knownFlakyJobs: plan.knownFlakyJobs } : {}),
     attemptEvidenceVersion: plan.attemptEvidenceVersion,
     blockers: plan.blockers,
     candidate: plan.candidate,
@@ -1198,6 +1211,7 @@ export function buildReleaseExecutionPlanArtifact({
   blockers = [],
   candidate = null,
   coveragePolicy,
+  knownFlakyJobs,
   children,
   errors = [],
   evidenceReuse,
@@ -1269,6 +1283,9 @@ export function buildReleaseExecutionPlanArtifact({
       : {}),
     ...(waiver ? { telegramWaiver: waiver, targetVersion } : {}),
     ...(coveragePolicy !== undefined ? { coveragePolicy, targetVersion } : {}),
+    ...(knownFlakyJobs !== undefined
+      ? { knownFlakyJobs: normalizeKnownFlakyJobs(knownFlakyJobs, normalizedChildren) }
+      : {}),
     version: 1,
     kind: "openclaw.full-release-execution-plan",
     parentRunId: String(expected.parentRunId),
@@ -1288,8 +1305,10 @@ export function buildReleaseExecutionPlanArtifact({
   validatePlanSourceAdmission(basePlan, expected);
   validatePlanPublicationAdmission(basePlan, expected);
   if (!attemptAware) {
-    if (coveragePolicy !== undefined) {
-      throw new Error("release coverage policy requires a phase-three execution plan");
+    if (coveragePolicy !== undefined || knownFlakyJobs !== undefined) {
+      throw new Error(
+        "release coverage policy and flake allowance require an attempt-aware execution plan",
+      );
     }
     const result = { ...basePlan, sha256: releaseExecutionPlanSha256(basePlan) };
     serializeReleaseArtifact(result);
@@ -1401,6 +1420,32 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
     payload.coveragePolicy !== expected.coveragePolicy
   ) {
     throw new Error("release coverage policy differs from the expected execution plan");
+  }
+  if (payload.knownFlakyJobs !== undefined) {
+    const selectors = normalizeKnownFlakyJobs(payload.knownFlakyJobs, payload.children);
+    if (
+      JSON.stringify(selectors) !== JSON.stringify(payload.knownFlakyJobs) ||
+      (expected.knownFlakyJobs !== undefined &&
+        JSON.stringify(selectors) !==
+          JSON.stringify(normalizeKnownFlakyJobs(expected.knownFlakyJobs)))
+    ) {
+      throw new Error("known flaky jobs differ from the immutable execution plan");
+    }
+  }
+  if (
+    expected.knownFlakyJobs !== undefined &&
+    JSON.stringify(normalizeKnownFlakyJobs(expected.knownFlakyJobs)) !==
+      JSON.stringify(payload.knownFlakyJobs ?? [])
+  ) {
+    throw new Error("known flaky jobs differ from the expected execution plan");
+  }
+  if (
+    payload.sourceAdmission &&
+    JSON.stringify(
+      normalizeKnownFlakyJobs(payload.sourceAdmission.coverage?.known_flaky_jobs_json || []),
+    ) !== JSON.stringify(payload.knownFlakyJobs ?? [])
+  ) {
+    throw new Error("known flaky jobs differ from source admission");
   }
   const telegramWaiver = normalizeReleaseTelegramWaiver(payload);
   if (
@@ -1757,6 +1802,7 @@ function normalizedPlanChild(child, options = {}) {
 }
 
 export function buildReleaseStateArtifact({
+  automaticRetries = [],
   cancellation = {},
   children,
   decision,
@@ -1793,6 +1839,9 @@ export function buildReleaseStateArtifact({
     releaseProfile,
     rerunGroup,
     executionPlanSha256: executionPlan.sha256,
+    ...(executionPlan.knownFlakyJobs !== undefined
+      ? { automaticRetries: validateReleaseFlakeRecords(automaticRetries, executionPlan) }
+      : {}),
     state: decision.state,
     activeRunIds,
     blockerCount: decision.blockerCount ?? completeBlockerIndex.length,
@@ -2174,6 +2223,25 @@ export function releaseStateChildEvidence(child) {
 }
 
 function verifyStateStructure(state, executionPlan, label) {
+  if (executionPlan.knownFlakyJobs !== undefined && !Object.hasOwn(state, "automaticRetries")) {
+    throw new Error(`${label} omitted automatic retry receipts`);
+  }
+  const retries = validateReleaseFlakeRecords(
+    state.automaticRetries ?? [],
+    executionPlan,
+    state.children,
+  );
+  if (
+    (retries.some(
+      (record) => !["observed", "not-attempted", "rejected"].includes(record.outcome),
+    ) ||
+      (executionPlan.knownFlakyJobs ?? []).some(
+        (selector) => !retries.some((record) => record.child === selector.split(":", 1)[0]),
+      )) &&
+    !state.errors.some((error) => error.kind === "automatic_retry_unresolved")
+  ) {
+    throw new Error(`${label} omits unresolved automatic retry`);
+  }
   const selected = executionPlan.children.filter((entry) => entry.selected);
   const expectedKeys = selected.map((child) => child.key).toSorted();
   if (JSON.stringify(Object.keys(state.children).toSorted()) !== JSON.stringify(expectedKeys)) {
@@ -2375,6 +2443,11 @@ function verifyReleaseStatePair(planPayload, decisionPayload, drainPayload, expe
   verifyStateStructure(decision, executionPlan, "release decision");
   verifyStateStructure(drain, executionPlan, "diagnostic drain");
   verifyStateTransition(decision, drain, executionPlan);
+  if (
+    JSON.stringify(decision.automaticRetries ?? []) !== JSON.stringify(drain.automaticRetries ?? [])
+  ) {
+    throw new Error("release decision and diagnostic drain automatic retries differ");
+  }
   return {
     decision,
     drain,

@@ -254,8 +254,8 @@ vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
 }));
 
-vi.mock("../logging.js", async () => ({
-  ...(await vi.importActual<typeof import("../logging.js")>("../logging.js")),
+vi.mock("../logging/console.js", async () => ({
+  ...(await vi.importActual<typeof import("../logging/console.js")>("../logging/console.js")),
   enableConsoleCapture: enableConsoleCaptureMock,
 }));
 

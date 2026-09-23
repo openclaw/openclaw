@@ -107,7 +107,7 @@ const MODEL_SETUP_RE = new RegExp(
   "i",
 );
 const CREATE_AGENT_RE = new RegExp(
-  String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+role\s+(?<role>\S+))?(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?(?:\s+model\s+(?<model>\S+))?$`,
+  String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+name\s+(?<name>${ARG_WORD}))?(?:\s+role\s+(?<role>\S+))?(?:\s+purpose\s+(?<purpose>${ARG_WORD}))?(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?(?:\s+model\s+(?<model>\S+))?$`,
   "i",
 );
 const CREATE_TEAM_RE = new RegExp(
@@ -469,10 +469,14 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       };
     }
     const workspace = trimShellishToken(createMatch.groups.workspace);
+    const name = trimShellishToken(createMatch.groups.name);
+    const purpose = trimShellishToken(createMatch.groups.purpose);
     const model = createMatch.groups.model;
     return {
       kind: "create-agent",
       agentId: normalizeExplicitSystemAgentId(createMatch.groups.agent),
+      ...(name ? { name } : {}),
+      ...(purpose ? { purpose } : {}),
       ...(role ? { role } : {}),
       ...(workspace ? { workspace } : {}),
       ...(model ? { model } : {}),
@@ -587,6 +591,8 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
     case "create-agent":
       return [
         `create agent ${operation.agentId} with workspace ${formatCreateAgentWorkspace(operation.workspace)}`,
+        operation.name ? `name: ${JSON.stringify(operation.name)}` : undefined,
+        operation.purpose ? `purpose: ${JSON.stringify(operation.purpose)}` : undefined,
         operation.role
           ? `role: ${operation.role === "coordinator" ? "Chief of staff" : operation.role.charAt(0).toUpperCase() + operation.role.slice(1)}`
           : undefined,

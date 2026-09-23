@@ -1,4 +1,3 @@
-// Telegram plugin module implements doctor contract behavior.
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,

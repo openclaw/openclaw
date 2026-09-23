@@ -228,7 +228,6 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ type: Boolean }) embedded = false;
   @property({ type: Boolean }) presented = false;
   @property({ attribute: false }) focusRequest?: () => boolean;
-  @property({ attribute: false }) canFocus?: () => boolean;
   @state() private now = Date.now();
 
   private readonly railState = new ChatSessionRailState();
@@ -292,16 +291,11 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   }
 
   override updated(changedProperties: PropertyValues<this>) {
-    // Retained tabs stay mounted while hidden. Presentation and explicit commands
-    // own focus; history, ordinary replies, and reconnects must not interrupt it.
+    // The pane owns focus intent across lazy mounting and retained tab presentation.
     const focusRequested = changedProperties.has("focusRequest")
       ? this.focusRequest?.()
       : undefined;
-    if (
-      this.presented &&
-      (this.canFocus?.() ?? true) &&
-      (focusRequested ?? changedProperties.has("presented"))
-    ) {
+    if (this.presented && focusRequested) {
       this.querySelector<HTMLTextAreaElement>(".chat-session-rail__input:not(:disabled)")?.focus({
         preventScroll: true,
       });
@@ -566,6 +560,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
       return nothing;
     }
     const digest = visibleDigest(input);
+    const placeholder = t("chat.rail.askPlaceholder");
     if (mode === "pill") {
       return html`
         <div class="chat-session-rail chat-session-rail--pill" aria-live="polite">
@@ -707,12 +702,15 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
                   this.sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"
                 }
                 .value=${this.companion.draft}
-                placeholder=${pending ? t("chat.rail.askPending") : t("chat.rail.askPlaceholder")}
-                ?disabled=${!this.connected || pending}
+                placeholder=${placeholder}
+                ?disabled=${!this.connected}
                 @keydown=${this.composer.handleKeydown}
                 @input=${this.composer.handleInput}
                 ${ref(this.composer.ref)}
               ></textarea>
+              <span class="agent-chat__composer-placeholder" aria-hidden="true"
+                >${placeholder}</span
+              >
             </label>
           </div>
           <div class="agent-chat__composer-footer">

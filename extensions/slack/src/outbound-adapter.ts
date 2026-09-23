@@ -1,4 +1,3 @@
-// Slack plugin module implements outbound adapter behavior.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import {

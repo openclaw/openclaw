@@ -27,8 +27,9 @@ export async function waitForPidFile(
   filePath: string,
   timeoutMs: number,
   delay: (ms: number) => Promise<unknown> = sleep,
+  now: () => number = () => Date.now(),
 ): Promise<number> {
-  const deadlineAt = Date.now() + timeoutMs;
+  const deadlineAt = now() + timeoutMs;
   while (true) {
     if (existsSync(filePath)) {
       const pid = Number.parseInt(readFileSync(filePath, "utf8"), 10);
@@ -36,7 +37,7 @@ export async function waitForPidFile(
         return pid;
       }
     }
-    if (Date.now() >= deadlineAt) {
+    if (now() >= deadlineAt) {
       throw new Error(`timeout waiting for pid in ${filePath}`);
     }
     await delay(5);

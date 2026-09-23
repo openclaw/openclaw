@@ -671,7 +671,12 @@ describe("chat history recovery byte budget", () => {
             const result = stringify(...args);
             if (
               Array.isArray(args[0]) &&
-              args[0].some((value) => asOptionalRecord(value)?.role === "user") &&
+              args[0].some((value) => {
+                const record = asOptionalRecord(value);
+                return (
+                  record?.role === "user" || asOptionalRecord(record?.message)?.role === "user"
+                );
+              }) &&
               typeof result === "string" &&
               result.includes(marker)
             ) {
@@ -720,6 +725,7 @@ describe("chat history recovery byte budget", () => {
         };
         const exactBytes =
           Buffer.byteLength(historyJson) + Buffer.byteLength(JSON.stringify(expected));
+        const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
         try {
           const bounded = await call({ maxBytes: exactBytes - 1 });
           expect(bounded.messages).toEqual(inactive.messages);
@@ -733,13 +739,61 @@ describe("chat history recovery byte budget", () => {
           ).toBe(exactBytes);
           const delta = await call({ cursor: exact.deltaCursor, maxBytes: exactBytes });
           expect(delta).toMatchObject({ kind: "delta", messages: [], inFlightRun: expected });
+          await appendTranscriptMessage(scope, {
+            eventId: "delta-user",
+            message: {
+              role: "user",
+              content: `${marker}: ${'漢字\n"\\🤖'.repeat(100)}`,
+              timestamp: 13,
+            },
+          });
+          await appendTranscriptMessage(scope, {
+            eventId: "delta-tool",
+            message: {
+              role: "assistant",
+              content: [{ type: "toolCall", id: "read-delta", name: "read", arguments: {} }],
+              timestamp: 14,
+            },
+          });
+          const appended = await call({ cursor: exact.deltaCursor });
+          expect(appended).toMatchObject({
+            kind: "delta",
+            messages: [{ messageId: "delta-user" }, { messageId: "delta-tool" }],
+            activity: [{ messageId: "delta-tool" }],
+            inFlightRun: expected,
+          });
+          const deltaBytes =
+            Buffer.byteLength(JSON.stringify(appended.messages)) +
+            Buffer.byteLength(JSON.stringify({ activity: appended.activity })) -
+            1 +
+            Buffer.byteLength(JSON.stringify(expected));
+          for (const extraBytes of [0, -1]) {
+            const page = await call({
+              cursor: exact.deltaCursor,
+              maxBytes: deltaBytes + extraBytes,
+            });
+            expect(page.messages).toEqual(appended.messages);
+            expect(page.activity).toEqual(appended.activity);
+            expect(page.inFlightRun).toEqual(
+              extraBytes === 0 ? expected : { ...expected, text: "" },
+            );
+            expect(page).not.toHaveProperty("messagesBytes");
+            expect(page).not.toHaveProperty("activityBytes");
+          }
+          expect(delta).not.toHaveProperty("messagesBytes");
+          expect(delta).not.toHaveProperty("activityBytes");
           expect(JSON.stringify(inactive.messages)).toBe(historyJson);
         } finally {
+          clock.mockRestore();
           registration.cleanup();
           context.chatRunState.clearRun("run-history-bytes");
         }
         const completed = await call();
-        expect(completed.messages).toEqual(inactive.messages);
+        expect(completed.messages).toHaveLength(14);
+        if (!Array.isArray(completed.messages)) {
+          throw new Error("Expected completed history messages");
+        }
+        expect(completed.messages.slice(0, 12)).toEqual(inactive.messages);
         expect(completed.inFlightRun).toBeUndefined();
       });
     },
@@ -760,6 +814,8 @@ describe("chat metadata ownership", () => {
       expect(readChatMetadata).toHaveBeenCalledWith({
         agentId: "main",
         requesterProfileId: owner.id,
+        isCurrent: expect.any(Function),
+        assertCurrent: expect.any(Function),
         draftAccountSelection: expect.objectContaining({
           owner: owner.id,
           authProfileId,
@@ -815,24 +871,6 @@ describe("chat metadata ownership", () => {
       });
     },
   );
-
-  it("rejects combining a personal draft preview with a persisted session selector", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async () => {
-      const { authProfileId, readChatMetadata, request } = createPersonalMetadataFixture();
-      const respond = await request({
-        agentId: "main",
-        sessionKey: "agent:main:existing",
-        authProfileId,
-      });
-
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
-      expect(readChatMetadata).not.toHaveBeenCalled();
-    });
-  });
 
   it.each(["disconnect", "role loss", "abort"] as const)(
     "rejects a personal draft preview after %s during the metadata read",
@@ -915,8 +953,18 @@ describe("chat metadata ownership", () => {
             }),
           }),
         ],
-        [{ agentId: "main" }],
+        [
+          {
+            agentId: "main",
+            requesterProfileId: undefined,
+            isCurrent: expect.any(Function),
+            assertCurrent: expect.any(Function),
+          },
+        ],
       ]);
+      const neutral = expectDefined(readChatMetadata.mock.calls[1]?.[0], "neutral metadata read");
+      expect(neutral.isCurrent?.()).toBe(true);
+      expectDefined(neutral.assertCurrent, "neutral metadata authority check")();
       expect(respond).toHaveBeenCalledTimes(2);
       readChatMetadata.mockClear();
       await handler({

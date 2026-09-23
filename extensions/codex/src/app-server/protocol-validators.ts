@@ -23,7 +23,6 @@ import {
   type CodexThreadItem,
   type CodexThreadResumeResponse,
   type CodexThreadStartResponse,
-  type CodexTurn,
   type CodexTurnCompletedNotification,
   type CodexTurnStartResponse,
 } from "./protocol.js";
@@ -298,19 +297,35 @@ export function assertCodexThreadAcceptsDirectInput(
 
 /** Asserts and normalizes a Codex turn/start response. */
 export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResponse {
-  const normalized = normalizeWithDefaults(turnStartResponseSchema, normalizeTurnEnvelope(value));
+  const normalized = normalizeWithDefaults(turnStartResponseSchema, value);
   return assertCodexShape(validateTurnStartResponse, normalized, "turn/start response");
 }
 
-/** Only the current text prompt may be echoed; capabilities and historical items are not passive. */
+/** Prompt echoes and attested managed-hook continuations cannot admit native capabilities. */
 export function assertCodexPassiveTurnItems(
   items: readonly CodexThreadItem[],
   prompt: string,
   taskLabel: string,
+  options: { allowManagedHookPrompts?: boolean } = {},
 ): void {
   let promptEchoSeen = false;
   for (const item of items) {
     if (item.type === "agentMessage" || item.type === "reasoning") {
+      continue;
+    }
+    if (
+      item.type === "hookPrompt" &&
+      options.allowManagedHookPrompts === true &&
+      Array.isArray(item.fragments) &&
+      item.fragments.length > 0 &&
+      item.fragments.every(
+        (fragment) =>
+          isJsonObject(fragment) &&
+          typeof fragment.text === "string" &&
+          typeof fragment.hookRunId === "string" &&
+          fragment.hookRunId.trim().length > 0,
+      )
+    ) {
       continue;
     }
     if (item.type === "userMessage" && !promptEchoSeen) {
@@ -357,23 +372,16 @@ export function assertCodexModelListResponse(value: unknown): CodexModelListResp
   );
 }
 
-/** Reads and normalizes a Codex turn object. */
-export function readCodexTurn(value: unknown): CodexTurn | undefined {
-  const response = readCodexShape(
-    validateTurnStartResponse,
-    normalizeWithDefaults(turnStartResponseSchema, { turn: normalizeTurn(value) }),
-  );
-  return response?.turn;
-}
-
 /** Reads a Codex turn/completed notification payload if it matches the protocol schema. */
 export function readCodexTurnCompletedNotification(
   value: unknown,
 ): CodexTurnCompletedNotification | undefined {
-  return readCodexShape(
+  const notification = readCodexShape(
     validateTurnCompletedNotification,
-    normalizeWithDefaults(turnCompletedNotificationSchema, normalizeTurnEnvelope(value)),
+    normalizeWithDefaults(turnCompletedNotificationSchema, value),
   );
+  // Turn is shared with turn/start, but only terminal states belong in this notification.
+  return notification?.turn.status === "inProgress" ? undefined : notification;
 }
 
 function assertCodexShape<T>(validate: CodexValidator<T>, value: unknown, label: string): T {
@@ -385,59 +393,6 @@ function assertCodexShape<T>(validate: CodexValidator<T>, value: unknown, label:
 
 function readCodexShape<T>(validate: CodexValidator<T>, value: unknown): T | undefined {
   return validate.check(value) ? value : undefined;
-}
-
-function normalizeTurn(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-  return {
-    error: null,
-    startedAt: null,
-    completedAt: null,
-    durationMs: null,
-    ...value,
-    items: Array.isArray((value as { items?: unknown }).items)
-      ? (value as { items: unknown[] }).items.map(normalizeThreadItem)
-      : [],
-  };
-}
-
-function normalizeThreadItem(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-  const item = value as { type?: unknown };
-  switch (item.type) {
-    case "agentMessage":
-      return { phase: null, delivery: null, memoryCitation: null, ...value };
-    case "plan":
-      return { text: "", ...value };
-    case "reasoning":
-      return { summary: [], content: [], ...value };
-    case "dynamicToolCall":
-      return {
-        namespace: null,
-        arguments: null,
-        status: "completed",
-        contentItems: null,
-        success: null,
-        durationMs: null,
-        ...value,
-      };
-    default:
-      return value;
-  }
-}
-
-function normalizeTurnEnvelope(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value) || !("turn" in value)) {
-    return value;
-  }
-  return {
-    ...value,
-    turn: normalizeTurn((value as { turn?: unknown }).turn),
-  };
 }
 
 function formatValidationErrors(validate: CodexValidator<unknown>, value: unknown): string {

@@ -1,24 +1,29 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import {
   getTaskById,
+  listFreshTasksForOwnerKey,
   listTaskRecordsForOwnerTree,
   listTaskRecordPage,
-  listTasksForAgentId,
+  listTaskSessionActivity,
   deleteTaskRecordById,
   resetTaskRegistryForTests,
 } from "./task-registry-query.js";
-import { markTaskTerminalById } from "./task-registry-record-api.js";
+import { prepareTaskRegistryRead } from "./task-registry-read.js";
+import { markTaskTerminalById, updateTaskNotifyPolicyById } from "./task-registry-record-api.js";
 import {
+  invalidateTaskRegistryProjection,
   readTaskRegistryRevision,
   reloadTaskRegistryFromStoreAsync,
   tasks as authoritativeTasks,
 } from "./task-registry-state.js";
-import { configureTaskRegistryRuntime } from "./task-registry.store.js";
+import { configureTaskRegistryRuntime, type TaskRegistryStore } from "./task-registry.store.js";
+import { createTaskFixture } from "./task-registry.test-support.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 afterEach(() => {
@@ -42,8 +47,59 @@ async function readTaskPage(params: Parameters<typeof listTaskRecordPage>[0]) {
   return result.value;
 }
 
+describe("listTaskSessionActivity", () => {
+  it("copies current session activity without retaining or cloning task payloads", () => {
+    const task: TaskRecord = {
+      taskId: "media",
+      runtime: "cli",
+      requesterSessionKey: "agent:main:requester",
+      ownerKey: "agent:main:owner",
+      scopeKind: "session",
+      taskKind: "image_generation",
+      task: "Generate an image",
+      status: "queued",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: 1,
+      detail: { nested: { value: "retained" } },
+      executionOwner: { host: "fixture", pid: 1, startIdentity: 1 },
+    };
+    const other = { ...task, taskId: "other", taskKind: undefined, createdAt: 2 };
+    configureTaskSnapshot([task, other]);
+    const activity = listTaskSessionActivity();
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    expect(listTaskSessionActivity()).toEqual(activity);
+    expect(clone).not.toHaveBeenCalled();
+    clone.mockRestore();
+    expect(activity).toEqual([
+      {
+        taskKind: "image_generation",
+        status: "queued",
+        requesterSessionKey: task.requesterSessionKey,
+        ownerKey: task.ownerKey,
+      },
+      {
+        taskKind: undefined,
+        status: "queued",
+        requesterSessionKey: task.requesterSessionKey,
+        ownerKey: task.ownerKey,
+      },
+    ]);
+    expectDefined(activity[0], "detached activity").status = "cancelled";
+    expect(getTaskById(task.taskId)?.status).toBe("queued");
+    publishTaskRecordAfterAtomicStore({ ...task, status: "succeeded", ownerKey: "new-owner" });
+    expect(listTaskSessionActivity()[0]).toMatchObject({
+      status: "succeeded",
+      ownerKey: "new-owner",
+    });
+    expect(activity[0]).toMatchObject({ status: "cancelled", ownerKey: task.ownerKey });
+    deleteTaskRecordById(task.taskId);
+    expect(listTaskSessionActivity()).toEqual([activity[1]]);
+  });
+});
+
 describe("listTasksForAgentId", () => {
-  it("clones only selected details from a 10000-task registry", () => {
+  it("clones only selected details from a 10000-task registry", async () => {
     const records = Array.from({ length: 10_000 }, (_, index): TaskRecord => ({
       taskId: `task-${index}`,
       runtime: "cli",
@@ -64,13 +120,13 @@ describe("listTasksForAgentId", () => {
       deliveryStates: new Map(),
     });
     configureTaskRegistryRuntime({ store });
-    getTaskById("task-0");
+    const prepared = expectDefined(await prepareTaskRegistryRead(), "prepared agent read");
     const revision = readTaskRegistryRevision();
     const read = vi.spyOn(store, "loadSnapshot");
     const write = vi.spyOn(store, "upsertTaskWithDeliveryState");
     const clone = vi.spyOn(globalThis, "structuredClone");
 
-    const selected = listTasksForAgentId(" agent-17 ");
+    const selected = prepared.listTasksForAgentId(" agent-17 ");
     const detailClones = clone.mock.calls.length;
     clone.mockRestore();
 
@@ -118,16 +174,53 @@ describe("listTasksForAgentId", () => {
       { ...task, taskId: "case-sensitive", agentId: "Worker" },
       { ...task, taskId: "requester-only", agentId: undefined, requesterAgentId: "worker" },
     ]);
-    expect(listTasksForAgentId(" worker ")).toEqual([task]);
-    expect(listTasksForAgentId("Worker").map((row) => row.taskId)).toEqual(["case-sensitive"]);
-    expect(listTasksForAgentId(" \t ")).toEqual([]);
-    expect(listTasksForAgentId("missing")).toEqual([]);
+    let prepared = expectDefined(await prepareTaskRegistryRead(), "prepared agent read");
+    expect(prepared.listTasksForAgentId(" worker ")).toEqual([task]);
+    expect(prepared.listTasksForAgentId("Worker").map((row) => row.taskId)).toEqual([
+      "case-sensitive",
+    ]);
+    expect(prepared.listTasksForAgentId(" \t ")).toEqual([]);
+    expect(prepared.listTasksForAgentId("missing")).toEqual([]);
 
     const replacement = { ...task, taskId: "replacement", detail: { version: 2 } };
     configureTaskSnapshot([replacement]);
     await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
-    expect(listTasksForAgentId("worker")).toEqual([replacement]);
+    prepared = expectDefined(await prepareTaskRegistryRead(), "reloaded agent read");
+    expect(prepared.listTasksForAgentId("worker")).toEqual([replacement]);
     expect(getTaskById(task.taskId)).toBeUndefined();
+  });
+  it("infers agent ids for session-scoped tasks", async () => {
+    configureTaskSnapshot([]);
+    const created = createTaskFixture("cli", {
+      ownerKey: undefined,
+      scopeKind: undefined,
+      taskKind: "video_generation",
+      sourceId: "video_generate:openai",
+      requesterSessionKey: "agent:main:discord:direct:123",
+      childSessionKey: "agent:main:discord:direct:123",
+      runId: "tool:video_generate:agent-index",
+      task: "Generate a lobster video",
+      notifyPolicy: "silent",
+    });
+
+    expect(created.agentId).toBe("main");
+    const read = expectDefined(await prepareTaskRegistryRead(), "prepared agent read");
+    expect(read.listTasksForAgentId("main").map((task) => task.taskId)).toEqual([created.taskId]);
+  });
+
+  it("uses the child session agent for cross-agent background task attribution", async () => {
+    configureTaskSnapshot([]);
+    const created = createTaskFixture("subagent", {
+      childSessionKey: "agent:worker:subagent:child",
+      runId: "run-worker-subagent",
+      task: "Inspect worker state",
+      deliveryStatus: "pending",
+    });
+
+    expect(created.agentId).toBe("worker");
+    const read = expectDefined(await prepareTaskRegistryRead(), "prepared agent read");
+    expect(read.listTasksForAgentId("worker").map((task) => task.taskId)).toEqual([created.taskId]);
+    expect(read.listTasksForAgentId("main")).toEqual([]);
   });
 });
 
@@ -647,4 +740,109 @@ describe("listTaskRecordPage", () => {
 
     expect(getTaskById(task.taskId)?.detail).toEqual({ nested: { value: "original" } });
   });
+});
+
+describe("listFreshTasksForOwnerKey", () => {
+  function createStoredTask(): TaskRecord {
+    return {
+      taskId: "task-restored",
+      runtime: "acp",
+      sourceId: "run-restored",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:codex:acp:restored",
+      runId: "run-restored",
+      task: "Restored task",
+      status: "running",
+      deliveryStatus: "pending",
+      notifyPolicy: "done_only",
+      createdAt: 100,
+      lastEventAt: 100,
+    };
+  }
+
+  it("uses canonical owner rows despite projection changes during lookup", async () => {
+    const storedTask = createStoredTask();
+    const loadSnapshot = vi.fn(() => ({
+      tasks: new Map(),
+      deliveryStates: new Map(),
+    }));
+    const lookup = createDeferred<TaskRecord[]>();
+    const entered = createDeferred();
+    const listTasksForOwnerKey = vi.fn<NonNullable<TaskRegistryStore["listTasksForOwnerKey"]>>(
+      () => {
+        entered.resolve();
+        return lookup.promise;
+      },
+    );
+    configureTaskRegistryRuntime({
+      store: {
+        ...createInMemoryTaskRegistryStore(),
+        loadSnapshot,
+        listTasksForOwnerKey,
+      },
+    });
+
+    const pending = listFreshTasksForOwnerKey("agent:main:main");
+    await entered.promise;
+    invalidateTaskRegistryProjection();
+    lookup.resolve([storedTask]);
+    const tasks = await pending;
+
+    expect(tasks.map((task) => task.taskId)).toEqual(["task-restored"]);
+    const [context, ownerKey, assertCurrent] = expectDefined(
+      listTasksForOwnerKey.mock.calls[0],
+      "captured owner lookup",
+    );
+    expect(ownerKey).toBe("agent:main:main");
+    expect(() => context.admission.assertCurrent()).not.toThrow();
+    expect(assertCurrent).not.toThrow();
+    expect(loadSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the current memory snapshot when a delayed owner lookup fails", async () => {
+    const storedTask = createStoredTask();
+    const lookup = createDeferred<TaskRecord[]>();
+    configureTaskRegistryRuntime({
+      store: {
+        ...createInMemoryTaskRegistryStore({
+          tasks: new Map([[storedTask.taskId, storedTask]]),
+          deliveryStates: new Map(),
+        }),
+        listTasksForOwnerKey: () => lookup.promise,
+      },
+    });
+    const pending = listFreshTasksForOwnerKey(storedTask.ownerKey);
+    updateTaskNotifyPolicyById({ taskId: storedTask.taskId, notifyPolicy: "silent" });
+    lookup.reject(new Error("owner lookup unavailable"));
+    expect(await pending).toMatchObject([{ taskId: storedTask.taskId, notifyPolicy: "silent" }]);
+  });
+
+  it.each(["resolved", "rejected"])(
+    "rejects a %s owner lookup after its registry is replaced",
+    async (outcome) => {
+      const storedTask = createStoredTask();
+      const entered = createDeferred();
+      const lookup = createDeferred<TaskRecord[]>();
+      configureTaskRegistryRuntime({
+        store: {
+          ...createInMemoryTaskRegistryStore(),
+          listTasksForOwnerKey: () => {
+            entered.resolve();
+            return lookup.promise;
+          },
+        },
+      });
+      const pending = listFreshTasksForOwnerKey(storedTask.ownerKey);
+      await entered.promise;
+      configureTaskRegistryRuntime({ store: createInMemoryTaskRegistryStore() });
+      if (outcome === "resolved") {
+        lookup.resolve([storedTask]);
+      } else {
+        lookup.reject(new Error("owner lookup unavailable"));
+      }
+      await expect(pending).rejects.toThrow("owner is no longer current");
+    },
+  );
 });

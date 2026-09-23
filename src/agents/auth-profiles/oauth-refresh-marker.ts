@@ -1,4 +1,5 @@
 import { hash, randomBytes } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OAuthCredential } from "./types.js";
 
 const OAUTH_REFRESH_FENCE_PREFIX = "openclaw-oauth-refresh-fence:v1:";
@@ -55,6 +56,38 @@ function parseOAuthRefreshFence(credential: OAuthRefreshFenceCredential | undefi
     refreshDigest: refresh[3]!,
     state: access[2] ? "failed" : "pending",
   };
+}
+
+/** Secret-free claim identity from already-owned credential publication facts. */
+export function readPendingOAuthRefreshClaimId(credential: unknown): string | undefined {
+  if (
+    !isRecord(credential) ||
+    credential.type !== "oauth" ||
+    typeof credential.access !== "string" ||
+    typeof credential.refresh !== "string" ||
+    credential.expires !== 1
+  ) {
+    return undefined;
+  }
+  const marker = parseOAuthRefreshFence({
+    type: "oauth",
+    access: credential.access,
+    refresh: credential.refresh,
+    expires: credential.expires,
+  });
+  return marker?.state === "pending" ? marker.claimId : undefined;
+}
+
+export function captureOAuthRefreshClaimPublication(
+  profiles: Record<string, unknown>,
+  profileIds: Iterable<string>,
+): ReadonlyMap<string, string | undefined> {
+  return new Map(
+    [...profileIds].map((profileId) => [
+      profileId,
+      readPendingOAuthRefreshClaimId(profiles[profileId]),
+    ]),
+  );
 }
 
 /** Replace one claimed OAuth generation with an inert, schema-valid durable marker. */
@@ -126,17 +159,24 @@ export function isSameOAuthRefreshGeneration(params: {
   if (params.left.provider !== params.right.provider) {
     return false;
   }
-  const leftFence = parseOAuthRefreshFence(params.left);
-  const rightFence = parseOAuthRefreshFence(params.right);
-  const refreshDigest = (credential: OAuthCredential) =>
+  return (
+    readOAuthRefreshGenerationDigest({ profileId: params.profileId, credential: params.left }) ===
+    readOAuthRefreshGenerationDigest({ profileId: params.profileId, credential: params.right })
+  );
+}
+
+/** The same secret-free generation identity for a credential and its durable fence. */
+export function readOAuthRefreshGenerationDigest(params: {
+  profileId: string;
+  credential: OAuthCredential;
+}): string {
+  return (
+    parseOAuthRefreshFence(params.credential)?.refreshDigest ??
     buildOAuthRefreshSecretDigest({
       profileId: params.profileId,
-      provider: credential.provider,
+      provider: params.credential.provider,
       kind: "refresh",
-      secret: credential.refresh,
-    });
-  return (
-    (leftFence?.refreshDigest ?? refreshDigest(params.left)) ===
-    (rightFence?.refreshDigest ?? refreshDigest(params.right))
+      secret: params.credential.refresh,
+    })
   );
 }

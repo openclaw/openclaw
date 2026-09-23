@@ -30,6 +30,7 @@ except ModuleNotFoundError:
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "autoreview"
+fixture_git = runpy.run_path(str(SCRIPT.with_name("test-review-harness.py")))["fixture_git"]
 FIXTURES = Path(__file__).with_name("fixtures")
 PRIVATE_KEY_BEGIN_TEXT = "BEGIN " + "PRIVATE KEY"
 RSA_PRIVATE_KEY_BEGIN_TEXT = "BEGIN RSA " + "PRIVATE KEY"
@@ -85,6 +86,7 @@ report = {
     "overall_correctness": "patch is correct",
     "overall_explanation": "fake codex clean",
     "overall_confidence": 0.99,
+    "review_completion": "complete",
 }
 Path(output_path).write_text(json.dumps(report))
 print("fake codex ok")
@@ -117,6 +119,7 @@ report = {
     "overall_correctness": "patch is correct",
     "overall_explanation": "fake claude clean",
     "overall_confidence": 0.99,
+    "review_completion": "complete",
 }
 print(json.dumps(report))
 '''
@@ -147,6 +150,7 @@ report = {
     "overall_correctness": "patch is correct",
     "overall_explanation": "fake pi clean",
     "overall_confidence": 0.99,
+    "review_completion": "complete",
 }
 print(json.dumps(report))
 	'''
@@ -174,6 +178,7 @@ report = {
     "overall_correctness": "patch is correct",
     "overall_explanation": "fake kimi clean",
     "overall_confidence": 0.99,
+    "review_completion": "complete",
 }
 print(json.dumps(report))
 '''
@@ -208,19 +213,8 @@ def deadline_after_reviewer_ready(helper, ready: Path):
 
 
 def git(repo: Path, *args: str) -> str:
-    env = os.environ.copy()
-    env.update(
-        {
-            "GIT_AUTHOR_NAME": "Autoreview Test",
-            "GIT_AUTHOR_EMAIL": "autoreview@example.invalid",
-            "GIT_COMMITTER_NAME": "Autoreview Test",
-            "GIT_COMMITTER_EMAIL": "autoreview@example.invalid",
-        }
-    )
-    result = subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        env=env,
+    result = fixture_git(
+        repo, *args,
         check=True,
         text=True,
         stdout=subprocess.PIPE,
@@ -647,8 +641,8 @@ class AutoreviewMixedTargetTests(unittest.TestCase):
                     if mutation == "index conflict":
                         git(repo, "update-index", "--force-remove", "--", "src/migrate-0.py")
                         # Text-mode stdin on Windows adds a CR to Git's pathname.
-                        subprocess.run(["git", "update-index", "--index-info"], cwd=repo, check=True,
-                                       input=f"100644 {oid} 2\tsrc/migrate-0.py\n".encode(), capture_output=True)
+                        fixture_git(repo, "update-index", "--index-info", check=True,
+                                    input=f"100644 {oid} 2\tsrc/migrate-0.py\n".encode(), capture_output=True)
                     else:
                         mode = "160000" if mutation == "index gitlink" else "120000"
                         git(repo, "update-index", "--cacheinfo", f"{mode},{oid},src/migrate-0.py")
@@ -694,6 +688,7 @@ class AutoreviewMixedTargetTests(unittest.TestCase):
                 "run_engine": lambda _args, _repo, prompt: sends.append(prompt) or json.dumps({
                     "findings": [], "overall_correctness": "patch is correct",
                     "overall_explanation": "Synthetic clean.", "overall_confidence": 0.9,
+                    "review_completion": "complete",
                 }),
             }), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 passes = self.helper["prepare_review_prompts"](repo, "local", None, captured, "", evidence, 30_000)
@@ -706,6 +701,55 @@ class AutoreviewMixedTargetTests(unittest.TestCase):
                 for record in item.chunk.sources:
                     self.assertIn(record.index.content, sent)
                     self.assertIn(record.working_tree.content, sent)
+
+    def test_unfinished_mixed_pass_retains_valid_attribution_without_certifying_scope(self):
+        with self.migration() as (repo, *_):
+            captured = self.helper["local_bundle"](repo)
+            record = captured.mixed[0]
+            finding = {
+                "title": "Synthetic claim", "body": "A concrete migration defect.",
+                "priority": "P2", "confidence": 0.8, "category": "bug",
+                "code_location": {"file_path": record.path, "line": 1},
+                "source_attribution": {
+                    "target": "index", "record_id": record.identity,
+                    "source_id": record.index.identity, "side": "present",
+                    "column": 1, "excerpt": "obsolete(0)",
+                },
+            }
+            provider = {
+                "findings": [finding], "overall_correctness": "patch is incorrect",
+                "overall_explanation": "Awaiting another batch.", "overall_confidence": 0.2,
+            }
+            prepare = self.helper["prepare_review_prompts"]
+            for completions in (("incomplete",), ("incomplete", "complete"), ("complete", "incomplete")):
+                with self.subTest(completions=completions):
+                    output, status = repo.parent / "result.json", repo.parent / "status.json"
+                    engine = mock.Mock(side_effect=[
+                        json.dumps({**provider, "review_completion": completion}) for completion in completions
+                    ])
+                    argv = [str(SCRIPT), "--mode", "local", "--max-priority", "P2",
+                            "--require-finding", "Synthetic claim", "--expect-findings",
+                            "--json-output", str(output), "--status-output", str(status)]
+                    text = io.StringIO()
+                    with mock.patch.dict(self.helper["main_impl"].__globals__, {
+                        "repo_root": lambda: repo,
+                        "prepare_review_prompts": lambda *args: prepare(*args) * len(completions),
+                        "run_engine": engine,
+                    }), mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(text):
+                        self.assertEqual(self.helper["main_impl"](), 2)
+                    result = json.loads(output.read_text())
+                    self.assertEqual(engine.call_count, len(completions))
+                    self.assertEqual(result["review_status"], "incomplete")
+                    self.assertEqual(result["findings"][0]["source_attribution"], finding["source_attribution"])
+                    self.assertNotIn("attribution_rejected_findings", result)
+                    self.assertNotIn("missing_required_findings", result)
+                    self.assertEqual(len(result["pass_reports"]), len(completions))
+                    for entry in result["pass_reports"]:
+                        self.assertEqual(entry["report"]["provider_report"], provider)
+                    self.assertNotIn("review_completion", output.read_text())
+                    self.assertTrue(json.loads(status.read_text())["report_produced"])
+                    self.assertIn("provider observation (incomplete review)", text.getvalue())
+                    self.assertNotIn("scoped-clean", text.getvalue())
 
     def test_honest_capacity_refusal_and_no_legacy_metadata_bypass(self):
         with self.migration() as (repo, *_):
@@ -771,7 +815,7 @@ class AutoreviewMixedTargetTests(unittest.TestCase):
                         with mock.patch.dict(self.helper["main_impl"].__globals__, {
                             "repo_root": lambda: repo,
                             "prepare_review_prompts": lambda *args: original_prepare(*args) * count,
-                            "run_engine": lambda *_: json.dumps(provider),
+                            "run_engine": lambda *_: json.dumps({**provider, "review_completion": "complete"}),
                         }), mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(text), \
                                 contextlib.redirect_stderr(io.StringIO()):
                             self.assertEqual(self.helper["main_impl"](), expected_exit)
@@ -960,6 +1004,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 return json.dumps({
                     "findings": [], "overall_correctness": "patch is correct",
                     "overall_explanation": "fixture clean", "overall_confidence": 0.99,
+                    "review_completion": "complete",
                 })
 
             with mock.patch.dict(self.helper["main_impl"].__globals__, {
@@ -1565,7 +1610,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
             def run_engine(_args, _repo, prompt):
                 sent.append(prompt)
-                return json.dumps(report)
+                return json.dumps({**report, "review_completion": "complete"})
 
             main = self.helper["main_impl"]
             with mock.patch.dict(main.__globals__, {
@@ -1712,7 +1757,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
                         def run_engine(_args, _repo, prompt):
                             sends.append(prompt)
-                            return json.dumps(provider_report)
+                            return json.dumps({**provider_report, "review_completion": "complete"})
 
                         argv = [str(SCRIPT), "--engine", engine, "--mode", mode, "--max-priority", "P2",
                                 "--dataset", e2e, "--prompt-file", "context.md", "--prompt", "Review the complete candidate.",
@@ -1793,7 +1838,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
                         with mock.patch.dict(self.helper["main_impl"].__globals__, {
                             "repo_root": lambda: repo,
                             "build_review_prompts": lambda *_args: ["synthetic pack"] * count,
-                            "run_engine": lambda *_args: json.dumps(provider),
+                            "run_engine": lambda *_args: json.dumps({**provider, "review_completion": "complete"}),
                         }), mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                             self.assertEqual(self.helper["main_impl"](), exit_code)
                         result = json.loads((root / "result.json").read_text())
@@ -1816,9 +1861,241 @@ class AutoreviewHardeningTests(unittest.TestCase):
                         if required and expected_status == "incomplete":
                             self.assertEqual(result["missing_required_findings"], required)
 
+    def test_local_filter_collection_is_all_or_nothing_before_review(self) -> None:
+        import shlex
+
+        cases = (
+            ("required-conversion", "probe", {"aaa-ordinary.txt", "data.txt"}),
+            ("unused-driver", "unused", {"aaa-ordinary.txt", "data.txt"}),
+            ("stat-clean-neighbor", "probe", {"aaa-ordinary.txt"}),
+        )
+        provider_report = {
+            "findings": [],
+            "overall_correctness": "patch is correct",
+            "overall_explanation": "Synthetic complete-scope review.",
+            "overall_confidence": 0.99,
+        }
+        for scenario, driver, expected_paths in cases:
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory(
+                prefix="autoreview-filter-main.",
+            ) as tempdir:
+                root = Path(tempdir).resolve()
+                home = root / "operator"
+                home.mkdir()
+                # Keep native setup and main's actual Git preflight independent of
+                # caller routing, configuration, reviewer defaults, and credentials.
+                env = {key: os.environ[key] for key in (
+                    "PATH", "PATHEXT", "SYSTEMROOT", "SystemRoot", "COMSPEC", "WINDIR",
+                    "TEMP", "TMP", "TMPDIR", "DEVELOPER_DIR",
+                ) if key in os.environ}
+                env.update({
+                    "HOME": str(home), "USERPROFILE": str(home),
+                    "GIT_CONFIG_GLOBAL": os.devnull,
+                    "GIT_CONFIG_SYSTEM": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0",
+                    "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+                })
+                with mock.patch.dict(os.environ, env, clear=True):
+                    repo = init_repo(root)
+                    git(repo, "config", "core.autocrlf", "false")
+                    git(repo, "config", "commit.gpgsign", "false")
+                    ordinary = repo / "aaa-ordinary.txt"
+                    data = repo / "data.txt"
+                    markers = (root / "clean-dispatched", root / "process-dispatched")
+                    programs = (repo / "cleaner.py", repo / "processor.py")
+                    for marker, program, ending in zip(markers, programs, (
+                        "sys.stdout.buffer.write(sys.stdin.buffer.read())\n",
+                        "raise SystemExit(23)\n",
+                    )):
+                        program.write_bytes((
+                            "from pathlib import Path\nimport sys\n"
+                            f"Path({str(marker)!r}).write_bytes(b'synthetic dispatch\\n')\n"
+                            + ending
+                        ).encode("utf-8"))
+                    (repo / ".gitattributes").write_bytes(b"data.txt filter=probe\n")
+                    ordinary.write_bytes(b"ordinary original\n")
+                    data.write_bytes(b"filtered original\n")
+                    git(repo, "add", ".")
+                    git(repo, "commit", "-qm", "synthetic dormant filter fixture")
+
+                    # Establish non-racy clean data before enabling any converter.
+                    # Never repair or refresh that entry after converters are armed.
+                    info = data.stat()
+                    os.utime(data, ns=(info.st_atime_ns, info.st_mtime_ns - 2_000_000_000))
+                    git(repo, "update-index", "--refresh")
+                    ordinary.write_bytes(b"ordinary changed before filtered path\n")
+                    if scenario != "stat-clean-neighbor":
+                        data.write_bytes(b"filtered content changed and different in size\n")
+                    # Freeze the complete expected patch while no driver can run.
+                    expected_patch = git(
+                        repo, "--no-optional-locks", "diff", "--no-ext-diff",
+                        "--no-textconv", "--no-renames", "--no-color", "--patch",
+                    )
+                    self.assertIn("+ordinary changed before filtered path", expected_patch)
+                    if scenario != "stat-clean-neighbor":
+                        self.assertIn("+filtered content changed and different in size", expected_patch)
+                    for field, program in zip(("clean", "process"), programs):
+                        command = shlex.join((Path(sys.executable).as_posix(), program.as_posix()))
+                        git(repo, "config", f"filter.{driver}.{field}", command)
+                    git(repo, "config", f"filter.{driver}.required", "true")
+
+                    def observe():
+                        # Collection may refresh index stat caches, but must retain
+                        # every staged entry and every working/configuration byte.
+                        files = {
+                            str(path.relative_to(repo)): path.read_bytes()
+                            for path in repo.rglob("*")
+                            if path.is_file() and path != repo / ".git" / "index"
+                        }
+                        return files, git(repo, "ls-files", "--stage", "-z")
+
+                    before = observe()
+                    output_dir = root / "outputs"
+                    output_dir.mkdir()
+                    human = output_dir / "report.txt"
+                    report = output_dir / "report.json"
+                    sidecar = output_dir / "status.json"
+                    sidecar.write_bytes(b'{"status":"scoped-clean","stale":true}\n')
+                    argv = [
+                        str(SCRIPT), "--engine", "codex", "--mode", "local",
+                        "--max-priority", "P2", "--output", str(human),
+                        "--json-output", str(report), "--status-output", str(sidecar),
+                    ]
+
+                    def reply(_args, selected_repo, _prompt):
+                        if scenario == "required-conversion":
+                            raise AssertionError("partial conversion-dependent scope reached reviewer")
+                        self.assertEqual(selected_repo, repo)
+                        return json.dumps({**provider_report, "review_completion": "complete"})
+
+                    engine = mock.Mock(side_effect=reply)
+                    stdout, stderr = io.StringIO(), io.StringIO()
+                    main = self.helper["main_impl"]
+                    with mock.patch.dict(main.__globals__, {
+                        "repo_root": lambda: repo,
+                        "resolve_engine_binary": lambda *_args: (True, None),
+                        "run_engine": engine,
+                    }), mock.patch.object(sys, "argv", argv), \
+                            contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                        try:
+                            if scenario == "required-conversion":
+                                with self.assertRaisesRegex(SystemExit, r"(?i)filter"):
+                                    main()
+                            else:
+                                self.assertEqual(main(), 0)
+                        finally:
+                            self.assertFalse(markers[0].exists(), "clean converter executed")
+                            self.assertFalse(markers[1].exists(), "process converter executed")
+                            self.assertEqual(observe(), before, "collection mutated fixture inputs")
+
+                    if scenario == "required-conversion":
+                        engine.assert_not_called()
+                        self.assertEqual(list(output_dir.iterdir()), [],
+                                         "refusal must not leave reports, status, or partial outputs")
+                        self.assertNotIn("scoped-clean:", stdout.getvalue())
+                        continue
+
+                    engine.assert_called_once()
+                    prompt = engine.call_args.args[2]
+                    self.assertIn(expected_patch.rstrip(), prompt)
+                    paths = set(re.findall(r"^diff --git a/(\S+) b/\1$", prompt, re.MULTILINE))
+                    self.assertEqual(paths, expected_paths)
+                    for path in expected_paths:
+                        self.assertEqual(prompt.count(f"diff --git a/{path} b/{path}\n"), 1)
+                    result = json.loads(report.read_text(encoding="utf-8"))
+                    self.assertEqual(result["findings"], [])
+                    self.assertEqual(result["review_status"], "scoped-clean")
+                    for key in ("overall_correctness", "overall_explanation", "overall_confidence"):
+                        self.assertEqual(result[key], provider_report[key])
+                    self.assertEqual(json.loads(sidecar.read_text(encoding="utf-8")), {
+                        "schema_version": 1, "status": "scoped-clean", "exit_code": 0,
+                        "engine": "codex", "report_produced": True, "reason": None,
+                        "reviewer_exit_code": None, "timed_out": False,
+                    })
+                    rendered = human.read_text(encoding="utf-8")
+                    self.assertIn("scoped-clean:", rendered)
+                    self.assertIn(provider_report["overall_explanation"], rendered)
+                    self.assertIn(rendered, stdout.getvalue())
+                    self.assertEqual({path.name for path in output_dir.iterdir()},
+                                     {"report.txt", "report.json", "status.json"})
+
+    def test_completion_finalizes_status_once_and_preserves_provider_observations(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+            (repo / "source.txt").write_text("changed\n")
+            status_fn = self.helper["review_status"]
+            for completions in (("complete",), ("incomplete",), ("incomplete", "complete"), ("complete", "incomplete")):
+                for has_finding in (False, True):
+                    for expect in (False, True):
+                        for save_text in (False, True):
+                            with self.subTest(completions=completions, finding=has_finding, expect=expect, save_text=save_text):
+                                providers = [{
+                                    "findings": [{
+                                        "title": "Synthetic defect", "body": "Retain this observation.",
+                                        "priority": "P2", "confidence": 0.01, "category": "bug",
+                                        "code_location": {"file_path": "source.txt", "line": 1},
+                                    }] if has_finding else [],
+                                    "overall_correctness": "patch is incorrect" if has_finding else "patch is correct",
+                                    "overall_explanation": (
+                                        "Awaiting the second evidence batch before a final review verdict."
+                                        if completion == "incomplete" else "Finished this assigned assessment."
+                                    ),
+                                    "overall_confidence": 0.01,
+                                } for completion in completions]
+                                engine = mock.Mock(side_effect=[
+                                    json.dumps({**provider, "review_completion": completion})
+                                    for provider, completion in zip(providers, completions)
+                                ])
+                                result_path, status_path, text_path = (
+                                    root / name for name in ("result.json", "status.json", "result.txt")
+                                )
+                                argv = [str(SCRIPT), "--mode", "local", "--max-priority", "P2",
+                                        "--json-output", str(result_path), "--status-output", str(status_path)]
+                                if expect:
+                                    argv.append("--expect-findings")
+                                if save_text:
+                                    argv += ["--output", str(text_path)]
+                                complete = all(value == "complete" for value in completions)
+                                expected_status = "incomplete" if not complete else "findings" if has_finding else "scoped-clean"
+                                expected_exit = 2 if not complete else int(not has_finding) if expect else int(has_finding)
+                                finalized = mock.Mock(wraps=status_fn)
+                                text = io.StringIO()
+                                with mock.patch.dict(self.helper["main_impl"].__globals__, {
+                                    "repo_root": lambda: repo,
+                                    "build_review_prompts": lambda *_: ["synthetic pack"] * len(completions),
+                                    "run_engine": engine, "review_status": finalized,
+                                }), mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(text), \
+                                        contextlib.redirect_stderr(io.StringIO()):
+                                    self.assertEqual(self.helper["main_impl"](), expected_exit)
+                                finalized.assert_called_once()
+                                self.assertEqual(engine.call_count, len(completions))
+                                result = json.loads(result_path.read_text())
+                                self.assertEqual(result["review_status"], expected_status)
+                                self.assertEqual(result["overall_confidence"], 0.01)
+                                self.assertEqual(bool(result["findings"]), has_finding)
+                                retained = ([result] if len(completions) == 1
+                                            else [entry["report"] for entry in result["pass_reports"]])
+                                self.assertEqual([entry["provider_report"] for entry in retained], providers)
+                                self.assertNotIn("review_completion", result_path.read_text())
+                                self.assertEqual(json.loads(status_path.read_text()), {
+                                    "schema_version": 1, "status": expected_status, "exit_code": expected_exit,
+                                    "engine": "codex", "report_produced": True, "reason": None,
+                                    "reviewer_exit_code": None, "timed_out": False,
+                                })
+                                for provider in providers:
+                                    self.assertIn(provider["overall_explanation"], text.getvalue())
+                                if save_text:
+                                    self.assertIn(text_path.read_text(), text.getvalue())
+                                if not complete:
+                                    self.assertNotIn("scoped-clean", text.getvalue())
+                                    self.assertIn("provider observation (incomplete review)", text.getvalue())
+
     def test_status_unavailable_and_local_refusals_remain_distinct(self) -> None:
-        clean = json.dumps({"findings": [], "overall_correctness": "patch is correct",
-                            "overall_explanation": "Synthetic review.", "overall_confidence": 0.9})
+        public = {"findings": [], "overall_correctness": "patch is correct",
+                  "overall_explanation": "Synthetic review.", "overall_confidence": 0.9}
+        clean = json.dumps({**public, "review_completion": "complete"})
         unavailable = self.helper["ReviewerUnavailable"]
         cases = (
             ("engine", unavailable("DIAGNOSTIC_SENTINEL", result=subprocess.CompletedProcess([], 7, "", "")), "engine_failed"),
@@ -1826,8 +2103,12 @@ class AutoreviewHardeningTests(unittest.TestCase):
             ("invalid-json", "not JSON", "invalid_report"),
             ("invalid-schema", '{"findings": []}', "invalid_report"),
             ("invalid-field-type", json.dumps({"findings": [], "overall_correctness": [],
-                                               "overall_explanation": "Invalid enum", "overall_confidence": 0.9}), "invalid_report"),
+                                               "overall_explanation": "Invalid enum", "overall_confidence": 0.9,
+                                               "review_completion": "complete"}), "invalid_report"),
             ("invalid-event-type", '[{"type":"assistant","message":{"content":null}}]', "invalid_report"),
+            ("missing-completion", json.dumps(public), "invalid_report"),
+            *((f"invalid-completion-{index}", json.dumps({**public, "review_completion": value}), "invalid_report")
+              for index, value in enumerate(("", "deferred", [], {}, None, 42, False))),
             ("isolation", SystemExit("isolation refused"), None),
             ("spawn", OSError("cannot execute reviewer"), None),
         )
@@ -1841,9 +2122,11 @@ class AutoreviewHardeningTests(unittest.TestCase):
                     with self.subTest(count=count, label=label):
                         sidecar = root / "status.json"
                         report = root / "result.json"
+                        human = root / "result.txt"
                         sidecar.write_text('{"status":"scoped-clean"}')
                         argv = [str(SCRIPT), "--mode", "local", "--engine", "codex",
-                                "--status-output", str(sidecar), "--json-output", str(report)]
+                                "--status-output", str(sidecar), "--json-output", str(report),
+                                "--output", str(human)]
                         engine = mock.Mock(side_effect=[clean] * (count - 1) + [failure])
                         with mock.patch.dict(self.helper["main_impl"].__globals__, {
                             "repo_root": lambda: repo,
@@ -1853,6 +2136,8 @@ class AutoreviewHardeningTests(unittest.TestCase):
                             with self.assertRaises((SystemExit, OSError)):
                                 self.helper["main_impl"]()
                         self.assertFalse(report.exists())
+                        self.assertFalse(human.exists())
+                        self.assertEqual(engine.call_count, count)
                         self.assertEqual(sidecar.exists(), reason is not None)
                         if reason:
                             text = sidecar.read_text()
@@ -2159,9 +2444,10 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 git(repo, "add", "unrelated.txt")
                 git(repo, "commit", "-qm", "unrelated maintenance")
             expected_parent = git(repo, "rev-parse", "HEAD^").strip()
-            expected_patch = subprocess.check_output(
-                ["git", "diff", *self.helper["SAFE_DIFF_FLAGS"], "HEAD^", "HEAD"], cwd=repo,
-            ).decode("utf-8")
+            expected_patch = fixture_git(
+                repo, "diff", *self.helper["SAFE_DIFF_FLAGS"], "HEAD^", "HEAD",
+                check=True, capture_output=True,
+            ).stdout.decode("utf-8")
             for state, depth in (("missing", 1), ("available", 2), ("retained", None)):
                 with self.subTest(state=state):
                     checkout = root / state
@@ -2760,6 +3046,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
                             ),
                             "overall_explanation": "test review",
                             "overall_confidence": 0.9,
+                            "review_completion": "complete",
                         }
                     )
 
@@ -2773,9 +3060,11 @@ class AutoreviewHardeningTests(unittest.TestCase):
                                 args, [args], repo, prompts, {"source.txt"}
                             )
                     else:
-                        reports = self.helper["run_review_passes"](
+                        results = self.helper["run_review_passes"](
                             args, [args], repo, prompts, {"source.txt"}
                         )
+                        self.assertTrue(all(result.complete for _, result in results))
+                        reports = [(label, result.report) for label, result in results]
                         report = self.helper["merge_chunk_reports"](reports)
                         self.helper["require_findings"](report, args.require_finding)
                         self.assertEqual(report["overall_correctness"], "patch is incorrect")
@@ -3564,6 +3853,77 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
             self.assertIn("# Prompt file: review.md", evidence.prompt)
 
+    def test_absolute_prompt_file_keeps_evidence_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir)).resolve()
+            prompt = repo / "review.md"
+            prompt.write_bytes(b"review context\n")
+            args = argparse.Namespace(prompt=[], prompt_file=[str(prompt)], dataset=[])
+            evidence = self.helper["capture_evidence_inputs"](args, repo)
+            self.assertEqual(evidence.prompt, "# Prompt file: review.md\nreview context\n")
+            self.assertEqual(evidence.files[0].raw_path, "review.md")
+            self.helper["verify_evidence"](repo, evidence.files)
+            prompt.write_text("changed\n", encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "evidence changed"):
+                self.helper["verify_evidence"](repo, evidence.files)
+            with self.assertRaisesRegex(SystemExit, "repo-relative"):
+                self.helper["capture_evidence_file"](repo, str(prompt), "--dataset")
+            (repo / ".env").write_text("fixture\n", encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "sensitive"):
+                self.helper["capture_evidence_file"](repo, str(repo / ".env"), "--prompt-file")
+
+    @unittest.skipIf(os.name == "nt", "the fake executable is POSIX-only")
+    def test_git_preflight_failures_stop_before_target_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            for body, diagnostic, minimum in (
+                ("exit 7", "exit 7", 0),
+                ("exec sleep 60", "timed out after 10s", 9),
+            ):
+                with self.subTest(diagnostic=diagnostic):
+                    binary = write_executable(root / f"git-stub-{minimum}", f"#!/bin/sh\n{body}\n")
+                    started = time.monotonic()
+                    result = subprocess.run(
+                        [sys.executable, str(SCRIPT), "--mode", "local", "--dry-run"],
+                        cwd=repo, env={**os.environ, "AUTOREVIEW_GIT": str(binary)},
+                        text=True, capture_output=True, timeout=20,
+                    )
+                    elapsed = time.monotonic() - started
+                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                    self.assertIn("incomplete", result.stderr)
+                    self.assertIn(diagnostic, result.stderr)
+                    self.assertIn(str(binary), result.stderr)
+                    self.assertIn("DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer", result.stderr)
+                    self.assertNotIn("autoreview target:", result.stdout)
+                    self.assertNotIn("scoped-clean", result.stdout + result.stderr)
+                    self.assertGreaterEqual(elapsed, minimum)
+                    self.assertLess(elapsed, 15)
+
+    def test_git_override_uses_trusted_resolution_and_preserves_git_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            binary = write_executable(root / "git-stub", "#!/bin/sh\nexit 0\n")
+            developer = str(root / "Xcode.app/Contents/Developer")
+            with mock.patch.dict(os.environ, {"AUTOREVIEW_GIT": str(binary), "DEVELOPER_DIR": developer,
+                                               "GIT_DIR": "untrusted", "DYLD_INSERT_LIBRARIES": "untrusted"}):
+                with mock.patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"ok", b"")) as run:
+                    self.assertEqual(self.helper["git"](repo, "rev-parse", "HEAD"), "ok")
+                    self.assertEqual(self.helper["git_bytes"](repo, "show", "HEAD").stdout, b"ok")
+                for call in run.call_args_list:
+                    self.assertEqual(call.args[0][0], str(binary))
+                    self.assertEqual(call.kwargs["env"]["DEVELOPER_DIR"], developer)
+                    self.assertNotIn("GIT_DIR", call.kwargs["env"])
+                    self.assertNotIn("DYLD_INSERT_LIBRARIES", call.kwargs["env"])
+                reviewer_env = self.helper["safe_engine_env"](repo, engine="codex")
+                self.assertNotIn("AUTOREVIEW_GIT", reviewer_env)
+                self.assertNotIn("DEVELOPER_DIR", reviewer_env)
+            local_binary = write_executable(repo / "git-stub", "#!/bin/sh\nexit 0\n")
+            with mock.patch.dict(os.environ, {"AUTOREVIEW_GIT": str(local_binary)}):
+                with self.assertRaisesRegex(SystemExit, "executable not found"):
+                    self.helper["resolve_git"](repo)
+
     def test_review_prompts_omit_absolute_repo_path_and_keep_instructions_whole(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
@@ -3597,7 +3957,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             outside = root / "outside.md"
             outside.write_text("outside\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(SystemExit, "repo-relative"):
+            with self.assertRaisesRegex(SystemExit, "inside the reviewed repository"):
                 self.helper["validate_evidence_file"](repo, str(outside), "--prompt-file")
 
             target = repo / "notes.md"
@@ -3611,6 +3971,8 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 raise
             with self.assertRaisesRegex(SystemExit, "symlinked"):
                 self.helper["validate_evidence_file"](repo, "link.md", "--dataset")
+            with self.assertRaisesRegex(SystemExit, "symlinked"):
+                self.helper["capture_evidence_file"](repo, str(link.resolve().parent / "link.md"), "--prompt-file")
 
     def test_safe_engine_env_strips_process_injection_variables(self) -> None:
         old = os.environ.copy()
@@ -4324,6 +4686,7 @@ else:
         ) -> subprocess.CompletedProcess[str]:
             observed["cwd"] = cwd
             observed["env"] = kwargs["env"]
+            observed["schema"] = json.loads(_cmd[_cmd.index("--json-schema") + 1])
             return subprocess.CompletedProcess([], 0, "{}", "")
 
         with tempfile.TemporaryDirectory() as tempdir:
@@ -4348,6 +4711,7 @@ else:
                 observed["env"]["CLAUDE_CODE_DISABLE_AUTO_MEMORY"],
                 "1",
             )
+            self.assertEqual(observed["schema"], self.helper["PROVIDER_SCHEMA"])
 
     def test_codex_env_rejects_executable_dbus_transport(self) -> None:
         old = os.environ.copy()
@@ -4972,7 +5336,7 @@ else:
             with contextlib.redirect_stderr(io.StringIO()):
                 self.helper["validate_report"](literal, repo, {"src/index.ts"}, [])
             self.assertEqual(literal["findings"], [])
-            self.assertEqual(self.helper["review_status"](literal), "incomplete")
+            self.assertEqual(self.helper["review_status"](literal, complete=True), "incomplete")
 
             for invalid_path in ("", 123, None, True):
                 with self.subTest(invalid_path=invalid_path):
@@ -5025,6 +5389,7 @@ else:
             "overall_explanation": "explanation\x07",
             "overall_confidence": 0.9,
         }
+        report["review_status"] = self.helper["review_status"](report, complete=True)
         output = io.StringIO()
 
         with contextlib.redirect_stdout(output):
@@ -6638,6 +7003,7 @@ class AuthenticatedProxyTests(unittest.TestCase):
         proxy, forms = self.proxy_fixture()
         report = {"findings": [], "overall_correctness": "patch is incorrect",
                   "overall_explanation": "provider says " + " | ".join(forms), "overall_confidence": 0.8}
+        report["review_status"] = self.helper["review_status"](report, complete=True)
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"HTTPS_PROXY": proxy}, clear=True):
             output = Path(tmp) / "report.json"
             self.helper["atomic_write_text"](output, json.dumps(self.helper["redact_proxy_report"](report)))
@@ -6667,14 +7033,10 @@ class AuthenticatedProxyTests(unittest.TestCase):
             root = Path(tmp).resolve()
             repo = root / "repo"
             repo.mkdir()
-            def git(*args):
-                subprocess.run(["git", "-C", str(repo), "-c", "user.name=Proxy Test",
-                                "-c", "user.email=proxy@example.invalid", "-c", "commit.gpgsign=false",
-                                *args], check=True, capture_output=True)
-            git("init", "-q")
+            git(repo, "init", "-q")
             (repo / "source.txt").write_text("before\n")
-            git("add", ".")
-            git("commit", "-qm", "fixture")
+            git(repo, "add", ".")
+            git(repo, "commit", "-qm", "fixture")
             (repo / "source.txt").write_text("after\n")
             fake = root / "codex-fixture"
             fake.write_text(f"#!{sys.executable}\n" + '''import json, os, sys
@@ -6693,6 +7055,7 @@ flag = "--output-last-message" if "--output-last-message" in sys.argv else "-o"
 Path(sys.argv[sys.argv.index(flag) + 1]).write_text(json.dumps({
     "findings": [], "overall_correctness": "patch is incorrect",
     "overall_explanation": "transport diagnostics: " + os.environ["HTTPS_PROXY"], "overall_confidence": 0.8,
+    "review_completion": "complete",
 }))
 ''')
             fake.chmod(0o755)

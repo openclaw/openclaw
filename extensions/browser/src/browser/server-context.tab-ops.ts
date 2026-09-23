@@ -152,6 +152,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         await assertCdpEndpointAllowed(profile.cdpUrl, ssrfPolicy);
         const pages = await listPagesViaPlaywright({
           cdpUrl: profile.cdpUrl,
+          ...(profile.engine === "lightpanda" ? { engine: profile.engine } : {}),
           ssrfPolicy,
           timeoutMs,
           ...(capabilities.requiresCompleteTargetEnumeration
@@ -211,7 +212,12 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         webSocketDebuggerUrl?: string;
         type?: string;
       }>
-    >(appendCdpPath(cdpHttpBase, "/json/list"), undefined, undefined, getCdpControlPolicy());
+    >(
+      appendCdpPath(cdpHttpBase, "/json/list"),
+      options?.timeoutMs,
+      options?.signal ? { signal: options.signal } : undefined,
+      getCdpControlPolicy(),
+    );
     const cdpControlPolicy = getCdpControlPolicy();
     const tabs: BrowserTab[] = [];
     for (const t of raw) {
@@ -241,9 +247,14 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
 
   const listTabs = async (options?: BrowserOperationOptions): Promise<BrowserTab[]> => {
     const tabs = await readTabs(options);
+    options?.signal?.throwIfAborted();
     // Chrome MCP target identity is authoritative. A replacement tab cannot
     // inherit an alias safely, even when its URL matches the closed tab.
-    return assignTabAliases(runtime, tabs, !capabilities.usesChromeMcp);
+    return assignTabAliases(
+      runtime,
+      tabs,
+      !capabilities.usesChromeMcp && profile.engine !== "lightpanda",
+    );
   };
 
   const enforceManagedTabLimit = async (
@@ -310,6 +321,15 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     tab: BrowserTab,
     options?: BrowserOperationOptions & { requireDurableOwnership?: boolean },
   ): Promise<BrowserOpenResult> => {
+    if (profile.engine === "lightpanda") {
+      if (options?.requireDurableOwnership) {
+        throw new Error("Connection-scoped browser pages cannot be retained by a dashboard.");
+      }
+      return {
+        ...tab,
+        ownership: { status: "non-durable", reason: "browser-identity-unavailable" },
+      };
+    }
     const cdpTimeouts = getRemoteCdpActionTimeouts();
     const ownership = await resolveCdpTabOwnership({
       profileName: profile.name,
@@ -357,6 +377,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     }
 
     let createdTargetId: string | undefined;
+    let closeCreatedPage: (() => Promise<void>) | undefined;
     try {
       if (capabilities.usesPersistentPlaywright) {
         const mod = await getPwAiModule({ mode: "strict" });
@@ -365,11 +386,13 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         if (typeof createPageViaPlaywright === "function") {
           const page = await createPageViaPlaywright({
             cdpUrl: profile.cdpUrl,
+            ...(profile.engine === "lightpanda" ? { engine: profile.engine } : {}),
             url,
             cdpPolicy,
             ...(opts?.signal ? { signal: opts.signal } : {}),
             ...ssrfPolicyOpts,
           });
+          closeCreatedPage = page.close;
           createdTargetId = page.targetId;
           return adoptValidatedTab(
             await withTabOwnership(
@@ -543,7 +566,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         { ...opts, label: normalizedLabel },
       );
     } catch (openError) {
-      if (createdTargetId) {
+      if (closeCreatedPage) {
+        await closeCreatedPage().catch(() => {});
+      } else if (createdTargetId) {
         // Creation owns the target until a successful handoff. Cleanup must not
         // inherit the caller's abort or replace the original open failure.
         await fetchOk(

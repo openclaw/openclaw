@@ -126,8 +126,17 @@ describe("context-engine turn outbox", () => {
     );
 
     valid = true;
-    await drainContextEngineTurnOutbox({ database, engine, engineId: "test", warn });
+    const onCommitted = vi.fn(() => {
+      throw new Error("maintenance handoff failed");
+    });
+    await drainContextEngineTurnOutbox({ database, engine, engineId: "test", onCommitted, warn });
 
+    expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ advancementKey: payload.boundary.admission.logicalTurnId }),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "[context-engine] committed turn notification failed: maintenance handoff failed",
+    );
     expect(
       database.db
         .prepare("SELECT 1 FROM context_engine_turn_outbox WHERE advancement_key = ?")

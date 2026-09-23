@@ -1,4 +1,3 @@
-import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { retireSessionPaneHandoffs } from "../../pages/chat/chat-pane-shared.ts";
@@ -14,7 +13,7 @@ type DeletedComposerDraftTarget = {
 };
 
 export async function retireDeletedComposerDrafts(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   targets: readonly DeletedComposerDraftTarget[],
 ): Promise<void> {
   let failureReported = false;

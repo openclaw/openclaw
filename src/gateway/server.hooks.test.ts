@@ -542,8 +542,8 @@ describe("gateway server hooks", () => {
     testState.sessionConfig = { scope: "global" };
     await withGatewayServer(async ({ port }) => {
       expect((await postHook(port, "/hooks/mapped-wake", { subject: "Global" })).status).toBe(200);
-      await waitForSystemEventTexts("global");
-      expect(peekSystemEvents("global")).toContain("Mapped wake: Global");
+      await waitForSystemEventTexts("agent:hooks:global");
+      expect(peekSystemEvents("agent:hooks:global")).toContain("Mapped wake: Global");
     });
   });
 
@@ -1008,12 +1008,12 @@ describe("gateway server hooks", () => {
           sessionKey: "agent:hooks:slack:channel:c123",
         });
         expect(resNoAgent.status).toBe(200);
-        await waitForSystemEventTexts(resolveMainKey());
+        await waitForSystemEventTexts("agent:main:global");
         const noAgentCall = cronRunCall();
         expect(noAgentCall?.job?.agentId).toBe("main");
         expect(noAgentCall?.sessionKey).toBe("agent:main:slack:channel:c123");
         expect(peekSystemEventEntries("agent:main:main")).toStrictEqual([]);
-        drainSystemEvents(resolveMainKey());
+        drainSystemEvents("agent:main:global");
       });
     },
   );

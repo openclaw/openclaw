@@ -63,6 +63,7 @@ export function createPromptBuildToolPolicy<
   let toolsAllow: string[] | undefined;
   const current = {
     activeToolNames: [...baseline.activeToolNames],
+    callableToolNames: [...baseline.activeToolNames],
     effectiveTools: params.effectiveTools,
     uncompactedEffectiveTools: params.uncompactedEffectiveTools,
     tools: params.tools,
@@ -126,6 +127,7 @@ export function applyPromptBuildToolsAllow<
   forceToolNames?: readonly string[];
 }): {
   activeToolNames: string[];
+  callableToolNames: string[];
   effectiveTools: TEffectiveTool[];
   uncompactedEffectiveTools: TUncompactedTool[];
   tools: TTool[];
@@ -169,6 +171,7 @@ export function applyPromptBuildToolsAllow<
 
   return {
     activeToolNames,
+    callableToolNames: promptPolicy.callableToolNames,
     effectiveTools: promptPolicy.tools,
     uncompactedEffectiveTools: allowedUncompactedTools,
     tools: allowedTools,

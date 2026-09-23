@@ -22,7 +22,8 @@ Every settings surface (the `/settings` takeover pages plus the Plugins/Skills h
 
 ## Rules
 
-- **No status pills.** Status is `renderSettingsStatus` — a dot + plain text (`● Connected`). Badges (`.settings-count`) exist only for genuine counts.
+- **Do not narrate unchanged defaults.** Controls and placeholders show the effective value. Omit repetitive “Using default” descriptions; keep useful help, scope, reset controls, and default references for customized values.
+- **No status pills.** Status is `renderSettingsStatus` — a dot + plain text (`● Connected`) by default. Permissions use neutral text without dots, with a small checkmark for granted access and aligned action buttons; an ungranted permission is a choice, not an error. Badges (`.settings-count`) exist only for genuine counts.
 - **Spacing uses `--space-*` tokens** (`base.css`); no hardcoded paddings/gaps.
 - **Motion budget:** color/background transitions only. No enter animations, staggered reveals, or hover glows.
 - **Buttons:** default `.btn` (quiet). `--accent` primary at most once per view. Danger actions live in a `danger: true` section at the page bottom.

@@ -57,7 +57,7 @@ import {
   loadProviderPolicyArtifacts,
 } from "../plugins/provider-public-artifacts.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../utils.js";
 import {
   formatLocalRuntimeDoctorNote,
@@ -845,7 +845,7 @@ function resolvePrimaryMemoryProviderEnvVar(provider: string): string {
     return "OPENAI_API_KEY";
   }
   const authProviderId = MEMORY_EMBEDDING_PROVIDER_AUTH_IDS.get(provider);
-  const envVar = authProviderId ? getProviderEnvVars(authProviderId)[0] : undefined;
+  const envVar = authProviderId ? getProviderEnvVarsCore(authProviderId)[0] : undefined;
   return envVar ?? `${provider.toUpperCase()}_API_KEY`;
 }
 

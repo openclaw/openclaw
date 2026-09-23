@@ -1,4 +1,3 @@
-// Discord plugin module implements model picker.state behavior.
 import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";

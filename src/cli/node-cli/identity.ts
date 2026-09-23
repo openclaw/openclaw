@@ -1,16 +1,14 @@
 // Prints the local node host device identity for pairing verification.
-import {
-  loadDeviceIdentityIfPresent,
-  publicKeyRawBase64UrlFromPem,
-} from "../../infra/device-identity.js";
+import { loadDeviceIdentityIfPresentAsync } from "../../infra/device-identity-async.js";
+import { publicKeyRawBase64UrlFromPem } from "../../infra/device-identity.js";
 import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";
 
 /**
  * Read-only by design: the SSH-verified pairing probe calls this remotely and
  * must never mint a fresh identity on a host that has not run the node host.
  */
-export function runNodeIdentityShow(opts: { json?: boolean }) {
-  const identity = loadDeviceIdentityIfPresent();
+export async function runNodeIdentityShow(opts: { json?: boolean }) {
+  const identity = await loadDeviceIdentityIfPresentAsync();
   if (!identity) {
     defaultRuntime.error(
       "no node device identity found (start the node host once with `openclaw node run` or `openclaw node install`)",

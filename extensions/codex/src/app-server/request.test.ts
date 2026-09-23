@@ -1,5 +1,6 @@
 // Codex tests cover request plugin behavior.
 import path from "node:path";
+import { isNativeError } from "node:util/types";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearSessionStoreCacheForTest,
@@ -30,6 +31,7 @@ vi.mock("./shared-client.js", () => ({
 }));
 
 const {
+  CodexAppServerScopedRequestRejectedError,
   readCodexAppServerUsage,
   requestCodexAppServerClientJson,
   requestCodexAppServerJson,
@@ -445,7 +447,11 @@ describe("requestCodexAppServerJson sandbox guard", () => {
           throw cause;
         },
       }),
-    ).rejects.toMatchObject({ name: "CodexAppServerScopedRequestRejectedError", cause });
+    ).rejects.toMatchObject({
+      name: "CodexAppServerScopedRequestRejectedError",
+      cause,
+      stack: expect.stringContaining("\n    at "),
+    });
     expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
       phase: "prepare",
       category: "scoped-rejection",
@@ -859,6 +865,49 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
+  it("omits cleanup stacks without suppressing abort-listener diagnostics", async () => {
+    const stackTraceLimit = Error.stackTraceLimit;
+    const reasons: unknown[] = [];
+    const listenerErrors: Error[] = [];
+    const listenerStackLimits: number[] = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockImplementation(
+      async ({ abandonSignal }: { abandonSignal: AbortSignal }) => {
+        abandonSignal.addEventListener("abort", () => {
+          reasons.push(abandonSignal.reason);
+          listenerStackLimits.push(Error.stackTraceLimit);
+          listenerErrors.push(new Error("abort listener diagnostic"));
+        });
+        return { request: async () => ({ data: [] }) };
+      },
+    );
+
+    try {
+      Error.stackTraceLimit = 10;
+      for (let i = 0; i < 2; i += 1) {
+        await expect(
+          requestCodexAppServerJson({ method: "model/list", requestParams: {} }),
+        ).resolves.toEqual({ data: [] });
+      }
+      expect(reasons).toHaveLength(2);
+      expect(reasons[0]).not.toBe(reasons[1]);
+      for (const reason of reasons) {
+        expect(reason).toBeInstanceOf(CodexAppServerScopedRequestRejectedError);
+        expect(isNativeError(reason)).toBe(true);
+        expect(reason).toMatchObject({
+          message: "codex app-server model/list timed out",
+          stack: "CodexAppServerScopedRequestRejectedError: codex app-server model/list timed out",
+        });
+      }
+      expect(listenerStackLimits).toEqual([10, 10]);
+      for (const error of listenerErrors) {
+        expect(error.stack).toContain("\n    at ");
+      }
+      expect(Error.stackTraceLimit).toBe(10);
+    } finally {
+      Error.stackTraceLimit = stackTraceLimit;
+    }
+  });
+
   it("does not request another model page after the shared deadline", async () => {
     vi.useFakeTimers();
     const page = createDeferred<{ data: never[]; nextCursor: string }>();
@@ -965,7 +1014,10 @@ describe("requestCodexAppServerJson sandbox guard", () => {
           vi.setSystemTime(Date.now() + wallJumpMs);
           return { rateLimitsByLimitId: { codex: { limitId: "codex" } } };
         }
-        return { account: { email: "codex-account@example.com" } };
+        return {
+          account: { type: "chatgpt", email: "codex-account@example.com", planType: "pro" },
+          requiresOpenaiAuth: true,
+        };
       });
       const closeAndWait = vi.fn(async () => undefined);
       sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue({

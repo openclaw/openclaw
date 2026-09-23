@@ -23,7 +23,8 @@ export function captureSessionEntryRead(
             sessionId: selected.row.current_session_id,
             updatedAt: selected.row.updated_at,
             lifecycleRevision: selected.entry.lifecycleRevision,
-            digest: sha256Hex(JSON.stringify(selected.entry)),
+            // Read acknowledgments do not change metadata or session authority.
+            digest: sha256Hex(JSON.stringify({ ...selected.entry, lastReadAt: undefined })),
           }
         : undefined;
     });

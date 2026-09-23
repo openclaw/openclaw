@@ -14,8 +14,9 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createAcpTaskBackingDetail } from "../tasks/task-backing-records.js";
+import { createRunningTaskRunCoreWithReceiptAsync } from "../tasks/task-executor-create.async.js";
+import { readResidentTaskFlow } from "../tasks/task-flow-registry.js";
 import { upsertTaskFlowRegistryRecordToSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
-import { configureTaskFlowRegistryRuntime } from "../tasks/task-flow-registry.store.test-support.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
   deleteTaskFlowRecordById,
@@ -24,11 +25,14 @@ import {
 import {
   cancelTaskById,
   createTaskRecord,
-  deleteTaskRecordById,
   findTaskByRunId,
   getTaskById,
   listTaskRecords,
 } from "../tasks/task-registry.js";
+import {
+  configureTaskRegistryRuntime,
+  getTaskRegistryStore,
+} from "../tasks/task-registry.store.js";
 import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
@@ -77,17 +81,16 @@ function flow(flowId: string, overrides: Partial<TaskFlowRecord> = {}): TaskFlow
   };
 }
 
-function holdFlowWorkerReply(target: "flows.current" | "flows.updateManaged") {
-  const held = createDeferredCore();
-  const release = createDeferredCore();
+function observeTaskWorkerReplies(observe: (type: PropertyKey) => Promise<void> | undefined) {
   const original = workerStore.runSqliteWorkerStoreOperation;
-  let paused = false;
   vi.spyOn(workerStore, "runSqliteWorkerStoreOperation").mockImplementation(
     <Operations extends SqliteWorkerOperations, T>(
       store: SqliteWorkerStore<Operations>,
       operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
       stateContext?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[2],
       assertCurrent?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[3],
+      createAdmission?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[4],
+      requireStateLifecycle?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[5],
     ) =>
       original(
         store,
@@ -95,18 +98,33 @@ function holdFlowWorkerReply(target: "flows.current" | "flows.updateManaged") {
           operation({
             execute: async (command, options) => {
               const result = await scope.execute(command, options);
-              if (!paused && command.type === target) {
-                paused = true;
-                held.resolve();
-                await release.promise;
+              const pending = observe(command.type);
+              if (pending) {
+                await pending;
               }
               return result;
             },
           }),
         stateContext,
         assertCurrent,
+        createAdmission,
+        requireStateLifecycle,
       ),
   );
+}
+
+function holdFlowWorkerReply(target: "flows.current" | "flows.updateManaged") {
+  const held = createDeferredCore();
+  const release = createDeferredCore();
+  let paused = false;
+  observeTaskWorkerReplies((type) => {
+    if (!paused && type === target) {
+      paused = true;
+      held.resolve();
+      return release.promise;
+    }
+    return undefined;
+  });
   return { held, release };
 }
 
@@ -122,6 +140,180 @@ afterEach(async () => {
 });
 
 describe("registered task flow reconciliation", () => {
+  it("settles active task fanout through the registered worker without host task or flow writes", async () => {
+    installRuntimeTaskDeliveryMock();
+    const create = (description: string, childSessionKey = ownerKey) => {
+      const parentFlowId = crypto.randomUUID();
+      upsertTaskFlowRegistryRecordToSqlite(
+        flow(parentFlowId, { syncMode: "task_mirrored", controllerId: undefined }),
+      );
+      return createRunningTaskRunCoreWithReceiptAsync({
+        parentFlowId,
+        runtime: "cli",
+        ownerKey,
+        scopeKind: "session",
+        childSessionKey,
+        runId: "active-worker-run",
+        task: description,
+        notifyPolicy: "silent",
+        deliveryStatus: "not_applicable",
+      });
+    };
+    const first = await create("First active task");
+    const second = await create("Second active task");
+    const other = await create("Other active task", "agent:main:other-child");
+    if (!first || !second || !other || !first.task.parentFlowId || !second.task.parentFlowId) {
+      throw new Error("Expected task and flow receipts");
+    }
+    const { db } = openOpenClawStateDatabase();
+    const sql = getNodeSqliteKysely<DB>(db);
+    const tracker = trackSqliteStatementExecutions(db, ["task", "flow"] as const, (statement) => {
+      if (!/\b(?:insert|update|delete)\b/i.test(statement)) {
+        return null;
+      }
+      if (/\b(?:task_runs|task_delivery_state)\b/i.test(statement)) {
+        return "task";
+      }
+      return /\bflow_runs\b/i.test(statement) ? "flow" : null;
+    });
+    const commands: PropertyKey[] = [];
+    observeTaskWorkerReplies((type) => {
+      commands.push(type);
+    });
+    try {
+      await first.finalizeActive({ status: "succeeded", endedAt: Date.now() }, () => true);
+      const stored = executeSqliteQuerySync(
+        db,
+        sql
+          .selectFrom("task_runs")
+          .select(["task_id", "status"])
+          .where("task_id", "in", [first.task.taskId, second.task.taskId, other.task.taskId]),
+      ).rows;
+      expect(new Map(stored.map((row) => [row.task_id, row.status]))).toEqual(
+        new Map([
+          [first.task.taskId, "succeeded"],
+          [second.task.taskId, "succeeded"],
+          [other.task.taskId, "running"],
+        ]),
+      );
+      const flows = executeSqliteQuerySync(
+        db,
+        sql
+          .selectFrom("flow_runs")
+          .select("status")
+          .where("flow_id", "in", [first.task.parentFlowId, second.task.parentFlowId]),
+      ).rows;
+      expect(flows.map((row) => row.status)).toEqual(["succeeded", "succeeded"]);
+      expect(commands.filter((type) => type === "tasks.finalizeActive")).toHaveLength(2);
+      expect(tracker.counts).toEqual({ task: 0, flow: 0 });
+    } finally {
+      tracker.restore();
+    }
+  });
+
+  it("publishes only the managed child whose worker receipt has been acknowledged", async () => {
+    installRuntimeTaskDeliveryMock();
+    upsertTaskFlowRegistryRecordToSqlite(flow("publication-flow"));
+    const managed = createPluginRuntime().tasks.async.managedFlows.bindSession({
+      sessionKey: ownerKey,
+    });
+    const events: Array<{ taskId: string; task: string }> = [];
+    configureTaskRegistryRuntime({
+      observers: {
+        onEvent(event) {
+          if (event.kind === "upserted") {
+            events.push({ taskId: event.task.taskId, task: event.task.task });
+          }
+        },
+      },
+    });
+    const firstRead = createDeferredCore();
+    const releaseFirstRead = createDeferredCore();
+    const secondReceipt = createDeferredCore();
+    const releaseSecondReceipt = createDeferredCore();
+    let mutations = 0;
+    let readHeld = false;
+    const taskStore = getTaskRegistryStore();
+    const read = taskStore.loadMutationSnapshotAsync.bind(taskStore);
+    vi.spyOn(taskStore, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
+      const snapshot = await read(...args);
+      if (!readHeld) {
+        readHeld = true;
+        firstRead.resolve();
+        await releaseFirstRead.promise;
+      }
+      return snapshot;
+    });
+    observeTaskWorkerReplies((type) => {
+      if (type === "flows.runTask" && ++mutations === 2) {
+        secondReceipt.resolve();
+        return releaseSecondReceipt.promise;
+      }
+      return undefined;
+    });
+    const common = {
+      flowId: "publication-flow",
+      runtime: "cli" as const,
+      childSessionKey: "agent:main:publication-child",
+      deliveryStatus: "not_applicable" as const,
+      notifyPolicy: "silent" as const,
+    };
+    const pending: Promise<unknown>[] = [];
+    try {
+      const first = managed.runTask({ ...common, runId: "publication-a", task: "First child" });
+      pending.push(first);
+      await firstRead.promise;
+      const second = managed.runTask({ ...common, runId: "publication-b", task: "Second child" });
+      pending.push(second);
+      await secondReceipt.promise;
+      releaseFirstRead.resolve();
+      const firstResult = await first;
+      if (!firstResult.created) {
+        throw new Error("Expected the first managed child");
+      }
+      expect(events).toEqual([{ taskId: firstResult.task.taskId, task: "First child" }]);
+      releaseSecondReceipt.resolve();
+      const secondResult = await second;
+      if (!secondResult.created) {
+        throw new Error("Expected the second managed child");
+      }
+      const secondTaskId = secondResult.task.taskId;
+      expect(events).toEqual([
+        { taskId: firstResult.task.taskId, task: "First child" },
+        { taskId: secondTaskId, task: "Second child" },
+      ]);
+      events.length = 0;
+      const reused = await managed.runTask({
+        ...common,
+        runId: "publication-b",
+        task: "Second child",
+      });
+      if (!reused.created) {
+        throw new Error("Expected the existing managed child");
+      }
+      expect(reused.task.taskId).toBe(secondTaskId);
+      expect(events).toEqual([]);
+      const updated = await managed.runTask({
+        ...common,
+        runId: "publication-b",
+        task: "Second child",
+        sourceId: "publication-source",
+      });
+      if (!updated.created) {
+        throw new Error("Expected the updated managed child");
+      }
+      expect(updated.task.taskId).toBe(secondTaskId);
+      expect(events).toEqual([{ taskId: secondTaskId, task: "Second child" }]);
+      expect(getTaskById(secondTaskId)).toMatchObject({
+        sourceId: "publication-source",
+      });
+    } finally {
+      releaseFirstRead.resolve();
+      releaseSecondReceipt.resolve();
+      await Promise.allSettled(pending);
+    }
+  });
+
   it.each([4, 16])(
     "keeps ACP creation and managed authority current across %s generations during a worker write",
     async (generations) => {
@@ -336,87 +528,6 @@ describe("registered task flow reconciliation", () => {
     },
   );
 
-  it.each(["remove selected", "append candidate"] as const)(
-    "preserves ACP generation history when restored observers %s",
-    async (change) => {
-      const childSessionKey = "agent:main:restore-child";
-      for (const [id, generation, createdAt] of [
-        ["selected", 100, 1],
-        ["retained", 1, 2],
-      ] as const) {
-        upsertTaskFlowRegistryRecordToSqlite(flow(id, { syncMode: "task_mirrored" }));
-        upsertTaskWithDeliveryStateToSqlite({
-          task: task(id, {
-            childSessionKey,
-            parentFlowId: id,
-            createdAt,
-            detail: createAcpTaskBackingDetail(id, generation),
-          }),
-        });
-      }
-      upsertTaskFlowRegistryRecordToSqlite(flow("appended", { syncMode: "task_mirrored" }));
-      let observed = false;
-      let removed = false;
-      let appended: TaskRecord | null = null;
-      configureTaskFlowRegistryRuntime({
-        observers: {
-          onEvent: (event) => {
-            if (event.kind !== "restored" || observed) {
-              return;
-            }
-            observed = true;
-            if (change === "remove selected") {
-              removed = deleteTaskRecordById("selected");
-            } else {
-              appended = createTaskRecord({
-                runtime: "acp",
-                ownerKey,
-                scopeKind: "session",
-                childSessionKey,
-                parentFlowId: "appended",
-                runId: "appended-run",
-                task: "Appended during restore",
-                status: "running",
-                deliveryStatus: "not_applicable",
-                detail: createAcpTaskBackingDetail("appended", 200),
-              });
-            }
-          },
-        },
-      });
-      const created = createBackgroundTaskRecord(
-        {
-          agentId: "main",
-          requesterAgentId: "main",
-          requesterSessionKey: ownerKey,
-          childSessionKey,
-          runId: "after-restore",
-          task: "Register after reentrant restore",
-        },
-        3_000,
-        "after-restore-instance",
-      );
-      expect(observed).toBe(true);
-      if (change === "remove selected") {
-        expect(removed).toBe(true);
-        expect(getTaskById("selected")).toBeUndefined();
-      } else {
-        expect(appended).toMatchObject({ detail: { generation: 200 } });
-      }
-      if (!created) {
-        throw new Error("Expected ACP creation after reentrant flow restore");
-      }
-      const expectedGeneration = change === "remove selected" ? 101 : 201;
-      expect(getTaskById(created.taskId)).toMatchObject({
-        detail: { instanceId: "after-restore-instance", generation: expectedGeneration },
-      });
-      await closeOpenClawStateDatabaseAsync();
-      expect(getTaskById(created.taskId)).toMatchObject({
-        detail: { instanceId: "after-restore-instance", generation: expectedGeneration },
-      });
-    },
-  );
-
   it.each(["read", "lookup", "update", "delete", "refresh"] as const)(
     "does not overwrite a synchronous %s with a delayed worker observation",
     async (intervening) => {
@@ -516,8 +627,6 @@ describe("registered task flow reconciliation", () => {
       const { held, release } = holdFlowWorkerReply(
         intervening === "refresh" ? "flows.current" : "flows.updateManaged",
       );
-      const onEvent = vi.fn();
-      configureTaskFlowRegistryRuntime({ observers: { onEvent } });
       const pending = managed.finish({ flowId: created.flowId, expectedRevision: 0, endedAt: 100 });
       try {
         await held.promise;
@@ -527,14 +636,7 @@ describe("registered task flow reconciliation", () => {
         if (intervening === "lookup") {
           measureLookup("pending", "lookup-run", "lookup-0-16");
           measureLookup("pending-no-eligible", "ineligible-run", "ineligible");
-          const { db } = openOpenClawStateDatabase();
-          executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<DB>(db)
-              .updateTable("flow_runs")
-              .set({ sync_mode: "managed" })
-              .where("flow_id", "=", "lookup-0-16"),
-          );
+          expect(deleteTaskFlowRecordById("lookup-0-16")).toBe(true);
           measureLookup("pending-fresh", "lookup-run", "lookup-0-15");
         } else if (intervening === "update") {
           expect(
@@ -559,31 +661,21 @@ describe("registered task flow reconciliation", () => {
           );
           await reloadTaskFlowRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         }
-        onEvent.mockClear();
         release.resolve();
         expect(await pending).toMatchObject({
           applied: true,
           flow: { revision: 1, status: "succeeded" },
         });
         if (intervening === "delete") {
-          expect(legacy.get(created.flowId)).toBeUndefined();
+          expect(readResidentTaskFlow(created.flowId)).toBeUndefined();
         } else {
           const readOnly = intervening === "read" || intervening === "lookup";
-          expect(legacy.get(created.flowId)).toMatchObject({
+          expect(readResidentTaskFlow(created.flowId)).toMatchObject({
             revision: readOnly ? 1 : 2,
             ...(readOnly || intervening === "update"
               ? { status: readOnly ? "succeeded" : "running" }
               : { goal: "Refreshed canonical flow" }),
           });
-        }
-        if (intervening === "read" || intervening === "lookup") {
-          expect(onEvent).toHaveBeenCalledExactlyOnceWith({
-            kind: "upserted",
-            flow: expect.objectContaining({ revision: 1, status: "succeeded" }),
-            previous: expect.objectContaining({ revision: 0, status: "queued" }),
-          });
-        } else {
-          expect(onEvent).not.toHaveBeenCalled();
         }
         if (intervening === "lookup") {
           measureLookup("settled", "lookup-run", "lookup-0-15");
@@ -593,7 +685,7 @@ describe("registered task flow reconciliation", () => {
           expect(legacy.get(created.flowId)).toEqual(settled);
           console.log("Run lookup flow snapshots", JSON.stringify(lookupReads));
           expect(lookupReads.map(({ count }) => count)).toEqual([0, 0, 1, 0, 1, 0, 1]);
-          expect(lookupReads.map(({ rows }) => rows)).toEqual([0, 0, 35, 0, 35, 0, 35]);
+          expect(lookupReads.map(({ rows }) => rows)).toEqual([0, 0, 1, 0, 1, 0, 34]);
           expect(
             lookupReads.filter(({ count }) => count > 0).every(({ textBytes }) => textBytes > 0),
           ).toBe(true);

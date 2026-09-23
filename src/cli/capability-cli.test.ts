@@ -206,7 +206,7 @@ const mocks = vi.hoisted(() => ({
         : {}),
     }),
   ),
-  getProviderEnvVars: vi.fn((providerId: string) => [
+  getProviderEnvVarsCore: vi.fn((providerId: string) => [
     `${providerId.toUpperCase().replaceAll("-", "_")}_API_KEY`,
   ]),
   embedBatch: vi.fn(async (inputs: unknown[], options?: { inputType?: string }) =>
@@ -292,7 +292,7 @@ vi.mock("../runtime.js", async (importOriginal) => ({
 }));
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
-  getProviderEnvVars: mocks.getProviderEnvVars,
+  getProviderEnvVarsCore: mocks.getProviderEnvVarsCore,
   resolveProviderAuthLookupMaps: () => ({
     aliasMap: {},
     envCandidateMap: {},
@@ -698,7 +698,7 @@ describe("capability cli", () => {
     mocks.getTtsProvider.mockReset().mockReturnValue("openai");
     mocks.listSpeechProviders.mockReset().mockReturnValue([]);
     mocks.resolveExplicitTtsOverrides.mockClear();
-    mocks.getProviderEnvVars
+    mocks.getProviderEnvVarsCore
       .mockReset()
       .mockImplementation((providerId: string) => [
         `${providerId.toUpperCase().replaceAll("-", "_")}_API_KEY`,
@@ -1032,7 +1032,7 @@ describe("capability cli", () => {
     expect(providers).toContainEqual(
       expect.objectContaining({ provider: "openai", configured: true }),
     );
-    expect(mocks.getProviderEnvVars).toHaveBeenCalledWith("openai");
+    expect(mocks.getProviderEnvVarsCore).toHaveBeenCalledWith("openai");
   });
 
   it("scopes provider state and model selection to an explicit agent", async () => {
@@ -4351,7 +4351,7 @@ describe("capability cli", () => {
 
   it("marks env-backed image providers as configured", async () => {
     vi.stubEnv("FAL_KEY", "fal-test-key");
-    mocks.getProviderEnvVars.mockReturnValueOnce(["FAL_KEY"]);
+    mocks.getProviderEnvVarsCore.mockReturnValueOnce(["FAL_KEY"]);
     mocks.listRuntimeImageGenerationProviders.mockReturnValueOnce([
       { id: "fal", label: "fal", defaultModel: "fal-ai/flux", models: [] },
     ] as never);
@@ -4366,7 +4366,7 @@ describe("capability cli", () => {
   it("marks env-backed video generation and description providers as configured", async () => {
     vi.stubEnv("RUNWAYML_API_SECRET", "runway-test-key");
     vi.stubEnv("GEMINI_API_KEY", "gemini-test-key");
-    mocks.getProviderEnvVars.mockImplementation((providerId: string) =>
+    mocks.getProviderEnvVarsCore.mockImplementation((providerId: string) =>
       providerId === "runway" ? ["RUNWAYML_API_SECRET"] : ["GEMINI_API_KEY"],
     );
     mocks.listRuntimeVideoGenerationProviders.mockReturnValueOnce([
@@ -4395,7 +4395,7 @@ describe("capability cli", () => {
 
   it("marks env-backed TTS providers as configured", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-test-key");
-    mocks.getProviderEnvVars.mockReturnValueOnce(["XAI_API_KEY"]);
+    mocks.getProviderEnvVarsCore.mockReturnValueOnce(["XAI_API_KEY"]);
     mocks.listSpeechProviders.mockReturnValueOnce([
       { id: "xai", label: "xAI", models: [], voices: [] },
     ] as never);

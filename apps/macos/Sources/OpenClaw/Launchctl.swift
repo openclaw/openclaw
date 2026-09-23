@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 struct LaunchAgentPlistSnapshot: Equatable {
     let programArguments: [String]
@@ -13,6 +14,23 @@ struct LaunchAgentPlistSnapshot: Equatable {
 }
 
 enum LaunchAgentPlist {
+    static var homeDirectoryURL: URL {
+        #if DEBUG
+        if let testingHomeDirectoryURL { return testingHomeDirectoryURL }
+        #endif
+        return FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    #if DEBUG
+    // UI callbacks can outlive the test task's executor context. TestIsolation
+    // owns this override without redirecting Foundation's process-wide home.
+    private static let testingHomeDirectory = Mutex<URL?>(nil)
+    static var testingHomeDirectoryURL: URL? {
+        get { self.testingHomeDirectory.withLock { $0 } }
+        set { self.testingHomeDirectory.withLock { $0 = newValue } }
+    }
+    #endif
+
     static func snapshot(
         url: URL,
         generatedEnvironmentFileURL: URL? = nil,

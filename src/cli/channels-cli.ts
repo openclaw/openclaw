@@ -207,7 +207,7 @@ export async function registerChannelsCli(
     .description("Show channel status (use openclaw status --deep for a full connection check)")
     .option("--channel <name>", `Only show one channel (${formatCliChannelOptions(["all"])})`)
     .option("--probe", "Probe channel credentials", false)
-    .option("--timeout <ms>", "Timeout in ms", "10000")
+    .option("--timeout <ms>", "Timeout in ms")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runChannelsCommand(async () => {

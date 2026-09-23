@@ -3,7 +3,11 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
 import { readStringParam, withNormalizedTimestamp } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
-import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  DiscordAccountConfig,
+  DiscordActionConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 // Discord plugin module implements runtime.messaging.shared behavior.
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { mergeDiscordAccountConfig, resolveDefaultDiscordAccountId } from "../accounts.js";
@@ -27,6 +31,7 @@ type ConversationReadInvocationOrigin = NonNullable<
 
 export type DiscordMessagingActionOptions = {
   reply?: ChannelMessageActionContext["reply"];
+  progressSnapshot?: ChannelMessageActionContext["progressSnapshot"];
   mediaAccess?: ChannelMessageActionContext["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -45,6 +50,7 @@ export type DiscordMessagingActionContext = {
   params: Record<string, unknown>;
   isActionEnabled: ActionGate<DiscordActionConfig>;
   cfg: OpenClawConfig;
+  accountConfig: DiscordAccountConfig;
   options?: DiscordMessagingActionOptions;
   accountId?: string;
   resolveChannelId: () => string;
@@ -491,6 +497,7 @@ export function createDiscordMessagingActionContext(params: {
     params: params.input,
     isActionEnabled: params.isActionEnabled,
     cfg: params.cfg,
+    accountConfig,
     options: params.options,
     accountId,
     resolveChannelId: () =>

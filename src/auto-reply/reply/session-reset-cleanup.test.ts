@@ -33,9 +33,9 @@ describe("clearSessionResetRuntimeState", () => {
   });
 
   it("clears reset queues and drains system events for normalized keys", () => {
-    enqueueSystemEvent("stale alpha", { sessionKey: "alpha" });
-    enqueueSystemEvent("stale beta", { sessionKey: "beta" });
-    enqueueSystemEvent("fresh gamma", { sessionKey: "gamma" });
+    enqueueSystemEvent("stale alpha", withSystemEventOwner({ sessionKey: "alpha" }, "main"));
+    enqueueSystemEvent("stale beta", withSystemEventOwner({ sessionKey: "beta" }, "main"));
+    enqueueSystemEvent("fresh gamma", withSystemEventOwner({ sessionKey: "gamma" }, "main"));
 
     const result = clearSessionResetRuntimeState([" alpha ", undefined, " ", "alpha", "beta"], {
       agentId: "main",
@@ -43,20 +43,24 @@ describe("clearSessionResetRuntimeState", () => {
 
     expect(result.keys).toEqual(["alpha", "beta"]);
     expect(result.systemEventsCleared).toBe(2);
-    expect(peekSystemEvents("alpha")).toStrictEqual([]);
-    expect(peekSystemEvents("beta")).toStrictEqual([]);
-    expect(peekSystemEvents("gamma")).toEqual(["fresh gamma"]);
+    expect(peekSystemEvents("agent:main:alpha")).toStrictEqual([]);
+    expect(peekSystemEvents("agent:main:beta")).toStrictEqual([]);
+    expect(peekSystemEvents("agent:main:gamma")).toEqual(["fresh gamma"]);
   });
 
   it("preserves events owned by other agents during an agent-scoped reset", () => {
-    enqueueSystemEvent("unowned", { sessionKey: "global" });
+    enqueueSystemEvent("main", withSystemEventOwner({ sessionKey: "global" }, "main"));
     enqueueSystemEvent("alpha", withSystemEventOwner({ sessionKey: "global" }, "alpha"));
     enqueueSystemEvent("beta", withSystemEventOwner({ sessionKey: "global" }, "beta"));
 
-    const result = clearSessionResetRuntimeState(["global"], { agentId: " Alpha " });
+    const result = clearSessionResetRuntimeState(["global", "agent:beta:global"], {
+      agentId: " Alpha ",
+    });
 
-    expect(result.systemEventsCleared).toBe(2);
-    expect(peekSystemEvents("global")).toEqual(["beta"]);
+    expect(result.systemEventsCleared).toBe(1);
+    expect(peekSystemEvents("agent:alpha:global")).toEqual([]);
+    expect(peekSystemEvents("agent:main:global")).toEqual(["main"]);
+    expect(peekSystemEvents("agent:beta:global")).toEqual(["beta"]);
   });
 
   it("releases active reply work owned by the archived reset session id", () => {

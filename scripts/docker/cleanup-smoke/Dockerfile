@@ -19,6 +19,8 @@ COPY node-version.mjs ./
 COPY node-sqlite.mjs ./
 COPY node-runtime-update.mjs ./
 COPY node-runtime-recovery.mjs ./
+COPY cli-root-options.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs ./
+COPY node-host-launcher.mjs ./
 COPY ui/package.json ./ui/package.json
 COPY packages ./packages
 COPY extensions ./extensions
@@ -27,6 +29,7 @@ COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-
 COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs
 COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
 COPY scripts/lib/package-lifecycle-marker.mjs ./scripts/lib/package-lifecycle-marker.mjs
+COPY scripts/lib/fs-safe-prebuild.mjs ./scripts/lib/fs-safe-prebuild.mjs
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
   corepack enable \
   && if ! pnpm install --frozen-lockfile >/tmp/openclaw-cleanup-pnpm-install.log 2>&1; then \

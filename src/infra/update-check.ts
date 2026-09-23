@@ -5,6 +5,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { createGitCommandError, executeGitCommand } from "./git-exec.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
+import { readPackageName } from "./package-json.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import {
   channelToNpmTag,
@@ -17,12 +18,15 @@ import {
   fetchNpmPackageTargetStatus,
   type NpmMetadataCommandRunner,
 } from "./update-check-package-target.js";
+import { resolveGitRepositoryMetadata, type GitTrackingTarget } from "./update-git-metadata.js";
 import { readBuiltRuntimeCommit } from "./update-git-runtime.js";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
+import { createUpdatePreflightFailure } from "./update-preflight-details.js";
 import type { UpdateFetchFailure } from "./update-run-record.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
+import { describeUpdateInstallRoot } from "./update-runner-install-surface.js";
 
 type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 type GitUpdateOptions = {
@@ -40,6 +44,7 @@ type GitUpdateStatus = {
   upstream: string | null;
   upstreamSource?: "tracking" | "receipt";
   upstreamSha?: string | null;
+  repositoryUrl?: string;
   commitAtMs?: number | null;
   dirty: boolean | null;
   ahead: number | null;
@@ -54,12 +59,6 @@ type GitUpdateStatus = {
 export type UpdateInstallIdentity = {
   installKind: "git" | "package" | "unknown";
   git?: Pick<GitUpdateStatus, "branch" | "tag" | "error">;
-};
-
-type GitTrackingTarget = {
-  revision: string;
-  display: string;
-  fetch: "prune" | { remote: string; mergeRef: string };
 };
 
 type DepsStatus = {
@@ -108,7 +107,12 @@ export type UpdateCheckResult = {
   git?: GitUpdateStatus;
   deps?: DepsStatus;
   registry?: RegistryStatus;
-  error?: { status: "unknown" | "failed"; message: string; timeoutMs?: number };
+  error?: {
+    status: "unknown" | "failed";
+    message: string;
+    timeoutMs?: number;
+    code?: "installation-unclassified";
+  };
 };
 
 const PUBLIC_NPM_REGISTRY_URL = "https://registry.npmjs.org/";
@@ -235,7 +239,12 @@ export async function resolveUpdateInstallKind(
     throw createGitCommandError("git rev-parse --show-toplevel", result);
   }
   const gitRoot = result?.code === 0 ? result.stdout.trim() : "";
-  return gitRoot && updateInstallRootsMatch(gitRoot, root) ? "git" : "package";
+  if (gitRoot && updateInstallRootsMatch(gitRoot, root)) {
+    return "git";
+  }
+  const packageName = await readPackageName(root);
+  options.signal?.throwIfAborted();
+  return packageName === PUBLIC_NPM_PACKAGE_NAME ? "package" : "unknown";
 }
 
 /** Read the install and local Git identity needed to select an update channel. */
@@ -419,6 +428,7 @@ async function checkGitUpdateStatus(params: {
     upstream,
     ...(upstreamSource ? { upstreamSource } : {}),
     upstreamSha: upstreamCommit,
+    ...(await resolveGitRepositoryMetadata(readGit, tracking, branch)),
     commitAtMs,
     dirty,
     ahead: parsed ? Number(parsed[1]) : null,
@@ -664,6 +674,19 @@ export async function checkUpdateStatus(params: {
     onGitProbeTimeout: params.onGitProbeTimeout,
   });
   const isGit = installKind === "git";
+  if (installKind === "unknown") {
+    const failure = createUpdatePreflightFailure(
+      "installation-unclassified",
+      `${await describeUpdateInstallRoot(root)} Service unit target: not inspected by update status installation checks; run openclaw gateway status --deep.`,
+    );
+    params.signal?.throwIfAborted();
+    return {
+      root,
+      installKind,
+      packageManager: "unknown",
+      error: { status: "unknown", code: "installation-unclassified", message: failure.message },
+    };
+  }
   const packageManager = isGit
     ? await detectPackageManager(root)
     : ((await detectGlobalInstallManagerForRoot(

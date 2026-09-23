@@ -15,13 +15,45 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Split Dashboard face" });
 suite.define(() => {
   it.each([
-    { action: "focus", sourceFace: "dashboard", targetFace: "chat", legacy: false },
-    { action: "close", sourceFace: "dashboard", targetFace: "chat", legacy: false },
-    { action: "focus", sourceFace: "chat", targetFace: "dashboard", legacy: false },
-    { action: "focus", sourceFace: "dashboard", targetFace: "chat", legacy: true },
+    {
+      action: "focus",
+      sourceFace: "dashboard",
+      targetFace: "chat",
+      legacy: false,
+      revisitChat: false,
+    },
+    {
+      action: "close",
+      sourceFace: "dashboard",
+      targetFace: "chat",
+      legacy: false,
+      revisitChat: false,
+    },
+    {
+      action: "focus",
+      sourceFace: "chat",
+      targetFace: "dashboard",
+      legacy: false,
+      revisitChat: false,
+    },
+    {
+      action: "focus",
+      sourceFace: "dashboard",
+      targetFace: "chat",
+      legacy: true,
+      revisitChat: false,
+    },
+    {
+      action: "focus",
+      sourceFace: "chat",
+      targetFace: "dashboard",
+      legacy: false,
+      revisitChat: true,
+    },
   ] as const)(
-    "uses $targetFace after $action (saved layout: $legacy)",
-    async ({ action, sourceFace, targetFace, legacy }) => {
+    "opens shared $targetFace after $action while keeping local intent (saved layout: $legacy, explicit Chat: $revisitChat)",
+    async ({ action, sourceFace, targetFace, legacy, revisitChat }) => {
+      const expectedFace = legacy ? "dashboard" : revisitChat ? "chat" : targetFace;
       await suite.withPage({ viewport: { width: 2400, height: 1000 } }, async ({ page }) => {
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));
@@ -42,7 +74,7 @@ suite.define(() => {
           },
         ] satisfies [GatewaySessionRow, GatewaySessionRow];
         await page.addInitScript(
-          ({ storageKey, sessions, savedLayout }) => {
+          ({ storageKey, sessions, savedLayout, revisitChat: startOnTarget }) => {
             localStorage.setItem(
               storageKey,
               JSON.stringify({
@@ -67,7 +99,7 @@ suite.define(() => {
                     }
                   : {}),
                 chatSplitLayout: {
-                  activePaneId: "p1",
+                  activePaneId: startOnTarget ? "p2" : "p1",
                   columnWeights: [0.5, 0.5],
                   columns: sessions.map((row, index) => ({
                     id: `c${index + 1}`,
@@ -82,6 +114,7 @@ suite.define(() => {
             storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
             sessions: rows,
             savedLayout: legacy,
+            revisitChat,
           },
         );
         const gateway = await installMockGateway(page, {
@@ -117,7 +150,9 @@ suite.define(() => {
             ]),
           ),
         });
-        await page.goto(`${suite.server.baseUrl}${sourceFace}/main/face-alpha`);
+        await page.goto(
+          `${suite.server.baseUrl}${revisitChat ? "chat/main/face-beta" : `${sourceFace}/main/face-alpha`}`,
+        );
         const panes = page.locator('openclaw-chat-page openclaw-chat-pane[aria-hidden="false"]');
         const alpha = panes.filter({ hasText: "Conversation Alpha" });
         const beta = panes.filter({ hasText: "Conversation Beta" });
@@ -146,6 +181,10 @@ suite.define(() => {
         });
         const before = await observe();
         await page.screenshot({ path: path.join(suite.artifactDir, "before.png") });
+        if (revisitChat) {
+          await alpha.locator(".chat-pane__header").click();
+          await page.waitForURL((url) => url.pathname === "/chat/main/face-alpha");
+        }
         if (action === "focus") {
           await beta.locator(".chat-pane__header").click();
         } else {
@@ -155,31 +194,31 @@ suite.define(() => {
         await expect
           .poll(() => beta.getAttribute("class"))
           .toContain("chat-pane-cache__pane--active");
-        await page.evaluate(
-          () =>
-            new Promise<void>((resolve) => {
-              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-            }),
-        );
+        await expect
+          .poll(async () => ({
+            pathname: new URL(page.url()).pathname,
+            dashboard: await dashboard(beta).count(),
+          }))
+          .toEqual({
+            pathname: `/${expectedFace}/main/face-beta`,
+            dashboard: expectedFace === "dashboard" ? 1 : 0,
+          });
         const after = await observe();
         await page.screenshot({ path: path.join(suite.artifactDir, "after.png") });
         await writeFile(
           path.join(suite.artifactDir, "observations.json"),
-          JSON.stringify({ action, sourceFace, targetFace, legacy, before, after }, null, 2),
+          JSON.stringify(
+            { action, sourceFace, targetFace, legacy, revisitChat, before, after },
+            null,
+            2,
+          ),
         );
         expect(after.errors).toEqual([]);
         expect(after.sends).toEqual([]);
         expect(after.betaDraft).toBe(before.betaDraft);
-        expect(after.betaDashboard).toBe(targetFace === "dashboard" || legacy ? 1 : 0);
-        expect(new URL(after.url).pathname).toBe(`/${targetFace}/main/face-beta`);
-        expect(after.patches).not.toContainEqual(
-          expect.objectContaining({
-            params: expect.objectContaining({
-              key: rows[1].key,
-              boardFace: targetFace === "chat" ? "dashboard" : "chat",
-            }),
-          }),
-        );
+        expect(after.betaDashboard).toBe(expectedFace === "dashboard" ? 1 : 0);
+        expect(new URL(after.url).pathname).toBe(`/${expectedFace}/main/face-beta`);
+        expect(after.patches).toEqual([]);
       });
     },
   );

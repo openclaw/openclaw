@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -176,46 +177,6 @@ function resolveThreadedSourceTarget(
   );
 }
 
-function hasExplicitDeliveryFailure(payload: unknown, depth = 0): boolean {
-  if (!payload || typeof payload !== "object" || depth > 4) {
-    return false;
-  }
-  if (Array.isArray(payload)) {
-    return payload.some((value) => hasExplicitDeliveryFailure(value, depth + 1));
-  }
-  const record = payload as Record<string, unknown>;
-  if (record.ok === false || record.delivered === false || record.dryRun === true) {
-    return true;
-  }
-  const messageId = normalizeOptionalLowercaseString(record.messageId);
-  if (messageId === "skipped" || messageId === "suppressed") {
-    return true;
-  }
-  const status = normalizeOptionalLowercaseString(record.status);
-  if (
-    status === "failed" ||
-    status === "error" ||
-    status === "skipped" ||
-    status === "suppressed" ||
-    status === "dry_run"
-  ) {
-    return true;
-  }
-  const deliveryStatus = normalizeOptionalLowercaseString(record.deliveryStatus);
-  if (
-    deliveryStatus === "failed" ||
-    deliveryStatus === "error" ||
-    deliveryStatus === "skipped" ||
-    deliveryStatus === "suppressed" ||
-    deliveryStatus === "dry_run"
-  ) {
-    return true;
-  }
-  return ["details", "payload", "result", "results", "sendResult", "toolResult"].some((key) =>
-    hasExplicitDeliveryFailure(record[key], depth + 1),
-  );
-}
-
 function resolveCurrentSourceTurnId(
   toolContext: InternalChannelThreadingToolContext | undefined,
 ): string | undefined {
@@ -291,7 +252,8 @@ export async function reconcileTerminalSourceReplyDelivery(params: {
   if (!params.receipt) {
     return "not-applicable";
   }
-  if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
+  const deliveryFact = projectPluginMessageDeliveryFact(params.deliveredPayload);
+  if (deliveryFact && deliveryFact.status !== "settled") {
     if (params.preservePendingOnExplicitFailure) {
       return "pending";
     }
@@ -489,7 +451,8 @@ function resolveDeliveredCurrentSourceReply(
   params: SourceReplyTranscriptMirrorParams,
   allowAsync: boolean,
 ): SourceReplyMatch {
-  if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
+  const deliveryFact = projectPluginMessageDeliveryFact(params.deliveredPayload);
+  if (deliveryFact && deliveryFact.status !== "settled") {
     return false;
   }
   switch (params.action.trim().toLowerCase()) {
@@ -565,7 +528,8 @@ function isDeliveredCurrentSourceReplyAction(params: SourceReplyTranscriptMirror
 export async function mirrorDeliveredSourceReplyToTranscript(
   params: SourceReplyTranscriptMirrorParams,
 ): Promise<boolean> {
-  if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
+  const deliveryFact = projectPluginMessageDeliveryFact(params.deliveredPayload);
+  if (deliveryFact && (deliveryFact.status !== "settled" || deliveryFact.partialDelivery)) {
     return false;
   }
   const threadPlacement = resolveSourceReplyThreadPlacement(

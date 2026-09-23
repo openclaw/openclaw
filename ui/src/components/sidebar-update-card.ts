@@ -15,12 +15,17 @@ import {
   isUpdateActionable,
 } from "../app/update-schedule-projection.ts";
 import { t } from "../i18n/index.ts";
+import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { PollController } from "../lit/poll-controller.ts";
 import "../styles/sidebar-update-card.css";
 import { icons } from "./icons.ts";
 import { isUpdateRunAttentionVisible } from "./sidebar-attention-update.ts";
+import { renderSidebarNotificationCard } from "./sidebar-notification-card.ts";
 import "./tooltip.ts";
+import { renderUpdateGitRevisions } from "./update-git-revisions.ts";
+
+registerSidebarAttentionEnglish();
 
 class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) compact = false;
@@ -192,6 +197,10 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       return {
         title: view.headline,
         detail: view.compactLabel,
+        timestampMs:
+          this.updateRun.status === "running"
+            ? this.updateRun.createdAtMs
+            : this.updateRun.finishedAtMs,
         icon:
           this.updateRun.status === "running"
             ? icons.refresh
@@ -213,6 +222,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     const blocked = statusBanner && statusBanner.tone !== "info";
     const blockedReason = statusBanner?.text.trim() || t("updates.sidebar.blockedSummary");
     return {
+      timestampMs: campaign?.announcedAtMs,
       detail: blocked
         ? campaign?.state === "waiting-for-idle" && targetLabel
           ? t("updates.sidebar.blockedWaiting", { target: targetLabel })
@@ -241,44 +251,12 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     if (!summary) {
       return nothing;
     }
-    return html`<details
-      class="sidebar-issues-panel__details sidebar-issues-panel__details--${summary.severity}"
-    >
-      <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
-        <span
-          class="sidebar-issues-panel__icon ${
-            summary.critical ? "sidebar-issues-panel__icon--critical" : ""
-          }"
-          aria-hidden="true"
-          >${summary.icon}</span
-        >
-        <span class="sidebar-issues-panel__content">
-          <span class="sidebar-issues-panel__entity" title=${summary.title}>${summary.title}</span>
-          <span class="sidebar-issues-panel__state" title=${summary.detail}>${summary.detail}</span>
-        </span>
-        ${
-          this.onDismiss
-            ? html`<button
-                type="button"
-                class="sidebar-issues-panel__dismiss"
-                aria-label=${t("attention.dismissItem", { item: summary.title })}
-                title=${t("attention.dismissItem", { item: summary.title })}
-                @click=${(event: Event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  this.onDismiss?.();
-                }}
-              >
-                ${icons.x}
-              </button>`
-            : nothing
-        }
-        <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
-      </summary>
-      <div class="sidebar-issues-panel__body sidebar-update-issue__body">
-        ${this.renderCompactDetails()}
-      </div>
-    </details>`;
+    return renderSidebarNotificationCard({
+      ...summary,
+      onDismiss: this.onDismiss,
+      body: this.renderCompactDetails(),
+      bodyClass: "sidebar-update-issue__body",
+    });
   }
 
   private renderCompactDetails() {
@@ -485,6 +463,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
               </button>`
             : nothing
         }
+        ${actionable && !busy ? renderUpdateGitRevisions(this.updateSchedule, this.updateAvailable) : nothing}
       </div>
     `;
   }

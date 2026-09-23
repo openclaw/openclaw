@@ -58,7 +58,7 @@ it.each(["background", "capture"] as const)(
       recordAgentDatabaseAdmissions([refusal], { source: "startup" });
       const projection = await createSessionRowProjection({ cfg });
       try {
-        expect(projection.select()).toEqual([]);
+        expect(projection.selectEntries()).toEqual([]);
         await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {
           sessionChanges.emit({ all: true, scope: "config" });
           if (read === "capture") {

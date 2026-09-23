@@ -332,7 +332,7 @@ describe("secrets runtime provider and media surfaces", () => {
       refreshActiveProviderAuthRuntimeSnapshot,
     } = await import("./runtime.js");
     const { registerProviderAuthRuntimeSnapshotActivationOwner } =
-      await import("./runtime-provider-auth-activation.js");
+      await import("./runtime-state.js");
     const { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
       await import("../config/runtime-snapshot.js");
     activateSecretsRuntimeSnapshot(initial);

@@ -424,7 +424,7 @@ Open **Home** from the sidebar's **Pages** menu to chat, or select an existing s
 - Queued message controls: **Delete** removes the local queued copy, including when a reconnect refresh is still finishing. It does not undo a message already accepted by the Gateway; use **Stop** to cancel an active turn.
 - Durable sending: every send (text, picked images, and voice notes) is journaled to a per-gateway on-device outbox before any network attempt, so app termination cannot lose submitted input. Sends queued while offline deliver in order on reconnect with stable idempotency keys, and a send is retired only after the turn is visible in canonical `chat.history` — an acknowledgement alone is not treated as proof of delivery. Acknowledged reconnect sends show the same streaming progress as online sends; requests that never reach the socket queue remain queued for the next connection. Ambiguous outcomes (lost acknowledgement, app killed mid-send, Gateway restart before the transcript write) surface as visible rows with explicit **Retry**/**Delete** instead of auto-resending. If refreshed history changes branches, earlier queued input keeps its text and attachments but requires explicit retry; input admitted after that history is displayed can send normally when reconnecting to the same branch. Slash commands never auto-replay across a reconnect; they park for explicit retry. The queue is bounded (50 messages and 48 MB of attachment bytes per Gateway) and unsent rows expire after 48 hours. Composer drafts that were never submitted are not process-durable.
 - Completed answers show up to eight compact source cards for cited pages found in that run’s successful web searches and fetches. Tap a card to read its recorded search snippet or page excerpt and open the source. The cards do not fetch page content; favicons come through the Gateway and honor `gateway.controlUi.automaticallyFetchFavicons`, with a globe when disabled or unavailable.
-- Image input works through the picker and Android Sharesheet. Assistant-generated images resolve through the paired Gateway connection, render inline with a full-screen preview, and retain only their small artifact references in the offline transcript cache. Downloads are capped at 12 MiB and decoded to bounded display bitmaps.
+- Image input works through the picker and Android Sharesheet. Sent photos sit above your text bubble; adjacent photos wrap into compact rows. Assistant photos stay beside their associated text in message order. Tap a photo for the full-screen preview. Messages display at most four image previews at once; **Next images** and **Previous images** reach the rest without keeping every decoded image in memory. Assistant-generated images resolve through the paired Gateway connection and retain only their small artifact references in the offline transcript cache. Downloads are capped at 12 MiB and decoded to bounded display bitmaps.
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
 - Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via Gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the Gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
 
@@ -437,15 +437,22 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 - Navigate through the sidebar's **Pages** menu. Voice input belongs to the Chat
   composer; there is no separate Voice tab.
 - Tap the composer microphone for on-device speech recognition that inserts a
-  transcript into the draft. Long-press the microphone to record a voice-note
-  attachment. The UI reports unavailable recognition, missing permission,
+  transcript into the draft. While listening, a Stop icon replaces the microphone;
+  tap it to finish listening. While starting or transcribing, a Close icon cancels
+  that attempt. Long-press the microphone to open **Voice options**,
+  then choose **Record voice note** to create an attachment. The UI reports
+  unavailable recognition, missing permission,
   busy/network failures, and no-speech outcomes instead of silently dropping
   the attempt. If dictation is unavailable and a Gateway is selected,
   **Record voice note** offers a new recording while keeping the draft. It does
   not recover speech from the failed dictation attempt or send anything
   automatically.
-- Start continuous **Talk** from the Chat waveform. Dictation, voice-note
-  recording, and Talk are mutually exclusive microphone paths.
+- To start continuous **Talk**, long-press the microphone and choose **Start Talk**.
+  Dictation, voice-note recording, and Talk are mutually exclusive microphone paths.
+- Your selected agent stays bound to Talk and the main chat when the same Gateway
+  reconnects, including while its agent list refreshes. Removing that agent falls
+  back to the Gateway default. Switching Gateways or restarting the app clears
+  this in-memory choice.
 - Talk Mode promotes the existing foreground service from `connectedDevice` to `connectedDevice|microphone` before capture starts, then demotes it when Talk Mode stops. The node service declares `FOREGROUND_SERVICE_CONNECTED_DEVICE` with `CHANGE_NETWORK_STATE`; Android 14+ also requires the `FOREGROUND_SERVICE_MICROPHONE` declaration, the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.
 - By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured Gateway Talk provider. It inherits the session's thinking setting. Local system TTS is used only when `talk.speak` is unavailable.
 - Gateway config changes refresh Android's cached Talk settings on the next use, without reconnecting or interrupting an active capture.

@@ -1,12 +1,11 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import type { ConfigFileSnapshot } from "../config/config.js";
+import type {
+  ConfigFileSnapshot,
+  ReadConfigFileSnapshotWithPluginMetadataResult,
+} from "../config/config.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
-import {
-  assertDeferredPluginMigrationConfigEditAllowed,
-  getDeferredPluginMigrationConfigFacts,
-} from "../config/deferred-plugin-migration-config.js";
-import { visitConfigValueTree } from "../config/io.read-helpers.js";
+import { assertDeferredPluginMigrationConfigEditAllowed } from "../config/deferred-plugin-migration-config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
@@ -22,6 +21,7 @@ import {
   collectUnsupportedSecretRefPolicyIssues,
   validateConfigObjectRawWithPlugins,
 } from "../config/validation.js";
+import { visitConfigValueTree } from "../config/value-tree.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -87,21 +87,20 @@ export async function loadValidConfigForWrite(runtime: RuntimeEnv = defaultRunti
 
 export { formatInvalidConfigRepairHint };
 
-export async function strictlyValidateConfigSnapshotForCli(
-  snapshot: ConfigFileSnapshot,
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+export async function finishConfigValidationForCli(
+  read: ReadConfigFileSnapshotWithPluginMetadataResult,
 ): Promise<ConfigFileSnapshot> {
-  if (!snapshot.valid) {
+  const { snapshot, strictIssues } = read;
+  if (!snapshot.valid || !snapshot.exists) {
     return snapshot;
   }
-  const validated = validateConfigObjectRawWithPlugins(snapshot.sourceConfig, {
-    semanticValidation: "strict",
-    pluginMetadataSnapshot,
-    deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
-  });
-  const issues = validated.ok
-    ? await collectConfigSecretProviderErrors({ config: snapshot.runtimeConfig })
-    : validated.issues;
+  if (!strictIssues) {
+    throw new Error("Config validation requires its prepared source result.");
+  }
+  const issues =
+    strictIssues.length === 0
+      ? await collectConfigSecretProviderErrors({ config: snapshot.runtimeConfig })
+      : strictIssues;
   return issues.length === 0 ? snapshot : { ...snapshot, valid: false, issues };
 }
 
@@ -383,6 +382,13 @@ function dedupeDryRunErrors(errors: ConfigSetDryRunError[]): ConfigSetDryRunErro
 /** Validates one final candidate and decides whether the runner may preview, skip, or write it. */
 export async function validateConfigMutation(params: {
   config: OpenClawConfig;
+  /** Keep authored model comparisons and their resolution environment together. */
+  modelValidation?: {
+    config: OpenClawConfig;
+    previousConfig: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    previousEnv?: NodeJS.ProcessEnv;
+  };
   previousConfig: OpenClawConfig;
   operations: ConfigSetOperation[];
   options: ConfigMutationOptions;
@@ -436,8 +442,7 @@ export async function validateConfigMutation(params: {
 
   const { checkTouchedTextModelRefs } = await import("./config-model-validation.js");
   const modelCheck = await checkTouchedTextModelRefs({
-    config,
-    previousConfig: params.previousConfig,
+    ...(params.modelValidation ?? { config, previousConfig: params.previousConfig }),
     touchedPaths: operations.map(({ setPath }) => setPath),
     redactDependencyValues: true,
   });

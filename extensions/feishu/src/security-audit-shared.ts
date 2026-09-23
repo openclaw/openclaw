@@ -1,4 +1,3 @@
-// Feishu plugin module implements security audit shared behavior.
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   asOptionalRecord as asRecord,

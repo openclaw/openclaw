@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { CodexThreadListParams } from "./app-server/protocol.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import {
   CodexCatalogPersistence,
@@ -50,16 +51,62 @@ function completeState(rows: CodexCatalogIndexRow[]): CodexCatalogState {
   };
 }
 
+function memoryState() {
+  const values = new Map<string, StoredCodexCatalogEntry>();
+  const state: CodexCatalogState = {
+    entries: async () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
+    register: async (key, value) => {
+      values.set(key, value);
+    },
+    delete: async (key) => values.delete(key),
+  };
+  return { values, state };
+}
+
 describe("resident Codex catalog restore bounds", () => {
+  it("persists newly reached overflow when an incremental walk stops at its known prefix", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const { values, state } = memoryState();
+    const native = Array.from({ length: 19_999 }, (_, i) => row(`stored-${i}`, 20_000 - i));
+    const readNative = vi.fn(async (params: CodexThreadListParams) => {
+      const offset = Number(params.cursor ?? 0);
+      return {
+        rows: native.slice(offset, offset + 64),
+        nextCursor: offset + 64 < native.length ? String(offset + 64) : undefined,
+      };
+    });
+    const index = new CodexCatalogIndex({
+      homeId: "incremental-overflow",
+      state,
+      readNative,
+      assertCurrent: () => {},
+    });
+    try {
+      await index.initialize();
+      expect(values.get("complete")).toEqual({ version: 1, kind: "complete" });
+      for (const id of ["new-one", "new-two"]) {
+        await index.upsertThread({
+          id,
+          projectId: null,
+          source: "cli",
+          preview: "New native request",
+          recencyAt: 30_000,
+        });
+        native.unshift(index.get(id)!);
+      }
+      readNative.mockClear();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+      expect(readNative).toHaveBeenCalledOnce();
+      expect(values.get("complete")).toEqual({ version: 1, kind: "complete", overflow: true });
+    } finally {
+      await index.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("reads snapshots after mutations admitted while an earlier write settles", async () => {
-    const values = new Map<string, StoredCodexCatalogEntry>();
-    const state: CodexCatalogState = {
-      entries: async () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
-      register: async (key, value) => {
-        values.set(key, value);
-      },
-      delete: async (key) => values.delete(key),
-    };
+    const { values, state } = memoryState();
     const persistence = new CodexCatalogPersistence(state, () => {});
     try {
       persistence.put(row("first", 200));

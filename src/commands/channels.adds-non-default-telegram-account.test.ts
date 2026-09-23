@@ -177,50 +177,6 @@ function createTelegramCommandTestPlugin(): ChannelPlugin {
     onAccountRemoved: async ({ accountId }) => {
       await offsetMocks.deleteTelegramUpdateOffset({ accountId });
     },
-    collectStatusIssues: (accounts) =>
-      accounts.flatMap((account) => {
-        if (account.enabled !== true || account.configured !== true) {
-          return [];
-        }
-        const issues: ChannelStatusIssue[] = [];
-        const issueAccountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
-        if (account.allowUnmentionedGroups === true) {
-          issues.push({
-            channel: "telegram",
-            accountId: issueAccountId,
-            kind: "config",
-            message:
-              "Config allows unmentioned group messages (requireMention=false). Telegram Bot API privacy mode will block most group messages unless disabled.",
-          });
-        }
-        const audit = account.audit as
-          | {
-              hasWildcardUnmentionedGroups?: boolean;
-              groups?: Array<{ chatId?: string; ok?: boolean; status?: string; error?: string }>;
-            }
-          | undefined;
-        if (audit?.hasWildcardUnmentionedGroups === true) {
-          issues.push({
-            channel: "telegram",
-            accountId: issueAccountId,
-            kind: "config",
-            message:
-              'Telegram groups config uses "*" with requireMention=false; membership probing is not possible without explicit group IDs.',
-          });
-        }
-        for (const group of audit?.groups ?? []) {
-          if (group.ok === true || !group.chatId) {
-            continue;
-          }
-          issues.push({
-            channel: "telegram",
-            accountId: issueAccountId,
-            kind: "runtime",
-            message: `Group ${group.chatId} not reachable by bot.${group.status ? ` status=${group.status}` : ""}${group.error ? `: ${group.error}` : ""}`,
-          });
-        }
-        return issues;
-      }),
   });
   return {
     ...plugin,
@@ -738,20 +694,6 @@ describe("channels command", () => {
       },
       patterns: [/Warnings:/, /permission audit/i, /Channel 111/i],
     },
-    {
-      name: "surfaces Telegram privacy-mode hints when allowUnmentionedGroups is enabled",
-      channelAccounts: {
-        telegram: [
-          {
-            accountId: "default",
-            enabled: true,
-            configured: true,
-            allowUnmentionedGroups: true,
-          },
-        ],
-      },
-      patterns: [/Warnings:/, /Telegram Bot API privacy mode/i],
-    },
   ])("$name", ({ channelAccounts, patterns }) => {
     const joined = formatChannelStatusJoined(channelAccounts);
     for (const pattern of patterns) {
@@ -771,33 +713,6 @@ describe("channels command", () => {
       ],
     });
     expect(joined).toMatch(/bot:@openclaw_bot/);
-  });
-
-  it("surfaces Telegram group membership audit issues in channels status output", () => {
-    const joined = formatChannelStatusJoined({
-      telegram: [
-        {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          audit: {
-            hasWildcardUnmentionedGroups: true,
-            unresolvedGroups: 1,
-            groups: [
-              {
-                chatId: "-1001",
-                ok: false,
-                status: "left",
-                error: "not in group",
-              },
-            ],
-          },
-        },
-      ],
-    });
-    expect(joined).toMatch(/Warnings:/);
-    expect(joined).toMatch(/membership probing is not possible/i);
-    expect(joined).toMatch(/Group -1001/i);
   });
 
   it("surfaces WhatsApp auth/runtime hints when unlinked or disconnected", () => {

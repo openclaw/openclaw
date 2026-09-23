@@ -363,8 +363,13 @@ describe("memory-core plugin runtime registration", () => {
         runtime: hostRuntime,
         logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn },
         registerTool(factory, options) {
-          if (options?.names?.includes("intent") && typeof factory === "function") {
-            intentFactory = factory as typeof intentFactory;
+          if (
+            options?.names?.includes("intent") &&
+            typeof factory !== "function" &&
+            "contextVersion" in factory
+          ) {
+            expect(factory.contextVersion).toBe(2);
+            intentFactory = (ctx) => factory.create({ ...ctx, assertInvocationCurrent: () => {} });
           }
         },
       }),

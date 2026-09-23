@@ -252,13 +252,13 @@ function repairToolCallInputs(
       // without mutating provider-owned assistant content.
       const replaySafeToolCalls = extractToolCallsFromAssistant(msg);
       const followingToolResults = collectFollowingToolResults(messages, index);
+      const hasSpawnAttachments = hasSessionsSpawnAttachmentToolCall(msg.content);
       if (
         isReplaySafeThinkingAssistantTurn(msg.content, allowedToolNames, isCompleted) &&
         replaySafeToolCalls.every(
           (toolCall) =>
             !preservedThinkingToolCallIds.has(toolCall.id) &&
-            (!hasSessionsSpawnAttachmentToolCall(msg.content) ||
-              followingToolResults.ids.has(toolCall.id)) &&
+            (!hasSpawnAttachments || followingToolResults.ids.has(toolCall.id)) &&
             (!followingToolResults.displaced || !priorToolCallIds.has(toolCall.id)),
         )
       ) {

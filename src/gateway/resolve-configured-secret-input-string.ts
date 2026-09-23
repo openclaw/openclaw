@@ -8,6 +8,7 @@ import { secretRefKey } from "../secrets/ref-contract.js";
 import {
   describeSecretResolutionOperatorDiagnostic,
   describeSecretResolutionOperatorRecovery,
+  isSecretResolutionError,
 } from "../secrets/resolve-errors.js";
 import { resolveSecretRefValues } from "../secrets/resolve.js";
 import { formatConcreteConfigPath, tokenizeConcreteConfigPath } from "../shared/dot-path.js";
@@ -45,9 +46,12 @@ type ConfiguredSecretInputParams = {
   unresolvedReasonStyle?: SecretInputUnresolvedReasonStyle;
 };
 
-async function resolveConfiguredSecretInput(
-  params: ConfiguredSecretInputParams,
-): Promise<{ refConfigured: boolean; value?: string; unresolvedRefReason?: string }> {
+async function resolveConfiguredSecretInput(params: ConfiguredSecretInputParams): Promise<{
+  refConfigured: boolean;
+  value?: string;
+  unresolvedRefReason?: string;
+  unresolvedRefCode?: "SECRET_REF_REDACTED_VALUE";
+}> {
   const style = params.unresolvedReasonStyle ?? "generic";
   let configPath = params.path;
   if (typeof params.value === "string" && getConfigResolutionFacts(params.config) !== null) {
@@ -103,10 +107,16 @@ async function resolveConfiguredSecretInput(
     }
     return { refConfigured: true, value: trimmed };
   } catch (error) {
+    const redactedValue =
+      isSecretResolutionError(error) && error.code === "SECRET_REF_REDACTED_VALUE";
     const operatorDiagnostic =
-      style === "detailed" ? describeSecretResolutionOperatorDiagnostic(error) : undefined;
+      style === "detailed" || redactedValue
+        ? describeSecretResolutionOperatorDiagnostic(error)
+        : undefined;
     const operatorRecovery =
-      style === "detailed" ? describeSecretResolutionOperatorRecovery(error) : undefined;
+      style === "detailed" || redactedValue
+        ? describeSecretResolutionOperatorRecovery(error)
+        : undefined;
     const unresolvedReason = buildUnresolvedReason({
       path: params.path,
       style,
@@ -116,6 +126,7 @@ async function resolveConfiguredSecretInput(
     const operatorDetail = [operatorDiagnostic, operatorRecovery].filter(Boolean).join(". ");
     return {
       refConfigured: true,
+      ...(redactedValue ? { unresolvedRefCode: "SECRET_REF_REDACTED_VALUE" as const } : {}),
       unresolvedRefReason: operatorDetail
         ? `${unresolvedReason} ${operatorDetail}.`
         : unresolvedReason,
@@ -125,7 +136,11 @@ async function resolveConfiguredSecretInput(
 
 export async function resolveConfiguredSecretInputString(
   params: ConfiguredSecretInputParams,
-): Promise<{ value?: string; unresolvedRefReason?: string }> {
+): Promise<{
+  value?: string;
+  unresolvedRefReason?: string;
+  unresolvedRefCode?: "SECRET_REF_REDACTED_VALUE";
+}> {
   const { refConfigured: _refConfigured, ...resolved } = await resolveConfiguredSecretInput(params);
   return resolved;
 }
@@ -138,6 +153,7 @@ export async function resolveConfiguredSecretInputWithFallback(
   value?: string;
   source?: ConfiguredSecretInputSource;
   unresolvedRefReason?: string;
+  unresolvedRefCode?: "SECRET_REF_REDACTED_VALUE";
   secretRefConfigured: boolean;
 }> {
   const resolved = await resolveConfiguredSecretInput(params);
@@ -173,6 +189,7 @@ export async function resolveConfiguredSecretInputWithFallback(
 
   return {
     unresolvedRefReason: resolved.unresolvedRefReason,
+    ...(resolved.unresolvedRefCode ? { unresolvedRefCode: resolved.unresolvedRefCode } : {}),
     secretRefConfigured: true,
   };
 }

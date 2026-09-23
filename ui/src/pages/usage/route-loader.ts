@@ -5,6 +5,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
+import { createDefaultUsageDateRange } from "./helpers.ts";
 import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import type { UsageRouteData } from "./types.ts";
 
@@ -25,10 +26,8 @@ export async function loadUsageRouteData(
   snapshot: UsageRouteSnapshot,
 ): Promise<UsageRouteData> {
   const { gateway, gatewaySnapshot, agentId, date } = snapshot;
-  const startDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   const query: UsageRouteData["query"] = {
-    startDate,
-    endDate: startDate,
+    ...createDefaultUsageDateRange(date),
     scope: "family",
     timeZone: "local",
     agentId,

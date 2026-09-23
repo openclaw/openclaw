@@ -1,7 +1,11 @@
 import { expect, it, type Mock } from "vitest";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
+import { setPreparedModelRuntimeAuthStore } from "../agents/prepared-model-runtime-auth.js";
+import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
 import type { TuiModelChoice } from "./tui-backend.js";
 
@@ -204,4 +208,38 @@ export function registerEmbeddedModelCatalogTests({
       expect.objectContaining({ sessionKeys: ["agent:main:main"] }),
     );
   });
+}
+
+export async function withEmbeddedModelCatalogOwnerFixture(
+  params: LoadPreparedModelCatalogParams,
+  read: (snapshot: PreparedModelRuntimeSnapshot) => Promise<unknown>,
+) {
+  const config: OpenClawConfig = params.config ?? {};
+  const agentId = params.agentId ?? "main";
+  let active = true;
+  const snapshot: PreparedModelRuntimeSnapshot = {
+    catalogOwner: { agentId, workspaceDir: "/tmp/tui-catalog-workspace" },
+    agentId,
+    agentDir: "/tmp/tui-catalog-agent",
+    activeProjectKeys: [],
+    config,
+    observationConfig: config,
+    isCurrent: () => active,
+    authModes: {},
+    metadataSnapshot: createPluginMetadataSnapshotFixture(),
+    allowGatewaySubagentBinding: false,
+    modelCatalog: { entries: [], routeVariants: [] },
+    configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
+    inlineProviderModels: [],
+    createStores() {
+      throw new Error("Catalog projection must not create execution stores");
+    },
+  };
+  setPreparedModelRuntimeAuthStore(snapshot, { version: 1, profiles: {} });
+  try {
+    return await read(snapshot);
+  } finally {
+    active = false;
+  }
 }

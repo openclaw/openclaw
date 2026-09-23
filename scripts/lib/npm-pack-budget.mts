@@ -1,10 +1,11 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { resolveNpmJsonEntries } from "./npm-json-output.mts";
 
 // Both bundled fs-safe loader layouts need all native targets (~31 MiB),
-// alongside mirrored runtime dependencies and bundled documentation. Keep the
-// remaining headroom bounded so accidental build/pack duplication still fails.
-const NPM_PACK_UNPACKED_SIZE_BUDGET_BYTES = 235 * 1024 * 1024;
+// alongside mirrored runtime dependencies, bundled documentation, the portable
+// cloud SQLite worker bundle (~46 MiB) and bundled chrome-devtools-mcp (~13 MiB).
+// Track remaining headroom so accidental build/pack duplication remains visible.
+const NPM_PACK_UNPACKED_SIZE_BUDGET_BYTES = 320 * 1024 * 1024;
 
 function formatMiB(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
@@ -28,12 +29,13 @@ function formatPackUnpackedSizeBudgetError(params: {
   ].join(" ");
 }
 
-export function collectPackUnpackedSizeErrors(
+export function collectPackUnpackedSizeFindings(
   results: unknown,
   options: { budgetBytes?: number; missingDataMessage?: string } = {},
-): string[] {
+) {
   const entries = resolveNpmJsonEntries(results);
   const errors: string[] = [];
+  const violations: { file: string; title: string; message: string }[] = [];
   const budgetBytes = options.budgetBytes ?? NPM_PACK_UNPACKED_SIZE_BUDGET_BYTES;
   let checkedCount = 0;
 
@@ -49,13 +51,15 @@ export function collectPackUnpackedSizeErrors(
     if (packResult.unpackedSize <= budgetBytes) {
       continue;
     }
-    errors.push(
-      formatPackUnpackedSizeBudgetError({
+    violations.push({
+      file: "package.json",
+      title: "npm package unpacked size budget",
+      message: formatPackUnpackedSizeBudgetError({
         budgetBytes,
         label: resolvePackResultLabel(packResult, index),
         unpackedSize: packResult.unpackedSize,
       }),
-    );
+    });
   }
 
   if (entries.length > 0 && checkedCount === 0) {
@@ -65,5 +69,5 @@ export function collectPackUnpackedSizeErrors(
     );
   }
 
-  return errors;
+  return { errors, violations };
 }

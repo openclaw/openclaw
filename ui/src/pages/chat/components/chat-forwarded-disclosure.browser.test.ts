@@ -1,17 +1,25 @@
 import { render } from "lit";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { THEME_TYPEFACES, syncTypefaceStylesheets } from "../../../app/typography.ts";
+import { resolveTypefaces, syncTypefaceStylesheets } from "../../../app/typography.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { renderMessageGroup } from "./chat-message-group.ts";
-import "../../../styles/base.css";
-import "../../../styles/chat/startup-layout.css";
-import "../../../styles/chat/message-layout.css";
-import "../../../styles/chat/grouped.css";
-import "../../../styles/chat/text.css";
+import baseCss from "../../../styles/base.css?inline";
+import groupedCss from "../../../styles/chat/grouped.css?inline";
+import messageCss from "../../../styles/chat/message-layout.css?inline";
+import startupCss from "../../../styles/chat/startup-layout.css?inline";
+import textCss from "../../../styles/chat/text.css?inline";
+import mobileCss from "../../../styles/layout.mobile.css?inline";
+
+let stylesheet: HTMLStyleElement;
 
 // Match the app's default font before measuring the disclosure's inline baseline.
 beforeEach(async () => {
-  const typefaces = THEME_TYPEFACES.claw;
+  stylesheet = document.createElement("style");
+  stylesheet.textContent = [baseCss, mobileCss, startupCss, messageCss, textCss, groupedCss].join(
+    "\n",
+  );
+  document.head.append(stylesheet);
+  const typefaces = resolveTypefaces("claw");
   syncTypefaceStylesheets(typefaces);
   await expect
     .poll(() =>
@@ -30,9 +38,10 @@ afterEach(async () => {
   if (avatarUrl) {
     URL.revokeObjectURL(avatarUrl);
     avatarUrl = undefined;
-    const { page } = await import("vitest/browser");
-    await page.viewport(1280, 720);
   }
+  stylesheet.remove();
+  const { page } = await import("vitest/browser");
+  await page.viewport(1280, 720);
   document.documentElement.removeAttribute("data-theme-mode");
 });
 
@@ -96,6 +105,8 @@ it.each(
 )(
   "collapses forwarded $role messages independently in $theme at $width",
   async ({ role, theme, width }) => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(width, 800);
     document.documentElement.dataset.themeMode = theme;
     const { draw } = fixture(role, width);
     await document.fonts.ready;

@@ -230,7 +230,7 @@ export function validatePluginConfig(params: {
   const result = validatePluginSchemaValue({
     origin: params.origin,
     schema,
-    cacheKey: params.cacheKey ?? JSON.stringify(schema),
+    cacheKey: params.cacheKey,
     value: value ?? {},
     sourceValue: params.sourceValue,
     applyDefaults: true,

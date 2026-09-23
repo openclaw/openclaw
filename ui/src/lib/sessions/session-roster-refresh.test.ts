@@ -1,7 +1,7 @@
 // @vitest-environment node
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
@@ -160,7 +160,7 @@ describe("session roster refresh", () => {
           coordinator.setForegroundRoute("agent:main:first-chat");
         }
         invalidate();
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         const delayedExplicit = explicit === "readmission" ? subscription?.refresh() : null;
         expect(reads).toBe(2);
         if (explicit === "readmission") {
@@ -180,7 +180,7 @@ describe("session roster refresh", () => {
         }
         const explicitRefresh = explicit === "pending" ? subscription?.refresh() : null;
         slow.resolve(result(2));
-        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(5_000);
         if (nextChatHoldsRefresh) {
           expect(reads).toBe(explicit === "pending" ? 3 : 2);
           if (explicit === "held") {
@@ -356,7 +356,7 @@ describe("session roster refresh", () => {
           event: "session.message",
           payload: { sessionKey: "global", agentId, hasActiveRun: false, status: "done" },
         });
-        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(request).toHaveBeenCalledTimes(agentId === "research" && scope.agentId ? 0 : 1);
         request.mockClear();
       }

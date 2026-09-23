@@ -1,4 +1,3 @@
-// Slack plugin module implements resolve channels behavior.
 import type { WebClient } from "@slack/web-api";
 import { resolveDirectoryAllowlistEntries } from "openclaw/plugin-sdk/directory-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";

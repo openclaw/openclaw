@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements cli behavior.
 import {
   createLazyCliRuntimeLoader,
   createStandardLiveTransportQaCliRegistration,
@@ -12,6 +11,7 @@ const loadDiscordQaAdapterRuntime = createLazyCliRuntimeLoader<
 const standardDiscordQaCliRegistration = createStandardLiveTransportQaCliRegistration({
   channelId: "discord",
   channelLabel: "Discord",
+  agentE2e: true,
   async createAdapter(context) {
     return (await loadDiscordQaAdapterRuntime()).createDiscordQaTransportAdapter(context);
   },

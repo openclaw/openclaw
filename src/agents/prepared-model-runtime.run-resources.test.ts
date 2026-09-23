@@ -18,6 +18,11 @@ import {
   retirePluginCache,
   waitForPluginCacheRetirement,
 } from "../plugins/plugin-cache.js";
+import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
+import {
+  getPluginInstanceOwner,
+  type PluginInstanceHandle,
+} from "../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { quiescePluginRegistry } from "../plugins/registry-lifecycle.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
@@ -49,6 +54,7 @@ type Registration = {
   file: string;
   disposals: number;
   store: PluginStateKeyedStore<{ value: number }>;
+  instance: PluginInstanceHandle;
 };
 
 async function withRunFixture(
@@ -84,6 +90,13 @@ async function withRunFixture(
     const finishCatalog = createDeferredCore();
     const bridge = {
       registrations,
+      captureInstance: () => {
+        const instance = expectDefined(
+          pluginInstanceInvocation.getStore()?.instance,
+          "registering instance",
+        );
+        return expectDefined(getPluginInstanceOwner(instance)?.instance, "managed instance owner");
+      },
       hold: false,
       finishDisposal,
       disposalStarted,
@@ -135,7 +148,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   const database = new DatabaseSync(file);
   database.exec("CREATE TABLE answer(value INTEGER); INSERT INTO answer VALUES (42)");
   const store = api.runtime.state.openKeyedStore({ namespace: "run-proof", maxEntries: 20 });
-  const record = { id: api.id, mode: api.registrationMode, database, file, disposals: 0, store };
+  const record = { id: api.id, mode: api.registrationMode, database, file, disposals: 0, store, instance: bridge.captureInstance() };
   bridge.registrations.push(record);
   api.lifecycle.registerRuntimeLifecycle({ id: "database", async dispose() {
     if (bridge.hold && record === bridge.registrations[0]) {
@@ -289,13 +302,16 @@ it("keeps overlapping RUN callers on one registration and closes only after the 
     expect(first.snapshot === second.snapshot).toBe(true);
     expect(registrations.length).toBe(count);
     expect(original().mode).toBe("discovery");
+    expect(() => original().instance.reserveReplacement()).toThrow("active retained work");
     await first[Symbol.asyncDispose]();
     await nextTurn();
     expect(readAnswer(original())).toBe(42);
     expect(original().disposals).toBe(0);
+    expect(() => original().instance.reserveReplacement()).toThrow("active retained work");
     await second[Symbol.asyncDispose]();
     await expect.poll(() => original().disposals).toBe(1);
     expect(original().database.isOpen).toBe(false);
+    original().instance.reserveReplacement()();
     expectReopened(original());
   });
 });
@@ -334,6 +350,8 @@ it("preserves the direct one-entry idle retention policy across RUN eviction", a
     await first[Symbol.asyncDispose]();
     await nextTurn();
     expect(readAnswer(original())).toBe(42);
+    // Idle publication keeps physical custody without blocking explicit replacement.
+    original().instance.reserveReplacement()();
     const warm = await acquire({ retainIdleRunOwner: true });
     expect(warm.snapshot === first.snapshot).toBe(true);
     const next = await acquire({ retainIdleRunOwner: true }, `${input.workspaceDir}/next`);
@@ -398,11 +416,13 @@ it("process close waits for admitted registration disposal and rejects new RUN a
         ]);
         expect(readAnswer(original())).toBe(42);
         expect(closed).toBe(false);
+        expect(() => original().instance.reserveReplacement()).toThrow("active retained work");
       } finally {
         finishDisposal.resolve();
         await Promise.all([closing, leaseReleased]);
       }
       expect(original().disposals).toBe(1);
+      original().instance.reserveReplacement()();
       expectReopened(original());
     },
   );
@@ -516,11 +536,13 @@ it.each(["hold", "reject"] as const)(
             }),
           ]);
           expect(readAnswer(original())).toBe(42);
+          expect(() => original().instance.reserveReplacement()).toThrow("active retained work");
           if (catalog === "hold") {
             abort.abort(new Error("fixture admission cancelled"));
             await expect(pending.then(() => undefined)).rejects.toThrow("aborted");
             expect(getPreparedModelRuntimeSnapshot(input) === undefined).toBe(true);
             expect(original().disposals).toBe(0);
+            expect(() => original().instance.reserveReplacement()).toThrow("active retained work");
           }
           finishCatalog.resolve();
           if (catalog === "reject") {

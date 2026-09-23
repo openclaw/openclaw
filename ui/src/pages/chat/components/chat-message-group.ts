@@ -13,7 +13,6 @@ import { t } from "../../../i18n/index.ts";
 import type { MessageGroup, ToolCard } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
-import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import {
   readToolApprovalReviewOutcome,
   readToolApprovalReviews,
@@ -22,10 +21,10 @@ import {
 import {
   groupToolCards,
   summarizeToolGroup,
+  readPreparedActivity,
   type ToolCardGroup,
 } from "../../../lib/chat/tool-call-grouping.ts";
-import { resolveToolCallView } from "../../../lib/chat/tool-call-view.ts";
-import { extractToolCardsCached, isToolCardError } from "../../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
@@ -55,12 +54,11 @@ import {
 } from "./chat-message-stream.ts";
 import type { AssistantMessageDisclosure } from "./chat-message-text.ts";
 import { extractGroupMeta, renderMessageMeta } from "./chat-message-timestamp.ts";
+import { renderChatReplyAttribution } from "./chat-reply-attribution.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
-  isRunningToolCard,
   renderBrowserTabPreviews,
   renderToolCard,
-  resolveToolRowText,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
@@ -204,35 +202,55 @@ export function renderActivityGroup(
   if (!firstGroup || opts.showToolCalls === false) {
     return nothing;
   }
-  const cards = groups.flatMap((group) =>
-    group.messages.flatMap((item) => extractToolCardsCached(item.message)),
+  const entries = groups.flatMap((group) => group.messages);
+  const cards = entries.flatMap((entry) => extractToolCardsCached(entry.message));
+  const preparedByCard = new Map<ToolCard, ReturnType<typeof readPreparedActivity>[number]>();
+  const activity = entries.flatMap((entry) => {
+    const prepared = readPreparedActivity(entry.message);
+    const byCallId = new Map(prepared.map((item) => [item.toolCallId, item]));
+    for (const card of extractToolCardsCached(entry.message)) {
+      const item = card.callId ? byCallId.get(card.callId) : undefined;
+      if (item) {
+        preparedByCard.set(card, item);
+      }
+    }
+    return prepared;
+  });
+  const visibleActivity = activity.filter(
+    (item) => !item.hideFromChannelProgress && !item.suppressChannelProgress,
   );
-  const latestGroup = groups[groups.length - 1] ?? firstGroup;
-  const latestCards = latestGroup.messages.flatMap((item) => extractToolCardsCached(item.message));
-  // While a run is live, the newest still-running call names the group so
-  // the collapsed header reads like a status line; afterwards it aggregates.
-  const runningCard = opts.runActive
-    ? latestCards.findLast((card) => isRunningToolCard(card, opts.runActive))
+  const running = opts.runActive
+    ? visibleActivity.findLast((item) => item.status === "running")
     : undefined;
   const cardGroups = groupToolCards(cards);
-  let runningOperation = runningCard;
-  if (runningCard?.parentToolCallId) {
+  let runningOperation = running;
+  if (running?.toolCallId) {
+    const runningCard = cards.findLast((card) => preparedByCard.get(card) === running);
     for (const root of cardGroups) {
       const pending = [...root.children];
       for (const child of pending) {
-        if (child.card === runningCard && resolveToolCallView(root.card).title) {
-          runningOperation = root.card;
+        if (child.card === runningCard) {
+          // Recorded nesting chooses the owner; only its prepared item supplies copy.
+          const parentActivity = preparedByCard.get(root.card);
+          if (
+            parentActivity &&
+            !parentActivity.hideFromChannelProgress &&
+            !parentActivity.suppressChannelProgress
+          ) {
+            runningOperation = parentActivity;
+          }
         }
         pending.push(...child.children);
       }
     }
   }
-  const groupSummaryLabel = runningCard
-    ? `${resolveToolRowText(runningOperation ?? runningCard, opts.runActive)}…`
-    : summarizeToolGroup(cards.map((card) => ({ ...card, isError: isToolCardError(card) })));
+  const visibleCalls = new Set(visibleActivity.map((item) => item.toolCallId ?? item.itemId));
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
+  const groupSummaryLabel = runningOperation
+    ? `${runningOperation.title}…`
+    : summarizeToolGroup(visibleActivity, { includeFailureCount: activityExpanded });
   const toolCardOverrides = new Map<ToolCard, unknown>();
   const toolContexts = new Map(
     groups.flatMap((group) =>
@@ -308,9 +326,7 @@ export function renderActivityGroup(
       >
         <span class="chat-activity-group__icon">${icons.listTree}</span>
         <span class="chat-tool-disclosure__content">
-          <span class="chat-activity-group__label" title=${groupSummaryLabel}
-            >${groupSummaryLabel}</span
-          >
+          <span class="chat-activity-group__label">${groupSummaryLabel}</span>
         </span>
         ${
           reviewOutcome
@@ -329,7 +345,15 @@ export function renderActivityGroup(
               >`
             : nothing
         }
-        ${activityExpanded ? nothing : renderToolOutcomeSummary(cards)}
+        ${
+          activityExpanded
+            ? nothing
+            : renderToolOutcomeSummary(
+                cards.filter((card) => card.callId && visibleCalls.has(card.callId)),
+                true,
+                visibleActivity,
+              )
+        }
         <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
       <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>
@@ -533,9 +557,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         ? resolveIdentityHue(group.sender)
         : null;
   const sendStatus = readPendingSendStatus(group.messages.at(-1)?.message);
-  const replyToLabel =
-    normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
-  const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
 
   const inlineUserAvatar =
     normalizedRole === "user" &&
@@ -574,22 +595,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       ${inlineUserAvatar ? nothing : avatar}
       <div class="chat-group-messages">
         ${forwardedSource ? renderForwardedAttribution(group, opts) : nothing}
-        ${
-          replyToLabel
-            ? html`
-                <div
-                  class="chat-reply-attribution"
-                  title=${replyToTitle}
-                  aria-label=${replyToTitle}
-                >
-                  <span class="chat-reply-attribution__icon" aria-hidden="true"
-                    >${icons.cornerDownLeft}</span
-                  >
-                  <span>${replyToLabel}</span>
-                </div>
-              `
-            : nothing
-        }
+        ${normalizedRole === "assistant" ? renderChatReplyAttribution(group.replyToSender) : nothing}
         ${
           opts.frameContent ??
           repeat(

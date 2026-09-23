@@ -3,18 +3,19 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { nativeBoundaryTestEntrypoints } from "./native-boundary-runtime.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { createManagedHandoffLeaseDatabase } from "./update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-const databaseModule = new URL("./update-managed-service-handoff-database.ts", import.meta.url)
-  .href;
+const databaseUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.handoffDatabase);
+const databaseModule = databaseUrl.href;
 const repoRoot = process.cwd();
-const tsxLoader = pathToFileURL(path.resolve("scripts/tsx.mjs")).href;
 let root: string;
 let databasePath: string;
 
@@ -57,7 +58,14 @@ type RunningChild = {
 function spawnFixture(script: string, args: string[] = []): RunningChild {
   const child = spawn(
     process.execPath,
-    ["--no-warnings", "--import", tsxLoader, "--input-type=module", "--eval", script, ...args],
+    [
+      "--no-warnings",
+      ...resolveRuntimeWorkerArgv(databaseUrl).slice(0, -1),
+      "--input-type=module",
+      "--eval",
+      script,
+      ...args,
+    ],
     { cwd: repoRoot, env: {}, stdio: ["ignore", "pipe", "pipe"] },
   );
   const closed = once(child, "close");
@@ -128,6 +136,34 @@ describe("managed handoff database publication", () => {
     expect(stat.nlink).toBe(1);
     expect(readOwners()).toEqual(["first"]);
     expect(fs.readdirSync(root)).toEqual([path.basename(databasePath)]);
+  });
+
+  it("uses synchronous directory spelling for synchronous durability receipts", () => {
+    // Windows native realpath expands short aliases that ordinary realpath may preserve.
+    // Model that spelling difference without replacing the directory or its identity.
+    const nativeRealpath = fs.realpathSync.native;
+    vi.spyOn(fs.realpathSync, "native").mockImplementation((...args) => {
+      const result = nativeRealpath(...args);
+      return args[0] === root && typeof result === "string" ? result + path.sep + "." : result;
+    });
+
+    createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
+      insertRow(db, root, "alias-owner"),
+    );
+
+    expect(readOwners()).toEqual(["alias-owner"]);
+    expect(fs.statSync(databasePath).nlink).toBe(1);
+  });
+
+  it("publishes when the parent file ID exceeds Number's exact range", () => {
+    mockLargeDirectoryId(root);
+
+    createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
+      insertRow(db, root, "exact-owner"),
+    );
+
+    expect(readOwners()).toEqual(["exact-owner"]);
+    expect(fs.statSync(databasePath).nlink).toBe(1);
   });
 
   it("recovers an existing private empty database through the existing DDL path", () => {

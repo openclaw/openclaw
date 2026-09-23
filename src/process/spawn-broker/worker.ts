@@ -356,8 +356,15 @@ async function launch(
 }
 
 process.once("disconnect", shutdown);
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
+const onSupervisorSignal = () => {
+  // A cgroup stop can reach the broker before the Gateway finishes child cleanup.
+  // Keep its transport alive until the parent relinquishes ownership through IPC.
+  if (!process.connected) {
+    shutdown();
+  }
+};
+process.on("SIGTERM", onSupervisorSignal);
+process.on("SIGINT", onSupervisorSignal);
 process.on("message", (raw: unknown, handle: SendHandle) => {
   // Only the version-matched parent can write this private IPC channel.
   let decoded: unknown;
@@ -408,7 +415,10 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
   } else if (message.type === "cancel") {
     entry.execa?.cancel();
   } else if (message.type === "output-drained") {
-    entry.execa?.outputDrained(message.fd, message.error ? new Error(message.error) : undefined);
+    entry.execa?.outputDrained(
+      message.fd,
+      message.error ? Object.assign(new Error(message.error.message), message.error) : undefined,
+    );
     entry.openPipes.delete(message.fd);
     forget(message.id, entry);
   } else if (message.type === "disconnect" && entry.child.connected) {

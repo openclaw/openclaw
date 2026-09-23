@@ -20,6 +20,8 @@ export type CodexCatalogIndexOptions = {
   localSessionsRoot?: string;
   state?: CodexCatalogState;
   readNative: CodexCatalogIndexRead;
+  /** Settle background source health once, including a successful prefix walk. */
+  runNativeWalk?: <T>(run: () => Promise<T>) => Promise<T>;
   requestTimeoutMs?: number;
   assertCurrent: () => void;
   runBackground?: (run: () => Promise<void>) => Promise<void>;

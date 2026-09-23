@@ -170,11 +170,62 @@
 }
 
 .meetings-live {
-  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--ok);
+  background: var(--ok-subtle);
   font-size: var(--control-ui-text-xs);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--ok) 25%, transparent);
   border-radius: var(--radius-sm);
   padding: var(--space-1) var(--space-2);
+}
+
+.meetings-live::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  animation: meetings-live-pulse 2s ease-in-out infinite;
+}
+
+.meetings-live-status {
+  padding: var(--space-3) var(--space-4);
+  margin-block: var(--space-4);
+  border-inline-start: 2px solid var(--ok);
+  border-radius: var(--radius-sm);
+  background: var(--ok-subtle);
+}
+
+.meetings-live-status__heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.meetings-live-status__elapsed {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.meetings-live-status p {
+  margin: var(--space-2) 0 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+@keyframes meetings-live-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meetings-live::before {
+    animation: none;
+  }
 }
 
 .transcripts-list__entry p,
