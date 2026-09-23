@@ -233,6 +233,55 @@ describe("openclaw.setup provider resolution", () => {
     },
   );
 
+  it("keeps an activation alive for its provider's full device-code window", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { wizardSessions, context } = makeContext();
+    const sessionId = "activation-device-code";
+    const signedIn = createDeferredCore();
+    setupInferenceMocks.activateSetupInference.mockImplementationOnce(
+      async (params: ActivateSetupInferenceParams) => {
+        const prompter = expectDefined(params.prompter, "activation prompter");
+        // Detected Codex activation hosts the provider sign-in when no profile or key exists.
+        await prompter.deviceCode?.({
+          title: "OpenAI Codex device code",
+          code: "ABCD-EFGH",
+          expiresInMinutes: 15,
+          message: "Enter this one-time code on the sign-in page.",
+        });
+        const signal = expectDefined(params.signal, "activation signal");
+        await new Promise<void>((resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          void signedIn.promise.then(resolve);
+        });
+        return { ok: true, modelRef: "openai/gpt-5.6-luna", latencyMs: 1, lines: [] };
+      },
+    );
+    try {
+      await systemAgentHandler("openclaw.setup.activate.start")({
+        params: { sessionId, kind: "codex-cli", modelRef: "openai/gpt-5.6-luna" },
+        respond: () => undefined,
+        context,
+      } as never);
+      const session = expectDefined(wizardSessions.get(sessionId), "activation wizard session");
+      const codeStep = await callWizardNext(context, { sessionId });
+      expect(codeStep.step).toMatchObject({ deviceCode: { expiresInMinutes: 15 } });
+
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1_000);
+      expect(session.getStatus()).toBe("running");
+      expect(session.signal.aborted).toBe(false);
+
+      signedIn.resolve();
+      expect(await callWizardNext(context, { sessionId })).toMatchObject({
+        done: true,
+        status: "done",
+        modelActivation: { modelRef: "openai/gpt-5.6-luna" },
+      });
+    } finally {
+      signedIn.resolve();
+      vi.useRealTimers();
+    }
+  });
+
   it("locks cancellation before an accepted runtime install can start", async () => {
     const { wizardSessions, context } = makeContext();
     const sessionId = "runtime-install-lock";
