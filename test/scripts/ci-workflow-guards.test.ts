@@ -5738,7 +5738,7 @@ server.listen(0, "127.0.0.1", () => {
                     "cache-matched-key":
                       generation === "a".repeat(64)
                         ? ""
-                        : `${cacheInputs["restore-keys"].trim()}9-1`,
+                        : `${expectDefined(cacheInputs["restore-keys"], "transform restore prefix").trim()}9-1`,
                   },
                 };
               } else {
