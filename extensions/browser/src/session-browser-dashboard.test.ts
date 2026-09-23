@@ -1,13 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionBrowserAuthority } from "./browser-dashboard.types.js";
 import { getBrowserStateRuntime, setBrowserStateRuntime } from "./browser-runtime-state.js";
 import {
   makeBrowserProfile,
   makeBrowserServerState,
 } from "./browser/server-context.test-harness.js";
-import {
-  accessSessionBrowserDashboard,
-  type SessionBrowserAuthority,
-} from "./session-browser-dashboard.js";
+import { accessSessionBrowserDashboard } from "./session-browser-dashboard.js";
 
 const mocked = vi.hoisted(() => ({
   definition: vi.fn(),

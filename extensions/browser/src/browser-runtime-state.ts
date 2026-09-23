@@ -6,8 +6,10 @@ import type {
 // Browser plugin runtime state shared across lazy bundles and duplicate SDK module instances.
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import type { BrowserDashboardDefinition } from "./browser-dashboard.types.js";
-import type { SessionBrowserDashboard } from "./session-browser-dashboard.js";
+import type {
+  BrowserDashboardDefinition,
+  SessionBrowserDashboard,
+} from "./browser-dashboard.types.js";
 
 export type BrowserDashboardOperation = {
   promise: Promise<unknown>;

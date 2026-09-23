@@ -7,6 +7,8 @@ import type {
   BrowserDashboardDefinition,
   BrowserDashboardRequest,
   BrowserDashboardResponse,
+  SessionBrowserAuthority,
+  SessionBrowserDashboard,
 } from "./browser-dashboard.types.js";
 import { getBrowserStateRuntime, getOptionalBrowserStateRuntime } from "./browser-runtime-state.js";
 import { resolveCdpControlPolicy } from "./browser/cdp-reachability-policy.js";
@@ -18,29 +20,9 @@ import {
   getProfileLifecycle,
   isProfileGenerationCurrent,
 } from "./browser/server-context.lifecycle.js";
-import type { GatewayRequestHandlers } from "./core-api.js";
 
-export type SessionBrowserAuthority = NonNullable<
-  Parameters<GatewayRequestHandlers[string]>[0]["sessionAccessAuthority"]
->;
 type SessionBorrow = ReturnType<SessionBrowserAuthority["retainSession"]>;
-type OwnedPage = Awaited<
-  ReturnType<NonNullable<Awaited<ReturnType<typeof getPwAiModule>>>["createPageViaPlaywright"]>
->;
 const MAX_SESSION_DASHBOARDS = 64;
-
-/** One isolated context belongs to one exact session incarnation and board instance. */
-export type SessionBrowserDashboard = {
-  definition: BrowserDashboardDefinition;
-  session: SessionBrowserAuthority["target"];
-  paused: boolean;
-  page?: OwnedPage;
-  signal: AbortSignal;
-  assertCurrent: () => void;
-  assertDefinitionCurrent: () => Promise<void>;
-  definitionChanged: () => void;
-  close: () => Promise<void>;
-};
 
 function keyFor(definition: BrowserDashboardDefinition) {
   return JSON.stringify([definition.agentId, definition.sessionKey, definition.instanceId]);
@@ -88,7 +70,7 @@ async function createResource(
   let retired = false;
   let definitionPending = false;
   let definitionEpoch = 0;
-  let page: OwnedPage | undefined;
+  let page: SessionBrowserDashboard["page"];
   let assertProfileCurrent: (() => void) | undefined;
   let removeProfileAbort: (() => void) | undefined;
   let closing: Promise<void> | undefined;
