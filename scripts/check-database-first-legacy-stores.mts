@@ -4,6 +4,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
+import type { Checker } from "typescript/unstable/sync";
 import {
   explicitUndefinedLegacyObjectPropertyValue,
   mergeConditionalLegacyObjectPropertyValue,
@@ -14,7 +15,10 @@ import {
   type LegacyObjectPropertyValue as LegacyPropertyValue,
   type LegacyPathBranchAssignment,
 } from "./lib/legacy-store-path-domain.mts";
-import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import {
+  createNativeTypeScriptParser,
+  createNativeTypeScriptProject,
+} from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
 
@@ -422,7 +426,7 @@ function importSource(node: ts.ImportDeclaration) {
 function isLegacyRestartSentinelPreflightDetection(
   node: ts.StringLiteralLikeNode,
   relativePath: string,
-  checker: ts.TypeChecker | undefined,
+  checker: Checker | undefined,
 ) {
   if (
     relativePath !== legacyRestartSentinelPreflightPath ||
@@ -465,26 +469,43 @@ function isLegacyRestartSentinelPreflightDetection(
     someCall.arguments[0]!.expression.text === "fs" &&
     someCall.arguments[0]!.name.text === "existsSync" &&
     checker
-      ?.getSymbolAtLocation(someCall.arguments[0]!.expression)
-      ?.declarations?.some(
-        (declaration) =>
+      ?.getSymbolAtPosition(
+        node.getSourceFile().fileName,
+        someCall.arguments[0]!.expression.getStart(),
+      )
+      ?.declarations.some((handle) => {
+        const declaration = handle.resolve();
+        return (
+          declaration !== undefined &&
           ts.isImportClause(declaration) &&
-          !declaration.isTypeOnly &&
+          declaration.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
           ts.isImportDeclaration(declaration.parent) &&
           ts.isStringLiteral(declaration.parent.moduleSpecifier) &&
-          declaration.parent.moduleSpecifier.text === "node:fs",
-      ) === true
+          declaration.parent.moduleSpecifier.text === "node:fs"
+        );
+      }) === true
   );
 }
 
 function collectLegacyFileBoundaryViolations(sourceFile: ts.SourceFile, relativePath: string) {
-  let preflightChecker: ts.TypeChecker | undefined;
-  if (relativePath === legacyRestartSentinelPreflightPath) {
-    const options = { noLib: true, noResolve: true, types: [] };
-    const host = ts.createCompilerHost(options);
-    host.getSourceFile = (fileName) => (fileName === sourceFile.fileName ? sourceFile : undefined);
-    preflightChecker = ts.createProgram([sourceFile.fileName], options, host).getTypeChecker();
-  }
+  const preflightConfig = path.join(
+    path.dirname(sourceFile.fileName),
+    ".openclaw-restart-preflight.tsconfig.json",
+  );
+  using preflightProject =
+    relativePath === legacyRestartSentinelPreflightPath
+      ? createNativeTypeScriptProject({
+          cwd: path.dirname(sourceFile.fileName),
+          configFileName: preflightConfig,
+          files: {
+            [sourceFile.fileName]: sourceFile.getFullText(),
+            [preflightConfig]: JSON.stringify({
+              compilerOptions: { noLib: true, noResolve: true, types: [] },
+              files: [sourceFile.fileName],
+            }),
+          },
+        })
+      : undefined;
   const checkRestartSentinel = relativePath !== legacyRestartSentinelMigrationPath;
   const checkExecApprovals =
     relativePath !== legacyExecApprovalsMigrationPath &&
@@ -508,7 +529,11 @@ function collectLegacyFileBoundaryViolations(sourceFile: ts.SourceFile, relative
       checkRestartSentinel &&
       ts.isStringLiteralLikeNode(node) &&
       legacyRestartSentinelFilenamePattern.test(node.text) &&
-      !isLegacyRestartSentinelPreflightDetection(node, relativePath, preflightChecker)
+      !isLegacyRestartSentinelPreflightDetection(
+        node,
+        relativePath,
+        preflightProject?.project.checker,
+      )
     ) {
       addRestartViolation(node, "legacy restart sentinel reference");
     }
