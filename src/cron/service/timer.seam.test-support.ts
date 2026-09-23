@@ -1,4 +1,4 @@
-import { findTaskByRunId, listTaskRecords } from "../../tasks/task-registry.js";
+import { findTaskByRunId, listTaskRecords } from "../../tasks/runtime-internal.js";
 import type { CronJob } from "../types.js";
 
 export function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeMode"] }): CronJob {
