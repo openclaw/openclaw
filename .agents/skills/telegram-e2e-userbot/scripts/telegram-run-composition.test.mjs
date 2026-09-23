@@ -26,6 +26,7 @@ async function composition(mode, acquisitionReady = Promise.resolve()) {
   const controller = new AbortController();
   const originalFetch = globalThis.fetch;
   const originalSpawn = childProcess.spawn;
+  const originalWriteFileSync = fs.writeFileSync;
   const originalKill = process.kill;
   let released = 0;
   let healthy = true;
@@ -172,12 +173,14 @@ sys.exit(record.main())
       });
       observe("gateway-spawn", child);
       const command = options.env?.TELEGRAM_E2E_FOLLOWUP_CONTROL_COMMAND;
-      if (command)
-        watchers.push(
-          fs.watch(path.dirname(command), () => {
-            if (fs.existsSync(command)) observe("control-wait");
-          }),
-        );
+      if (command) {
+        // Directory notifications can lag or disappear after a completed command write.
+        fs.writeFileSync = (...args) => {
+          const result = originalWriteFileSync(...args);
+          if (args[0] === command) observe("control-wait");
+          return result;
+        };
+      }
     }
     if (argv.some((value) => String(value).endsWith("user-record.py")))
       child.once("exit", () => observe("recorder-terminated"));
@@ -342,6 +345,7 @@ sys.exit(record.main())
         );
       for (const watcher of watchers) watcher.close();
       childProcess.spawn = originalSpawn;
+      fs.writeFileSync = originalWriteFileSync;
       syncBuiltinESMExports();
       globalThis.fetch = originalFetch;
       fs.rmSync(root, { recursive: true, force: true });
