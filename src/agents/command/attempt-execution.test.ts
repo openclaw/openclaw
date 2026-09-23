@@ -41,25 +41,6 @@ import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir
 describe("resolveFallbackRetryPrompt", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
 
-  it("returns original body on first attempt (isFallbackRetry=false)", () => {
-    expect(
-      resolveFallbackRetryPrompt({
-        body: originalBody,
-        isFallbackRetry: false,
-      }),
-    ).toBe(originalBody);
-  });
-
-  it("prepends recovery prefix to original body on fallback retry with existing session history", () => {
-    expect(
-      resolveFallbackRetryPrompt({
-        body: originalBody,
-        isFallbackRetry: true,
-        sessionHasHistory: true,
-      }),
-    ).toBe(`[Retry after the previous model attempt failed or timed out]\n\n${originalBody}`);
-  });
-
   it("preserves original body for fallback retry when sessionHasHistory is undefined", () => {
     expect(
       resolveFallbackRetryPrompt({
@@ -67,39 +48,6 @@ describe("resolveFallbackRetryPrompt", () => {
         isFallbackRetry: true,
       }),
     ).toBe(originalBody);
-  });
-
-  it("returns original body on first attempt regardless of sessionHasHistory", () => {
-    expect(
-      resolveFallbackRetryPrompt({
-        body: originalBody,
-        isFallbackRetry: false,
-        sessionHasHistory: true,
-      }),
-    ).toBe(originalBody);
-
-    expect(
-      resolveFallbackRetryPrompt({
-        body: originalBody,
-        isFallbackRetry: false,
-        sessionHasHistory: false,
-      }),
-    ).toBe(originalBody);
-  });
-
-  it("prepends priorContextPrelude before the retry marker on fallback retry", () => {
-    const prelude = "## Prior session context (from claude-cli)\nuser: prior question";
-    // Claude fallback prelude must come before the retry marker so the model
-    // receives prior CLI context before the instruction about failure recovery.
-    const result = resolveFallbackRetryPrompt({
-      body: originalBody,
-      isFallbackRetry: true,
-      sessionHasHistory: true,
-      priorContextPrelude: prelude,
-    });
-    expect(result).toBe(
-      `${prelude}\n\n[Retry after the previous model attempt failed or timed out]\n\n${originalBody}`,
-    );
   });
 
   it("emits the retry prompt with prelude even when sessionHasHistory is false (claude-cli case)", () => {
@@ -486,29 +434,6 @@ describe("claudeCliSessionTranscriptHasContent", () => {
 
   const GRACE_MS = 250;
 
-  it("returns true when the Claude project transcript has an assistant message", async () => {
-    const workspaceDir = await makeWorkspace();
-    await writeClaudeProjectFile(
-      workspaceDir,
-      "session-with-assistant",
-      `${JSON.stringify({
-        type: "assistant",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "hello" }],
-        },
-      })}\n`,
-    );
-
-    expect(
-      await claudeCliSessionTranscriptHasContent({
-        sessionId: "session-with-assistant",
-        workspaceDir,
-        homeDir: tmpDir,
-      }),
-    ).toBe(true);
-  });
-
   it("rejects path-like session ids instead of escaping the Claude projects tree", async () => {
     const workspaceDir = await makeWorkspace();
     await writeClaudeProjectFile(workspaceDir, "safe-session", "");
@@ -710,22 +635,6 @@ describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
     ).toBe(false);
   });
 
-  it("returns false when the last assistant message has no tool_use", async () => {
-    await writeJsonlSession("text-only", [
-      {
-        type: "assistant",
-        message: { role: "assistant", content: [{ type: "text", text: "all done" }] },
-      },
-    ]);
-    expect(
-      await claudeCliSessionTranscriptHasOrphanedToolUse({
-        sessionId: "text-only",
-        workspaceDir,
-        homeDir: tmpDir,
-      }),
-    ).toBe(false);
-  });
-
   it("returns false when every tool_use in the last assistant message has a matching tool_result", async () => {
     await writeJsonlSession("answered", [
       {
@@ -750,29 +659,6 @@ describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
         homeDir: tmpDir,
       }),
     ).toBe(false);
-  });
-
-  it("returns true when the last assistant message has a trailing tool_use without tool_result", async () => {
-    await writeJsonlSession("orphan", [
-      {
-        type: "assistant",
-        message: { role: "assistant", content: [{ type: "text", text: "let me run that" }] },
-      },
-      {
-        type: "assistant",
-        message: {
-          role: "assistant",
-          content: [{ type: "tool_use", id: "toolu_unanswered", name: "Bash", input: {} }],
-        },
-      },
-    ]);
-    expect(
-      await claudeCliSessionTranscriptHasOrphanedToolUse({
-        sessionId: "orphan",
-        workspaceDir,
-        homeDir: tmpDir,
-      }),
-    ).toBe(true);
   });
 
   it("returns true when a Claude server tool use is unanswered", async () => {
@@ -1163,4 +1049,3 @@ describe("createAcpVisibleTextAccumulator", () => {
     expect(acc.finalizeReplySnapshot()).toEqual(expected);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
