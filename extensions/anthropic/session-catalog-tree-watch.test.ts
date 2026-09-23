@@ -172,6 +172,21 @@ describe("Claude project directory watch", () => {
     expect(watched.get(path.join(root, "existing"))).not.toBe(child);
   });
 
+  it("tracks files in Linux child directories nested below the watched root", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const workspace = path.join(root, "account", "workspace");
+    await promises.mkdir(workspace, { recursive: true });
+    watch = createDirtyDirectoryWatch(root);
+    watch.observeChildDirectories(["account", "account/workspace"]);
+    await armed(watch);
+
+    await promises.writeFile(path.join(workspace, "local_session.json"), "{}\n");
+    await vi.waitFor(() => expect(watch?.takeDirty()).toEqual(new Set(["account/workspace"])), {
+      timeout: 2_000,
+      interval: 25,
+    });
+  });
+
   it("requests a full read instead of throwing when watcher creation fails", () => {
     const attach = vi.spyOn(fs, "watch").mockImplementation(() => {
       throw new Error("watch capacity exhausted");

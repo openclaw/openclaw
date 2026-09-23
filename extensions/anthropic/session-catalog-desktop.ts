@@ -177,6 +177,7 @@ async function readDesktopMetadata(
   forceRefresh?: boolean,
   budget?: CatalogJsonReadBudget,
   onIoFailure?: () => void,
+  watch?: DirtyDirectoryWatch,
 ): Promise<{
   available: boolean;
   customGroups: Map<string, string>;
@@ -201,14 +202,22 @@ async function readDesktopMetadata(
   const racedFilesBefore = budget?.racedFiles ?? 0;
   const remainingBytesBefore = budget?.remainingBytes;
   const lateRejectedFilePaths = new Set<string>();
+  const sessionsRoot = desktopSessionsDir(homeDir);
+  const watchedDirectories = new Set<string>();
+  const observeDirectory = (directory: string) => {
+    watchedDirectories.add(path.relative(sessionsRoot, directory));
+    watch?.observeChildDirectories(watchedDirectories);
+  };
   let readFailed = false;
   const markIoFailure = () => {
     readFailed = true;
     onIoFailure?.();
   };
   const customGroups = await readClaudeDesktopCustomGroups(homeDir, forceRefresh);
-  for (const accountDir of (await childDirectories(desktopSessionsDir(homeDir))).toSorted()) {
+  for (const accountDir of (await childDirectories(sessionsRoot)).toSorted()) {
+    observeDirectory(accountDir);
     for (const workspaceDir of (await childDirectories(accountDir)).toSorted()) {
+      observeDirectory(workspaceDir);
       let entries: string[];
       try {
         entries = await fs.readdir(workspaceDir);
@@ -527,7 +536,7 @@ export async function readDesktopOverlay(
       current.watch = undefined;
       return emptyDesktopOverlay;
     }
-    const overlay = await readDesktopMetadata(homeDir, forceRefresh, budget, onIoFailure);
+    const overlay = await readDesktopMetadata(homeDir, forceRefresh, budget, onIoFailure, watch);
     return previous ? preserveArchivedSessions(overlay, previous) : overlay;
   })().finally(() => {
     current.refreshing = false;

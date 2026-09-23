@@ -304,6 +304,7 @@ describe("Claude session catalog JSON budget", () => {
   });
 
   it("clears a cached partial status after Desktop metadata recovers", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const home = await createHome();
     await writeDesktopMetadata(home, "recovered", {
       cliSessionId: "desktop-recovered-session",
