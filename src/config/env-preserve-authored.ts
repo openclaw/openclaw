@@ -34,30 +34,42 @@ function hasEscapedEnvVarRef(value: string): boolean {
   return collectAuthoredEnvRefs(value).some((ref) => ref.kind === "escaped");
 }
 
-export function containsAuthoredUnescapedEnvTemplate(value: unknown): boolean {
-  if (typeof value === "string") {
-    return containsEnvVarReference(value);
-  }
-  if (Array.isArray(value)) {
-    return value.some((item) => containsAuthoredUnescapedEnvTemplate(item));
-  }
-  if (isPlainObject(value)) {
-    return Object.values(value).some((item) => containsAuthoredUnescapedEnvTemplate(item));
+// Walks the value tree on an explicit work stack so a schema-valid deep
+// document cannot overflow the call stack while callers probe for templates.
+function containsDeepAuthoredEnvTemplate(
+  value: unknown,
+  isTemplate: (text: string) => boolean,
+): boolean {
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (typeof current === "string") {
+      if (isTemplate(current)) {
+        return true;
+      }
+      continue;
+    }
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        pending.push(item);
+      }
+      continue;
+    }
+    if (isPlainObject(current)) {
+      for (const item of Object.values(current)) {
+        pending.push(item);
+      }
+    }
   }
   return false;
 }
 
+export function containsAuthoredUnescapedEnvTemplate(value: unknown): boolean {
+  return containsDeepAuthoredEnvTemplate(value, containsEnvVarReference);
+}
+
 export function containsAuthoredEscapedEnvTemplate(value: unknown): boolean {
-  if (typeof value === "string") {
-    return hasEscapedEnvVarRef(value);
-  }
-  if (Array.isArray(value)) {
-    return value.some((item) => containsAuthoredEscapedEnvTemplate(item));
-  }
-  if (isPlainObject(value)) {
-    return Object.values(value).some((item) => containsAuthoredEscapedEnvTemplate(item));
-  }
-  return false;
+  return containsDeepAuthoredEnvTemplate(value, hasEscapedEnvVarRef);
 }
 
 function countAuthoredEnvRefsByPath(

@@ -1,6 +1,6 @@
 // Covers JSON merge-patch behavior for config mutations.
 import { describe, expect, it } from "vitest";
-import { applyMergePatch } from "./merge-patch.js";
+import { applyMergePatch, createMergePatch, mergePatchConflicts } from "./merge-patch.js";
 
 describe("applyMergePatch", () => {
   function makeAgentListBaseAndPatch() {
@@ -223,5 +223,85 @@ describe("applyMergePatch", () => {
       };
     };
     expect(merged.channels?.telegram?.allowFrom).toEqual(["333"]);
+  });
+});
+
+describe("stack-safe deep merge-patch", () => {
+  function buildNestedObject(
+    depth: number,
+    leaf: Record<string, unknown>,
+  ): Record<string, unknown> {
+    let value: Record<string, unknown> = leaf;
+    for (let i = 0; i < depth; i += 1) {
+      value = { level: value };
+    }
+    return value;
+  }
+
+  function readDeepLeaf(value: unknown, depth: number): unknown {
+    let current = value;
+    for (let i = 0; i < depth; i += 1) {
+      if (typeof current !== "object" || current === null || Array.isArray(current)) {
+        return undefined;
+      }
+      current = (current as Record<string, unknown>).level;
+    }
+    return current;
+  }
+
+  it("diffs a deeply nested document without a call-stack overflow", () => {
+    const depth = 5_000;
+    const base = buildNestedObject(depth, { leaf: "old" });
+    const target = buildNestedObject(depth, { leaf: "new" });
+    const patch = createMergePatch(base, target);
+    expect(readDeepLeaf(patch, depth)).toEqual({ leaf: "new" });
+    const applied = applyMergePatch(base, patch as Record<string, unknown>);
+    expect(readDeepLeaf(applied, depth)).toEqual({ leaf: "new" });
+  });
+
+  it("clones a deeply nested addition without a call-stack overflow", () => {
+    const depth = 5_000;
+    const base = { other: true };
+    const target = buildNestedObject(depth, { leaf: "added" });
+    const patch = createMergePatch(base, { other: true, deep: target });
+    expect(readDeepLeaf((patch as Record<string, unknown>).deep, depth)).toEqual({
+      leaf: "added",
+    });
+  });
+
+  it("reports no conflict for a deeply nested unchanged document", () => {
+    const depth = 5_000;
+    const base = buildNestedObject(depth, { leaf: "value" });
+    const patch = createMergePatch(base, base);
+    expect(mergePatchConflicts(base, base, patch)).toBe(false);
+  });
+
+  it("applies a deep patch through plugins.entries.config without a call-stack overflow", () => {
+    const depth = 5_000;
+    const base = {
+      plugins: { entries: { probe: { config: buildNestedObject(depth, { leaf: 1 }) } } },
+    };
+    const patch = {
+      plugins: { entries: { probe: { config: buildNestedObject(depth, { leaf: 2 }) } } },
+    };
+    const merged = applyMergePatch(base, patch) as typeof base;
+    expect(readDeepLeaf(merged.plugins.entries.probe.config, depth)).toEqual({ leaf: 2 });
+  });
+
+  it("keeps an authored __proto__ key as inert own data when cloning an added subtree", () => {
+    // JSON.parse mints an own enumerable `__proto__` data property; the object
+    // literal form would set a prototype instead, so both sides parse.
+    const target = JSON.parse('{"added":{"__proto__":{"flag":true},"kept":1}}') as Record<
+      string,
+      unknown
+    >;
+    const patch = createMergePatch({}, target) as Record<string, unknown>;
+    const added = patch.added as Record<string, unknown>;
+    expect(Object.hasOwn(added, "__proto__")).toBe(true);
+    expect(Object.getPrototypeOf(added)).toBe(Object.prototype);
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- The round-trip mints an own `__proto__` key on both sides; structuredClone cannot express that shape.
+    expect(JSON.parse(JSON.stringify(added))).toEqual(
+      JSON.parse('{"__proto__":{"flag":true},"kept":1}'),
+    );
   });
 });

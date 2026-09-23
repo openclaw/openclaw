@@ -917,7 +917,6 @@ describe("restoreEnvVarRefs with edited arrays", () => {
     ).toEqual(incoming);
   });
 });
-
 describe("restoreEnvVarRefsFromResolved", () => {
   it.each([{ explicit: [["0", "token"]] }, { explicit: [["0"]] }])(
     "keeps explicit escaped activation on its uniquely retained owner ($explicit)",
