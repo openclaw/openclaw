@@ -125,9 +125,7 @@ function validateObservation(observation: AgentEnergeticObservation): void {
 
 function meanKnown(values: readonly DynamicsMetric[]): number | null {
   const known = values.filter((value): value is number => value !== null);
-  return known.length === 0
-    ? null
-    : known.reduce((sum, value) => sum + value, 0) / known.length;
+  return known.length === 0 ? null : known.reduce((sum, value) => sum + value, 0) / known.length;
 }
 
 function maxKnown(values: readonly DynamicsMetric[]): number | null {
@@ -159,9 +157,7 @@ function classifyEnergyLevel(energy: DynamicsMetric): EnergyLevel {
  * These are engineering control regimes, not claims of literal equilibrium
  * thermodynamics. Energy and temperature are intentionally orthogonal.
  */
-function assessAgentEnergetics(
-  observation: AgentEnergeticObservation,
-): AgentEnergeticAssessment {
+function assessAgentEnergetics(observation: AgentEnergeticObservation): AgentEnergeticAssessment {
   validateObservation(observation);
   const {
     energy,
@@ -240,12 +236,7 @@ function assessAgentEnergetics(
     };
   }
 
-  if (
-    temperature !== null &&
-    correlation !== null &&
-    temperature >= 0.7 &&
-    correlation <= 0.45
-  ) {
+  if (temperature !== null && correlation !== null && temperature >= 0.7 && correlation <= 0.45) {
     return {
       replicaId: observation.replicaId,
       energyLevel,
@@ -269,11 +260,7 @@ function assessAgentEnergetics(
       replicaId: observation.replicaId,
       energyLevel,
       regime: "liquid",
-      score: scoreMean([
-        mobility,
-        1 - Math.abs(temperature - 0.5),
-        1 - correlation / 2,
-      ]),
+      score: scoreMean([mobility, 1 - Math.abs(temperature - 0.5), 1 - correlation / 2]),
       reason: "mobile search combines exploration with partial coordination",
     };
   }
@@ -467,15 +454,11 @@ export function planEnergeticLaunch(params: {
     ...params.state,
   };
   const decision = assessPopulationEnergetics([current, ...(params.peers ?? [])]);
-  const assessment = decision.assessments.find(
-    (item) => item.replicaId === params.replicaId,
-  );
+  const assessment = decision.assessments.find((item) => item.replicaId === params.replicaId);
   if (!assessment) {
     throw new Error("population energetics lost the target replica");
   }
-  const targeted = decision.actions.filter((action) =>
-    actionTargets(action, params.replicaId),
-  );
+  const targeted = decision.actions.filter((action) => actionTargets(action, params.replicaId));
   const actionKinds = targeted.map((action) => action.kind);
   const suppressSpawn = actionKinds.includes("drain");
   const controls = computeControls(assessment.energyLevel);

@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  planEnergeticLaunch,
-  type AgentEnergeticObservation,
-} from "./population-energetics.js";
+import { planEnergeticLaunch, type AgentEnergeticObservation } from "./population-energetics.js";
 
 function observation(
   replicaId: string,
@@ -23,10 +20,7 @@ function observation(
   };
 }
 
-function plan(
-  patch: Partial<AgentEnergeticObservation>,
-  peers: AgentEnergeticObservation[] = [],
-) {
+function plan(patch: Partial<AgentEnergeticObservation>, peers: AgentEnergeticObservation[] = []) {
   const target = observation("target", patch);
   const { replicaId, ...state } = target;
   return planEnergeticLaunch({ replicaId, state, peers });

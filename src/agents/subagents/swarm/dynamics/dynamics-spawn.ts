@@ -1,5 +1,10 @@
 import { candidateIdentity, type CandidateManifest } from "./candidate-evidence.js";
 import { buildHandoffManifest, type HandoffPayload } from "./dynamics-handoffs.js";
+import type {
+  DynamicsRequirement,
+  DynamicsSpawnRequirements,
+  InformationBoundary,
+} from "./dynamics-types.js";
 import {
   planEnergeticLaunch,
   type AgentEnergeticObservation,
@@ -7,11 +12,6 @@ import {
   type DynamicsMetric,
   type EnergeticLaunchPlan,
 } from "./population-energetics.js";
-import type {
-  DynamicsRequirement,
-  DynamicsSpawnRequirements,
-  InformationBoundary,
-} from "./dynamics-types.js";
 
 export type PreparedDynamicsSpawn = {
   task: string;
@@ -168,10 +168,7 @@ function readMetric(value: unknown, name: string): DynamicsMetric {
   return value;
 }
 
-function readEnergeticState(
-  raw: Record<string, unknown>,
-  name: string,
-): AgentEnergeticState {
+function readEnergeticState(raw: Record<string, unknown>, name: string): AgentEnergeticState {
   return {
     energy: readMetric(raw.energy, `${name}.energy`),
     temperature: readMetric(raw.temperature, `${name}.temperature`),
@@ -188,11 +185,7 @@ function readEnergeticState(
 function readEnergeticPeer(value: unknown, index: number): AgentEnergeticObservation {
   const name = `dynamics.energetics.peers[${index}]`;
   const raw = readRecord(value, name);
-  if (
-    Object.keys(raw).some(
-      (key) => key !== "replicaId" && !ENERGETIC_METRIC_KEYS.has(key),
-    )
-  ) {
+  if (Object.keys(raw).some((key) => key !== "replicaId" && !ENERGETIC_METRIC_KEYS.has(key))) {
     throw new Error(`unsupported ${name} field`);
   }
   return {
@@ -209,11 +202,7 @@ function readEnergeticLaunch(
     return undefined;
   }
   const raw = readRecord(value, "dynamics.energetics");
-  if (
-    Object.keys(raw).some(
-      (key) => key !== "peers" && !ENERGETIC_METRIC_KEYS.has(key),
-    )
-  ) {
+  if (Object.keys(raw).some((key) => key !== "peers" && !ENERGETIC_METRIC_KEYS.has(key))) {
     throw new Error("unsupported dynamics.energetics field");
   }
   const peersRaw = raw.peers;
@@ -269,8 +258,7 @@ export function prepareDynamicsSpawn(params: {
     );
   }
 
-  const raw =
-    options.handoff === undefined ? {} : readRecord(options.handoff, "dynamics.handoff");
+  const raw = options.handoff === undefined ? {} : readRecord(options.handoff, "dynamics.handoff");
   if (
     Object.keys(raw).some(
       (key) => !["candidateDigest", "artifactRefs", "evidenceRefs", "summary"].includes(key),
