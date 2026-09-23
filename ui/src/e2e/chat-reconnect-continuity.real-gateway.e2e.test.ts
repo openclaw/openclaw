@@ -213,6 +213,10 @@ suite.define(() => {
             const reconstructedText = (await reconstructed.textContent()) ?? "";
             expect(occurrences(reconstructedText, opening.trim())).toBe(1);
             expect(occurrences(reconstructedText, offlineTail)).toBe(1);
+            const assistantTranscript = (
+              await page.locator(".chat-group.assistant").allTextContents()
+            ).join("\n");
+            expect(occurrences(assistantTranscript, offlineTail)).toBe(1);
             expect(await page.locator(".chat-group.user", { hasText: firstPrompt }).count()).toBe(
               1,
             );
@@ -283,12 +287,32 @@ suite.define(() => {
             const reloadedPartialText = (await reloadedPartial.textContent()) ?? "";
             expect(occurrences(reloadedPartialText, opening.trim())).toBe(1);
             expect(occurrences(reloadedPartialText, offlineTail)).toBe(1);
-            expect(
-              await page
-                .locator(".chat-group.assistant")
-                .getByText(followUpReply, { exact: true })
-                .count(),
-            ).toBe(1);
+            const reloadedGroups = await page.locator(".chat-group").evaluateAll((groups) =>
+              groups.map((group) => ({
+                assistant: group.classList.contains("assistant"),
+                user: group.classList.contains("user"),
+                text: group.textContent ?? "",
+              })),
+            );
+            const firstAssistantIndex = reloadedGroups.findIndex(
+              (group) => group.assistant && group.text.includes(opening.trim()),
+            );
+            const followUpUserIndex = reloadedGroups.findIndex(
+              (group) => group.user && group.text.includes(followUpPrompt),
+            );
+            const followUpAssistantIndex = reloadedGroups.findIndex(
+              (group) => group.assistant && group.text.includes(followUpReply),
+            );
+            expect(firstAssistantIndex).toBeGreaterThanOrEqual(0);
+            expect(followUpUserIndex).toBeGreaterThan(firstAssistantIndex);
+            expect(followUpAssistantIndex).toBeGreaterThan(followUpUserIndex);
+            expect(reloadedGroups[followUpAssistantIndex]?.text).not.toContain(offlineTail);
+            const reloadedAssistantTranscript = reloadedGroups
+              .filter((group) => group.assistant)
+              .map((group) => group.text)
+              .join("\n");
+            expect(occurrences(reloadedAssistantTranscript, offlineTail)).toBe(1);
+            expect(occurrences(reloadedAssistantTranscript, followUpReply)).toBe(1);
             expect(provider.requests()).toBe(2);
             expect(provider.failures).toEqual([]);
           },
