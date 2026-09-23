@@ -1498,7 +1498,11 @@ describe("models.authStatus", () => {
 
   it("shares provider resolution across 20 clients of one published auth generation", async () => {
     const clients = Array.from({ length: 20 }, () => createOptions({ agentId: "main" }));
-    await Promise.all(clients.map((opts) => handler(opts)));
+    await Promise.all(
+      clients.map(async (opts) => {
+        await handler(opts);
+      }),
+    );
     for (const opts of clients) {
       expect(firstRespondCall(opts)).toEqual([
         true,
