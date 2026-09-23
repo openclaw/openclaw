@@ -103,9 +103,14 @@ describe("incomplete-turn recovery policy", () => {
         error: false,
         silent: false,
       },
-    ].flatMap((scenario) =>
+    ].flatMap(({ name, aborted, timedOut, yielded, error, silent }) =>
       [true, false, undefined].map((allowEmptyAssistantReplyAsSilent) => ({
-        ...scenario,
+        name,
+        aborted,
+        timedOut,
+        yielded,
+        error,
+        silent,
         allowEmptyAssistantReplyAsSilent,
       })),
     ),
