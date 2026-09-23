@@ -24,7 +24,7 @@ type SchemaOwner = {
   revision: number;
   facts?: SqliteSchemaFacts;
   dataVersion?: number;
-  probed: boolean;
+  probeTurn?: Promise<void>;
   transactionalSchema: boolean;
   transactionalFacts: boolean;
   snapshot?: object;
@@ -239,7 +239,7 @@ function trackSchemaChanges(
   registerNodeSqliteDisposeCallback(database, () => {
     invalidate(owner);
     owner.dataVersion = undefined;
-    owner.probed = false;
+    owner.probeTurn = undefined;
     // Native close can still fail; transaction settlement retains pending DDL publication.
     if (owner.scope) {
       scopes.finalizer.unregister(owner);
@@ -254,7 +254,7 @@ function trackSchemaChanges(
 export function readSqliteCacheDataVersion(database: DatabaseSync): number {
   const tracked = owners.get(database);
   const owner = tracked?.admitted ? tracked : undefined;
-  if (owner?.probed && !owner.authorizerActive && owner.dataVersion !== undefined) {
+  if (owner?.probeTurn && !owner.authorizerActive && owner.dataVersion !== undefined) {
     return owner.dataVersion;
   }
   const row = executeWithCachedStatement(database, "PRAGMA data_version", [], (statement) =>
@@ -268,15 +268,25 @@ export function readSqliteCacheDataVersion(database: DatabaseSync): number {
       invalidate(owner);
       owner.dataVersion = row.data_version;
     }
-    if (!owner.probed) {
-      owner.probed = true;
+    if (!owner.probeTurn) {
       // Retain only the facts, never a native handle or statement, until the next turn.
-      setImmediate(() => {
-        owner.probed = false;
-      }).unref();
+      const turn = new Promise<void>((resolve) => {
+        setImmediate(() => {
+          if (owner.probeTurn === turn) {
+            owner.probeTurn = undefined;
+          }
+          resolve();
+        }).unref();
+      });
+      owner.probeTurn = turn;
     }
   }
   return row.data_version;
+}
+
+/** A new asynchronous operation must not inherit a preceding operation's freshness probe. */
+export function waitForSqliteSchemaProbeTurn(database: DatabaseSync): Promise<void> | undefined {
+  return owners.get(database)?.probeTurn;
 }
 
 /** Install at native open, before callers can retain statements or install an authorizer. */
@@ -285,7 +295,6 @@ export function trackSqliteSchema(database: DatabaseSync, native: NativeSqlite):
     const owner: SchemaOwner = {
       admitted: false,
       revision: 0,
-      probed: false,
       transactionalSchema: false,
       transactionalFacts: false,
       authorizerActive: false,
