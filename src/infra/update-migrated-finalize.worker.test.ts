@@ -13,6 +13,7 @@ const fixture = vi.hoisted(() => ({
   finish: vi.fn(),
   terminal: vi.fn(),
   writeFile: vi.fn(),
+  stopService: vi.fn(),
   fence: { assertCurrent: vi.fn() },
 }));
 
@@ -48,6 +49,7 @@ vi.mock("../cli/update-cli/update-command-result.js", () => ({
 }));
 vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
   createWindowsTaskAutoStartGuard: vi.fn(),
+  maybeStopManagedServiceBeforeMutableUpdate: fixture.stopService,
 }));
 vi.mock("../cli/update-cli/update-command-terminal.js", () => ({
   withUpdateCommandTerminalResult: async (run: (registerRun: () => void) => Promise<unknown>) =>
