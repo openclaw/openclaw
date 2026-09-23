@@ -34,6 +34,7 @@ import { isSharedVitestExcludedPath } from "../../test/vitest/vitest.pattern-fil
 import { isPluginControlUiPath } from "../../test/vitest/vitest.ui-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
+import { GIT_LS_FILES_MAX_BUFFER_BYTES } from "./list-test-files.mts";
 import { parsePositiveInt } from "./numeric-options.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
@@ -179,10 +180,6 @@ function isSkippedTrackedTestFile(relativePath: string) {
 }
 
 let trackedRepoTestFiles: string[] | null | undefined;
-// Large checkouts exceed Node's 1 MiB spawnSync default. Preserve the Git inventory path;
-// ENOBUFS would otherwise trigger expensive extension-directory walks.
-export const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
-
 export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string[]) {
   // Query only the planner-owned tree: a full-repo inventory can overflow
   // spawnSync's buffer and either truncate the plan or force directory walks.
