@@ -1,5 +1,10 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
+import {
+  assertUpdateInitialStoreInvocation,
+  currentUpdateInitialStoreAdmission,
+  withUpdateInitialStoreInvocation,
+} from "../../infra/update-initial-store-invocation.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
@@ -45,10 +50,13 @@ import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 type PreparedUpdate = NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>;
 
 export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<void> {
-  const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
-  return await withRetainedUpdateRuntime(import.meta.url, (retainRuntime) =>
-    updateCommandWithRuntime(inputOpts, retainRuntime),
-  );
+  return withUpdateInitialStoreInvocation(inputOpts.initialStores, async () => {
+    const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
+    assertUpdateInitialStoreInvocation();
+    return withRetainedUpdateRuntime(import.meta.url, (retainRuntime) =>
+      updateCommandWithRuntime(inputOpts, retainRuntime),
+    );
+  });
 }
 
 async function updateCommandWithRuntime(
@@ -63,6 +71,7 @@ async function updateCommandWithRuntime(
   const prepared = await withUpdateAdmissionReporting(inputOpts, () =>
     withUpdateInProgressEnv(invocationCwd, () => prepareUpdateCommand(inputOpts)),
   );
+  assertUpdateInitialStoreInvocation(resolveUpdateCommandAdmissionRoot(prepared));
   // Post-core children report phase results; the outer updater owns the run ledger.
   if (prepared.postCoreUpdateResume) {
     return await withUpdateInProgressEnv(invocationCwd, async () =>
@@ -85,9 +94,15 @@ async function updateCommandWithRuntime(
       expectedForeground:
         prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     });
+    assertUpdateInitialStoreInvocation(root, env);
     const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
     assertUpdatePackageActivationAdmission(root, { serviceRoot });
-    if (await updateStateNeedsInitialization(env)) {
+    const needsInitialization = await updateStateNeedsInitialization(env);
+    assertUpdateInitialStoreInvocation(root, env);
+    if (needsInitialization) {
+      if (currentUpdateInitialStoreAdmission()) {
+        throw new Error("Explicit private update invocation requires existing initialized state.");
+      }
       const { initializeAndRunUpdate } = await import("./update-command-initialization-run.js");
       return await initializeAndRunUpdate(
         inputOpts,

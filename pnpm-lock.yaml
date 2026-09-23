@@ -204,7 +204,7 @@ overrides:
   protobufjs: 8.8.0
   uuid: 14.0.2
 
-packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
+packageExtensionsChecksum: sha256-hirsDRyu0OA1ydRUMmuS+lIOhWqVxMpoZdk2ZWOmNog=
 
 patchedDependencies:
   '@awesome.me/webawesome@3.12.0': e30830e3b67d6b834f2257eb85dd252dcf225ed935fb69646e6c90433c85d99c
@@ -16371,6 +16371,8 @@ snapshots:
     optional: true
 
   openai@7.15.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.21.3)(zod@4.6.5):
+    dependencies:
+      '@types/ws': 8.18.1
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.83
       '@smithy/hash-node': 4.5.2

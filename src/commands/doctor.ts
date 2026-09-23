@@ -1,5 +1,11 @@
 /** Top-level doctor command wrapper, including post-upgrade probe mode. */
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import {
+  assertUpdateInitialStoreInvocation,
+  currentUpdateInitialStoreAdmission,
+  withUpdateInitialStoreInvocation,
+} from "../infra/update-initial-store-invocation.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
@@ -50,9 +56,27 @@ export async function doctorCommand(
   options?: DoctorOptions,
   databasePreflight?: DoctorDatabasePreflight,
 ): Promise<void> {
+  return withUpdateInitialStoreInvocation(options?.initialStores, async () => {
+    if (currentUpdateInitialStoreAdmission()) {
+      const root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+      if (!root) {
+        throw new Error("Explicit private Doctor invocation requires its executing installation.");
+      }
+      assertUpdateInitialStoreInvocation(root);
+    }
+    return doctorCommandInternal(runtime, options, databasePreflight);
+  });
+}
+
+async function doctorCommandInternal(
+  runtime?: RuntimeEnv,
+  options?: DoctorOptions,
+  databasePreflight?: DoctorDatabasePreflight,
+): Promise<void> {
   const outputRuntime = runtime ?? defaultRuntime;
   if (options?.stateSqlite) {
     const { runDoctorStateSqliteCompact } = await import("./doctor-state-sqlite-compact.js");
+    assertUpdateInitialStoreInvocation();
     const report = await runDoctorStateSqliteCompact();
     if (options.json) {
       writeRuntimeJson(outputRuntime, report);
@@ -78,6 +102,7 @@ export async function doctorCommand(
       await import("./doctor-session-sqlite.js");
     const { withArtifactPreservingStateReads } =
       await import("../state/openclaw-state-db-readonly.js");
+    assertUpdateInitialStoreInvocation();
     const sessionSqliteOptions = {
       mode: sessionSqliteMode,
       ...(options.sessionSqliteStore ? { store: options.sessionSqliteStore } : {}),
@@ -157,7 +182,9 @@ export async function doctorCommand(
   if (options?.postUpgrade) {
     const { runPostUpgradeProbes } = await import("./doctor-post-upgrade.js");
     const { readSourceConfigBestEffort } = await import("../config/io.runtime.js");
+    assertUpdateInitialStoreInvocation();
     const config = await readSourceConfigBestEffort();
+    assertUpdateInitialStoreInvocation();
     const report = await runPostUpgradeProbes({ updateChannel: config.update?.channel });
     if (options.json) {
       writeRuntimeJson(outputRuntime, report);
@@ -173,6 +200,7 @@ export async function doctorCommand(
     exitCliAfterOutput(outputRuntime, hasError ? 1 : 0);
   }
   const doctorHealth = await import("../flows/doctor-health.js");
+  assertUpdateInitialStoreInvocation();
   await doctorHealth.runDoctorHealthFlow(runtime, options, undefined, databasePreflight);
 }
 

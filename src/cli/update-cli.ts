@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { UpdateInitialStoreInvocation } from "../infra/update-initial-store-invocation.js";
 import { POST_CORE_UPDATE_ENV } from "../infra/update-post-core-context.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
@@ -136,7 +137,10 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
 }
 
 /** Attach the update command group to the root CLI. */
-export function registerUpdateCli(program: Command) {
+export function registerUpdateCli(
+  program: Command,
+  invocation?: { initialStores: UpdateInitialStoreInvocation },
+) {
   program.enablePositionalOptions();
   const update = program
     .command("update")
@@ -199,6 +203,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       try {
         const { updateCommand } = await import("./update-cli/update-command.js");
         await updateCommand({
+          ...(invocation ? { initialStores: invocation.initialStores } : {}),
           runtimeRecoveryEnv: getProgramContext(program)?.runtimeRecoveryEnv,
           json: Boolean(opts.json),
           restart: Boolean(opts.restart),

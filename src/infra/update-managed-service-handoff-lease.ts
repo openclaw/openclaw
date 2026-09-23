@@ -9,6 +9,7 @@ import { hasErrnoCode } from "./errno.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "./kysely-sync.js";
 import type { SqliteTransactionOptions } from "./sqlite-transaction.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import { currentUpdateInitialStoreAdmission } from "./update-initial-store-invocation.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
 import { canCleanupLegacyManagedHandoff } from "./update-managed-service-handoff-cleanup.js";
 import {
@@ -57,7 +58,10 @@ export type ManagedHandoffParent = ManagedHandoffLease | BorrowedLegacyHandoffPa
 export type { BorrowedLegacyHandoffParent } from "./update-managed-service-handoff-legacy-parent.js";
 
 export function resolveManagedUpdateLeaseDatabasePath(): string {
-  return path.join(resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite");
+  return (
+    currentUpdateInitialStoreAdmission()?.selection.handoff.databasePath ??
+    path.join(resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite")
+  );
 }
 
 type LeaseRead =
@@ -77,6 +81,7 @@ export function createManagedHandoffLeaseStore(
   } = {
     databasePath: resolveManagedUpdateLeaseDatabasePath(),
     serviceManagerEnv: resolveServiceManagerEnv(),
+    existingIdentity: currentUpdateInitialStoreAdmission()?.selection.handoff,
   },
   logger?: SqliteTransactionOptions["logger"],
 ) {

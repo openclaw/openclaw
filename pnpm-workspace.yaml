@@ -132,6 +132,10 @@ allowBuilds:
 
 # The transient npm lock generator also needs the peer marked optional.
 packageExtensions:
+  # The SDK declaration extends ws.ClientOptions; global stores cannot inherit root @types.
+  openai@7.15.0:
+    dependencies:
+      "@types/ws": 8.18.1
   baileys:
     peerDependenciesMeta:
       sharp:

@@ -27,6 +27,7 @@ import {
   detectGlobalInstallManagerForRoot,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
+import type { UpdateInitialStoreInvocation } from "../../infra/update-initial-store-invocation.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
@@ -52,6 +53,8 @@ import { resolveNodeRunner } from "./node-runner.js";
 export { resolveNodeRunner } from "./node-runner.js";
 
 export type UpdateCommandOptions = {
+  /** Internal explicit private invocation; no public CLI flag or inferred selection. */
+  initialStores?: UpdateInitialStoreInvocation;
   /** Doctor's accepted source update targets dev without changing the saved channel. */
   sourceUpdate?: { root: string };
   /** In-process reporting only, after the update owner settles. Never serialized. */

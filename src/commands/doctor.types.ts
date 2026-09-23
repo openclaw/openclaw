@@ -1,5 +1,9 @@
+import type { UpdateInitialStoreInvocation } from "../infra/update-initial-store-invocation.js";
+
 /** CLI option shape shared by doctor command entrypoints and prompt helpers. */
 export type DoctorOptions = {
+  /** Explicit private in-process invocation, not a delegated update authority. */
+  initialStores?: UpdateInitialStoreInvocation;
   workspaceSuggestions?: boolean;
   yes?: boolean;
   nonInteractive?: boolean;

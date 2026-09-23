@@ -32,6 +32,7 @@ import {
   createFreeBsdPkgOwnershipInspection,
   type FreeBsdPkgOwnershipInspection,
 } from "../../infra/update-freebsd-pkg-ownership.js";
+import { assertUpdateInitialStoreInvocation } from "../../infra/update-initial-store-invocation.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
@@ -157,6 +158,7 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
     params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS);
   await pkgOwnership.assertUnowned(params.root);
   let env = resolveServiceRefreshEnv(process.env, params.invocationCwd);
+  assertUpdateInitialStoreInvocation(params.root, env);
   if (
     await resolveForegroundUpdateAdmission({
       root: params.root,
@@ -167,6 +169,7 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
         undefined,
     })
   ) {
+    assertUpdateInitialStoreInvocation(params.root, env);
     return env;
   }
   // A preview belongs to its explicit state directory. Real updates follow the
@@ -194,6 +197,7 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
       }
     }
   }
+  assertUpdateInitialStoreInvocation(params.root, env);
   return env;
 }
 
@@ -247,6 +251,7 @@ export async function admitUpdateCommandRun(params: {
 }): Promise<NonNullable<UpdateCommandOptions["run"]>> {
   assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
   const env = await resolveUpdateCommandAdmissionEnv(params);
+  assertUpdateInitialStoreInvocation(params.root, env);
   // A previous invocation may have died with a sealed restoration plan. Detect
   // it before any writable owner open or history row creation changes that state.
   // An inherited diagnostic run ID is not a durable continuation claim.
@@ -295,6 +300,7 @@ export async function admitUpdateCommandRun(params: {
     env,
     busyTimeoutMs: parseUpdateTimeoutMs(params.opts.timeout) ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
   };
+  assertUpdateInitialStoreInvocation(params.root, env);
   const created = createUpdateRun(
     {
       runId: env[UPDATE_RUN_ID_ENV]?.trim() || params.initialization?.runId,
@@ -582,6 +588,7 @@ export function readDevUpdateTarget(): DevUpdateTarget | undefined {
 }
 
 export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
+  assertUpdateInitialStoreInvocation();
   // Refuse before preflight can inspect write ownership or admit a live run ledger.
   const runtimeFailure = process.versions.bun
     ? null
@@ -630,7 +637,9 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   if (opts.sourceUpdate && installKind !== "git") {
     throw new Error("Doctor source update requires the accepted Git checkout.");
   }
-  const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
+  assertUpdateInitialStoreInvocation(discoveredRoot);
+  const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta(process.env);
+  assertUpdateInitialStoreInvocation(discoveredRoot);
   const foreground =
     !postCoreUpdateResume &&
     (await resolveForegroundUpdateAdmission({
@@ -654,6 +663,8 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
           rebind: shouldRestart,
         })
       : undefined;
+  assertUpdateInitialStoreInvocation(servicePlan?.rootRedirect?.root ?? discoveredRoot);
+  assertUpdateInitialStoreInvocation(servicePlan?.serviceRoot ?? discoveredRoot);
   const packageAdmission = {
     continuation: postCoreUpdateResume ? opts.run?.executorFence : undefined,
     serviceRoot: servicePlan?.serviceRoot ?? servicePlan?.rootRedirect?.root,
@@ -666,6 +677,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
       recoverOrphanedSidecars: false,
     });
   }
+  assertUpdateInitialStoreInvocation(discoveredRoot);
   opts.run?.executorFence?.assertCurrent();
   const handoffRoot = controlPlaneUpdateSentinelMeta?.root;
   if (handoffRoot) {
@@ -688,6 +700,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
       throw err;
     }
   }
+  assertUpdateInitialStoreInvocation(discoveredRoot);
   return {
     startedAt,
     postCoreUpdateResume,
