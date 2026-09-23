@@ -616,7 +616,7 @@ function relayRecord(pid: number): NativeHookRelayBridgeRecord {
   };
 }
 
-async function holdForeignLifecycle(captured: OpenClawStateWorkerContext, delayMs = 0) {
+export async function holdForeignLifecycle(captured: OpenClawStateWorkerContext, delayMs = 0) {
   const coordinatorPath = resolveStateDatabaseCoordinatorPath({
     databasePath: captured.admission.databasePath,
     runtimeDirectory: captured.coordinatorRuntime.directory,

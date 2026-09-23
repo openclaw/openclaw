@@ -424,13 +424,13 @@ describe("doctor canonical session-key repair", () => {
         entry: { sessionId: "older", subject: "preserved", updatedAt: 10 },
         env,
         eventText: "older history",
-        sessionKey: "agent:main:main",
+        sessionKey: "main",
         storePath,
       });
       const database = openSessionDatabase("main", env, storePath);
       database.db
         .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-        .run(JSON.stringify({ sessionId: "older", subject: "preserved" }), "agent:main:main");
+        .run(JSON.stringify({ sessionId: "older", subject: "preserved" }), "main");
 
       const first = await repairCanonicalSessionKeys({ apply: true, cfg, env });
       expect(first).toMatchObject({ foundGroups: 1, removedRows: 1, repairedGroups: 1 });
@@ -469,7 +469,7 @@ describe("doctor canonical session-key repair", () => {
         agentId: "main",
         entry: { sessionId: "alias-winner-session", updatedAt: 20 },
         env,
-        sessionKey: "agent:main:main",
+        sessionKey: "main",
         storePath,
       });
       const database = openSessionDatabase("main", env, storePath);
@@ -477,10 +477,10 @@ describe("doctor canonical session-key repair", () => {
         "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, 'owner', 10)",
       );
       insertMember.run("agent:main:work", "canonical-member");
-      insertMember.run("agent:main:main", "winner-member");
+      insertMember.run("main", "winner-member");
       writeSessionProgressCard(database.db, "agent:main:work", { markdown: "Already completed" });
       writeSessionProgressCard(database.db, "agent:main:work", {});
-      writeSessionProgressCard(database.db, "agent:main:main", { markdown: "Do not resurrect" });
+      writeSessionProgressCard(database.db, "main", { markdown: "Do not resurrect" });
       database.db
         .prepare(
           "INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at) VALUES ('same-store-conversation', 'webchat', 'default', 'direct', 'peer', 'peer', '{}', 10, 10)",
@@ -488,7 +488,7 @@ describe("doctor canonical session-key repair", () => {
         .run();
       database.db
         .prepare(
-          "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('same-store-operation', 'turn', 'same-store-conversation', 'agent:main:main', 'hash', 'sent', 10, 10)",
+          "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('same-store-operation', 'turn', 'same-store-conversation', 'main', 'hash', 'sent', 10, 10)",
         )
         .run();
 
@@ -532,20 +532,20 @@ describe("doctor canonical session-key repair", () => {
         agentId: "main",
         entry: { sessionId: "stale-alias", updatedAt: 10 },
         env,
-        sessionKey: "agent:main:main",
+        sessionKey: "main",
         storePath,
       });
       const database = openSessionDatabase("main", env, storePath);
       database.db
         .prepare(
-          "INSERT INTO session_suggestions (id, session_key, author_id, text, created_at, state) VALUES ('alias-suggestion', 'agent:main:main', 'operator', 'keep me', 10, 'pending')",
+          "INSERT INTO session_suggestions (id, session_key, author_id, text, created_at, state) VALUES ('alias-suggestion', 'main', 'operator', 'keep me', 10, 'pending')",
         )
         .run();
       const insertMember = database.db.prepare(
         "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, 'owner', 10)",
       );
       insertMember.run("agent:main:work", "canonical-member");
-      insertMember.run("agent:main:main", "stale-alias-member");
+      insertMember.run("main", "stale-alias-member");
 
       expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
         foundGroups: 1,
@@ -715,7 +715,7 @@ describe("doctor canonical session-key repair", () => {
     });
   });
 
-  it("moves a lone alias row to its canonical key", async () => {
+  it("trims a qualified address while repairing malformed metadata", async () => {
     await withStateDirEnv("openclaw-doctor-canonical-single-alias-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
@@ -793,22 +793,14 @@ describe("doctor canonical session-key repair", () => {
         repairedGroups: 1,
       });
       expect(
-        loadExactSessionEntryReadOnly({
-          agentId: "main",
-          env,
-          sessionKey: "agent:main:main",
-          storePath,
-        }),
-      ).toBeUndefined();
-      expect(
         database.db
           .prepare("SELECT count(*) AS count FROM session_nodes WHERE session_key = ?")
-          .get("agent:main:main"),
+          .get("agent:main:main "),
       ).toEqual({ count: 0 });
       const repaired = loadExactSessionEntryReadOnly({
         agentId: "main",
         env,
-        sessionKey: "agent:main:work",
+        sessionKey: "agent:main:main",
         storePath,
       })?.entry;
       expect(repaired).toMatchObject({
@@ -845,20 +837,14 @@ describe("doctor canonical session-key repair", () => {
             "SELECT source_session_key FROM conversation_deliveries WHERE operation_id = 'trimmed-alias-operation'",
           )
           .get(),
-      ).toEqual({ source_session_key: "agent:main:work" });
+      ).toEqual({ source_session_key: "agent:main:main" });
       expect(
         database.db
           .prepare(
             "SELECT session_key, identity_id FROM session_members WHERE identity_id = 'profile-1'",
           )
           .get(),
-      ).toEqual({ session_key: "agent:main:work", identity_id: "profile-1" });
-      expect(() =>
-        replaceSessionEntrySync(
-          { agentId: "main", env, sessionKey: "agent:main:main", storePath },
-          { sessionId: "recreated-alias", updatedAt: 20 },
-        ),
-      ).toThrow("openclaw doctor --fix");
+      ).toEqual({ session_key: "agent:main:main", identity_id: "profile-1" });
     });
   });
 
@@ -931,12 +917,6 @@ describe("doctor canonical session-key repair", () => {
           storePath: opsStore,
         }),
       ).toBeUndefined();
-      expect(() =>
-        replaceSessionEntrySync(
-          { agentId: "main", env, sessionKey: "agent:main:main", storePath: mainStore },
-          { sessionId: "new-destination-alias", updatedAt: 20 },
-        ),
-      ).toThrow("openclaw doctor --fix");
       await expect(
         loadTranscriptEvents({
           agentId: "main",
@@ -976,7 +956,7 @@ describe("doctor canonical session-key repair", () => {
         entry: { sessionId: "wrong-store", updatedAt: 10 },
         env,
         eventText: "wrong-store history",
-        sessionKey: "agent:main:main ",
+        sessionKey: "agent:main:shared ",
         storePath: opsStore,
       });
       const destinationDatabase = openSessionDatabase("main", env, mainStore);

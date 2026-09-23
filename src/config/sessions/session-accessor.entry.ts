@@ -89,7 +89,7 @@ export { resolveSessionEntryFromStore };
 /** Resolves a session directly through canonical SQLite row and alias ownership. */
 export function resolveSessionEntrySelection(
   scope: SessionAccessScope,
-  options: { readOnly?: boolean } = {},
+  options: Parameters<typeof resolveSessionEntry>[1] = {},
 ): ReturnType<typeof resolveSessionEntryFromStore> {
   return resolveSessionEntry(scope, options);
 }

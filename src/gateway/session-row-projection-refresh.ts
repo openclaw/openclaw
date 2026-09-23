@@ -1,4 +1,3 @@
-import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
@@ -34,11 +33,10 @@ export function createSessionRowRefresh(
     catalog: { needsInitialRead: boolean; refresh: () => Promise<unknown> };
     placementFacts: { prepare: () => Promise<void>; needsPreparation: boolean };
     membership: { prepare: () => Promise<void>; needsPreparation: boolean };
-    retainArchived: (row: records.MaterializedRow) => void;
   },
 ) {
   const revision = () => (owner.state().disposed ? undefined : owner.databaseRevision());
-  const refresh = createSessionRowMaterializer({
+  const materializer = createSessionRowMaterializer({
     ...owner,
     isActive: () => !owner.state().disposed,
   });
@@ -155,14 +153,9 @@ export function createSessionRowRefresh(
   function readExactRows(selected: ReadonlySet<string>) {
     return withSessionRowDatabaseFacts(
       { rows: owner.rows, dirty: owner.dirty, selected, cfg: owner.state().cfg, revision },
-      (ids, facts) => {
-        withAgentRosterFactsBatch(owner.state().cfg, () => refresh(ids, facts, true));
-        for (const id of ids) {
-          const row = owner.rows.get(id);
-          if (records.ready(row) && row.entry.archivedAt !== undefined) {
-            owner.retainArchived(row);
-          }
-        }
+      {
+        refreshPending: materializer.refreshPending,
+        accept: (ids, facts) => materializer.accept(ids, facts, true),
       },
     );
   }
@@ -201,11 +194,11 @@ export function createSessionRowRefresh(
     }
     await withSessionRowDatabaseFacts(
       { rows: owner.rows, dirty: owner.dirty, cfg: owner.state().cfg, revision },
-      (ids, facts) => withAgentRosterFactsBatch(owner.state().cfg, () => refresh(ids, facts)),
+      materializer,
     );
   }
   return {
-    refresh,
+    refresh: materializer.refresh,
     refreshBatch,
     prepareExactRows,
     dispose(this: void) {

@@ -83,7 +83,7 @@ describe("node workspace Git pack downloads", () => {
       "workspace",
     );
     expect(workspaceDir.length).toBeGreaterThan(260);
-    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(workspaceDir, { recursive: true, mode: 0o700 });
     try {
       const transfer = () =>
         runNodeWorkerWorkspaceTransfer({

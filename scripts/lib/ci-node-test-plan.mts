@@ -29,6 +29,7 @@ import {
   isUiBrowserTestFile,
   isUiTestTarget,
   uiTimingTestFiles,
+  uiE2eRealGatewayTestFiles,
 } from "../../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
@@ -1438,6 +1439,12 @@ const RELEASE_ONLY_UI_TEST_FILES = new Set([
   "ui/src/e2e/native-embed-settings.e2e.test.ts",
   "ui/src/e2e/chat-session-entry.e2e.test.ts",
   "ui/src/components/app-sidebar.stress.browser.test.ts",
+  "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
+  "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
+  "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+  "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
 ]);
 
 export function createUiTestShardGroups(
@@ -1459,8 +1466,11 @@ export function createUiTestShardGroups(
   ];
   return {
     ui: group("ui/vitest.config.ts", isUiTestTarget),
-    e2e: group("test/vitest/vitest.ui-e2e.config.ts", (file) =>
-      controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)),
+    e2e: group(
+      "test/vitest/vitest.ui-e2e.config.ts",
+      (file) =>
+        controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)) ||
+        uiE2eRealGatewayTestFiles.includes(file),
     ),
   };
 }
@@ -2729,7 +2739,7 @@ export function createVitestCacheWarmGroups(profile: "full" | "hybrid-hosted" = 
           ],
           [
             "channel-registry",
-            "src/channels/plugins/contracts/plugins-core.registry.contract.test.ts",
+            "src/channels/plugins/contracts/plugins-core.loader.contract.test.ts",
           ],
           [
             "channel-session",

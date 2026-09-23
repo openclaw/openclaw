@@ -10,13 +10,17 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { runPluginReleasePretagPackCheck } from "../../scripts/plugin-release-pretag-pack-check.ts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeJsonFile } from "../helpers/temp-repo.js";
+import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const posixIt = process.platform === "win32" ? it.skip : it;
@@ -216,11 +220,7 @@ descendant.once("message", () => {
 function startProofCli(repoDir: string) {
   const child = spawn(
     process.execPath,
-    [
-      "--import",
-      "tsx",
-      fileURLToPath(new URL("../../scripts/plugin-release-pretag-pack-check.ts", import.meta.url)),
-    ],
+    resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(toolingTsEntrypoints.pluginPretagPackCheck)),
     {
       cwd: repoDir,
       env: { PATH: process.env.PATH, HOME: repoDir, TMPDIR: repoDir },

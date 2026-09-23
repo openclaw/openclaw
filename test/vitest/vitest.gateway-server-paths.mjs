@@ -152,6 +152,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-message-events.test.ts",
   "src/gateway/session-repository-materialization.test.ts",
   "src/gateway/session-repository-publication-handoff.test.ts",
+  "src/gateway/session-row-projection.accepted-facts.test.ts",
   "src/gateway/session-row-projection.membership.test.ts",
   "src/gateway/session-sharing-groups.test.ts",
   "src/gateway/session-sharing-preparation.test.ts",

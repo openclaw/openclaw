@@ -15,7 +15,6 @@ import { createConnection as createNetConnection, createServer as createNetServe
 import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   agentOutputHasExpectedOkMarker,
@@ -112,6 +111,8 @@ import {
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
 import * as candidateProcess from "../../scripts/lib/cross-os-release-checks/process.ts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
+import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 vi.mock("node:net", { spy: true });
 
@@ -2106,9 +2107,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-signal-"));
     const childPidPath = join(dir, "child.pid");
-    const scriptUrl = pathToFileURL(
-      resolvePath("scripts/lib/cross-os-release-checks/process.ts"),
-    ).href;
+    const scriptUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.crossOsProcess).href;
     let childPid: number | undefined;
     let runnerPid: number | undefined;
 
@@ -2171,9 +2170,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-signal-exit-"));
     const childPidPath = join(dir, "child.pid");
     const logPath = join(dir, "signal.log");
-    const scriptUrl = pathToFileURL(
-      resolvePath("scripts/lib/cross-os-release-checks/process.ts"),
-    ).href;
+    const scriptUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.crossOsProcess).href;
     let childPid: number | undefined;
     let runnerPid: number | undefined;
 

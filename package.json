@@ -437,7 +437,9 @@
     "!dist/plugin-sdk/worker-task-server.d.ts",
     "!dist/plugin-sdk/media-ffmpeg.d.ts",
     "!dist/plugin-sdk/realtime-voice-playback.d.ts",
-    "!dist/plugin-sdk/text-grapheme.d.ts"
+    "!dist/plugin-sdk/text-grapheme.d.ts",
+    "!dist/plugin-sdk/agent-harness-session-runtime.d.ts",
+    "!dist/plugin-sdk/agent-harness-attempt-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -900,6 +902,9 @@
       "types": "./dist/plugin-sdk/agent-harness.d.ts",
       "default": "./dist/plugin-sdk/agent-harness.js"
     },
+    "./plugin-sdk/agent-harness-attempt-runtime": {
+      "default": "./dist/plugin-sdk/agent-harness-attempt-runtime.js"
+    },
     "./plugin-sdk/agent-harness-exec-review-runtime": {
       "default": "./dist/plugin-sdk/agent-harness-exec-review-runtime.js"
     },
@@ -913,6 +918,9 @@
     "./plugin-sdk/agent-workspace-runtime": {
       "types": "./dist/plugin-sdk/agent-workspace-runtime.d.ts",
       "default": "./dist/plugin-sdk/agent-workspace-runtime.js"
+    },
+    "./plugin-sdk/agent-harness-session-runtime": {
+      "default": "./dist/plugin-sdk/agent-harness-session-runtime.js"
     },
     "./plugin-sdk/agent-harness-tool-runtime": {
       "default": "./dist/plugin-sdk/agent-harness-tool-runtime.js"

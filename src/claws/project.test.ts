@@ -5,7 +5,9 @@ import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "../infra/fs-safe-defaults.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { buildClawProject } from "./project-build.js";
+import { clawProjectBuildEntrypoint } from "./project-runtime.test-support.js";
 import { ClawProjectError, createClawProject, validateClawProject } from "./project.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -59,16 +61,22 @@ describe("Claw projects", () => {
   it("matches the golden artifact digest under a restrictive umask", () => {
     const output = join(tempDirs.make("openclaw-claw-umask-"), "golden.tgz");
     const project = join(process.cwd(), "test", "fixtures", "claws", "project-v1");
+    const projectBuildUrl = resolveRuntimeWorkerUrl(clawProjectBuildEntrypoint);
     const script = [
       "process.umask(0o077);",
-      'const { buildClawProject } = await import("./src/claws/project-build.ts");',
+      `const { buildClawProject } = await import(${JSON.stringify(projectBuildUrl.href)});`,
       `const result = await buildClawProject(${JSON.stringify(project)}, ${JSON.stringify(output)});`,
       "process.stdout.write(result.integrity);",
     ].join("\n");
 
     const result = spawnSync(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", script],
+      [
+        ...resolveRuntimeWorkerArgv(projectBuildUrl).slice(0, -1),
+        "--input-type=module",
+        "--eval",
+        script,
+      ],
       {
         cwd: process.cwd(),
         encoding: "utf8",

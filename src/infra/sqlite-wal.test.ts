@@ -4,7 +4,6 @@ import childProcess, { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import { probeTreeClone } from "@openclaw/fs-safe/copy";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -12,6 +11,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { sqliteMaintenanceEntrypoints } from "./sqlite-maintenance-runtime.test-support.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
@@ -665,8 +666,6 @@ describe("sqlite WAL maintenance", () => {
       const tempDir = tempDirs.make("openclaw-sqlite-wal-replacement-");
       const databasePath = path.join(tempDir, "state.sqlite");
       const staleCloseMarker = path.join(tempDir, "stale-close-marker");
-      const childScript = path.join(tempDir, "split-brain-child.mts");
-      const sqliteWalModuleUrl = pathToFileURL(path.resolve("src/infra/sqlite-wal.ts")).href;
       const { DatabaseSync } = requireNodeSqlite();
       const seed = new DatabaseSync(databasePath);
       seed.exec(
@@ -675,42 +674,6 @@ describe("sqlite WAL maintenance", () => {
       seed.prepare("INSERT INTO events VALUES (?)").run("base");
       seed.exec("PRAGMA wal_checkpoint(TRUNCATE);");
       seed.close();
-      fs.writeFileSync(
-        childScript,
-        `
-          import fs from "node:fs";
-          import { Worker } from "node:worker_threads";
-          import { DatabaseSync } from "node:sqlite";
-          import { configureSqliteWalMaintenance } from ${JSON.stringify(sqliteWalModuleUrl)};
-
-          const role = process.argv[2];
-          const databasePath = process.argv[3];
-          const staleCloseMarker = process.argv[4];
-          if (role === "worker") {
-            new Worker(new URL(import.meta.url), { argv: ["stale", databasePath, staleCloseMarker] });
-          } else if (role === "stale") {
-            const stale = new DatabaseSync(databasePath);
-            setTimeout(() => {
-              fs.writeFileSync(staleCloseMarker, stale.isOpen ? "open" : "closed");
-              process.kill(process.pid, "SIGKILL");
-            }, 5_000);
-            configureSqliteWalMaintenance(stale, {
-              autoCheckpointPages: 0,
-              checkpointIntervalMs: 2_500,
-              databaseLabel: "replacement-family-test",
-              databasePath,
-            });
-            stale.prepare("INSERT INTO events VALUES (?)").run("stale");
-            process.stdout.write("stale-ready\\n");
-          } else {
-            const current = new DatabaseSync(databasePath);
-            current.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;");
-            current.prepare("INSERT INTO events VALUES (?)").run("current");
-            process.stdout.write("current-ready\\n");
-          }
-          setInterval(() => {}, 1_000);
-        `,
-      );
 
       const spawnRole = (role: "current" | "stale", readyLine: string) => {
         let stdout = "";
@@ -718,9 +681,9 @@ describe("sqlite WAL maintenance", () => {
         const child = spawn(
           process.execPath,
           [
-            "--import",
-            "tsx",
-            childScript,
+            ...resolveRuntimeWorkerArgv(
+              resolveRuntimeWorkerUrl(sqliteMaintenanceEntrypoints.walReplacement),
+            ),
             role === "stale" && thread === "worker" ? "worker" : role,
             databasePath,
             staleCloseMarker,
