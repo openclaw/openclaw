@@ -190,6 +190,86 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
     }
   });
 
+  it("contains widened tables after restoring a percentage reading width", async () => {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: `Keep this explanation at the saved reading width.
+
+| Failure | Recorded implementation author |
+| --- | --- |
+| Quiet mode displays reasoning and an unwanted exit message after a queued run is cancelled | Morgan, with Riley as coauthor on the follow-up repair |
+| A warning survives an intentional no-reply response | Casey, exposing older fallback behavior |`,
+            },
+          ],
+          timestamp: Date.now(),
+          __openclaw: { id: "percentage-table", seq: 1 },
+        },
+      ],
+    });
+    try {
+      await page.goto(`${server.baseUrl}settings/appearance#settings-appearance-chat`);
+      const widthInput = page.locator("[data-settings-chat-message-width]");
+      await widthInput.fill("82%");
+      await widthInput.press("Tab");
+      await page.goto(`${server.baseUrl}chat`);
+      const shell = page.locator('[data-entry-id="percentage-table"] .markdown-table');
+      await shell.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          page
+            .locator(".chat")
+            .evaluate((element) =>
+              getComputedStyle(element).getPropertyValue("--chat-thread-max-width").trim(),
+            ),
+        )
+        .toBe("82%");
+      const contained = () =>
+        shell.evaluate((element) => {
+          const pane = element.closest(".chat-thread")!.getBoundingClientRect();
+          const bounds = element.getBoundingClientRect();
+          return bounds.left >= pane.left && bounds.right <= pane.right;
+        });
+      for (const width of [1440, 1920, 1280]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await expect.poll(contained).toBe(true);
+        await expect
+          .poll(() =>
+            shell.evaluate(
+              (element) =>
+                element.getBoundingClientRect().width >
+                element.parentElement!.getBoundingClientRect().width,
+            ),
+          )
+          .toBe(true);
+      }
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await expect.poll(contained).toBe(true);
+      if (captureProof) {
+        await page.screenshot({ path: path.join(artifactDir, "saved-percentage.png") });
+      }
+      await openChatSidePanelType(page, "Files");
+      await page.locator('.side-panel__panel[data-panel-slot="workspace"]').waitFor();
+      await expect.poll(contained).toBe(true);
+      expect(
+        await shell
+          .locator(".markdown-table__viewport")
+          .evaluate((element) => element.scrollWidth - element.clientWidth),
+      ).toBeLessThanOrEqual(1);
+      if (captureProof) {
+        await page.screenshot({ path: path.join(artifactDir, "saved-percentage-files.png") });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it.each(["chat", "assistant panel"])(
     "contains overflow and preserves copy, fullscreen focus, and web links in %s",
     async (surface) => {

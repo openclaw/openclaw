@@ -403,8 +403,8 @@
       min(
         12rem,
         calc(
-          (100cqw - var(--chat-thread-max-width) - 2 * var(--chat-thread-gutter) - 2 *
-              var(--chat-thread-side-inset)) /
+          (100cqw - var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-gutter) -
+              2 * var(--chat-thread-side-inset)) /
             2
         )
       )
