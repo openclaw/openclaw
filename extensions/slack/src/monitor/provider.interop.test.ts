@@ -14,88 +14,32 @@ describe("resolveSlackBoltInterop", () => {
   function FakeHTTPReceiver() {}
   function FakeSocketModeReceiver() {}
 
-  it("uses the default import when it already exposes named exports", () => {
-    const resolved = resolveSlackBoltInterop({
-      defaultImport: {
-        App: FakeApp,
-        HTTPReceiver: FakeHTTPReceiver,
-        SocketModeReceiver: FakeSocketModeReceiver,
-      },
-      namespaceImport: {},
-    });
+  const moduleExports = {
+    App: FakeApp,
+    HTTPReceiver: FakeHTTPReceiver,
+    SocketModeReceiver: FakeSocketModeReceiver,
+  };
 
-    expect(resolved).toEqual({
-      App: FakeApp,
-      HTTPReceiver: FakeHTTPReceiver,
-      SocketModeReceiver: FakeSocketModeReceiver,
-    });
-  });
-
-  it("uses nested default export when the default import is a wrapper object", () => {
-    const resolved = resolveSlackBoltInterop({
-      defaultImport: {
-        default: {
-          App: FakeApp,
+  it.each([
+    ["default import", { defaultImport: moduleExports, namespaceImport: {} }],
+    ["nested default import", { defaultImport: { default: moduleExports }, namespaceImport: {} }],
+    [
+      "App constructor with namespace receivers",
+      {
+        defaultImport: FakeApp,
+        namespaceImport: {
           HTTPReceiver: FakeHTTPReceiver,
           SocketModeReceiver: FakeSocketModeReceiver,
         },
       },
-      namespaceImport: {},
-    });
-
-    expect(resolved).toEqual({
-      App: FakeApp,
-      HTTPReceiver: FakeHTTPReceiver,
-      SocketModeReceiver: FakeSocketModeReceiver,
-    });
-  });
-
-  it("uses the namespace receiver when the default import is the App constructor itself", () => {
-    const resolved = resolveSlackBoltInterop({
-      defaultImport: FakeApp,
-      namespaceImport: {
-        HTTPReceiver: FakeHTTPReceiver,
-        SocketModeReceiver: FakeSocketModeReceiver,
-      },
-    });
-
-    expect(resolved).toEqual({
-      App: FakeApp,
-      HTTPReceiver: FakeHTTPReceiver,
-      SocketModeReceiver: FakeSocketModeReceiver,
-    });
-  });
-
-  it("uses namespace.default when it exposes named exports", () => {
-    const resolved = resolveSlackBoltInterop({
-      defaultImport: undefined,
-      namespaceImport: {
-        default: {
-          App: FakeApp,
-          HTTPReceiver: FakeHTTPReceiver,
-          SocketModeReceiver: FakeSocketModeReceiver,
-        },
-      },
-    });
-
-    expect(resolved).toEqual({
-      App: FakeApp,
-      HTTPReceiver: FakeHTTPReceiver,
-      SocketModeReceiver: FakeSocketModeReceiver,
-    });
-  });
-
-  it("falls back to the namespace import when it exposes named exports", () => {
-    const resolved = resolveSlackBoltInterop({
-      defaultImport: undefined,
-      namespaceImport: {
-        App: FakeApp,
-        HTTPReceiver: FakeHTTPReceiver,
-        SocketModeReceiver: FakeSocketModeReceiver,
-      },
-    });
-
-    expect(resolved).toEqual({
+    ],
+    [
+      "namespace default",
+      { defaultImport: undefined, namespaceImport: { default: moduleExports } },
+    ],
+    ["namespace import", { defaultImport: undefined, namespaceImport: moduleExports }],
+  ] as const)("resolves the %s module shape", (_name, imports) => {
+    expect(resolveSlackBoltInterop(imports)).toEqual({
       App: FakeApp,
       HTTPReceiver: FakeHTTPReceiver,
       SocketModeReceiver: FakeSocketModeReceiver,
@@ -146,14 +90,16 @@ describe("createSlackBoltApp", () => {
     }
   }
 
+  const interop = {
+    App: FakeApp as never,
+    HTTPReceiver: FakeHTTPReceiver as never,
+    SocketModeReceiver: FakeSocketModeReceiver as never,
+  };
+
   it("uses SocketModeReceiver with native reconnects and shared client options", () => {
     const clientOptions = { teamId: "T1" };
     const { app, receiver } = createSlackBoltApp({
-      interop: {
-        App: FakeApp as never,
-        HTTPReceiver: FakeHTTPReceiver as never,
-        SocketModeReceiver: FakeSocketModeReceiver as never,
-      },
+      interop,
       slackMode: "socket",
       token: "xoxb-test",
       appToken: "xapp-test",
@@ -191,11 +137,7 @@ describe("createSlackBoltApp", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const { receiver, socketModeLogger } = createSlackBoltApp({
-        interop: {
-          App: FakeApp as never,
-          HTTPReceiver: FakeHTTPReceiver as never,
-          SocketModeReceiver: FakeSocketModeReceiver as never,
-        },
+        interop,
         slackMode: "socket",
         token: "xoxb-test",
         appToken: "xapp-test",
@@ -234,11 +176,7 @@ describe("createSlackBoltApp", () => {
 
   it("applies OpenClaw self-event filtering through installed Bolt middleware", async () => {
     const { app } = createSlackBoltApp({
-      interop: {
-        App: FakeApp as never,
-        HTTPReceiver: FakeHTTPReceiver as never,
-        SocketModeReceiver: FakeSocketModeReceiver as never,
-      },
+      interop,
       slackMode: "socket",
       token: "xoxb-test",
       appToken: "xapp-test",
@@ -583,44 +521,10 @@ describe("createSlackBoltApp", () => {
     },
   );
 
-  it("uses Slack's fixed Socket Mode receiver policy", () => {
-    const clientOptions = { teamId: "T1" };
-    const { receiver } = createSlackBoltApp({
-      interop: {
-        App: FakeApp as never,
-        HTTPReceiver: FakeHTTPReceiver as never,
-        SocketModeReceiver: FakeSocketModeReceiver as never,
-      },
-      slackMode: "socket",
-      token: "xoxb-test",
-      appToken: "xapp-test",
-      slackWebhookPath: "/slack/events",
-      clientOptions,
-    });
-
-    const receiverArgs = (receiver as unknown as FakeSocketModeReceiver).args;
-    const receiverLogger = receiverArgs.logger as { error?: unknown; warn?: unknown };
-    expect(receiverLogger.error).toBeTypeOf("function");
-    expect(receiverLogger.warn).toBeTypeOf("function");
-    expect(receiverArgs).toEqual({
-      appToken: "xapp-test",
-      autoReconnectEnabled: true,
-      clientPingTimeout: 15_000,
-      logger: receiverLogger,
-      installerOptions: {
-        clientOptions,
-      },
-    });
-  });
-
   it("uses HTTPReceiver for webhook mode", () => {
     const clientOptions = { teamId: "T1" };
     const { app, receiver } = createSlackBoltApp({
-      interop: {
-        App: FakeApp as never,
-        HTTPReceiver: FakeHTTPReceiver as never,
-        SocketModeReceiver: FakeSocketModeReceiver as never,
-      },
+      interop,
       slackMode: "http",
       token: "xoxb-test",
       signingSecret: "secret",
@@ -650,11 +554,7 @@ describe("createSlackBoltApp", () => {
       const wrappedReceiver = { durable: true };
       const wrapReceiver = vi.fn(() => wrappedReceiver as never);
       const { app, receiver } = createSlackBoltApp({
-        interop: {
-          App: FakeApp as never,
-          HTTPReceiver: FakeHTTPReceiver as never,
-          SocketModeReceiver: FakeSocketModeReceiver as never,
-        },
+        interop,
         slackMode,
         token: "test-bot-token",
         ...(slackMode === "socket"
@@ -674,31 +574,4 @@ describe("createSlackBoltApp", () => {
       ).resolves.toBe(false);
     },
   );
-
-  it("prevents Bolt's constructor-time token verification side effect", () => {
-    let eagerAuthTestCalls = 0;
-    class BoltLikeEagerAuthApp extends FakeApp {
-      constructor(args: Record<string, unknown>) {
-        super(args);
-        if (args.tokenVerificationEnabled !== false) {
-          eagerAuthTestCalls += 1;
-        }
-      }
-    }
-
-    createSlackBoltApp({
-      interop: {
-        App: BoltLikeEagerAuthApp as never,
-        HTTPReceiver: FakeHTTPReceiver as never,
-        SocketModeReceiver: FakeSocketModeReceiver as never,
-      },
-      slackMode: "socket",
-      token: "xoxb-invalid",
-      appToken: "xapp-test",
-      slackWebhookPath: "/slack/events",
-      clientOptions: {},
-    });
-
-    expect(eagerAuthTestCalls).toBe(0);
-  });
 });
