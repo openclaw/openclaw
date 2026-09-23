@@ -1,5 +1,4 @@
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
-import type { ContextWindowInfo } from "../agents/context-window-guard.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type {
   GetReplyOptions,
@@ -57,6 +56,7 @@ import type {
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
 } from "./host-hook-turn-types.js";
+import type { SkillInstallSpecMetadata } from "./install-security-scan.types.js";
 
 export type {
   PluginHookBeforeModelResolveAttachment,
@@ -315,7 +315,11 @@ export type PluginHookAgentContext = PluginHookContextWindow & {
   readonly hookInvocation?: Readonly<{ assertActive(): void }>;
 };
 
-export type PluginHookContextWindowSource = ContextWindowInfo["source"];
+export type PluginHookContextWindowSource =
+  | "model"
+  | "modelsConfig"
+  | "agentContextTokens"
+  | "default";
 
 export type PluginHookBeforeAgentReplyEvent = {
   cleanedBody: string;
@@ -888,26 +892,9 @@ export type PluginHookBeforeInstallBuiltinScan = {
   error?: string;
 };
 
-type PluginHookBeforeInstallSkillInstallSpec = {
-  id?: string;
-  kind: "brew" | "node" | "go" | "uv" | "download";
-  label?: string;
-  bins?: string[];
-  os?: string[];
-  formula?: string;
-  package?: string;
-  module?: string;
-  url?: string;
-  sha256?: string;
-  archive?: string;
-  extract?: boolean;
-  stripComponents?: number;
-  targetDir?: string;
-};
-
 export type PluginHookBeforeInstallSkill = {
   installId: string;
-  installSpec?: PluginHookBeforeInstallSkillInstallSpec;
+  installSpec?: SkillInstallSpecMetadata;
 };
 
 export type PluginHookBeforeInstallPlugin = {
