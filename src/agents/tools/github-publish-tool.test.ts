@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import "./message-tool.copy-text.test-support.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createGitHubPublishTool } from "./github-publish-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";

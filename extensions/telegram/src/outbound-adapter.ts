@@ -18,6 +18,7 @@ import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./butt
 import { TELEGRAM_MAX_CAPTION_LENGTH, telegramCaptionDeliveryMetadata } from "./caption.js";
 import {
   canonicalizeTelegramPresentationPayload,
+  prepareTelegramPresentationPayloadForCoreAdaptation,
   resolveTelegramInteractiveTextFallback,
   resolveTelegramPresentationCapabilities,
 } from "./interactive-fallback.js";
@@ -163,7 +164,8 @@ type CreateTelegramOutboundAdapterOptions = {
   preferFinalAssistantVisibleText?: boolean;
 };
 
-function normalizeTelegramMetadataOnlyPayload(payload: ReplyPayload): ReplyPayload | null {
+function normalizeTelegramMetadataOnlyPayload(inputPayload: ReplyPayload): ReplyPayload | null {
+  const payload = prepareTelegramPresentationPayloadForCoreAdaptation(inputPayload);
   const telegramData = payload.channelData?.telegram as
     | {
         buttons?: TelegramInlineButtons;

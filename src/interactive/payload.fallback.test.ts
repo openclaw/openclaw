@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import "./payload.copy-text.test-support.js";
+import "../channels/plugins/outbound/interactive.copy-text.test-support.js";
 import { normalizeMessagePresentation, renderMessagePresentationFallbackText } from "./payload.js";
 
 describe("presentation payload controls", () => {

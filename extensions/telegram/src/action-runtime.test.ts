@@ -2429,7 +2429,7 @@ describe("handleTelegramAction", () => {
     expect(requireRecord(call[2], "mixed message and table options").token).toBe("tok");
   });
 
-  it("uses presentation fallback text for button-only sends", async () => {
+  it("uses the control-only anchor without repeating native choices", async () => {
     await handleTelegramAction(
       {
         action: "sendMessage",
@@ -2448,7 +2448,7 @@ describe("handleTelegramAction", () => {
 
     const call = mockCall(sendMessageTelegram, 0, "button-only fallback");
     expect(call[0]).toBe("123456");
-    expect(call[1]).toBe("- Approve");
+    expect(call[1]).toBe("Choose an option.");
     expect(requireRecord(call[2], "button-only fallback options").buttons).toEqual([
       [{ text: "Approve", callback_data: "approve" }],
     ]);

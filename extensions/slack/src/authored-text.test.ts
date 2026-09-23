@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import "./message-action-dispatch.copy-text.test-support.js";
 import { resolveSlackAuthoredTextPlacement } from "./authored-text.js";
 
 describe("resolveSlackAuthoredTextPlacement", () => {

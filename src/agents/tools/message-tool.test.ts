@@ -3491,7 +3491,7 @@ describe("message tool schema scoping", () => {
     expect(JSON.stringify(properties.voiceId)).not.toContain("anyOf");
     expect(presentationSchemaJson).toContain('"action"');
     expect(presentationSchemaJson).toContain('"command"');
-    expect(presentationSchemaJson).toContain('"const":"url"');
+    expect(presentationSchemaJson).toMatch(/(?=.*"const":"url")(?=.*"const":"copy-text")/s);
     expect(presentationSchemaJson).toContain('"const":"web-app"');
     expect(presentationSchemaJson).toContain('"widgetId"');
     expect(webAppRequiredFields).toEqual(

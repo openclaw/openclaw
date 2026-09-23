@@ -6,6 +6,29 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isWellFormedApprovalId } from "../../packages/gateway-protocol/src/schema/approval-id.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
+import {
+  renderMessagePresentationChartFallbackText,
+  renderMessagePresentationTableFallbackText,
+} from "./payload-fallback-blocks.js";
+import type {
+  MessagePresentationChartBlock,
+  MessagePresentationChartSegment,
+  MessagePresentationChartSeries,
+  MessagePresentationTableBlock,
+  MessagePresentationTableCell,
+} from "./payload-structured-block-types.js";
+
+export {
+  renderMessagePresentationChartFallbackText,
+  renderMessagePresentationTableFallbackText,
+} from "./payload-fallback-blocks.js";
+export type {
+  MessagePresentationChartBlock,
+  MessagePresentationChartSegment,
+  MessagePresentationChartSeries,
+  MessagePresentationTableBlock,
+  MessagePresentationTableCell,
+} from "./payload-structured-block-types.js";
 
 const PRESENTATION_FALLBACK_CONTINUATION = Symbol.for(
   "openclaw.presentation.fallback-continuation",
@@ -93,6 +116,11 @@ export type MessagePresentationAction =
       /** Opaque callback value interpreted by the target channel/plugin. */
       type: "callback";
       value: string;
+    }
+  | {
+      /** Copy text to the user's clipboard without invoking a callback. */
+      type: "copy-text";
+      text: string;
     }
   | ModelPickerAction
   | {
@@ -328,56 +356,6 @@ export type MessagePresentationSelectBlock = {
   options: MessagePresentationOption[];
 };
 
-export type MessagePresentationChartSegment = {
-  /** Category label shown in the chart legend. */
-  label: string;
-  /** Positive segment magnitude. */
-  value: number;
-};
-
-export type MessagePresentationChartSeries = {
-  /** Unique series name shown in the chart legend. */
-  name: string;
-  /** One finite value for each chart category, in category order. */
-  values: number[];
-};
-
-export type MessagePresentationChartBlock =
-  | {
-      type: "chart";
-      chartType: "pie";
-      /** Short chart heading. */
-      title: string;
-      segments: MessagePresentationChartSegment[];
-    }
-  | {
-      type: "chart";
-      chartType: "bar" | "area" | "line";
-      /** Short chart heading. */
-      title: string;
-      /** Ordered categories shared by every series. */
-      categories: string[];
-      series: MessagePresentationChartSeries[];
-      xLabel?: string;
-      yLabel?: string;
-    };
-
-/** Scalar cell value supported by portable table presentations. */
-export type MessagePresentationTableCell = string | number;
-
-/** Portable table rendered natively where supported and linearly elsewhere. */
-export type MessagePresentationTableBlock = {
-  type: "table";
-  /** Short table heading used by native renderers and fallback text. */
-  caption: string;
-  /** Unique ordered column labels shared by every row. */
-  headers: string[];
-  /** Rows whose width exactly matches the header count. */
-  rows: MessagePresentationTableCell[][];
-  /** Optional column whose cells should be rendered as row headers. */
-  rowHeaderColumnIndex?: number;
-};
-
 export type MessagePresentationInteractiveBlock =
   | MessagePresentationButtonsBlock
   | MessagePresentationSelectBlock;
@@ -528,6 +506,10 @@ function normalizePresentationAction(raw: unknown): MessagePresentationAction | 
   if (type === "callback") {
     const value = normalizeOptionalString(record.value);
     return value ? { type: "callback", value } : undefined;
+  }
+  if (type === "copy-text") {
+    const text = typeof record.text === "string" ? record.text : undefined;
+    return text?.length ? { type, text } : undefined;
   }
   if (type === "model-picker") {
     return normalizeModelPickerAction(record);
@@ -1088,51 +1070,6 @@ export const interactiveReplyToPresentation = legacyInteractiveReplyToPresentati
  *
  * Exported through the plugin SDK for channel adapters.
  */
-export function renderMessagePresentationChartFallbackText(
-  block: MessagePresentationChartBlock,
-): string {
-  const lines = [`${block.title} (${block.chartType} chart)`];
-  if (block.chartType === "pie") {
-    lines.push(...block.segments.map((segment) => `- ${segment.label}: ${String(segment.value)}`));
-    return lines.join("\n");
-  }
-  if (block.xLabel) {
-    lines.push(`X axis: ${block.xLabel}`);
-  }
-  if (block.yLabel) {
-    lines.push(`Y axis: ${block.yLabel}`);
-  }
-  lines.push(
-    ...block.series.map(
-      (series) =>
-        `- ${series.name}: ${block.categories
-          .map((category, index) => `${category}: ${String(series.values[index])}`)
-          .join("; ")}`,
-    ),
-  );
-  return lines.join("\n");
-}
-
-function renderTableFallbackValue(value: MessagePresentationTableCell): string {
-  return String(value).replace(/\s+/g, " ").trim();
-}
-
-export function renderMessagePresentationTableFallbackText(
-  block: MessagePresentationTableBlock,
-): string {
-  const headers = block.headers.map(renderTableFallbackValue);
-  const lines = [`${renderTableFallbackValue(block.caption)} (table)`];
-  lines.push(
-    ...block.rows.map(
-      (row) =>
-        `- ${row
-          .map((cell, index) => `${headers[index]}: ${renderTableFallbackValue(cell)}`)
-          .join("; ")}`,
-    ),
-  );
-  return lines.join("\n");
-}
-
 /** Keep only operator-visible navigation and public command text in control fallbacks. */
 export function renderMessagePresentationControlFallbackLabel(
   control: Pick<
@@ -1149,6 +1086,17 @@ export function renderMessagePresentationControlFallbackLabel(
   }
   if (action?.type === "command") {
     return `${control.label}: \`${action.command}\``;
+  }
+  if (action?.type === "copy-text") {
+    if (!/[\n\r\u2028\u2029`]/u.test(action.text)) {
+      return `${control.label}: \`${action.text}\``;
+    }
+    const longestBacktickRun = Math.max(
+      0,
+      ...Array.from(action.text.matchAll(/`+/gu), (match) => match[0].length),
+    );
+    const fence = "`".repeat(Math.max(3, longestBacktickRun + 1));
+    return `${control.label}:\n${fence}\n${action.text}\n${fence}`;
   }
   return control.label;
 }

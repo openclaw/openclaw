@@ -1,5 +1,6 @@
 // Telegram tests cover plain-text chunk-splitting behavior.
 import { describe, expect, it } from "vitest";
+import "./send.copy-text.test-support.js";
 import { splitTelegramPlainTextChunks } from "./rich-plain-fallback.js";
 
 function containsLoneSurrogate(text: string): boolean {
