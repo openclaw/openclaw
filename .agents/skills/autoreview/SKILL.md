@@ -114,6 +114,8 @@ findings, or to bypass a safety refusal or isolation failure.
 Codex defaults to `gpt-6-astra`, high reasoning, with a `gpt-5.6-terra` retry
 only for an account-access failure. Explicit `gpt-5.6-sol` selections retain that
 access-only retry; other explicit models, including Astra, have no model fallback.
+Existing `none`/`minimal` effort settings without a model override retain Sol
+and its access-only retry; unconfigured runs use Astra/high.
 Honor explicit user engine/model choices.
 The helper does not automatically fall back between engines.
 

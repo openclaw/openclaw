@@ -6733,6 +6733,9 @@ def reviewer_args(args: argparse.Namespace) -> list[argparse.Namespace]:
         or env_global_thinking
         or DEFAULT_THINKING_BY_ENGINE.get(engine)
     )
+    if engine == "codex" and model_override is None and thinking in {"none", "minimal"}:
+        # Preserve shipped effort-only invocations that Astra cannot support.
+        model = "gpt-5.6-sol"
     if engine == "claude":
         fallback_model = (
             fallback_by_engine.get(engine)

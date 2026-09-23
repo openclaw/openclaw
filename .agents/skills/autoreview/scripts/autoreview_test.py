@@ -1103,7 +1103,10 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
     def test_astra_rejects_unsupported_effort_from_cli_and_environment(self) -> None:
         with tempfile.TemporaryDirectory(prefix="autoreview-invalid-effort.") as tempdir:
             for effort in ("none", "minimal", "ultra"):
-                for source in ("default", "cli", "keyed-cli", "environment", "global-environment"):
+                sources = ("cli", "keyed-cli", "environment", "global-environment")
+                if effort == "ultra":
+                    sources += ("default",)
+                for source in sources:
                     with self.subTest(effort=effort, source=source):
                         argv = [sys.executable, str(SCRIPT_PATH), "--engine", "codex",
                                 "--codex-bin", str(Path(tempdir) / "missing-codex")]
@@ -1128,6 +1131,11 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
 
     def test_astra_validation_uses_effective_cli_overrides(self) -> None:
         cases = (
+            ({}, ["--thinking", "minimal", "--thinking", "codex=high"], "gpt-6-astra", "high"),
+            ({"AUTOREVIEW_THINKING": "none", "AUTOREVIEW_CODEX_THINKING": "high"},
+             [], "gpt-6-astra", "high"),
+            ({"AUTOREVIEW_CODEX_THINKING": "minimal"},
+             ["--thinking", "high"], "gpt-6-astra", "high"),
             ({"AUTOREVIEW_CODEX_MODEL": "gpt-6-astra", "AUTOREVIEW_CODEX_THINKING": "none"},
              ["--thinking", "high"], "gpt-6-astra", "high"),
             ({"AUTOREVIEW_CODEX_MODEL": "gpt-6-astra", "AUTOREVIEW_CODEX_THINKING": "minimal"},
@@ -1139,6 +1147,25 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 reviewer = AUTOREVIEW.reviewer_args(AUTOREVIEW.parse_args())[0]
                 self.assertEqual(reviewer.model, model)
                 self.assertEqual(reviewer.thinking, effort)
+
+    def test_effort_only_cli_and_environment_preserve_supported_models(self) -> None:
+        for effort in ("none", "minimal", "low", "medium", "high", "xhigh", "max"):
+            selections = (
+                (["--thinking", effort], {}),
+                (["--thinking", "codex=" + effort], {}),
+                ([], {"AUTOREVIEW_THINKING": effort}),
+                ([], {"AUTOREVIEW_CODEX_THINKING": effort}),
+            )
+            for thinking_args, env in selections:
+                with self.subTest(effort=effort, thinking_args=thinking_args, env=env):
+                    with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+                        sys, "argv", ["autoreview", *thinking_args],
+                    ):
+                        reviewer = AUTOREVIEW.reviewer_args(AUTOREVIEW.parse_args())[0]
+                    expected_model = "gpt-5.6-sol" if effort in {"none", "minimal"} else "gpt-6-astra"
+                    self.assertEqual(reviewer.model, expected_model)
+                    self.assertEqual(reviewer.thinking, effort)
+                    self.assertEqual(reviewer.fallback_model, "gpt-5.6-terra")
 
     def test_astra_preserves_supported_effort_and_explicit_model(self) -> None:
         selections = (
