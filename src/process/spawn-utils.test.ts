@@ -155,7 +155,11 @@ describe("child-process spawn diagnostics", () => {
     now = 90_000;
     emitChildProcessSpawnSample();
     expect(events).toEqual([
-      expect.objectContaining({ family: "node", count: 2, intervalMs: 90_000 }),
+      expect.objectContaining({
+        family: process.versions.bun ? "bun" : "node",
+        count: 2,
+        intervalMs: 90_000,
+      }),
     ]);
     now = 150_000;
     emitChildProcessSpawnSample();
@@ -181,7 +185,11 @@ describe("child-process spawn diagnostics", () => {
   );
 
   it("bounds labels to command families and discards disabled observations", () => {
-    for (const command of ["/private/customer/helper-secret", "C:\\private\\Git.EXE"]) {
+    for (const command of [
+      "/private/customer/helper-secret",
+      "C:\\private\\Git.EXE",
+      "/usr/local/bin/bun",
+    ]) {
       const child = new EventEmitter() as ChildProcess;
       recordChildProcessSpawn(command, child);
       child.emit("spawn");
@@ -191,6 +199,7 @@ describe("child-process spawn diagnostics", () => {
     expect(events).toEqual([
       expect.objectContaining({ family: "other", count: 1 }),
       expect.objectContaining({ family: "git", count: 1 }),
+      expect.objectContaining({ family: "bun", count: 1 }),
     ]);
     expect(JSON.stringify(events)).not.toContain("private");
 
@@ -205,6 +214,6 @@ describe("child-process spawn diagnostics", () => {
     setDiagnosticsEnabledForProcess(true);
     now = 180_000;
     emitChildProcessSpawnSample();
-    expect(events).toHaveLength(2);
+    expect(events).toHaveLength(3);
   });
 });

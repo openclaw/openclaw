@@ -105,25 +105,37 @@ describe.each([
       }
       return {};
     });
-  it.each(["other-operator", null])(
-    "refuses report admission for administrator profile %s",
-    async (profileId) => {
-      const request = requestForStatus();
-      const harness = harnessFor(request);
-      harness.update({ selfUser: profileId ? { id: profileId } : null });
-      const overlays = createApplicationOverlays(harness.gateway);
-      try {
-        await flushMicrotasks();
-        expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId);
-        await overlays.reportUpdateFailure(attemptId);
-        expect(reportUpdateFailure).not.toHaveBeenCalled();
-        expect(overlays.snapshot.updateFailureReportBusy).toBe(false);
-        expect(overlays.snapshot.updateFailureReportNotice).toBeNull();
-      } finally {
-        overlays.dispose();
+  it.each([
+    { profileId: "other-operator", allowed: true },
+    { profileId: null, allowed: false },
+  ])("admits only identified administrator profile $profileId", async ({ profileId, allowed }) => {
+    const request = requestForStatus();
+    const harness = harnessFor(request);
+    harness.update({ selfUser: profileId ? { id: profileId } : null });
+    reportUpdateFailure.mockImplementation(async ({ isCurrent }) => {
+      expect(isCurrent()).toBe(true);
+      return null;
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+    try {
+      await flushMicrotasks();
+      expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId);
+      await overlays.reportUpdateFailure(attemptId);
+      expect(reportUpdateFailure).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      if (allowed) {
+        expect(reportUpdateFailure).toHaveBeenCalledWith({
+          attemptId,
+          client: harness.gateway.snapshot.client,
+          isCurrent: expect.any(Function),
+        });
+        expect(reportUpdateFailure.mock.calls[0]?.[0].isCurrent()).toBe(false);
       }
-    },
-  );
+      expect(overlays.snapshot.updateFailureReportBusy).toBe(false);
+      expect(overlays.snapshot.updateFailureReportNotice).toBeNull();
+    } finally {
+      overlays.dispose();
+    }
+  });
 
   it("never reports during status hydration and suppresses duplicate clicks", async () => {
     const request = requestForStatus();

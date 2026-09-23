@@ -24,7 +24,7 @@ and publishes the result. Avoid exposing a generic SQL callback to application
 code or adding an asynchronous wrapper around an existing asynchronous facade.
 The plugin KV API already has asynchronous methods over its SQLite owner.
 
-Operator approval lookups, pending replay, verdicts, expiry, and allow-once
+Ordinary operator approval lookups, pending replay, verdicts, expiry, and allow-once
 consumption execute in the shared-state worker. Lookups and pending scans retain
 their expiry and corrupt-row repair transactions; history pages use the read-only
 worker. The approval manager retains live authority and decision handoffs, checks
@@ -32,6 +32,56 @@ authority at transaction and commit admission, and joins accepted mutations befo
 retiring their local bindings. Startup orphan closure and pruning remain boot
 admission operations. Stored bytes, schemas, retention, and update behavior are
 unchanged.
+
+Captured request authority survives worker waits and is rechecked before lookup,
+verdict commit, reconciliation, and response publication. The store shares FIFO
+admission across worker operations and the retained v2026.9.4 opaque SDK commit
+guard. That explicitly selected compatibility family runs the same kernels in a
+native transaction so a guard that uses SQLite never waits on its own worker's
+writer lock. It is not a failure fallback. Removing this exception requires an SDK
+contract that can require worker-safe guards. History remains on the read-only
+worker, with full request checks outside its storage work. Legacy exec/plugin
+read and resolution handlers carry the same original request authority through
+expiry, prefix lookup, and verdict admission. An unknown verdict outcome gets one
+readback under the original physical database admission and captured maintenance,
+schema, and coordinator scopes without retrying the write. Replacing that owner
+leaves the verdict uncertain even if the replacement contains matching approval
+bytes; local settlement rechecks the original admission after readback. Settlement
+retains auto-review provenance only from that operation's postcommit receipt and
+preserves the unanswered no-route fallback contract. Runtime resolver IDs can be
+shared or null; a matching row without a receipt cannot establish auto-review
+provenance. Such a verdict stays locally uncertain, while a distinct device or
+channel winner settles as an operator decision. A confirmed pending readback
+clears an inconclusive attempt. Delayed reconciliation retains the original
+database admission until that uncertainty is resolved. Retries recheck that owner
+before work and at transaction/commit admission; a pending readback cannot clear
+a replaced owner's fence. Cancellation still closes local executable authority
+immediately when durable admission is refused.
+
+Autonomous expiry rearms its existing timer after a definite worker overload or
+unavailability refusal. The retry retains the original database, maintenance,
+schema, and coordinator owner and checks the unchanged deadline in the same CAS.
+Later verdicts and reconciliation retain that pending entry's owner until local
+settlement. They cannot adopt a replacement or redirect the write to another store.
+Closing or replacing that owner stops the retry. Cleanup failures and uncertain
+write outcomes do not authorize replay; ordinary corruption keeps its existing
+fail-closed settlement.
+
+Request config custody follows committed policy publications. Equivalent snapshots
+and settings unrelated to approval auth or session routing preserve the request.
+Changes to those retained policy facts permanently revoke it, including a change
+restored before the next worker check. Handler completion releases its publication
+listener; worker commit checks consume the retained revocation fact without loading
+config, profiles, or session rows. Native-compatible requests retain the same
+publication fence in addition to their synchronous SDK guard.
+
+Bundled in-process agent callers still compose opaque guards from their run,
+profile, and receipt authority owners. Those callers, and delegated worker-claim
+liveness checks that still read placement state synchronously, require a separate
+owner migration before the complete approval flow is free of parent-thread SQL.
+That migration must prepare authority through those owners and retain live commit
+checks; it must not treat internal agent identity as WebSocket authority or drop
+the external SDK guard contract.
 
 Worker environment inventory is a committed, revisioned projection owned by its
 store. Startup hydrates through the read-only worker scope; runtime mutations use
@@ -720,6 +770,14 @@ it does not become a permanent restore failure.
 Task observation waits for each acknowledged row's required flow effects.
 Acknowledged task mutations are never replayed.
 
+Modern run-owner binding also awaits the shared-state worker. Its original creation
+receipt follows only matching committed lifecycle timestamp changes; replacement
+rows and rolled-back events cannot advance that identity. Binding joins accepted
+events and required publication, then rechecks the original run before installing
+its live cancellation owner. The receipt releases its lineage listener on failure
+or settlement. A confirmed no-op may reselect after a matching committed event;
+failed or uncertain writes are never replayed.
+
 Active core Gateway task completion retains the creation-time registry owners and
 updates its original run/runtime/session selection through the shared-state worker.
 Each selected task is reread against its exact receipt and current Gateway/run
@@ -1262,7 +1320,11 @@ Read-only callbacks made while a cached agent writer holds a transaction use a
 separate read-only companion connection. Each call rereads committed rows and
 checks the current schema, agent owner, and physical file identity. The companion
 retains prepared statements, never an authorization result or an open read
-transaction. Canonical validation belongs to the admitted physical database:
+transaction. On connections whose owner enables statement caching, schema-version
+checks reuse the prepared `PRAGMA user_version` statement but read its current
+value on every call. Authorizer changes, database replacement, and close retain
+the existing statement-cache invalidation rules.
+Canonical validation belongs to the admitted physical database:
 first admission requires full proof, then the schema-21 pending-key projection
 records changes independently of connection lifetime. Startup and initial Gateway
 authorization of an unadmitted reader use the existing mutation worker for pending
@@ -1572,8 +1634,11 @@ the parent synchronously joins transaction settlement before allowing owner reti
 that mandatory join cannot be abandoned at the append deadline.
 
 Periodic incremental vacuum uses the same write-admission boundary, so it can
-service reclamation approval before taking the writer lock. Its 512-page limit
-is unchanged; passive checkpoints remain outside the write transaction.
+service reclamation approval before taking the writer lock. Each connection starts
+with eight-page units and adjusts toward a 25 ms hold target, growing at most twice
+per unit up to 512 pages. The scheduling estimate expires with the connection.
+Periodic maintenance retains its 512-page total budget per tick, reacquiring
+admission between units; passive checkpoints remain outside the write transaction.
 
 The WAL owner supplies one checkpoint-before-vacuum operation for periodic,
 reclamation, and archive maintenance. An incomplete checkpoint skips vacuum.

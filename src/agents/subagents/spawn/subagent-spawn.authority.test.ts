@@ -53,10 +53,7 @@ import {
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { registerSubagentRun } from "../registry/subagent-registry.js";
-import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "../registry/subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
@@ -151,7 +148,7 @@ describe("pending spawn invocation authority", () => {
         cleanupBrowser.mockImplementation(originalCleanup);
       }
       clearAgentRunContext("b");
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
       expect(completedB).toMatchObject({
         generation: completedGeneration,
         cleanupCompletedAt: expect.any(Number),

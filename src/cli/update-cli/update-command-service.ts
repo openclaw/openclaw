@@ -22,7 +22,6 @@ import {
   waitForGatewayHealthyRestart,
   type GatewayRestartSnapshot,
 } from "../daemon-cli/restart-health.js";
-import { runRestartScript } from "./restart-helper.js";
 import { tryWriteCompletionCache, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
@@ -186,7 +185,6 @@ export async function maybeRestartService(params: {
   serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
   serviceManagerUid?: number;
   gatewayPort: number;
-  restartScriptPath?: string | null;
   invocationCwd?: string;
   nodeRunner?: string;
   skipLegacyServiceRestart?: boolean;
@@ -404,9 +402,7 @@ export async function maybeRestartService(params: {
         expectedGatewayVersion !== undefined &&
         expectedGatewayVersion !== normalizeOptionalString(activation.result.before?.version);
       let restarted = false;
-      let restartInitiated = false;
       let refreshedGatewayHealth: GatewayRestartSnapshot | undefined;
-      let restartScriptPath = preserveDefinition ? null : activation.restartScriptPath;
       if (activation.refreshServiceEnv && activation.serviceInstallEnv !== null) {
         try {
           recordPhase("restarting");
@@ -504,10 +500,8 @@ export async function maybeRestartService(params: {
             };
             assertCurrent();
             expectedGatewayVersion = normalizeOptionalString(activation.result.after?.version);
-            restartScriptPath = null;
           }
           if (isPackageUpdate) {
-            restartScriptPath = null;
             updatedInstallRestartNeedsServiceRootProof = !canVerifyUpdatedGatewayByVersion;
           }
         }
@@ -539,15 +533,7 @@ export async function maybeRestartService(params: {
         );
         return healthy ?? (await failed("restart-health-failed"));
       }
-      if (restartScriptPath) {
-        if (!preserveDefinition) {
-          await createUpdateConfigSnapshot();
-        }
-        recordPhase("restarting");
-        activationAccepted = await runRestartScript(restartScriptPath, activation.timeoutMs);
-        assertCurrent();
-        restartInitiated = true;
-      } else if (
+      if (
         canRestartUpdatedInstall() ||
         (!isPackageUpdate && !activation.skipLegacyServiceRestart)
       ) {
@@ -588,13 +574,7 @@ export async function maybeRestartService(params: {
         defaultRuntime.log(theme.muted("Gateway: restart skipped (no installed service found)."));
       }
 
-      const shouldVerifyRestart =
-        restartInitiated ||
-        (restarted &&
-          (preserveDefinition ||
-            expectedGatewayVersion !== undefined ||
-            activation.result.mode === "git")) ||
-        activation.requireRunningServiceAfterRestart;
+      const shouldVerifyRestart = restarted || activation.requireRunningServiceAfterRestart;
       if (shouldVerifyRestart) {
         const requireRunningService =
           updatedInstallRestartNeedsServiceRootProof ||
@@ -612,10 +592,6 @@ export async function maybeRestartService(params: {
         }
         if (restartHealthy === "readiness-pending") {
           return restartHealthy;
-        }
-        if (!activation.opts.json && restartInitiated) {
-          defaultRuntime.log(theme.success("Daemon restart completed."));
-          defaultRuntime.log("");
         }
       }
 

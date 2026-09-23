@@ -1,8 +1,9 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   UsageCostWorkerInput,
   UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
-import { serveWorkerTasks } from "../../infra/worker-task-server.js";
+import { serveOwnedWorkerTasks } from "../../infra/worker-task-server.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
 import type { SessionHistoryWorkerResult } from "./session-history-types.js";
@@ -67,7 +68,11 @@ async function withHistoryDatabase<T>(
   }
 }
 
-serveWorkerTasks(
+let closeReadOnlyCandidates:
+  | typeof import("../../state/openclaw-agent-db-readonly-scope.js").closeOpenClawAgentDatabaseReadOnlyCandidates
+  | undefined;
+
+serveOwnedWorkerTasks(
   async (
     input,
     channel,
@@ -75,6 +80,9 @@ serveWorkerTasks(
   ): Promise<
     SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues> | UsageCostWorkerReply
   > => {
+    // Install cleanup before this worker can acquire either a cached or explicit reader.
+    closeReadOnlyCandidates ??= (await import("../../state/openclaw-agent-db-readonly-scope.js"))
+      .closeOpenClawAgentDatabaseReadOnlyCandidates;
     // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
     const request = input as SessionTranscriptWorkerInput | UsageCostWorkerInput;
     if (request.kind === "sqlite-target") {
@@ -152,6 +160,17 @@ serveWorkerTasks(
           )),
         };
       }
+      if (request.kind === "session-row-backfill") {
+        const { readSessionRowTranscriptFields } =
+          await import("../../gateway/session-row-transcript-backfill.kernel.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, () => ({
+            kind: "session-row-backfill" as const,
+            fields: readSessionRowTranscriptFields(request.params),
+          }))),
+        };
+      }
       if (request.kind === "session-target-inventory") {
         const { readSessionStoreTargetInventory } =
           await import("./session-store-target-inventory.js");
@@ -186,7 +205,8 @@ serveWorkerTasks(
         };
       }
       if (request.kind === "session-entry-list") {
-        const { listSessionEntriesReadOnly } = await import("./session-accessor.sqlite-entry.js");
+        const { listSessionEntriesReadOnly } =
+          await import("./session-accessor.sqlite-entry-list.read.js");
         return {
           ok: true,
           ...(await withHistoryDatabase(request.database, () => ({
@@ -408,6 +428,12 @@ serveWorkerTasks(
                       ),
                     };
                   }
+                  if (request.request.kind === "recent") {
+                    const { target, ...limits } = request.request.params;
+                    const { messages } =
+                      await options.readers.readRecentSessionMessagesWithStatsAsync(target, limits);
+                    return { kind: "recent", messages };
+                  }
                   if (request.request.kind === "delta") {
                     const { prepareSessionHistoryDelta } =
                       await import("../../gateway/session-history-delta-visibility.js");
@@ -485,5 +511,32 @@ serveWorkerTasks(
       }
       throw error;
     }
+  },
+  {
+    closeResource: (key) => {
+      const parsed: unknown = key === undefined ? undefined : JSON.parse(key);
+      if (
+        !Array.isArray(parsed) ||
+        !parsed.every(
+          (candidate) =>
+            isRecord(candidate) &&
+            typeof candidate.path === "string" &&
+            (candidate.scope === undefined || candidate.scope === "sibling-family"),
+        )
+      ) {
+        throw new Error("Session reader cleanup requires captured physical paths");
+      }
+      const candidates = parsed.map((candidate: { path: string; scope?: "sibling-family" }) =>
+        candidate.scope
+          ? { path: candidate.path, scope: candidate.scope }
+          : { path: candidate.path },
+      );
+      closeReadOnlyCandidates?.(candidates);
+      for (const [identity, retained] of historyDatabaseScopes) {
+        if (!retained.scope.hasRetainedConnection) {
+          historyDatabaseScopes.delete(identity);
+        }
+      }
+    },
   },
 );

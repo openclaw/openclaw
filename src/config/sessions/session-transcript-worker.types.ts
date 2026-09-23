@@ -5,6 +5,10 @@ import type {
   readSessionEntryResetRecallCutoff,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
+import type {
+  SessionRowTranscriptFields,
+  SessionRowTranscriptReadParams,
+} from "../../gateway/session-row-transcript-backfill.types.js";
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
 import type {
   SessionCostUsageCacheRead,
@@ -32,6 +36,10 @@ import type {
   SessionModelContextLimits,
 } from "./session-accessor.sqlite-model-context.js";
 import type { loadTranscriptReadSnapshotSync } from "./session-accessor.sqlite-read.js";
+import type {
+  SessionEntryReplacementSelection,
+  SessionEntryReplacementState,
+} from "./session-accessor.sqlite-replacement-read.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type {
@@ -175,6 +183,17 @@ type SessionTitleFieldsWorkerResult = {
   fields: SessionTitleFields;
 };
 
+type SessionRowBackfillWorkerInput = {
+  kind: "session-row-backfill";
+  database: { agentId: string; path: string };
+  params: SessionRowTranscriptReadParams;
+};
+
+type SessionRowBackfillWorkerResult = {
+  kind: "session-row-backfill";
+  fields: SessionRowTranscriptFields;
+};
+
 type SessionTranscriptHydrationWorkerInput = {
   kind: "transcript-hydration";
   database: { agentId: string; path: string };
@@ -242,9 +261,10 @@ export type SessionExactEntriesWorkerInput = {
   env: NodeJS.ProcessEnv;
   sessionKeys: readonly string[];
   lifecycleSessionKey?: string;
-  projection?: "full" | "backing" | "sharing";
+  projection?: "full" | "backing" | "sharing" | "replacement";
   includeMembers?: boolean;
   includeAuthorization?: boolean;
+  replacementSelection?: SessionEntryReplacementSelection;
   continuation?: CanonicalSessionReaderContinuation;
 };
 
@@ -259,6 +279,7 @@ export type SessionExactEntriesWorkerResult = {
     birthtime?: string;
   };
   members?: Record<string, SessionMember[]>;
+  replacement?: SessionEntryReplacementState & { databaseIdentity: string };
   sharing?: {
     source: { agentId: string; path: string };
     databaseIdentity: string;
@@ -320,6 +341,7 @@ export type SessionHistoryWorkerInput =
   | SessionTranscriptHistoryWorkerInput
   | SessionPreviewWorkerInput
   | SessionTitleFieldsWorkerInput
+  | SessionRowBackfillWorkerInput
   | SessionRowPresenceWorkerInput
   | SessionMembersWorkerInput
   | SessionMembershipFactsWorkerInput
@@ -355,6 +377,7 @@ export type SessionTranscriptWorkerValues = {
   "history-page": SessionHistoryWorkerResult;
   "session-preview": SessionPreviewWorkerResult;
   "session-title-fields": SessionTitleFieldsWorkerResult;
+  "session-row-backfill": SessionRowBackfillWorkerResult;
   "session-row-presence": boolean;
   "session-members": SessionMember[];
   "session-membership-facts": SessionMembershipFacts;
@@ -404,6 +427,9 @@ export type SessionHistoryWorkerDatabase = {
   readTitleFields: (
     input: Omit<SessionTitleFieldsWorkerInput, "kind" | "database">,
   ) => Promise<SessionTitleFieldsWorkerResult["fields"]>;
+  readRowBackfill: (
+    params: SessionRowBackfillWorkerInput["params"],
+  ) => Promise<SessionRowBackfillWorkerResult["fields"]>;
   readEntryPresence: (scope: SessionRowPresenceWorkerInput["scope"]) => Promise<boolean>;
   readIdentityEvidence: (
     input: Omit<SessionIdentityEvidenceWorkerInput, "kind" | "database">,

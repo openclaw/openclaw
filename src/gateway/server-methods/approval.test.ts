@@ -54,6 +54,7 @@ import {
   cancelUnboundRunApprovals,
 } from "./approval-run-cancellation.js";
 import { createApprovalHandlers } from "./approval.js";
+import { createContext, deleteDurableApproval } from "./approval.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
@@ -102,15 +103,6 @@ function createManagers(databaseOptions: OpenClawStateDatabaseOptions) {
   };
   managersForCleanup.push(managers.exec, managers.plugin, managers.systemAgent);
   return managers;
-}
-
-function deleteDurableApproval(databaseOptions: OpenClawStateDatabaseOptions, id: string): void {
-  const database = openOpenClawStateDatabase(databaseOptions);
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
-  executeSqliteQuerySync(
-    database.db,
-    stateDb.deleteFrom("operator_approvals").where("approval_id", "=", id),
-  );
 }
 
 function corruptDurableApprovalPresentation(
@@ -238,24 +230,6 @@ function createClient(params: {
     },
     ...(params.internal ? { internal: { approvalRuntime: true } } : {}),
   } as unknown as GatewayRequestHandlerOptions["client"];
-}
-
-function createContext(
-  controlUiBasePath?: string,
-  approvalWebPushDelivery?: GatewayRequestHandlerOptions["context"]["approvalWebPushDelivery"],
-) {
-  return {
-    broadcast: vi.fn(),
-    broadcastToConnIds: vi.fn(),
-    approvalEvents: {
-      publishRequested: vi.fn(() => 0),
-      publishResolved: vi.fn(),
-    },
-    getApprovalClientConnIds: vi.fn(() => new Set(["approval-client"])),
-    getRuntimeConfig: () => ({ gateway: { controlUi: { basePath: controlUiBasePath } } }),
-    approvalWebPushDelivery,
-    logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
-  } as unknown as GatewayRequestHandlerOptions["context"];
 }
 
 async function invoke(params: {

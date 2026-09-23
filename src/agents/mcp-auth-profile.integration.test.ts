@@ -5,16 +5,15 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { mcpImportRuntimeEntrypoints } from "./mcp-import-runtime.test-support.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
-const fixturePath = fileURLToPath(
-  new URL("./mcp-auth-profile.integration.test-support.ts", import.meta.url),
-);
-// Removal: run this source fixture on Bun after oven-sh/bun#35690 supports the
-// synchronous module hooks used by the tsx preload.
-const sourceRuntimeExecutable = process.versions.bun ? "node" : process.execPath;
+const fixtureUrl = resolveRuntimeWorkerUrl(mcpImportRuntimeEntrypoints.authProfile);
+const nodeExecutable = resolveTestNodeExecPath();
 
 function createChildEnv(root: string): NodeJS.ProcessEnv {
   const home = path.join(root, "home");
@@ -52,8 +51,8 @@ describe("MCP profile auth through real credential owners", () => {
       const root = tempDirs.make("openclaw-mcp-auth-demand-");
       // Child isolation also keeps neighboring suites' store/provider mocks out of this proof.
       const { stdout } = await execFileAsync(
-        sourceRuntimeExecutable,
-        ["--import", "tsx", fixturePath, scenario, root],
+        nodeExecutable,
+        [...resolveRuntimeWorkerArgv(fixtureUrl, nodeExecutable), scenario, root],
         {
           cwd: repoRoot,
           env: createChildEnv(root),

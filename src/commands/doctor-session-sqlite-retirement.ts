@@ -4,7 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
 import {
   isPendingMigrationArtifactClaim,
   moveMigrationArtifact,
@@ -12,16 +11,18 @@ import {
   sameMigrationArtifact,
   statMigrationPath,
   type MigrationArtifact,
-} from "./doctor-session-sqlite-artifact.js";
-import { collectHistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
-import { coalesceSessionSqliteArchiveReferences } from "./doctor-session-sqlite-migration-coalesce.js";
+} from "../infra/session-sqlite-migration-artifact.js";
+import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
 import {
   hasSymbolicLinkInDirectoryPath,
   readSessionSqliteMigrationManifest,
   writeSessionSqliteMigrationManifest,
   type ActiveSessionSqliteMigrationRun,
   type SessionSqliteMigrationTargetInput,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
+import { collectHistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
+import { coalesceSessionSqliteArchiveReferences } from "./doctor-session-sqlite-migration-coalesce.js";
 import {
   collectRecoveryInventory,
   protectRecoveryDependencies,
@@ -30,7 +31,6 @@ import {
   type RecoveryArtifactReference,
   type RecoveryCleanupReport,
 } from "./doctor-session-sqlite-recovery-inventory.js";
-import type { DoctorSessionSqliteIssue } from "./doctor-session-sqlite-types.js";
 import {
   createRecoveryDestinationVerifier,
   verifyHistoricalMigrationArtifact,

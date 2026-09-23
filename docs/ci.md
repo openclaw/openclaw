@@ -13,9 +13,11 @@ job. Open the page that matches your task.
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
 
-Docs-only `main` pushes skip CI and cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Docker seed, QA Smoke, real-Gateway browser checks, and named process proofs run on selected `main` pushes and manual/release validation. Pull requests and exact-head PR fallback dispatches retain unit, boundary, build, and mocked-Gateway coverage. Windows retains its complete inventory across five measured file shards. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
+Docs-only `main` pushes skip CI and cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted canonical `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches retain unit, boundary, build, and mocked-Gateway coverage. Windows retains its complete inventory across five measured file shards. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
 
 Core-test-only PRs use targeted type checks only when every selected test exists in the checkout. Deleting a core test keeps the full type-check plan, including the existing core stripes on GitHub and hybrid profiles.
+
+Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid runs also split extension lint across six hosted jobs. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 
@@ -27,7 +29,7 @@ Native test builds retain coverage and source-line backtraces while omitting IDE
 
 Short hybrid jobs use a [40-row base threshold and 45-row hosted admission limit](/ci/capacity#bounded-hybrid-hosted-offload), with unchanged coverage and Blacksmith fallback when optional work does not fit.
 
-Additional hybrid check offloads require [fresh hosted assignment evidence](/ci/runners#hybrid-hosted-assignment-guard). Eligible PRs can move five measured checks; main pushes can also move lint, central types, and artifact builds within the same hosted row limit.
+Additional hybrid check offloads require [fresh hosted assignment evidence](/ci/runners#hybrid-hosted-assignment-guard). Eligible PRs can move five measured checks; main pushes can also move lint and central types within the same hosted row limit. Artifact builds retain Blacksmith because their measured hosted tail leaves no room for the [15-minute routing objective](/ci/routing-costs).
 
 Windows keeps its complete explicit test inventory in five [measured project-aligned shards](/ci/runners#runner-backend-modes), sharing each small project's setup within one job.
 
@@ -41,7 +43,7 @@ Build, QA and test orchestration restore the same [protected Node compile cache]
 
 In-process Gateway test configs use [exclusive plan admission within existing packed jobs](/ci/capacity#measured-shard-weights).
 
-Changed-extension PR jobs use [measured fallback rates and a 240-second packing budget](/ci/capacity#runner-registration-budget) within the landed 90-row compact, 130-row PR and 70-row push caps.
+Changed-extension PR jobs use [measured fallback rates and a 300-second packing budget](/ci/capacity#runner-registration-budget) within the landed 90-row compact, 130-row PR and 70-row push caps.
 
 Compact planning reserves the actual appended plugin rows before applying those
 Node matrix caps, allowing existing hosted tooling compaction to use the

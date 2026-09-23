@@ -41,7 +41,9 @@ export function createHarness(params?: {
       retainedPromptContextPages: [],
     },
   };
-  const sendPayload = vi.fn().mockResolvedValue(true);
+  const sendPayload = vi
+    .fn<Parameters<typeof createLaneTextDeliverer>[0]["sendPayload"]>()
+    .mockResolvedValue({ visibleReplySent: true });
   const flushDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
     await lane.stream?.flush();
   });

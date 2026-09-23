@@ -113,7 +113,13 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
       .label=${`${t("skillWorkshop.revision.title", { verb })}: ${proposal.slug}`}
       .description=${t("skillWorkshop.revision.description")}
       style="--openclaw-modal-width: 560px"
-      @modal-cancel=${cancelDisabled ? undefined : props.onRevisionCancel}
+      @modal-cancel=${(event: Event) => {
+        if (cancelDisabled) {
+          event.preventDefault();
+          return;
+        }
+        props.onRevisionCancel();
+      }}
     >
       <section class="sw-revision-dialog ${busy ? "sw-revision-dialog--sending" : ""}">
         <div class="sw-revision-dialog__head">
@@ -135,10 +141,14 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
             </button>
           </openclaw-tooltip>
         </div>
-        <p class="sw-revision-dialog__copy">${t("skillWorkshop.revision.description")}</p>
+        <p id="sw-revision-description" class="sw-revision-dialog__copy">
+          ${t("skillWorkshop.revision.description")}
+        </p>
         <textarea
           class="sw-revision-dialog__input"
           autofocus
+          aria-label=${t("skillWorkshop.revision.title", { verb })}
+          aria-describedby="sw-revision-description"
           placeholder=${t("skillWorkshop.revision.placeholder")}
           .value=${props.revisionDraft}
           ?disabled=${
@@ -290,7 +300,7 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
                   ${t("skillWorkshop.detail.draftMissing")}
                 </p>`
               : detailLoading
-                ? html`<p class="sw-muted">${t("skillWorkshop.detail.loading")}</p>`
+                ? html`<p class="sw-muted" role="status">${t("skillWorkshop.detail.loading")}</p>`
                 : renderSkillDocument(proposal.body)
           }
         </div>

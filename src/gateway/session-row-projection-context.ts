@@ -127,6 +127,7 @@ export function createSessionRowProjectionContext() {
       cfg: records.Inputs["cfg"],
       matching: (query: { key: string }) => records.Row[],
       put: (row: records.Row) => void,
+      referenced: (reference: string) => records.Row | undefined,
     ) {
       const previous = current.subagentRunsByChildSessionKey;
       prepare(epoch);
@@ -141,7 +142,13 @@ export function createSessionRowProjectionContext() {
           if (!row.storedEntry) {
             continue;
           }
-          const parents = records.readSessionRowParents(row, row.storedEntry, cfg, current);
+          const parents = records.readSessionRowParents(
+            row,
+            row.storedEntry,
+            cfg,
+            current,
+            referenced,
+          );
           if (!records.sameParents(row.parents, parents)) {
             put({ ...row, parents });
           }

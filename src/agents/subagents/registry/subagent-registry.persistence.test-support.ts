@@ -84,14 +84,19 @@ export async function settleSubagentRegistryPersistenceWork(
   } catch (error) {
     failures.push(error);
   }
+  // Terminal notification writes run off the Gateway thread, so uncaptured
+  // deliveries can outlive the default fence on a loaded runner.
   try {
-    await vi.waitFor(() => {
-      const holders = getActiveGatewayRootWorkHolders();
-      expect(
-        getActiveGatewayRootWorkCount(),
-        `residual registry roots: ${holders.join(", ") || "unattributed"}`,
-      ).toBe(0);
-    });
+    await vi.waitFor(
+      () => {
+        const holders = getActiveGatewayRootWorkHolders();
+        expect(
+          getActiveGatewayRootWorkCount(),
+          `residual registry roots: ${holders.join(", ") || "unattributed"}`,
+        ).toBe(0);
+      },
+      { timeout: 10_000 },
+    );
   } catch (error) {
     failures.push(error);
   }

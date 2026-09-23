@@ -95,7 +95,7 @@ async function post(
   );
 }
 
-async function fixture(withInstructions = true) {
+async function fixture(withInstructions = true, contextText = "synthetic persona") {
   const proxy = await createCodexInferenceProxy({
     upstream: new URL("https://api.openai.com/v1"),
     assertCurrent: () => {},
@@ -104,7 +104,7 @@ async function fixture(withInstructions = true) {
   const controller = new AbortController();
   const registration = proxy.context.register({
     threadId: "root",
-    text: "synthetic persona",
+    text: contextText,
     signal: controller.signal,
     assertCurrent: () => {},
   });
@@ -188,23 +188,26 @@ describe("private inference HTTP relay", () => {
     expect(transport.fetch).not.toHaveBeenCalled();
   });
 
-  it("revalidates admission after asynchronous transport preparation", async () => {
-    const { proxy, controller, body } = await fixture();
-    let writes = 0;
-    transport.fetch.mockImplementation(async (args) => {
-      controller.abort();
-      args.beforeRequest();
-      writes++;
-      throw new Error("must not reach the upstream");
-    });
-    const response = await post(proxy.baseUrl + "/responses", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    expect(response.status).toBe(502);
-    expect(transport.fetch).toHaveBeenCalledTimes(1);
-    expect(writes).toBe(0);
-  });
+  it.each(["synthetic persona", ""])(
+    "revalidates admission after asynchronous preparation with context=%j",
+    async (contextText) => {
+      const { proxy, controller, body } = await fixture(true, contextText);
+      let writes = 0;
+      transport.fetch.mockImplementation(async (args) => {
+        controller.abort();
+        args.beforeRequest();
+        writes++;
+        throw new Error("must not reach the upstream");
+      });
+      const response = await post(proxy.baseUrl + "/responses", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(502);
+      expect(transport.fetch).toHaveBeenCalledTimes(1);
+      expect(writes).toBe(0);
+    },
+  );
 
   it("passes native unauthorized responses through for native auth recovery", async () => {
     const { proxy, body } = await fixture();
@@ -278,13 +281,19 @@ describe("private inference WebSocket relay", () => {
 
   it.each([
     { proxied: false, localDnsUnavailable: false, withInstructions: true },
+    { proxied: false, localDnsUnavailable: false, withInstructions: true, contextText: "" },
     { proxied: true, localDnsUnavailable: false, withInstructions: true },
     { proxied: true, localDnsUnavailable: true, withInstructions: true },
     { proxied: false, localDnsUnavailable: false, withInstructions: false },
     { proxied: true, localDnsUnavailable: true, withInstructions: false },
   ])(
     "preserves WS deltas (proxy=$proxied, local DNS unavailable=$localDnsUnavailable, instructions=$withInstructions)",
-    async ({ proxied, localDnsUnavailable, withInstructions }) => {
+    async ({
+      proxied,
+      localDnsUnavailable,
+      withInstructions,
+      contextText = "synthetic persona",
+    }) => {
       const agent = new Agent();
       const destroy = vi.spyOn(agent, "destroy");
       transport.proxyAgent.mockReturnValue(proxied ? agent : undefined);
@@ -296,6 +305,7 @@ describe("private inference WebSocket relay", () => {
       const server = createServer();
       const wss = new WebSocketServer({ server });
       const received: unknown[] = [];
+      const receivedBytes: string[] = [];
       wss.on("headers", (headers) => {
         headers.push(
           "x-codex-turn-state: synthetic-turn-state",
@@ -309,6 +319,7 @@ describe("private inference WebSocket relay", () => {
             throw new Error("fixture expected an uncompressed Node WebSocket buffer");
           }
           received.push(JSON.parse(data.toString("utf8")));
+          receivedBytes.push(data.toString("utf8"));
           socket.send('{"type":"response.completed","response":{"id":"synthetic-response"}}');
         });
       });
@@ -320,7 +331,7 @@ describe("private inference WebSocket relay", () => {
         throw new Error("fixture did not listen");
       }
       transport.upstream = "ws://127.0.0.1:" + address.port;
-      const { proxy, registration, body } = await fixture(withInstructions);
+      const { proxy, registration, body } = await fixture(withInstructions, contextText);
       const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
       let responseHeaders: IncomingHttpHeaders | undefined;
       socket.on("upgrade", (response) => {
@@ -333,6 +344,7 @@ describe("private inference WebSocket relay", () => {
           "x-reasoning-included": "true",
           "openai-model": "fixture-model",
         });
+        const sent: string[] = [];
         for (const input of [body.input, []]) {
           const response = Promise.race([
             once(socket, "message"),
@@ -340,25 +352,36 @@ describe("private inference WebSocket relay", () => {
               throw new Error("inference relay closed before its response");
             }),
           ]);
-          socket.send(
-            JSON.stringify({
+          const wire = JSON.stringify(
+            {
               ...body,
               type: "response.create",
               input,
               previous_response_id: "previous",
-            }),
+            },
+            null,
+            2,
           );
+          sent.push(wire);
+          socket.send(wire);
           expect((await response)[0].toString()).toBe(
             '{"type":"response.completed","response":{"id":"synthetic-response"}}',
           );
         }
         const expected = {
           ...body,
-          instructions: withInstructions ? "native base\n\nsynthetic persona" : "synthetic persona",
+          instructions: contextText
+            ? withInstructions
+              ? "native base\n\n" + contextText
+              : contextText
+            : body.instructions,
           type: "response.create",
           previous_response_id: "previous",
         };
         expect(received).toEqual([expected, { ...expected, input: [] }]);
+        if (!contextText) {
+          expect(receivedBytes).toEqual(sent);
+        }
         expect(transport.dials).toEqual(["wss://api.openai.com/v1/responses"]);
         expect(transport.resolve).toHaveBeenCalledTimes(proxied ? 0 : 1);
         if (proxied) {

@@ -5,7 +5,10 @@ import { findTaskByRunId } from "../../tasks/task-registry.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import * as agentHandlerHelpers from "../agent-turn/agent-handler-helpers.js";
 import { waitForAcceptedRunDispatch } from "./agent-clock.test-helpers.js";
-import { spyDetachedCreateRunningTaskRun } from "./agent-task-tracking.test-helpers.js";
+import {
+  mockSpawnedChildSessionEntry,
+  spyDetachedCreateRunningTaskRun,
+} from "./agent-task-tracking.test-helpers.js";
 import {
   backendGatewayClient,
   describe0AfterEach0,
@@ -53,13 +56,7 @@ describe("gateway accepted dispatch clock", () => {
       const childSessionKey = "agent:main:subagent:native-delayed-child";
       const runId = "native-delayed-subagent-run";
       const baseClient = requireValue(backendGatewayClient(), "expected backend client");
-      mocks.userTurnStorePath = "/tmp/sessions.json";
-      mocks.loadSessionEntry.mockReturnValue({
-        cfg: {},
-        storePath: mocks.userTurnStorePath,
-        entry: { sessionId: "spawned-child-session", updatedAt: Date.now() },
-        canonicalKey: childSessionKey,
-      });
+      mockSpawnedChildSessionEntry(childSessionKey, root);
       mocks.updateSessionStore.mockResolvedValue(undefined);
       mocks.agentCommand.mockResolvedValue({
         payloads: [{ text: "ok" }],

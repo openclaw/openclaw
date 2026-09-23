@@ -97,3 +97,11 @@ export function applyQuoteReplyTarget(turn: Turn, payload: ReplyPayload): ReplyP
     replyToId: turn.implicitQuoteReplyTargetId,
   });
 }
+
+export function formatTelegramGroupThreadReply(
+  text: string,
+  participant: { name: string },
+): string {
+  const name = participant.name.replace(/[\\`*_{}[\]()<>#!|]/g, "\\$&").replace(/\s+/g, " ");
+  return `**${name}**\n${text}`;
+}

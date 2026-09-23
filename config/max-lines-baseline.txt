@@ -346,7 +346,6 @@ src/agents/provider-request-config.ts
 src/agents/provider-transport-fetch.test.ts
 src/agents/provider-transport-fetch.ts
 src/agents/runtime-plan/prepare-auth.test.ts
-src/agents/session-tool-result-guard.ts
 src/agents/session-transcript-repair.test.ts
 src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
@@ -769,7 +768,6 @@ ui/src/lib/skills/index.test.ts
 ui/src/pages/agents/agents-page.ts
 ui/src/pages/agents/memory/dreaming.test.ts
 ui/src/pages/agents/memory/view.ts
-ui/src/pages/agents/panels-tools-skills.ts
 ui/src/pages/chat/chat-command-executor.test.ts
 ui/src/pages/chat/chat-command-executor.ts
 ui/src/pages/chat/chat-gateway.test.ts
@@ -788,7 +786,6 @@ ui/src/pages/cron/view.ts
 ui/src/pages/sessions/sessions-page.ts
 ui/src/pages/sessions/view.test.ts
 ui/src/pages/sessions/view.ts
-ui/src/pages/usage/view-details.ts
 ui/src/pages/usage/view-overview.ts
 ui/src/pages/usage/view.ts
 ui/src/test-helpers/control-ui-e2e.ts

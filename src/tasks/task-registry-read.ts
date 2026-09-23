@@ -87,22 +87,42 @@ function isTaskRegistryReadCurrent(taskId: string, mode: "identity" | "settled")
     return true;
   }
   const task = tasks.get(taskId);
-  const preserved = new Set<TaskRegistryMutationScope>();
+  const currentScopes = new Set<TaskRegistryMutationScope>();
   for (const pending of projection.pending) {
     if (mode === "identity" && pending.readIdentity === "preserved") {
-      preserved.add(pending.scope);
-    } else if (
-      pending.scope.taskId === taskId ||
-      pending.published.has(taskId) ||
-      pending.publication?.records.has(taskId) ||
-      (task && matchesScope(task, pending.scope))
-    ) {
+      currentScopes.add(pending.scope);
+      continue;
+    }
+    const creation =
+      mode === "identity" &&
+      typeof pending.readIdentity === "object" &&
+      pending.readIdentity.kind === "creation"
+        ? pending.readIdentity
+        : undefined;
+    const changesIdentity = creation
+      ? creation.taskId === taskId ||
+        Boolean(
+          creation.runId &&
+          (task?.runId?.trim() === creation.runId ||
+            pending.published.get(taskId)?.runId?.trim() === creation.runId),
+        )
+      : pending.scope.taskId === taskId ||
+        pending.published.has(taskId) ||
+        (task && matchesScope(task, pending.scope));
+    if (changesIdentity || pending.publication?.records.has(taskId)) {
       return false;
+    }
+    if (creation) {
+      // Its broad readback includes sibling session rows that creation cannot rewrite.
+      currentScopes.add(pending.scope);
     }
   }
   // Failed publication can leave a dirty scope after its mutation owner retires.
   for (const scope of projection.dirtyScopes) {
-    if (!preserved.has(scope) && (scope.taskId === taskId || (task && matchesScope(task, scope)))) {
+    if (
+      !currentScopes.has(scope) &&
+      (scope.taskId === taskId || (task && matchesScope(task, scope)))
+    ) {
       return false;
     }
   }

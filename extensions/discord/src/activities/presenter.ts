@@ -86,7 +86,7 @@ export function createDiscordWidgetPresenter(
           },
         };
       }
-      if (title.length > 80) {
+      if (Array.from(title).length > 80) {
         return {
           ok: false,
           error: { code: "presentation_error", message: "title must be 80 characters or fewer" },

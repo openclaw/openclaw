@@ -560,7 +560,7 @@ export function createStatusReactionController() {
     setError: vi.fn(async () => {}),
     setDone: vi.fn(async () => {}),
     restoreInitial: vi.fn(async () => {}),
-  };
+  } satisfies NonNullable<TelegramMessageContext["statusReactionController"]>;
 }
 
 export function createDirectSessionPayload(): TelegramMessageContext["ctxPayload"] {
