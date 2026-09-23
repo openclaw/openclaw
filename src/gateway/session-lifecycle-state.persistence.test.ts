@@ -525,6 +525,9 @@ it.each([
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const writerStarted = createDeferred();
     const releaseWriter = createDeferred();
+    const terminalChanged = createDeferred();
+    const sessionEventSubscribers = createSessionEventSubscriberRegistry();
+    sessionEventSubscribers.subscribe("session-observer");
     let claimId: string | undefined;
     let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
     let heldWriter: Promise<unknown> | undefined;
@@ -564,13 +567,21 @@ it.each([
         signal: new AbortController().signal,
         log: silentLog,
         broadcast: vi.fn(),
-        broadcastToConnIds: vi.fn(),
+        broadcastToConnIds: (event, payload) => {
+          if (
+            event === "sessions.changed" &&
+            isRecord(payload) &&
+            payload.runId === runId
+          ) {
+            terminalChanged.resolve();
+          }
+        },
         nodeHasSessionSubscribers: () => false,
         nodeSendToSession: vi.fn(),
         agentRunSeq,
         chatRunState,
         toolEventRecipients: chatRunState.toolEventRecipients,
-        sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+        sessionEventSubscribers,
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
         chatAbortControllers: new Map(),
         restartRecoveryCandidates: new Map(),
@@ -603,11 +614,10 @@ it.each([
       );
       releaseWriter.resolve();
       await heldWriter;
-      await vi.waitFor(() => expect(loadSessionEntry(target)?.status).toBe(status));
-      await vi.waitFor(() =>
-        expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
-          "clear-requested",
-        ),
+      await terminalChanged.promise;
+      expect(loadSessionEntry(target)?.status).toBe(status);
+      expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
+        "clear-requested",
       );
     } finally {
       releaseWriter.resolve();
