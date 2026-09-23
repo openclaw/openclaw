@@ -11,6 +11,10 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import {
+  advanceCliHistoryBoundaryRangeInTransaction,
+  type CliHistoryWriterFacts,
+} from "./session-accessor.sqlite-cli-history-boundary.js";
 import type {
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
@@ -34,10 +38,15 @@ import { SessionTranscriptWriterClaimReboundError } from "./transcript-write-con
 
 export type TranscriptReportWorkerTarget = {
   resolved: Omit<ResolvedTranscriptScope, "env">;
+  cliWriter?: CliHistoryWriterFacts;
   fence: Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId">;
 };
 type PreparedReport = ReturnType<typeof prepareTranscriptReportSelection>;
-type ReportCommit = { committed: boolean; projectionNeedsReconcile: boolean };
+type ReportCommit = {
+  committed: boolean;
+  projectionNeedsReconcile: boolean;
+  cliHistoryChanged?: boolean;
+};
 export type TranscriptReportWorkerOperations = {
   prepare: {
     input: TranscriptReportSelection;
@@ -125,6 +134,10 @@ export function bindSqliteWorkerBackend(
             context.admit("commit");
             return err(refusal);
           }
+          const firstSeq = target.cliWriter
+            ? (readTranscriptContextVersionInTransaction(database, resolved.sessionId).rawSeq ??
+                -1) + 1
+            : undefined;
           let projectionNeedsReconcile = false;
           const projection = {
             scheduleProjectionReconcile: false as const,
@@ -169,12 +182,34 @@ export function bindSqliteWorkerBackend(
               projection,
             );
           }
+          let commitGranted = false;
+          const authorizeCommit = () => {
+            if (!commitGranted) {
+              context.admit("commit");
+              commitGranted = true;
+            }
+          };
+          const cliHistoryChanged =
+            target.cliWriter && firstSeq !== undefined
+              ? advanceCliHistoryBoundaryRangeInTransaction(
+                  database,
+                  resolved,
+                  {
+                    first: firstSeq,
+                    last:
+                      readTranscriptContextVersionInTransaction(database, resolved.sessionId)
+                        .rawSeq ?? -1,
+                  },
+                  target.cliWriter,
+                  authorizeCommit,
+                )
+              : false;
           const rebound = readRefusal();
           if (rebound) {
             throw new SessionTranscriptWriterClaimReboundError(rebound);
           }
-          context.admit("commit");
-          return ok({ committed: true, projectionNeedsReconcile });
+          authorizeCommit();
+          return ok({ committed: true, projectionNeedsReconcile, cliHistoryChanged });
         },
         options,
         { operationLabel: "session.transcript.report" },

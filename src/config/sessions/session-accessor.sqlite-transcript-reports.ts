@@ -16,10 +16,12 @@ import {
 } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
+import { getCliHistoryWriter } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
 } from "./session-accessor.sqlite-contract.js";
+import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
   captureLifecycleDatabaseScope,
@@ -128,10 +130,11 @@ async function withNativeCurrentTranscript<T>(
 
 async function withReportWorker<T>(
   scope: SessionTranscriptWriteScope,
+  kind: "read" | "append",
   run: (
     operation: Pick<SqliteWorkerStore<TranscriptReportWorkerOperations>, "execute">,
     assertCurrent: () => void,
-    publish: (result: { projectionNeedsReconcile: boolean }) => void,
+    publish: (result: { projectionNeedsReconcile: boolean; cliHistoryChanged?: boolean }) => void,
   ) => Promise<Result<T, TranscriptAppendRefusal>>,
 ): Promise<Result<T, TranscriptAppendRefusal>> {
   // Preserve the logical target for live authority and pin the physical owner before yielding.
@@ -140,13 +143,28 @@ async function withReportWorker<T>(
   const resolved = captureLifecycleDatabaseScope(resolveSqliteTranscriptScope(fenced));
   const options = toDatabaseOptions(resolved);
   const execution = captureOpenClawAgentDatabaseExecution(options);
+  const cliWriter =
+    kind === "append"
+      ? getCliHistoryWriter({ ...resolved, storePath: resolveOpenClawAgentSqlitePath(options) })
+      : undefined;
   const assertCurrent = () => {
     execution.assertCurrent();
     assertOwned();
+    cliWriter?.assertCurrent();
   };
   const { env: _env, ...workerResolved } = resolved;
   const target: TranscriptReportWorkerTarget = {
     resolved: workerResolved,
+    ...(cliWriter
+      ? {
+          cliWriter: {
+            runId: cliWriter.runId,
+            authFingerprint: cliWriter.authFingerprint,
+            lifecycleRevision: cliWriter.lifecycleRevision,
+            expectedWriterRunId: cliWriter.expectedWriterRunId,
+          },
+        }
+      : {}),
     fence: {
       expectedLifecycleRevision: fenced.expectedLifecycleRevision,
       expectedWriterRunId: fenced.expectedWriterRunId,
@@ -178,6 +196,12 @@ async function withReportWorker<T>(
                     worker.run(
                       (operation) =>
                         run(operation, assertCurrent, (publication) => {
+                          if (publication.cliHistoryChanged) {
+                            publishSessionEntryCacheInvalidation(database, {
+                              sessionKey: resolved.sessionKey,
+                              facts: { kind: "unchanged" },
+                            });
+                          }
                           if (publication.projectionNeedsReconcile) {
                             startSessionTranscriptIndexReconcile({
                               ...options,
@@ -231,7 +255,7 @@ export async function readLatestSessionTranscriptReport(
           .latest,
     );
   }
-  return withReportWorker(scope, async (operation, assertCurrent) => {
+  return withReportWorker(scope, "read", async (operation, assertCurrent) => {
     const prepared = await operation.execute({
       type: "prepare",
       input: { kind: "custom", customTypes },
@@ -289,7 +313,7 @@ export async function appendSessionTranscriptReport(
       throw new Error("Assistant report requires prepared transcript storage bytes");
     }
     const input = { ...report, message: preparedMessage.persistedMessage, preparedMessage };
-    return withReportWorker(scope, async (operation, _assertCurrent, publish) => {
+    return withReportWorker(scope, "append", async (operation, _assertCurrent, publish) => {
       const result = await operation.execute({ type: "assistant", input });
       if (!result.ok) {
         return result;
@@ -304,7 +328,7 @@ export async function appendSessionTranscriptReport(
     suppressWhenAssistantRun: report.suppressWhenAssistantRun,
   };
   const selectReport = report.selectReport;
-  return withReportWorker(scope, async (operation, assertCurrent, publish) => {
+  return withReportWorker(scope, "append", async (operation, assertCurrent, publish) => {
     for (let attempt = 0; attempt < 3; attempt++) {
       const prepared = await operation.execute({ type: "prepare", input: selection });
       assertCurrent();

@@ -5414,6 +5414,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(listMatchedTestFiles(worker)).toEqual(gatewayDatabaseWorkerTestFiles);
     expect(listMatchedTestFiles(worker)).toEqual(
       expect.arrayContaining([
+        "src/gateway/github-publication-transcript.test.ts",
+        "src/gateway/session-lifecycle-run-failure.test.ts",
+        "src/gateway/session-lifecycle-state.persistence.test.ts",
+        "src/gateway/worker-workspace-recovery-transcript.test.ts",
         "src/gateway/session-utils.queued-collector-admission.test.ts",
         "src/gateway/session-utils.queued-collector.test.ts",
       ]),
@@ -5445,6 +5449,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(infra.test?.setupFiles).toEqual(support.test?.setupFiles);
     const admitted = new Set(listMatchedTestFiles(infra));
     for (const file of [
+      "src/agents/subagents/registry/subagent-registry.session-failure.test.ts",
+      "src/plugin-sdk/session-transcript-runtime.test.ts",
       "src/agents/sessions/sdk.auth-migration.test.ts",
       "src/agents/subagents/spawn/subagent-spawn.in-process-gateway.test.ts",
       "src/agents/subagents/spawn/subagent-spawn.authority.test.ts",
