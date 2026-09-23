@@ -122,7 +122,75 @@ export function replaceComposerPopoverAnchor(
   return next;
 }
 
+// Above this many characters, a draft is taller than any plausible CSS
+// max-height cap, so a measurement pass cannot change the clamped height.
+// Measuring anyway is the expensive path: `height:auto` plus a scrollHeight
+// read force a synchronous text layout whose cost scales with the draft
+// (~19ms at 300KB, ~63ms at 1MB per keystroke in a Chrome CDP harness), and
+// `observeTextareaOverflow` re-runs overflow updates on beforeinput/input,
+// multiplying that cost. Durable drafts are restored per session, which is
+// how a single session's composer turns slow while every other session
+// stays fast.
+export const COMPOSER_MEASUREMENT_MAX_CHARS = 20_000;
+
+function isBeyondMeasurementCap(el: HTMLTextAreaElement): boolean {
+  return el.value.length > COMPOSER_MEASUREMENT_MAX_CHARS;
+}
+
+function resolveComposerMaxHeight(el: HTMLTextAreaElement): number {
+  // The owning surface declares its cap in CSS. Retain the historical
+  // fallback for detached/test controls whose computed max-height is not a
+  // pixel value.
+  const computedMaxHeight = getComputedStyle(el).maxHeight.trim();
+  const pixelMaxHeight = /^(\d+(?:\.\d+)?)px$/u.exec(computedMaxHeight);
+  return pixelMaxHeight ? Number(pixelMaxHeight[1]) : 150;
+}
+
+// Above the cap the box always overflows its capped height, so it stays
+// scrollable and carries no fades. Clearing the fade attributes matters
+// because a below-cap draft can have set them while being browsed, and a
+// programmatic replacement (session restore, dictation) can cross the cap
+// with no `beforeinput` to clear them — leaving the live text masked. These
+// are style and attribute writes only: no geometry read, so no forced layout.
+function applyBeyondCapOverflow(el: HTMLTextAreaElement) {
+  el.style.overflowY = "auto";
+  el.removeAttribute("data-scroll-fade-top");
+  el.removeAttribute("data-scroll-fade-bottom");
+}
+
+function resolveChatThread(el: HTMLTextAreaElement): HTMLElement | null {
+  return el.closest(".chat")?.querySelector<HTMLElement>(".chat-thread") ?? null;
+}
+
+// Once capped, the textarea can perturb the sibling transcript without
+// resizing its viewport, so ResizeObserver has no correction to apply.
+function restoreTranscriptAnchor(
+  thread: HTMLElement | null,
+  scrollPosition: { anchorToEnd: boolean; scrollTop: number } | null,
+) {
+  if (!thread) {
+    return;
+  }
+  if (scrollPosition?.anchorToEnd) {
+    thread.scrollTop = thread.scrollHeight;
+  }
+  // A following composer commit can hide this viewport from browser observers.
+  const after = thread.scrollTop;
+  publishTranscriptScroll(thread, {
+    type: "resize",
+    ...(scrollPosition?.anchorToEnd && scrollPosition.scrollTop !== after
+      ? { scrollCorrection: { before: scrollPosition.scrollTop, after } }
+      : {}),
+  });
+}
+
 function updateTextareaOverflow(el: HTMLTextAreaElement) {
+  if (isBeyondMeasurementCap(el)) {
+    // The draft is guaranteed to overflow its capped box; keep it scrollable
+    // without the layout-forcing reads.
+    applyBeyondCapOverflow(el);
+    return;
+  }
   const scrollable = el.scrollHeight > el.clientHeight + 1;
   // Two 16px fades need enough vertical runway not to overlap into a narrow
   // opaque strip on short drafts. Small overflows still scroll, just unfaded.
@@ -147,38 +215,39 @@ export function adjustTextareaHeight(el: HTMLTextAreaElement) {
     el.removeAttribute("data-scroll-fade-bottom");
     return;
   }
-  const thread = el.closest(".chat")?.querySelector<HTMLElement>(".chat-thread") ?? null;
+  if (isBeyondMeasurementCap(el)) {
+    // Pin straight to the CSS cap without the `height:auto` measurement pass.
+    const pinned = `${resolveComposerMaxHeight(el)}px`;
+    if (el.style.height === pinned) {
+      // Steady state: the height cannot change while the draft stays beyond
+      // the cap, so repeated edits stay measurement-free and the sibling
+      // transcript needs no compensation.
+      applyBeyondCapOverflow(el);
+      return;
+    }
+    // Entering the pinned height (or moving to a new cap) does change layout —
+    // an oversized draft pasted or restored into a short composer grows it —
+    // so this transition still owes the transcript its bottom-anchor repair.
+    const thread = resolveChatThread(el);
+    const scrollPosition = thread ? captureChatSessionScrollPosition(thread) : null;
+    el.style.height = pinned;
+    applyBeyondCapOverflow(el);
+    restoreTranscriptAnchor(thread, scrollPosition);
+    return;
+  }
+  const thread = resolveChatThread(el);
   const scrollPosition = thread ? captureChatSessionScrollPosition(thread) : null;
   // Hide the browser's scrollbar while measuring; restore it only when the
   // final CSS-constrained height actually clips the draft.
   el.style.overflowY = "hidden";
   el.style.height = "auto";
-  // The owning surface declares its cap in CSS. Retain the historical fallback
-  // for detached/test controls whose computed max-height is not a pixel value.
-  const style = getComputedStyle(el);
-  const computedMaxHeight = style.maxHeight.trim();
-  const pixelMaxHeight = /^(\d+(?:\.\d+)?)px$/u.exec(computedMaxHeight);
-  const maxHeight = pixelMaxHeight ? Number(pixelMaxHeight[1]) : 150;
   // scrollHeight includes padding but not borders. Bordered answer fields share
   // this owner with the borderless composer and must not scroll on a single line.
-  const borderHeight = style.boxSizing === "border-box" ? el.offsetHeight - el.clientHeight : 0;
-  el.style.height = `${Math.min(el.scrollHeight + borderHeight, maxHeight)}px`;
+  const borderHeight =
+    getComputedStyle(el).boxSizing === "border-box" ? el.offsetHeight - el.clientHeight : 0;
+  el.style.height = `${Math.min(el.scrollHeight + borderHeight, resolveComposerMaxHeight(el))}px`;
   updateTextareaOverflow(el);
-  // Once capped, the textarea can perturb the sibling transcript without
-  // resizing its viewport, so ResizeObserver has no correction to apply.
-  if (thread) {
-    if (scrollPosition?.anchorToEnd) {
-      thread.scrollTop = thread.scrollHeight;
-    }
-    // A following composer commit can hide this viewport from browser observers.
-    const after = thread.scrollTop;
-    publishTranscriptScroll(thread, {
-      type: "resize",
-      ...(scrollPosition?.anchorToEnd && scrollPosition.scrollTop !== after
-        ? { scrollCorrection: { before: scrollPosition.scrollTop, after } }
-        : {}),
-    });
-  }
+  restoreTranscriptAnchor(thread, scrollPosition);
 }
 
 export function observeTextareaOverflow(el: HTMLTextAreaElement) {
