@@ -33,6 +33,29 @@ export function registerSignalExitFinalizer(finalizer: SignalExitBarrier): void 
 }
 
 let pendingSignalExitDrain: Promise<void> | undefined;
+let pendingProcessExit: Promise<void> | undefined;
+
+/** Broken output must not bypass a maintenance owner's asynchronous recovery. */
+export function exitAfterSignalExitBarriers(code: number | string): void {
+  if (pendingProcessExit) {
+    return;
+  }
+  if (activeGates.size === 0 && activeBarriers.size === 0 && activeFinalizers.size === 0) {
+    process.exit(code);
+    return;
+  }
+  pendingProcessExit = waitForSignalExitBarriers()
+    .then(() => code)
+    // The output stream may itself be broken; cleanup owners report their own failures.
+    .catch(() => (code === 0 || code === "0" ? 1 : code))
+    .then((exitCode) => {
+      pendingProcessExit = undefined;
+      const outcome = process.exitCode;
+      process.exit(
+        (exitCode === 0 || exitCode === "0") && outcome !== undefined ? outcome : exitCode,
+      );
+    });
+}
 
 export function waitForSignalExitBarriers(): Promise<void> {
   pendingSignalExitDrain ??= drainSignalExitBarriers().finally(() => {
@@ -109,5 +132,5 @@ export function installCliSignalExitHandlers(): () => void {
 
 /** Command error/output finalization cannot race an accepted signal's cleanup. */
 export async function waitForCliSignalExit(): Promise<void> {
-  await cliSignalExit;
+  await Promise.all([cliSignalExit, pendingProcessExit]);
 }
