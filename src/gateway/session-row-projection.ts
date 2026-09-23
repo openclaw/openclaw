@@ -35,6 +35,7 @@ import {
 } from "./session-row-projection-archive.js";
 import { createSessionRowProjectionBackfill } from "./session-row-projection-backfill.js";
 import { createSessionRowProjectionCatalog } from "./session-row-projection-catalog.js";
+import { isIdentityScopesOnlyConfigChange } from "./session-row-projection-config.js";
 import { createSessionRowProjectionContext } from "./session-row-projection-context.js";
 import { createSessionRowCreatorIndex } from "./session-row-projection-identities.js";
 import {
@@ -244,9 +245,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     // Every stored identity must be visible before an earlier store selects a later parent.
     for (const { row, entry } of acquisitions) {
       const current = acquireEntry(row, entry);
-      if (current && !isCold(current)) {
+      if (current) {
         dirty.add(records.identity(current));
-        backfill.enqueue(records.identity(current));
+        if (!isCold(current)) {
+          backfill.enqueue(records.identity(current));
+        }
       }
     }
     membership.updateTargets(
@@ -268,6 +271,14 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     topologyDirty = epoch !== revision;
   }
   function mark(change: SessionRowChange) {
+    if ("all" in change && change.scope === "config" && !change.factsInvalidated) {
+      const next = inOwnerContext(() => params.getConfig?.() ?? cfg);
+      if (isIdentityScopesOnlyConfigChange(cfg, next)) {
+        cfg = next;
+        void ensureMaterialized().catch(() => {});
+        return;
+      }
+    }
     epoch++;
     const presentationOnly = metadata.invalidate(change) && !change.factsInvalidated;
     if (!presentationOnly) {
@@ -314,15 +325,17 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
           previous.sharingEntry = entry;
           if (entry?.archivedAt !== undefined && !registryFactsReady) {
             // Committed row changes must survive an unrelated compact-facts refill.
-            return archive.deferAcquisition({ ...previous, hasBoard: undefined });
+            return archive.deferAcquisition(previous);
           }
           return isCold(previous) || records.changesRowStructure(previous, entry)
-            ? acquireEntry({ ...previous, hasBoard: undefined }, entry)
+            ? acquireEntry(previous, entry)
             : previous;
         });
-        if (row && !isCold(row)) {
+        if (row) {
           dirty.add(records.identity(row));
-          backfill.enqueue(records.identity(row));
+          if (!isCold(row)) {
+            backfill.enqueue(records.identity(row));
+          }
         }
       }
       if (
@@ -349,11 +362,13 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
             }
             return acquireEntry(row, entry);
           });
-          if (!admitted || isCold(admitted)) {
+          if (!admitted) {
             continue;
           }
           dirty.add(records.identity(admitted));
-          backfill.enqueue(records.identity(admitted));
+          if (!isCold(admitted)) {
+            backfill.enqueue(records.identity(admitted));
+          }
         }
       }
     }
@@ -643,10 +658,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       return readSessionRowModelFacts({
         cfg,
         ...row,
-        preparedAcpMeta:
-          row.materialized && !dirty.has(records.identity(row))
-            ? (row.materialized.source.thinkingProjection.acpMeta ?? null)
-            : undefined,
         source: { entry: row.storedEntry, readSourceEntry: (key) => readSourceEntry(row, key) },
         modelCatalog: catalog.current,
         rowContext: metadata.current,

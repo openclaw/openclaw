@@ -78,29 +78,31 @@ if (!isMainThread) {
     // Keep the native implementation callable with the actual sending port.
     const nativePost = vi.spyOn(MessagePort.prototype, "postMessage");
     nativePost.mockRestore();
-    const dispatch = vi
-      .spyOn(MessagePort.prototype, "postMessage")
-      .mockImplementation(function (this: MessagePort, message, transferList) {
-        const result = nativePost.call(this, message, transferList);
-        const request = asOptionalRecord(message);
-        if (request?.type !== "accepted" || !(request.admission instanceof MessagePort)) {
-          return result;
-        }
-        dispatch.mockRestore();
-        // Keep the host listener queued until the worker owns its transaction,
-        // then enter the competing synchronous write on the same event-loop turn.
-        const deadline = Date.now() + 5_000;
-        const pause = new Int32Array(new SharedArrayBuffer(4));
-        while (!fs.existsSync(marker)) {
-          if (Date.now() >= deadline) {
-            throw new Error("Worker did not reach its transaction admission");
-          }
-          Atomics.wait(pause, 0, 0, 1);
-        }
-        current = ownerCurrent;
-        runOpenClawStateWriteTransaction(mutation, { path: stateDbPath });
+    const dispatch = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
+      this: MessagePort,
+      message,
+      transferList,
+    ) {
+      const result = nativePost.call(this, message, transferList);
+      const request = asOptionalRecord(message);
+      if (request?.type !== "accepted" || !(request.admission instanceof MessagePort)) {
         return result;
-      });
+      }
+      dispatch.mockRestore();
+      // Keep the host listener queued until the worker owns its transaction,
+      // then enter the competing synchronous write on the same event-loop turn.
+      const deadline = Date.now() + 5_000;
+      const pause = new Int32Array(new SharedArrayBuffer(4));
+      while (!fs.existsSync(marker)) {
+        if (Date.now() >= deadline) {
+          throw new Error("Worker did not reach its transaction admission");
+        }
+        Atomics.wait(pause, 0, 0, 1);
+      }
+      current = ownerCurrent;
+      runOpenClawStateWriteTransaction(mutation, { path: stateDbPath });
+      return result;
+    });
     const expiresAtMs = record.expiresAtMs + 1;
     const renewal = renewOrRestoreNativeHookRelayBridgeRecord({
       record: { ...record, expiresAtMs },

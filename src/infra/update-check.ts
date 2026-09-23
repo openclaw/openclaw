@@ -476,13 +476,12 @@ async function checkDepsStatus(params: {
     root,
     manager: params.manager,
   });
+  const paths = { manager: params.manager, lockfilePath, markerPath };
 
   if (!lockfilePath || !markerPath) {
     return {
-      manager: params.manager,
+      ...paths,
       status: "unknown",
-      lockfilePath,
-      markerPath,
       reason: "unknown package manager",
     };
   }
@@ -491,28 +490,22 @@ async function checkDepsStatus(params: {
   const markerExists = await exists(markerPath);
   if (!lockExists) {
     return {
-      manager: params.manager,
+      ...paths,
       status: "unknown",
-      lockfilePath,
-      markerPath,
       reason: "lockfile missing",
     };
   }
   if (!markerExists) {
     return {
-      manager: params.manager,
+      ...paths,
       status: "missing",
-      lockfilePath,
-      markerPath,
       reason: "node_modules marker missing",
     };
   }
 
   return {
-    manager: params.manager,
+    ...paths,
     status: "ok",
-    lockfilePath,
-    markerPath,
   };
 }
 
@@ -523,11 +516,8 @@ async function fetchNpmLatestVersion(params?: {
   runCommand?: NpmMetadataCommandRunner;
 }): Promise<RegistryStatus> {
   const res = await fetchNpmTagVersion({
+    ...params,
     tag: "latest",
-    timeoutMs: params?.timeoutMs,
-    cwd: params?.cwd,
-    env: params?.env,
-    runCommand: params?.runCommand,
   });
   return {
     latestVersion: res.version,
@@ -542,13 +532,7 @@ async function fetchNpmRegistryVersionForChannel(params: {
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
 }): Promise<RegistryStatus> {
-  const res = await resolveNpmChannelTag({
-    channel: params.channel,
-    timeoutMs: params.timeoutMs,
-    cwd: params.cwd,
-    env: params.env,
-    runCommand: params.runCommand,
-  });
+  const res = await resolveNpmChannelTag(params);
   return {
     latestVersion: res.version,
     tag: res.tag,
@@ -566,17 +550,13 @@ export async function fetchNpmTagVersion(params: {
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
 }): Promise<NpmTagStatus> {
+  const { tag, ...options } = params;
   const res = await fetchNpmPackageTargetStatus({
-    target: params.tag,
-    timeoutMs: params.timeoutMs,
-    spec: params.spec,
-    command: params.command,
-    cwd: params.cwd,
-    env: params.env,
-    runCommand: params.runCommand,
+    ...options,
+    target: tag,
   });
   return {
-    tag: params.tag,
+    tag,
     version: res.version,
     error: res.error,
   };
@@ -590,8 +570,9 @@ export async function resolveNpmChannelTag(params: {
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
 }): Promise<NpmTagStatus & { reason?: ExtendedStableFailureReason }> {
-  const channelTag = channelToNpmTag(params.channel);
-  if (params.channel === "extended-stable") {
+  const { channel, ...options } = params;
+  const channelTag = channelToNpmTag(channel);
+  if (channel === "extended-stable") {
     const resolved = await resolveExtendedStablePackage({
       installKind: "package",
       timeoutMs: params.timeoutMs,
@@ -602,14 +583,10 @@ export async function resolveNpmChannelTag(params: {
   }
   const fetchTag = (tag: string) =>
     fetchNpmTagVersion({
+      ...options,
       tag,
-      timeoutMs: params.timeoutMs,
-      command: params.command,
-      cwd: params.cwd,
-      env: params.env,
-      runCommand: params.runCommand,
     });
-  if (params.channel !== "beta") {
+  if (channel !== "beta") {
     return await fetchTag(channelTag);
   }
 

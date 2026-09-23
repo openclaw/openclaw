@@ -175,6 +175,10 @@ export function reconcileInitialTranscriptOffset(
 
 export class PositionRailGutterController implements ReactiveController {
   private frame: number | null = null;
+  private resizeObserver: ResizeObserver | null = null;
+  private viewport: HTMLDivElement | null = null;
+  private innerElement: HTMLDivElement | null = null;
+  private region: HTMLElement | null = null;
 
   constructor(
     private readonly host: ReactiveControllerHost & {
@@ -186,6 +190,45 @@ export class PositionRailGutterController implements ReactiveController {
   }
 
   hostUpdated(): void {
+    const viewport = this.host.scrollElement;
+    const inner = this.inner();
+    const region = viewport?.closest<HTMLElement>(".chat-main__conversation") ?? viewport;
+    if (viewport === this.viewport && inner === this.innerElement && region === this.region) {
+      return;
+    }
+    this.hostDisconnected();
+    if (!viewport?.isConnected || inner?.parentElement !== viewport || !region) {
+      return;
+    }
+    this.viewport = viewport;
+    this.innerElement = inner;
+    this.region = region;
+    let innerWidth: number | undefined;
+    let regionHeight: number | undefined;
+    this.resizeObserver = new ResizeObserver((entries) => {
+      let changed = false;
+      for (const entry of entries) {
+        if (entry.target === inner) {
+          const width = entry.borderBoxSize?.[0]?.inlineSize ?? entry.contentRect.width;
+          changed ||= width !== innerWidth;
+          innerWidth = width;
+        } else if (entry.target === region) {
+          const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+          changed ||= height !== regionHeight;
+          regionHeight = height;
+        }
+      }
+      // Streaming changes the inner height, but only column width affects the gutter.
+      if (changed) {
+        this.scheduleSync();
+      }
+    });
+    this.resizeObserver.observe(inner, { box: "border-box" });
+    this.resizeObserver.observe(region, { box: "border-box" });
+    this.scheduleSync();
+  }
+
+  private scheduleSync(): void {
     if (this.frame !== null) {
       return;
     }
@@ -198,6 +241,11 @@ export class PositionRailGutterController implements ReactiveController {
   }
 
   hostDisconnected(): void {
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+    this.viewport = null;
+    this.innerElement = null;
+    this.region = null;
     if (this.frame !== null) {
       cancelAnimationFrame(this.frame);
       this.frame = null;

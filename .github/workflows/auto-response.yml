@@ -11,23 +11,25 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'synchronize' }}
-
 permissions: {}
 
 jobs:
   auto-response:
     if: >-
       ${{
+        !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association || github.event.pull_request.author_association) &&
         (github.event_name != 'issue_comment' || github.event.comment.user.type != 'Bot') &&
+        (github.event.action != 'edited' || !github.event.changes ||
+          github.event.changes.title || github.event.changes.body || github.event.changes.base) &&
         (
           github.event_name != 'pull_request_target' ||
           (github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
           (github.actor != 'clawsweeper[bot]' && github.actor != 'openclaw-clawsweeper[bot]')
         )
       }}
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'synchronize' }}
     permissions:
       contents: read
       issues: write

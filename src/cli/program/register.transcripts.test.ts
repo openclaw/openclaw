@@ -387,14 +387,15 @@ describe("transcripts CLI", () => {
     // Manifest writers retain the same SELECT inside their synchronous transaction.
     // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted native receiver below.
     const prepare = DatabaseSync.prototype.prepare;
-    const prepareSpy = vi
-      .spyOn(DatabaseSync.prototype, "prepare")
-      .mockImplementation(function (this: DatabaseSync, sql) {
-        if (!this.isTransaction && /^select\b/iu.test(sql) && sql.includes("export_pending_json")) {
-          ownershipReads.push(sql);
-        }
-        return prepare.call(this, sql);
-      });
+    const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: DatabaseSync,
+      sql,
+    ) {
+      if (!this.isTransaction && /^select\b/iu.test(sql) && sql.includes("export_pending_json")) {
+        ownershipReads.push(sql);
+      }
+      return prepare.call(this, sql);
+    });
     // The identical writer SELECT may already be prepared and cached before observation.
     // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted statement receiver below.
     const get = StatementSync.prototype.get;

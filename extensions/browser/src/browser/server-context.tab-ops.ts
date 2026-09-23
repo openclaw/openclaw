@@ -152,6 +152,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         await assertCdpEndpointAllowed(profile.cdpUrl, ssrfPolicy);
         const pages = await listPagesViaPlaywright({
           cdpUrl: profile.cdpUrl,
+          ...(profile.engine === "lightpanda" ? { engine: profile.engine } : {}),
           ssrfPolicy,
           timeoutMs,
           ...(capabilities.requiresCompleteTargetEnumeration
@@ -249,7 +250,11 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     options?.signal?.throwIfAborted();
     // Chrome MCP target identity is authoritative. A replacement tab cannot
     // inherit an alias safely, even when its URL matches the closed tab.
-    return assignTabAliases(runtime, tabs, !capabilities.usesChromeMcp);
+    return assignTabAliases(
+      runtime,
+      tabs,
+      !capabilities.usesChromeMcp && profile.engine !== "lightpanda",
+    );
   };
 
   const enforceManagedTabLimit = async (
@@ -316,6 +321,15 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     tab: BrowserTab,
     options?: BrowserOperationOptions & { requireDurableOwnership?: boolean },
   ): Promise<BrowserOpenResult> => {
+    if (profile.engine === "lightpanda") {
+      if (options?.requireDurableOwnership) {
+        throw new Error("Connection-scoped browser pages cannot be retained by a dashboard.");
+      }
+      return {
+        ...tab,
+        ownership: { status: "non-durable", reason: "browser-identity-unavailable" },
+      };
+    }
     const cdpTimeouts = getRemoteCdpActionTimeouts();
     const ownership = await resolveCdpTabOwnership({
       profileName: profile.name,
@@ -372,6 +386,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         if (typeof createPageViaPlaywright === "function") {
           const page = await createPageViaPlaywright({
             cdpUrl: profile.cdpUrl,
+            ...(profile.engine === "lightpanda" ? { engine: profile.engine } : {}),
             url,
             cdpPolicy,
             ...(opts?.signal ? { signal: opts.signal } : {}),

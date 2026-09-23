@@ -21,6 +21,8 @@ import {
   type TaskRunTransition,
 } from "./task-registry.types.js";
 
+export class TaskRunTransitionUnsettledError extends Error {}
+
 type TaskRunOwnerTransition = {
   kind: "run-owner";
   params: { runId: string; executionOwner?: TaskExecutionOwner };

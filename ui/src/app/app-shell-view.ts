@@ -220,6 +220,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const newSessionAccess = readSessionMethodAccess(gatewaySnapshot, {
     method: "sessions.create",
     params: {},
+    sessionScope: true,
   });
   const openNewSession = callbacks.requestOpenNewSession;
   const uiSettings = context.theme.settings;

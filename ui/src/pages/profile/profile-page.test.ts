@@ -275,8 +275,12 @@ it("renders a write-access note without calling users.self for read-only viewers
 
   await page.updateComplete;
   expect(request.mock.calls).toEqual([["users.github.status", {}]]);
-  expect(page.textContent).toContain("Profile editing requires operator.write access.");
+  expect(page.textContent).toContain("Your current access does not allow profile editing.");
+  expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
+    "operator.read",
+  );
   expect(page.querySelector(".identity-name-control")).toBeNull();
+  expect(page.querySelector(".profile-refresh")).toBeNull();
 });
 
 it("offers identity connection setup without profile RPCs or secret inputs for unidentified connections", async () => {

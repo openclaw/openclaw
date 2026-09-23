@@ -16,7 +16,6 @@ export {
   DEFAULT_MAX_EXTRACTED_BYTES,
   DEFAULT_MAX_ENTRY_BYTES,
   inspectTarArchive,
-  loadZipArchiveWithPreflight,
   readArchiveEntry,
   resolveArchiveKind,
   resolvePackedRootDir,

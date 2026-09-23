@@ -90,7 +90,7 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
   return html`
     <div class="bp-toolbar">
       ${
-        !nativeTab && controller.operations.route
+        !nativeTab && !controller.host.dashboardTarget?.sessionScoped && controller.operations.route
           ? html`<span
               class="bp-profile"
               title=${t("browser.profile", { profile: controller.operations.route.profile })}
@@ -184,17 +184,21 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
             </button>`
           : nothing
       }
-      <button
-        class="bp-icon"
-        type="button"
-        title=${t(controller.download.pending ? "browser.downloading" : "browser.downloadFile")}
-        aria-label=${t(controller.download.pending ? "browser.downloading" : "browser.downloadFile")}
-        aria-busy=${controller.download.pending}
-        ?disabled=${!controller.download.available}
-        @click=${() => void controller.download.save()}
-      >
-        ${controller.download.pending ? icons.loader : icons.download}
-      </button>
+      ${
+        controller.host.dashboardTarget?.sessionScoped
+          ? nothing
+          : html`<button
+              class="bp-icon"
+              type="button"
+              title=${t(controller.download.pending ? "browser.downloading" : "browser.downloadFile")}
+              aria-label=${t(controller.download.pending ? "browser.downloading" : "browser.downloadFile")}
+              aria-busy=${controller.download.pending}
+              ?disabled=${!controller.download.available}
+              @click=${() => void controller.download.save()}
+            >
+              ${controller.download.pending ? icons.loader : icons.download}
+            </button>`
+      }
       <button
         class="bp-icon ${controller.mode === "annotate" ? "is-active" : ""}"
         type="button"

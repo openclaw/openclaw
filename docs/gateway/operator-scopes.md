@@ -72,6 +72,13 @@ Session grants never authorize deletion or changes to an existing session's
 sharing and visibility.
 Archiving a session does not grant permission to delete it.
 
+In the Control UI, session writers can use **New Session**, send messages in
+their own conversations, and stop their own active runs. Their model, effort,
+fast-mode, and non-full permission choices use the same session grant and the
+Gateway's allowed model catalog. Full permission mode, sandbox changes, and
+changes to an existing session's context window still require administrator access.
+Reconnecting rechecks current permission before replaying a Stop for its original run.
+
 Own-work methods, including message sending, ordinary session creation,
 recovery, and forks, accept `operator.sessions.write` where their parameters
 do not require administrator access. Session ownership, current authority,

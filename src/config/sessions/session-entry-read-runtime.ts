@@ -96,12 +96,13 @@ export async function withSessionEntriesFromStoresInWorker<T>(
 
 /** The ordinary return API returns data, never a retained authority claim. */
 export function readSessionEntriesFromStoreInWorker(input: SessionEntryWorkerRead) {
-  return withSessionEntriesFromStoresInWorker([input], ([read]) => read!.result);
+  return withSessionEntriesFromStoreInWorker(input, async (read) => read.result, true);
 }
 
 async function withSessionEntriesFromStoreInWorker<T>(
   input: SessionEntryWorkerRead,
   consume: (read: PreparedSessionEntryWorkerRead) => Promise<T>,
+  dataOnly = false,
 ): Promise<T> {
   const request = {
     sessionKeys: [...new Set(input.sessionKeys)],
@@ -117,7 +118,7 @@ async function withSessionEntriesFromStoreInWorker<T>(
       assertCurrent();
       return consume({ result, database, assertCurrent });
     },
-    { backing: input.projection === "backing" },
+    { backing: input.projection === "backing", dataOnly },
   );
 }
 
@@ -148,7 +149,7 @@ export async function readExpiredCronRunEntriesInWorker(
       assertCurrent();
       return entries;
     },
-    { lane: maintenanceLane },
+    { lane: maintenanceLane, dataOnly: true },
   );
 }
 
@@ -160,7 +161,15 @@ async function withSessionStoreReaderInWorker<T>(
     continuation: CanonicalSessionReaderContinuation | undefined,
     assertCurrent: () => void,
   ) => Promise<T>,
-  { backing = false, lane }: { backing?: boolean; lane?: SessionHistoryWorkerLane } = {},
+  {
+    backing = false,
+    lane,
+    dataOnly = false,
+  }: {
+    backing?: boolean;
+    lane?: SessionHistoryWorkerLane;
+    dataOnly?: boolean;
+  } = {},
 ): Promise<T> {
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
@@ -183,6 +192,7 @@ async function withSessionStoreReaderInWorker<T>(
     path: string;
     owner: NonNullable<ReturnType<typeof captureCanonicalSessionReaderContinuation>>;
   }> = [];
+  let assertFinalCurrent: (() => void) | undefined;
   try {
     for (const database of native?.databases ?? []) {
       const owner = captureCanonicalSessionReaderContinuation(database);
@@ -202,13 +212,19 @@ async function withSessionStoreReaderInWorker<T>(
         { ...database, env },
         async (owner) => {
           let active = true;
+          const assertCapturedCurrent = () => {
+            owner.assertCurrent();
+            continuation?.assertCurrent();
+            assertRoute();
+          };
+          if (dataOnly) {
+            assertFinalCurrent = assertCapturedCurrent;
+          }
           const assertCurrent = () => {
             if (!active) {
               throw new Error("Session entry read consumer is no longer active");
             }
-            owner.assertCurrent();
-            continuation?.assertCurrent();
-            assertRoute();
+            assertCapturedCurrent();
           };
           try {
             return await read(
@@ -226,12 +242,15 @@ async function withSessionStoreReaderInWorker<T>(
     };
     if (direct && target.agentId) {
       resolveSqliteAgentId({ scopedAgentId: agentId, storeAgentId: target.agentId });
-      return await readDatabase({ agentId: target.agentId, path: captured.physicalPath }, () =>
-        assertSessionStoreReadCandidate(target.path, [captured]),
+      const result = await readDatabase(
+        { agentId: target.agentId, path: captured.physicalPath },
+        () => assertSessionStoreReadCandidate(target.path, [captured]),
       );
+      assertFinalCurrent?.();
+      return result;
     }
     const registryRead = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env });
-    return await withSessionHistoryWorkerReadCandidates(
+    const result = await withSessionHistoryWorkerReadCandidates(
       candidates,
       async (discovery) => {
         const request = { agentId, storePath, env };
@@ -267,6 +286,9 @@ async function withSessionStoreReaderInWorker<T>(
       },
       lane,
     );
+    // Only returned data may be refused after cleanup; synchronous consumers can already publish.
+    assertFinalCurrent?.();
+    return result;
   } finally {
     for (const { owner } of continuations.toReversed()) {
       owner.release();
