@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
+import { isMessageToolSendActionName } from "../../agents/embedded-agent-messaging.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
 import { resolveReactionMessageId } from "../../channels/plugins/actions/reaction-message-id.js";
@@ -470,9 +471,10 @@ function resolveDeliveredCurrentSourceReply(
     case "thread-reply":
       return resolveDeliveredThreadPlacementSourceReply(params, allowAsync);
     default:
+      // Send variants share destination proof, not transcript or restart-receipt ownership.
       return (
-        (params.action === "send" || params.action === "poll") &&
-        isExactCurrentSourceConversation(params)
+        (isMessageToolSendActionName(params.action) || params.action === "poll") &&
+        isExactCurrentSourceConversation({ ...params, action: "send" })
       );
   }
 }

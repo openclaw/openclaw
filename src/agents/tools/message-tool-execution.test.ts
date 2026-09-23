@@ -7,8 +7,9 @@ import {
 import { withGroupThreadTurn } from "../../auto-reply/group-thread-context.js";
 import { resolveReactionMessageId } from "../../channels/plugins/actions/reaction-message-id.js";
 import type {
-  ChannelPlugin,
   ChannelMessageActionContext,
+  ChannelMessageActionName,
+  ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -53,6 +54,133 @@ const EMPTY_CATALOG = {
   channels: [],
   getChannel: () => undefined,
 } as const;
+
+describe("registered message action source completion", () => {
+  afterEach(() => resetPluginRuntimeStateForTest());
+
+  const cases: Array<{
+    action: ChannelMessageActionName;
+    mode: string;
+    target?: string;
+    expected?: true;
+  }> = [
+    ...(["upload-file", "sendAttachment", "sendWithEffect"] as const).flatMap((action) => [
+      { action, mode: "implicit target", expected: true as const },
+      { action, mode: "explicit target", target: "channel:C123", expected: true as const },
+    ]),
+    { action: "upload-file", mode: "other destination", target: "C999" },
+    ...["failure", "partial", "dry run", "progress", "throw"].map((mode) => ({
+      action: "upload-file" as const,
+      mode,
+      target: "C123",
+    })),
+    { action: "react", mode: "non-reply mutation", target: "C123" },
+  ];
+
+  it.each(cases)(
+    "records only eligible source completion for $action ($mode)",
+    async ({ action, mode, target, expected }) => {
+      const handleAction = vi.fn(async ({ params }: ChannelMessageActionContext) => {
+        if (mode === "throw") {
+          throw new Error("synthetic upload failure");
+        }
+        return jsonResult({
+          ok: mode !== "failure",
+          messageId: "native-message-1",
+          toJid: params.to,
+          ...(mode === "partial" ? { sentBeforeError: true } : {}),
+        });
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "workspace",
+            source: "test",
+            plugin: {
+              ...workspaceTestPlugin,
+              actions: {
+                describeMessageTool: () => ({ actions: [action] }),
+                handleAction,
+              },
+            } satisfies ChannelPlugin,
+          },
+        ]),
+      );
+      const identity = {
+        agentId: "main",
+        runId: "source-completion-run",
+        sessionKey: "agent:main:workspace:group:C123",
+      };
+      const source = {
+        currentChannelProvider: "workspace",
+        currentChannelId: "C123",
+        currentMessagingTarget: "C123",
+        currentMessageId: "inbound-message",
+      };
+      const capability = mintMessageActionTurnCapability({
+        ...identity,
+        requesterAccountId: "default",
+        toolContext: source,
+      });
+      try {
+        const tool = createMessageTool({
+          config: {
+            ...workspaceConfig,
+            tools: { message: { crossContext: { allowWithinProvider: true } } },
+          },
+          ...source,
+          agentId: identity.agentId,
+          runId: identity.runId,
+          agentSessionKey: identity.sessionKey,
+          agentAccountId: "default",
+          messageActionTurnCapability: capability,
+          sourceReplyDeliveryMode: "automatic",
+          getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
+          resolveCommandSecretRefsViaGateway: async ({ config }) => ({
+            resolvedConfig: config,
+            diagnostics: [],
+            targetStatesByPath: {},
+            hadUnresolvedTargets: false,
+          }),
+        });
+        const execution = tool.execute("source-upload", {
+          action,
+          ...(target ? { target } : {}),
+          ...(mode === "progress" ? { final: false } : {}),
+          ...(mode === "dry run" ? { dryRun: true } : {}),
+        });
+        let result;
+        if (mode === "throw") {
+          await expect(execution).rejects.toThrow("synthetic upload failure");
+        } else {
+          result = await execution;
+        }
+        expect(handleAction).toHaveBeenCalledTimes(mode === "dry run" ? 0 : 1);
+        if (mode !== "dry run") {
+          expect(handleAction.mock.calls[0]?.[0]).toMatchObject({
+            accountId: "default",
+            params: { to: mode === "other destination" ? "C999" : "C123" },
+          });
+        }
+        if (result) {
+          const delivery = readEmbeddedMessageDeliveryFact(
+            (result.details as { messageDelivery?: unknown }).messageDelivery,
+          );
+          expect(delivery?.sourceReplyDelivered).toBe(expected);
+          if (expected) {
+            expect(delivery).toMatchObject({
+              status: "settled",
+              primaryPlatformMessageId: "native-message-1",
+              partialDelivery: false,
+            });
+          }
+        }
+      } finally {
+        revokeMessageActionTurnCapability(capability);
+      }
+    },
+  );
+});
 
 function createFailingMessageTool(error: Error) {
   const runMessageAction = vi.fn(async () => {
