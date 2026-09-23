@@ -42,7 +42,12 @@ import {
   resolvePodmanSandboxRuntimeInfo,
   type PodmanSandboxRuntimeInfo,
 } from "./podman-runtime.js";
-import { readRegistryEntry, removeRegistryEntry, updateRegistry } from "./registry.js";
+import {
+  completeSandboxRegistryReservation,
+  readRegistryEntry,
+  removeRegistryEntry,
+  updateRegistry,
+} from "./registry.js";
 import {
   resolveDockerEnvPolicyEpoch,
   sanitizeExplicitSandboxEnvVars,
@@ -440,10 +445,10 @@ async function createSandboxContainer(params: {
     return await execContainer(engine, args);
   });
   const containerId = created.stdout.trim();
-  params.onAllocated?.(containerId);
   if (!/^[a-f0-9]{64}$/u.test(containerId)) {
     throw new Error("Container creation did not return an immutable container ID.");
   }
+  params.onAllocated?.(containerId);
   params.assertCurrent?.();
   await execContainer(engine, ["start", containerId]);
 
@@ -518,6 +523,14 @@ async function ensureSandboxContainerLifecycle(
     : configuredEngine;
   params.assertCurrent?.();
   let existingRegistryEntry = await readRegistryEntry(containerName);
+  if (
+    existingRegistryEntry?.runtimeState === "removing" ||
+    existingRegistryEntry?.runtimeState === "removing-pending"
+  ) {
+    throw new Error(
+      `Sandbox ${containerName} is being removed; retry after sandbox recreate completes.`,
+    );
+  }
   if (engine.id === "podman" && existingRegistryEntry) {
     if (!existingRegistryEntry.backendTarget) {
       throw Object.assign(
@@ -576,7 +589,10 @@ async function ensureSandboxContainerLifecycle(
         })
       : genericConfigHash;
   const now = Date.now();
-  const state = await containerState(engine, containerName);
+  const needsSetupReservation =
+    Boolean(params.cfg.docker.setupCommand?.trim()) ||
+    existingRegistryEntry?.runtimeState === "pending";
+  const state = await containerState(engine, containerName, { strict: needsSetupReservation });
   let containerId = "";
   if (state.exists) {
     const identity = await execContainer(
@@ -597,6 +613,11 @@ async function ensureSandboxContainerLifecycle(
   let hashMismatch = false;
   const registryEntry = existingRegistryEntry ?? undefined;
   if (hasContainer) {
+    if (registryEntry?.runtimeState === "pending") {
+      throw new Error(
+        `Sandbox ${containerName} setup did not complete. Inspect the retained container and preserve needed data before explicitly recreating it.`,
+      );
+    }
     currentHash = await readContainerConfigHash(engine, containerName);
     if (!currentHash) {
       currentHash = registryEntry?.configHash ?? null;
@@ -651,11 +672,13 @@ async function ensureSandboxContainerLifecycle(
       configLabelKind: "Image" as const,
       configHash: expectedHash,
     };
-    // Persist managed mount custody before provider allocation. A process crash
-    // must not leave a writer invisible to workspace quiescence and retirement.
-    if (params.workspaceSource === "managed-worktree") {
+    // Preserve managed mount custody and unfinished one-time setup before any
+    // provider allocation, including a crash or revocation before publication.
+    if (params.workspaceSource === "managed-worktree" || needsSetupReservation) {
       params.assertCurrent?.();
-      await updateRegistry(readyEntry);
+      await updateRegistry(
+        needsSetupReservation ? { ...readyEntry, runtimeState: "pending" } : readyEntry,
+      );
     }
     let allocated = false;
     try {
@@ -682,9 +705,12 @@ async function ensureSandboxContainerLifecycle(
         assertCurrent: params.assertCurrent,
         operatorAuthority: params.operatorAuthority,
       });
-      if (params.workspaceSource !== "managed-worktree") {
+      if (needsSetupReservation) {
+        await completeSandboxRegistryReservation(readyEntry);
+      } else if (params.workspaceSource !== "managed-worktree") {
         await updateRegistry(readyEntry);
       }
+      params.assertCurrent?.();
       return { containerName, containerId };
     } catch (creationError) {
       if (!allocated) {
@@ -693,7 +719,7 @@ async function ensureSandboxContainerLifecycle(
       if (params.operatorAuthority?.signal?.aborted) {
         // Revocation stops a proven-private generation without deleting its
         // writable layer. Shared/unknown environments remain running.
-        if (params.workspaceSource !== "managed-worktree") {
+        if (params.workspaceSource !== "managed-worktree" && !needsSetupReservation) {
           await updateRegistry(readyEntry);
         }
         throw creationError;
@@ -701,6 +727,7 @@ async function ensureSandboxContainerLifecycle(
       await throwAfterPartialSandboxCleanup({
         engine,
         containerName,
+        containerId,
         creationError,
         onRemoved: () => releaseSandboxContainerSource(engine, containerName, containerId),
       });
@@ -736,5 +763,6 @@ async function ensureSandboxContainerLifecycle(
     configLabelKind: "Image",
     configHash: hashMismatch ? (currentHash ?? undefined) : expectedHash,
   });
+  params.assertCurrent?.();
   return { containerName, containerId };
 }

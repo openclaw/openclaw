@@ -349,7 +349,10 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(
       spawnState.calls.some((call) => ["start", "exec", "rm"].includes(call.args[0] ?? "")),
     ).toBe(false);
-    expect(registryMocks.updateRegistry).not.toHaveBeenCalled();
+    expect(registryMocks.updateRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeState: "pending" }),
+    );
+    expect(registryMocks.completeSandboxRegistryReservation).not.toHaveBeenCalled();
     expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
     const envFile = collectDockerFlagValues(create.args, "--env-file")[0];
     expect(envFile).toBeDefined();

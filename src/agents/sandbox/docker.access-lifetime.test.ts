@@ -9,12 +9,15 @@ import {
 } from "./container-lifecycle.js";
 import { createDockerSandboxBackend } from "./docker-backend.js";
 import { DOCKER_SANDBOX_ENGINE, ensureSandboxContainer } from "./docker.js";
+import type { SandboxRegistryEntry } from "./registry.types.js";
 
 type Container = { id: string; name: string; hash: string; running: boolean };
 const fixture = vi.hoisted(() => ({
   containers: new Map<string, Container>(),
+  registry: new Map<string, SandboxRegistryEntry>(),
   calls: [] as string[][],
   serial: 0,
+  imageFails: false,
   removalFails: false,
   terminalState: "stopped" as "stopped" | "paused" | "unreachable",
   setup: undefined as undefined | ((signal: AbortSignal | undefined) => Promise<void>),
@@ -31,9 +34,32 @@ vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: fixture.logError }),
 }));
 vi.mock("./registry.js", () => ({
-  readRegistryEntry: vi.fn(async () => null),
-  updateRegistry: vi.fn(async () => {}),
-  removeRegistryEntry: vi.fn(async () => {}),
+  readRegistryEntry: vi.fn(async (name: string) => fixture.registry.get(name) ?? null),
+  updateRegistry: vi.fn(async (entry: SandboxRegistryEntry) => {
+    fixture.registry.set(entry.containerName, {
+      ...fixture.registry.get(entry.containerName),
+      ...structuredClone(entry),
+    });
+  }),
+  completeSandboxRegistryReservation: vi.fn(async (entry: SandboxRegistryEntry) => {
+    fixture.registry.set(entry.containerName, {
+      ...fixture.registry.get(entry.containerName),
+      ...structuredClone(entry),
+      runtimeState: "ready",
+    });
+  }),
+  removeRegistryEntry: vi.fn(
+    async (name: string, options?: { preserveRemovalIntent?: boolean }) => {
+      const state = fixture.registry.get(name)?.runtimeState;
+      if (
+        options?.preserveRemovalIntent &&
+        (state === "removing" || state === "removing-pending")
+      ) {
+        return;
+      }
+      fixture.registry.delete(name);
+    },
+  ),
 }));
 vi.mock("./mount-plan.js", () => ({
   prepareSandboxMountPlan: vi.fn(async () => ({ binds: [], skippedBinds: [] })),
@@ -48,6 +74,9 @@ vi.mock("./container-engine.js", () => ({
     fixture.calls.push(args);
     const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
     if (args[0] === "image") {
+      if (fixture.imageFails) {
+        throw new Error("image unavailable");
+      }
       return ok();
     }
     if (args[0] === "create") {
@@ -170,6 +199,8 @@ function provision(owner: ReturnType<typeof source> | undefined, scopeKey = "gue
 
 beforeEach(() => {
   fixture.calls.length = 0;
+  fixture.registry.clear();
+  fixture.imageFails = false;
   fixture.terminalState = "stopped";
   fixture.setup = undefined;
   fixture.inspectState = undefined;
@@ -404,7 +435,7 @@ it.each([
   },
 );
 
-it("settles revocation during setup before an already-queued replacement can start", async () => {
+it("retains interrupted setup and rejects queued or later reuse before restart", async () => {
   const owner = source();
   const started = createDeferred();
   fixture.setup = async (signal) => {
@@ -420,24 +451,78 @@ it("settles revocation during setup before an already-queued replacement can sta
   await started.promise;
   const replacement = source();
   const queued = ensureSandboxContainer(provision(replacement));
+  void queued.catch(() => {});
   owner.controller.abort(new Error("setup access revoked"));
   await rejected;
-  await queued;
+  await expect(queued).rejects.toThrow("setup did not complete");
+  const [container] = fixture.containers.values();
+  if (!container) {
+    throw new Error("Expected the retained partial container");
+  }
+  await withSandboxContainerLifecycle(container.name, undefined, async () => {});
   expect(fixture.calls.filter(([operation]) => operation === "kill")).toHaveLength(1);
   expect(fixture.calls.some(([operation]) => operation === "rm")).toBe(false);
-  const operations = fixture.calls.map(([operation]) => operation);
-  expect(operations.lastIndexOf("start")).toBeGreaterThan(operations.indexOf("wait"));
-  expect([...fixture.containers.values()]).toEqual([expect.objectContaining({ running: true })]);
-  replacement.closeForeground();
-  expect(() => replacement.authority.assertCurrent()).not.toThrow();
-  replacement.controller.abort();
-  const [name] = fixture.containers.keys();
-  if (!name) {
-    throw new Error("Expected the retained private container");
+  expect(fixture.calls.filter(([operation]) => operation === "start")).toHaveLength(1);
+  expect(fixture.calls.filter(([operation]) => operation === "exec")).toHaveLength(1);
+  expect(container.running).toBe(false);
+  expect(fixture.registry.get(container.name)?.runtimeState).toBe("pending");
+
+  const later = provision(source());
+  later.cfg.docker.image = "changed:image";
+  const beforeReuse = fixture.calls.length;
+  await expect(ensureSandboxContainer(later)).rejects.toThrow("setup did not complete");
+  expect(
+    fixture.calls
+      .slice(beforeReuse)
+      .some(([operation]) => ["create", "start", "exec", "rm"].includes(operation ?? "")),
+  ).toBe(false);
+});
+
+it("recovers a pending unallocated attempt when setup is removed", async () => {
+  fixture.imageFails = true;
+  await expect(ensureSandboxContainer(provision(source()))).rejects.toThrow("image unavailable");
+  expect(fixture.containers.size).toBe(0);
+  fixture.imageFails = false;
+  const params = provision(source());
+  delete params.cfg.docker.setupCommand;
+  const created = await ensureSandboxContainer(params);
+  await expect(ensureSandboxContainer(params)).resolves.toEqual(created);
+  expect(fixture.registry.get(created.containerName)?.runtimeState).toBe("ready");
+  expect(fixture.calls.filter(([operation]) => operation === "create")).toHaveLength(1);
+  expect(fixture.calls.some(([operation]) => operation === "exec")).toBe(false);
+});
+
+it("preserves management removal intent across failed setup and queued reuse", async () => {
+  const entered = createDeferred();
+  const setup = createDeferred();
+  fixture.setup = () => {
+    entered.resolve();
+    return setup.promise;
+  };
+  const creating = ensureSandboxContainer(provision(source()));
+  const failed = expect(creating).rejects.toThrow("setup failed");
+  await entered.promise;
+  fixture.setup = undefined;
+  const [container] = fixture.containers.values();
+  if (!container) {
+    throw new Error("Expected the allocated setup container");
   }
-  await withSandboxContainerLifecycle(name, undefined, async () => {});
-  expect(fixture.calls.filter(([operation]) => operation === "kill")).toHaveLength(2);
-  expect(fixture.containers.get(name)?.running).toBe(false);
+  const entry = fixture.registry.get(container.name);
+  if (!entry) {
+    throw new Error("Expected pending setup custody");
+  }
+  const queued = ensureSandboxContainer(provision(source()));
+  void queued.catch(() => {});
+  // Management publishes its removal fence before it waits for this owner queue.
+  fixture.registry.set(container.name, { ...entry, runtimeState: "removing-pending" });
+  const removing = removeSandboxContainerRuntime(DOCKER_SANDBOX_ENGINE, container.name);
+  setup.reject(new Error("setup failed"));
+  await failed;
+  await removing;
+  await expect(queued).rejects.toThrow("is being removed");
+  expect(fixture.calls.filter(([operation]) => operation === "create")).toHaveLength(1);
+  expect(fixture.calls.filter(([operation]) => operation === "start")).toHaveLength(1);
+  expect(fixture.registry.get(container.name)?.runtimeState).toBe("removing-pending");
 });
 
 it("discards stopped custody when the generation was restarted outside its owner", async () => {
@@ -571,7 +656,9 @@ it.each(["partial-creation", "replacement", "manager"] as const)(
     const retainedKills = [...fixture.containers.values()].map(({ id }) => ["kill", id]);
     expect(retainedKills).toHaveLength(1);
     owner.controller.abort();
-    await ensureSandboxContainer(provision(source({ grantId: "replacement" })));
+    for (const name of fixture.containers.keys()) {
+      await withSandboxContainerLifecycle(name, undefined, async () => {});
+    }
     expect(fixture.calls.filter(([operation]) => operation === "kill")).toEqual(retainedKills);
   },
 );

@@ -235,14 +235,14 @@ export async function createSandboxBackend(
           ) {
             throw new Error("Sandbox backend returned a runtime outside its reserved generation.");
           }
-          completeSandboxRegistryReservation(toEntry(backend));
+          await completeSandboxRegistryReservation(toEntry(backend));
           return backend;
         } catch (error) {
           if (
             error instanceof SandboxRuntimeRetiredError &&
             error.runtimeId === reservation.containerName
           ) {
-            completeSandboxRegistryReservation(reservation, true);
+            await completeSandboxRegistryReservation(reservation, true);
           }
           throw error;
         }

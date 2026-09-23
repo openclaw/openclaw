@@ -102,11 +102,25 @@ export async function dockerContainerState(name: string) {
   return await containerState(DOCKER_SANDBOX_ENGINE, name);
 }
 
-export async function containerState(engine: SandboxContainerEngine, name: string) {
+export async function containerState(
+  engine: SandboxContainerEngine,
+  name: string,
+  options: { strict?: boolean } = {},
+) {
   const result = await execContainer(engine, ["inspect", "-f", "{{.State.Running}}", name], {
     allowFailure: true,
   });
   if (result.code !== 0) {
+    if (
+      options.strict &&
+      !/no such (?:container|object)|container .* does not exist|no container with name or id .* found/iu.test(
+        result.stderr,
+      )
+    ) {
+      throw new Error(
+        `Unable to inspect ${engine.displayName} sandbox ${name}: ${result.stderr.trim() || `exit ${result.code}`}`,
+      );
+    }
     return { exists: false, running: false };
   }
   return { exists: true, running: result.stdout.trim() === "true" };

@@ -9,6 +9,7 @@ const registryMocks = vi.hoisted(() => ({
   readRegistryEntry: vi.fn(),
   removeRegistryEntry: vi.fn(),
   updateRegistry: vi.fn(),
+  completeSandboxRegistryReservation: vi.fn(),
 }));
 
 vi.mock("./container-engine.js", async (importOriginal) => ({
@@ -28,6 +29,7 @@ beforeEach(() => {
   registryMocks.readRegistryEntry.mockReset().mockResolvedValue(null);
   registryMocks.removeRegistryEntry.mockReset().mockResolvedValue(undefined);
   registryMocks.updateRegistry.mockReset().mockResolvedValue(undefined);
+  registryMocks.completeSandboxRegistryReservation.mockReset().mockResolvedValue(undefined);
   containerMocks.execContainer.mockReset().mockImplementation(async (_engine, args: string[]) => {
     if (args[0] === "inspect") {
       return { code: 1, stdout: "", stderr: "No such object" };
@@ -99,10 +101,12 @@ async function expectPartialRuntimeCleanup(params: {
   ).rejects.toThrow(params.expectedError);
   expect(containerMocks.execContainer).toHaveBeenCalledWith(
     expect.anything(),
-    ["rm", "-f", "oc-test-shared"],
+    ["rm", "-f", "a".repeat(64)],
     { allowFailure: true },
   );
-  expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("oc-test-shared");
+  expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("oc-test-shared", {
+    preserveRemovalIntent: true,
+  });
 }
 
 describe("fresh sandbox container cleanup", () => {
@@ -197,7 +201,10 @@ describe("fresh sandbox container cleanup", () => {
       cfg: config(workspaceDir, "exit 1"),
       expectedError: "setup failed",
     });
-    expect(registryMocks.updateRegistry).not.toHaveBeenCalled();
+    expect(registryMocks.updateRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeState: "pending", workspaceDir }),
+    );
+    expect(registryMocks.completeSandboxRegistryReservation).not.toHaveBeenCalled();
   });
 
   it("removes the runtime when registry publication fails", async () => {
@@ -237,6 +244,39 @@ describe("fresh sandbox container cleanup", () => {
     expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
   });
 
+  it("does not overwrite readiness when the existing runtime cannot be inspected", async () => {
+    const workspaceDir = tempDirs.make("openclaw-docker-inspection-unavailable-");
+    registryMocks.readRegistryEntry.mockResolvedValue({
+      containerName: "oc-test-shared",
+      backendId: "docker",
+      sessionKey: "partial-create",
+      createdAtMs: 1,
+      lastUsedAtMs: 1,
+      image: "openclaw-sandbox:test",
+      runtimeState: "ready",
+    });
+    containerMocks.execContainer.mockResolvedValue({
+      code: 125,
+      stdout: "",
+      stderr: "engine connection refused",
+    });
+    await expect(
+      ensureSandboxContainer({
+        scopeKey: "partial-create",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        cfg: config(workspaceDir, "echo setup"),
+      }),
+    ).rejects.toThrow("Unable to inspect Docker sandbox");
+    expect(registryMocks.updateRegistry).not.toHaveBeenCalled();
+    expect(registryMocks.completeSandboxRegistryReservation).not.toHaveBeenCalled();
+    expect(
+      containerMocks.execContainer.mock.calls.some(([, args]) =>
+        ["create", "start", "exec", "rm"].includes(args[0]),
+      ),
+    ).toBe(false);
+  });
+
   it("surfaces a partial-runtime removal failure", async () => {
     const workspaceDir = tempDirs.make("openclaw-docker-partial-recovery-");
     containerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => {
@@ -262,6 +302,9 @@ describe("fresh sandbox container cleanup", () => {
     ).rejects.toThrow("creation and cleanup both failed");
 
     expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
-    expect(registryMocks.updateRegistry).not.toHaveBeenCalled();
+    expect(registryMocks.updateRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeState: "pending", workspaceDir }),
+    );
+    expect(registryMocks.completeSandboxRegistryReservation).not.toHaveBeenCalled();
   });
 });

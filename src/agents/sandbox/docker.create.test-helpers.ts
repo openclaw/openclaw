@@ -36,6 +36,7 @@ const registryMocks = vi.hoisted(() => ({
   readRegistryEntry: vi.fn(),
   removeRegistryEntry: vi.fn(),
   updateRegistry: vi.fn(),
+  completeSandboxRegistryReservation: vi.fn(),
 }));
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -68,6 +69,7 @@ function createRegistryMock() {
     readRegistryEntry: registryMocks.readRegistryEntry,
     removeRegistryEntry: registryMocks.removeRegistryEntry,
     updateRegistry: registryMocks.updateRegistry,
+    completeSandboxRegistryReservation: registryMocks.completeSandboxRegistryReservation,
   };
 }
 
@@ -328,6 +330,8 @@ export function createSandboxContainerTestHarness() {
     registryMocks.removeRegistryEntry.mockResolvedValue(undefined);
     registryMocks.updateRegistry.mockClear();
     registryMocks.updateRegistry.mockResolvedValue(undefined);
+    registryMocks.completeSandboxRegistryReservation.mockClear();
+    registryMocks.completeSandboxRegistryReservation.mockResolvedValue(undefined);
     runtimeMocks.log.mockClear();
   });
 
