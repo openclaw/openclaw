@@ -68,9 +68,9 @@ matches one, and audits hunt for existing tests that do.
 ## Value bar
 
 Tests justify their maintenance cost by protecting behavior, a credible
-regression, or an independently meaningful contract. A test that must change
-for behavior-preserving source reorganization is suspect, not automatically
-deletable.
+regression, or an independently meaningful contract. In an audit, an existing
+test that must change for behavior-preserving source reorganization is suspect,
+not automatically deletable; the authoring gate still rejects new ones.
 
 Before judging a candidate, read the complete test and production owner, its
 entry point, callers, callees, sibling implementations, overlapping tests, CI
@@ -99,7 +99,9 @@ cross-language, package, release, or architecture contract. Also keep:
 
 - call ordering when order is observable behavior;
 - regressions with a credible failure mode;
-- source inspection when it is the cheapest independent guard;
+- source inspection when it is the cheapest independent guard: it fails when
+  the contract changes (the user-facing key, byte, or path) and survives an
+  identifier-only refactor;
 - a retained test that fails on the baseline: treat it as a possible product
   bug, reproduce it, and repair the owner rather than deleting it.
 

@@ -31,10 +31,15 @@ one lane.
 Give each lane to its own read-only agent. The agent reads every assigned test
 in full, including parameter tables. It also reads the production owners and
 their entry points, callers, history, and CI routing. Each test declaration
-goes into a written **ledger** with one mark:
+goes into a written **ledger** with one mark. An `it.each` is one declaration
+unless its rows need different marks; then mark each row.
 
-- `R`: retain, naming the contract and the bug it catches;
-- `C`: consolidate, naming the stronger owner that absorbs the assertion first;
+- `R`: retain, naming the contract and the bug it catches; a retained test that
+  only moves to a better-named file stays `R` with the move noted;
+- `F`: retain the contract but repair the assertion, such as a vacuous negative
+  that passes when only one of several items is missing;
+- `C`: consolidate, naming the owner that absorbs the assertion first: a sibling
+  table case, a stronger boundary suite, or the shared owner in another package;
 - `D`: delete, naming the proof that remains, or why no contract exists.
 
 Judge a test by its assertions, not its name. One Telegram test named for
