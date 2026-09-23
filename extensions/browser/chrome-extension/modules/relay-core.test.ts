@@ -419,6 +419,7 @@ describe("directLoopbackRelayPort", () => {
     "ws://127.0.0.1:18799/extension#secret",
     "ws://127.0.0.1:18799/extension?host=remote",
     "ws://127.0.0.1:18799/extension?profile=one&profile=two",
+    "ws://127.0.0.1/extension",
     "ws://127.0.0.1:0/extension",
     "wss://127.0.0.1:18799/extension",
   ])("rejects noncanonical or unsupported wake-up target %s", (url) => {
