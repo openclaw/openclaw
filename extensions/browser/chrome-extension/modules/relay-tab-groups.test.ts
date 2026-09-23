@@ -132,9 +132,9 @@ describe("addTabToOpenClawGroup", () => {
       groupId: -1,
       groupFallback: false,
       grouping: false,
-      initialGroup: false,
-      expectedGroupId: undefined,
-      groupOperationGroupId: undefined,
+      initialGroup: true,
+      expectedGroupId: 7,
+      groupOperationGroupId: 7,
       assertCurrent: vi.fn(),
     };
 
