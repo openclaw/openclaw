@@ -410,6 +410,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/media-generation-task-status.cold.test.ts",
   "src/agents/tools/media-generate-tool.donor-resources.test.ts",
   "src/agents/tools/media-generate-tool.resources.test.ts",
+  "src/agents/tools/media-generate-background.queue.test.ts",
   "src/agents/embedded-agent-runner/context-engine-maintenance.lifecycle.test.ts",
   "src/agents/embedded-agent-runner/context-engine-maintenance.test.ts",
   "src/agents/embedded-agent-runner/context-engine-maintenance.resources.test.ts",

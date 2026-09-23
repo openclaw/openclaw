@@ -30,6 +30,7 @@ import {
   musicGenerationTaskLifecycle,
   videoGenerationTaskLifecycle,
 } from "./media-generate-background.js";
+import { useMediaGenerationDeliveryRuntime } from "./media-generation-lifecycle.test-support.js";
 import { createMusicGenerateTool } from "./music-generate-tool.js";
 import { createVideoGenerateTool } from "./video-generate-tool.js";
 
@@ -296,6 +297,7 @@ afterAll(cleanupPluginLoaderFixturesForTest);
 describe.each(["image", "music", "video"] as const)(
   "prepared %s job registration resources",
   (kind) => {
+    useMediaGenerationDeliveryRuntime();
     const createTool = {
       image: createImageGenerateTool,
       music: createMusicGenerateTool,

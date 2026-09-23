@@ -25,12 +25,26 @@ type SessionDeliveryRuntime = {
 };
 
 const RUNTIME_RELOAD_RETRY_MS = 1_000;
-let runtime:
-  | (SessionDeliveryRuntime & {
-      runningEntries: Map<string, Promise<void>>;
-      pendingSchedules: Set<Promise<void>>;
-    })
-  | undefined;
+export type SessionDeliveryObservation = {
+  signal: AbortSignal;
+  canReconcileAfterDrain(): boolean;
+};
+type RuntimeObserver = {
+  owner: ActiveSessionDeliveryRuntime;
+  lifetime: AbortController;
+  settled: Promise<void>;
+};
+type ActiveSessionDeliveryRuntime = SessionDeliveryRuntime & {
+  runningEntries: Map<string, Promise<void>>;
+  pendingSchedules: Set<Promise<void>>;
+  observers: Set<RuntimeObserver>;
+  predecessorDrains: Set<Promise<void>>;
+  drained: boolean;
+  reconcileAfterDrain: boolean;
+  drainCompletion?: Promise<void>;
+  retirement?: Promise<void>;
+};
+let runtime: ActiveSessionDeliveryRuntime | undefined;
 let runtimeGeneration = 0;
 const scheduledEntries = new Map<string, { timer: ReturnType<typeof setTimeout>; dueAt: number }>();
 let pendingScanTimer: ReturnType<typeof setTimeout> | undefined;
@@ -151,32 +165,125 @@ async function runScheduledSessionDelivery(id: string, generation: number): Prom
   }
 }
 
-/** Register callbacks; stop fences scheduling and joins admitted reads and drains. */
+function sharesCurrentQueue(
+  left: ActiveSessionDeliveryRuntime,
+  right: ActiveSessionDeliveryRuntime,
+): boolean {
+  try {
+    left.queueContext.admission.assertCurrent();
+    right.queueContext.admission.assertCurrent();
+    return left.queueContext.admission.identity.key === right.queueContext.admission.identity.key;
+  } catch {
+    return false;
+  }
+}
+
+function joinRuntimeDrains(activeRuntime: ActiveSessionDeliveryRuntime): Promise<void> {
+  activeRuntime.drainCompletion ??= Promise.all([
+    ...activeRuntime.predecessorDrains,
+    ...activeRuntime.runningEntries.values(),
+    ...activeRuntime.pendingSchedules,
+  ]).then(() => {
+    activeRuntime.drained = true;
+  });
+  return activeRuntime.drainCompletion;
+}
+
+function retireRuntime(activeRuntime: ActiveSessionDeliveryRuntime): Promise<void> {
+  activeRuntime.retirement ??= joinRuntimeDrains(activeRuntime).then(async () => {
+    // Admitted delivery can still settle during shutdown. Let observers consume
+    // that final result before the caller disposes the queue's database owner.
+    const observers = [...activeRuntime.observers];
+    for (const observer of observers) {
+      observer.lifetime.abort();
+    }
+    await Promise.all(observers.map((observer) => observer.settled));
+  });
+  return activeRuntime.retirement;
+}
+
+/** Register callbacks; stop fences scheduling and joins delivery before its observers. */
 export function startSessionDeliveryRuntime(params: SessionDeliveryRuntime): () => Promise<void> {
+  const previous = runtime;
   runtimeGeneration += 1;
   const generation = runtimeGeneration;
   clearScheduledEntries();
-  const activeRuntime = {
+  const activeRuntime: ActiveSessionDeliveryRuntime = {
     ...params,
     runningEntries: new Map<string, Promise<void>>(),
     pendingSchedules: new Set<Promise<void>>(),
+    observers: new Set(),
+    predecessorDrains: new Set(),
+    drained: false,
+    reconcileAfterDrain: true,
   };
   runtime = activeRuntime;
-  let stopPromise: Promise<void> | undefined;
+  if (previous) {
+    const sameQueue = sharesCurrentQueue(previous, activeRuntime);
+    previous.reconcileAfterDrain = sameQueue;
+    if (sameQueue) {
+      // Every same-store replacement joins its predecessor's active sends,
+      // including ordinary deliveries that have no media observer.
+      const predecessorDrain = joinRuntimeDrains(previous);
+      activeRuntime.predecessorDrains.add(predecessorDrain);
+      void predecessorDrain.then(() => activeRuntime.predecessorDrains.delete(predecessorDrain));
+      for (const observer of previous.observers) {
+        observer.owner = activeRuntime;
+        activeRuntime.observers.add(observer);
+      }
+      previous.observers.clear();
+    }
+    void retireRuntime(previous);
+  }
   return () => {
     if (runtimeGeneration === generation) {
       runtimeGeneration += 1;
       runtime = undefined;
       clearScheduledEntries();
     }
-    // A replacement owns its own work. Join this owner's reads and settlement
-    // writes before its queue database or environment can be disposed.
-    stopPromise ??= Promise.all([
-      ...activeRuntime.runningEntries.values(),
-      ...activeRuntime.pendingSchedules,
-    ]).then(() => {});
-    return stopPromise;
+    return retireRuntime(activeRuntime);
   };
+}
+
+/** Detached producers need a live owner to deliver and observe their queued completion. */
+export function hasSessionDeliveryRuntime(): boolean {
+  return runtime !== undefined && runtime.retirement === undefined;
+}
+
+/** Join local observations before shutdown without cancelling the durable delivery itself. */
+export async function observeSessionDeliveryRuntime<T>(
+  observe: (observation: SessionDeliveryObservation | undefined) => Promise<T>,
+): Promise<T> {
+  const activeRuntime = runtime;
+  if (!activeRuntime) {
+    return await observe(undefined);
+  }
+  const settled = createDeferredCore();
+  const observer: RuntimeObserver = {
+    owner: activeRuntime,
+    lifetime: new AbortController(),
+    settled: settled.promise,
+  };
+  activeRuntime.observers.add(observer);
+  try {
+    return await observe({
+      signal: observer.lifetime.signal,
+      canReconcileAfterDrain: () => {
+        if (!observer.owner.drained || !observer.owner.reconcileAfterDrain) {
+          return false;
+        }
+        try {
+          observer.owner.queueContext.admission.assertCurrent();
+          return runtime === undefined || sharesCurrentQueue(observer.owner, runtime);
+        } catch {
+          return false;
+        }
+      },
+    });
+  } finally {
+    observer.owner.observers.delete(observer);
+    settled.resolve();
+  }
 }
 
 /** Schedule one durable entry when a gateway runtime is available. */

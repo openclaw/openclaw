@@ -34,6 +34,9 @@ import {
 import { ModelRegistry } from "../sessions/model-registry.js";
 import { createImageGenerateTool } from "./image-generate-tool.js";
 import { imageGenerationTaskLifecycle as lifecycle } from "./media-generate-background.js";
+import { useMediaGenerationDeliveryRuntime } from "./media-generation-lifecycle.test-support.js";
+
+useMediaGenerationDeliveryRuntime();
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMQVDL+DwACFAFmBODefwAAAABJRU5ErkJggg==",

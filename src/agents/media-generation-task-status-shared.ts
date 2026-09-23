@@ -26,6 +26,7 @@ import { buildSessionAsyncTaskStatusDetails } from "./session-async-task-status.
 /** Marks media as ready while requester delivery is still being confirmed. */
 export const MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS =
   "Generated media; delivering completion";
+export const MEDIA_GENERATION_QUEUED_COMPLETION_PROGRESS = "Media task finished; completion queued";
 
 type RecentMediaGenerationTaskStart = {
   task: TaskRecord;
@@ -463,7 +464,8 @@ function selectActiveMediaGenerationTasks(
     }
     if (
       params.excludeDeliveringCompletion &&
-      task.progressSummary === MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS
+      (task.progressSummary === MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS ||
+        task.progressSummary === MEDIA_GENERATION_QUEUED_COMPLETION_PROGRESS)
     ) {
       return false;
     }
@@ -553,11 +555,14 @@ function buildMediaGenerationTaskStatusText(params: {
       ? `${params.nounLabel} task ${params.task.taskId} is already ${params.task.status}${provider ? ` with ${provider}` : ""}.`
       : `${params.nounLabel} task ${params.task.taskId} recently ${params.task.status}${provider ? ` with ${provider}` : ""}.`,
     params.task.progressSummary ? `Progress: ${params.task.progressSummary}.` : null,
-    params.duplicateGuard
-      ? active
-        ? `Do not call ${params.toolName} again for this request. Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here.`
-        : `Do not call ${params.toolName} again for the same request; this recent ${params.completionLabel} generation already completed.`
-      : `Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here when it's ready.`,
+    params.task.progressSummary === MEDIA_GENERATION_QUEUED_COMPLETION_PROGRESS &&
+    isTaskStillBlockingDuplicateGuard(params.task)
+      ? `Finish or yield the current turn so the queued completion can be processed. Do not call ${params.toolName} again for this request.`
+      : params.duplicateGuard
+        ? active
+          ? `Do not call ${params.toolName} again for this request. Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here.`
+          : `Do not call ${params.toolName} again for the same request; this recent ${params.completionLabel} generation already completed.`
+        : `Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here when it's ready.`,
   ].filter((entry): entry is string => Boolean(entry));
   return lines.join("\n");
 }
@@ -579,7 +584,13 @@ function buildMediaGenerationTaskStatusListText(params: {
       const progress = task.progressSummary ? ` Progress: ${task.progressSummary}.` : "";
       return `- Task ${task.taskId}${runId} is ${task.status}${provider ? ` with ${provider}` : ""}.${progress}`;
     }),
-    `Wait for the completion events; the completion agent will send the finished ${params.completionLabel} here when each is ready.`,
+    params.tasks.some(
+      (task) =>
+        isTaskStillBlockingDuplicateGuard(task) &&
+        task.progressSummary === MEDIA_GENERATION_QUEUED_COMPLETION_PROGRESS,
+    )
+      ? "Finish or yield the current turn so queued completion events can be processed."
+      : `Wait for the completion events; the completion agent will send the finished ${params.completionLabel} here when each is ready.`,
     `Only start a new ${params.toolName} call if the user clearly asks for different/new ${params.completionLabel}.`,
   ];
   return lines.join("\n");

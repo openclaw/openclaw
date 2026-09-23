@@ -102,6 +102,27 @@ beforeEach(() => {
 });
 
 describe("media generation delivery-phase prompt guard", () => {
+  it("explains queued completion without blocking its completion turn", async () => {
+    const task = makeTask({ progressSummary: "Media task finished; completion queued" });
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue([task]);
+
+    expect(videoTaskStatusOwner.buildTaskStatusText(task)).toContain("Finish or yield");
+    expect(videoTaskStatusOwner.buildTaskStatusListText([task])).toContain("Finish or yield");
+    expect(
+      buildActiveMediaGenerationTaskPromptContext({
+        tasks: [task],
+        taskKind: "video_generation",
+        sourcePrefix: "video_generate",
+      }),
+    ).toBeUndefined();
+    expect(await videoTaskStatusOwner.findActiveTaskForSession("session/A")).toEqual(task);
+    expect(
+      await videoTaskStatusOwner.findDuplicateGuardTaskForSession("session/A", {
+        prompt: task.task,
+      }),
+    ).toEqual(task);
+  });
+
   it("does not warn about a task waiting only for completion delivery", () => {
     const tasks = [makeTask({ progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS })];
 

@@ -1,5 +1,6 @@
 /** Owns image, music, and video preflight, task admission, and detached completion. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { hasSessionDeliveryRuntime } from "../../infra/session-delivery-queue-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
@@ -227,7 +228,13 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
       providerId: params.providerId,
     });
 
-    if (handle && shouldDetachMediaGenerationTask(params.sessionKey, params.requesterAgentId)) {
+    // One-shot callers have no queue runtime to finish a detached task. Return
+    // their generated result (or error) through the existing foreground path.
+    if (
+      handle &&
+      hasSessionDeliveryRuntime() &&
+      shouldDetachMediaGenerationTask(params.sessionKey, params.requesterAgentId)
+    ) {
       recordRecentMediaGenerationTaskStartForSession({
         sessionKey: params.sessionKey,
         agentId: params.requesterAgentId,

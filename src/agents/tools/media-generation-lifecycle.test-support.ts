@@ -1,7 +1,9 @@
-import { expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { startSessionDeliveryRuntime } from "../../infra/session-delivery-queue-runtime.js";
 import type { loadWebMedia } from "../../media/web-media.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { AnyAgentTool } from "./common.js";
 import type { createImageGenerateTool } from "./image-generate-tool.js";
@@ -19,6 +21,24 @@ type ToolContract = {
   requesterOrigin?: DeliveryContext;
 };
 const agentSessionKey = "agent:main:discord:direct:123";
+
+/** Unit fixtures replace delivery, but detached admission still needs its real lifecycle owner. */
+export function useMediaGenerationDeliveryRuntime(): void {
+  let stop: (() => Promise<void>) | undefined;
+  beforeEach(() => {
+    stop = startSessionDeliveryRuntime({
+      queueContext: captureOpenClawStateWorkerContext(),
+      deliver: async () => {
+        throw new Error("Media unit fixture must supply its completion delivery result");
+      },
+      log: { info() {}, warn() {}, error() {} },
+    });
+  });
+  afterEach(async () => {
+    await stop?.();
+    stop = undefined;
+  });
+}
 
 function mediaConfig(kind: MediaKind, primary: string, timeoutMs?: number): OpenClawConfig {
   return { agents: { defaults: { mediaModels: { [kind]: { primary, timeoutMs } } } } };
@@ -40,6 +60,9 @@ export function defineMediaGenerationCancellationTests(
     referenceSignal: "caller" | "composed";
   },
 ) {
+  // The containing tool suite models a Gateway: its detached scheduler and
+  // completion stubs need the same host lifetime as these cancellation cases.
+  useMediaGenerationDeliveryRuntime();
   const { kind, tasks } = params;
   const createTool = (primary: string, options: Omit<ToolOptions, "config">) =>
     params.createTool({

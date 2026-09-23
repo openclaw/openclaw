@@ -28,6 +28,7 @@ export type MediaGenerationTaskHandle = {
 export type MediaGenerationCompletionWakeOutcome =
   | { status: "delivered" }
   | { status: "pending" }
+  | { status: "session_queued" }
   | { status: "permanent_failure" };
 
 export function retainBlockedMediaReferences(
@@ -139,10 +140,10 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   if (delivery.delivered) {
     return { status: "delivered" };
   }
-  if (
-    delivery.disposition === "session_queued" ||
-    delivery.reason === "completion_handoff_pending"
-  ) {
+  if (delivery.disposition === "session_queued") {
+    return { status: "session_queued" };
+  }
+  if (delivery.reason === "completion_handoff_pending") {
     return { status: "pending" };
   }
   if (delivery.disposition === "ambiguous") {

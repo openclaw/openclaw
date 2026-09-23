@@ -8,6 +8,8 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { drainPendingSessionDelivery } from "./session-delivery-queue-recovery.js";
 import {
+  hasSessionDeliveryRuntime,
+  observeSessionDeliveryRuntime,
   schedulePendingSessionDeliveries,
   scheduleSessionDelivery,
   startSessionDeliveryRuntime,
@@ -70,6 +72,151 @@ afterEach(() => {
 });
 
 describe("session delivery queue runtime", () => {
+  it("transfers pending observers to a same-store replacement without retaining the old runtime", async () => {
+    expect(hasSessionDeliveryRuntime()).toBe(false);
+    await withRuntime(async (startRuntime) => {
+      const gate = createDeferredCore();
+      const stopOld = startRuntime({ deliver: async () => {}, log: logger });
+      expect(hasSessionDeliveryRuntime()).toBe(true);
+      let oldSignal: AbortSignal | undefined;
+      const aborted = createDeferredCore();
+      const observed = observeSessionDeliveryRuntime(async (observation) => {
+        const signal = observation?.signal;
+        oldSignal = signal;
+        signal?.addEventListener("abort", () => aborted.resolve(), { once: true });
+        await gate.promise;
+      });
+      const stopNew = startRuntime({ deliver: async () => {}, log: logger });
+      try {
+        expect(oldSignal?.aborted).toBe(false);
+        await stopOld();
+        expect(oldSignal?.aborted).toBe(false);
+        expect(hasSessionDeliveryRuntime()).toBe(true);
+        await observeSessionDeliveryRuntime(async (observation) => {
+          expect(observation?.signal.aborted).toBe(false);
+        });
+        let stopped = false;
+        const stopping = stopNew().then(() => {
+          stopped = true;
+        });
+        await aborted.promise;
+        expect(stopped).toBe(false);
+        gate.resolve();
+        await observed;
+        await stopping;
+        expect(stopped).toBe(true);
+        expect(hasSessionDeliveryRuntime()).toBe(false);
+      } finally {
+        gate.resolve();
+        await observed;
+        await Promise.all([stopOld(), stopNew()]);
+      }
+    });
+    expect(hasSessionDeliveryRuntime()).toBe(false);
+  });
+
+  it.each([false, true])(
+    "joins predecessor delivery before replacement shutdown (observer: %s)",
+    async (withObserver) => {
+      vi.useFakeTimers();
+      await withRuntime(async (startRuntime, queueContext) => {
+        const id = await enqueueSessionDelivery(
+          {
+            kind: "agentTurn",
+            sessionKey: "agent:main:main",
+            message: "completion",
+            messageId: "predecessor-completion",
+          },
+          queueContext,
+        );
+        const entered = createDeferredCore();
+        const deliveryGate = createDeferredCore();
+        const order: string[] = [];
+        const stopOld = startRuntime({
+          log: logger,
+          deliver: async () => {
+            entered.resolve();
+            await deliveryGate.promise;
+            order.push("delivered");
+          },
+        });
+        let signal: AbortSignal | undefined;
+        const observed = withObserver
+          ? observeSessionDeliveryRuntime(async (observation) => {
+              signal = observation?.signal;
+              const interrupted = createDeferredCore();
+              signal?.addEventListener("abort", () => interrupted.resolve(), { once: true });
+              await interrupted.promise;
+              expect(observation?.canReconcileAfterDrain()).toBe(true);
+              expect(await loadPendingSessionDelivery(id, queueContext)).toBeNull();
+              order.push("reconciled");
+            })
+          : Promise.resolve();
+        let stopNew: ReturnType<typeof startSessionDeliveryRuntime> | undefined;
+        try {
+          await scheduleSessionDelivery(id, queueContext);
+          vi.advanceTimersByTime(0);
+          await entered.promise;
+          stopNew = startRuntime({ deliver: async () => {}, log: logger });
+          const stopping = stopNew().then(() => {
+            order.push("stopped");
+          });
+          await vi.advanceTimersByTimeAsync(0);
+          if (withObserver) {
+            expect(signal?.aborted).toBe(false);
+          }
+          expect(order).toEqual([]);
+          deliveryGate.resolve();
+          await Promise.all([stopping, observed, stopOld()]);
+          expect(order).toEqual(
+            withObserver ? ["delivered", "reconciled", "stopped"] : ["delivered", "stopped"],
+          );
+        } finally {
+          deliveryGate.resolve();
+          await Promise.all([stopOld(), stopNew?.(), observed]);
+        }
+      });
+    },
+  );
+
+  it("does not transfer observation or final reads to another queue store", async () => {
+    await withRuntime(async (startRuntime) => {
+      const gate = createDeferredCore();
+      const retired = createDeferredCore();
+      const stopOld = startRuntime({ deliver: async () => {}, log: logger });
+      let canReconcile: (() => boolean) | undefined;
+      const observed = observeSessionDeliveryRuntime(async (observation) => {
+        canReconcile = () => observation?.canReconcileAfterDrain() ?? false;
+        observation?.signal.addEventListener("abort", () => retired.resolve(), { once: true });
+        await gate.promise;
+      });
+      try {
+        await withTestDir({ prefix: "openclaw-other-delivery-owner-" }, async (stateDir) => {
+          await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+            const otherContext = captureOpenClawStateWorkerContext();
+            const stopOther = startSessionDeliveryRuntime({
+              queueContext: otherContext,
+              deliver: async () => {},
+              log: logger,
+            });
+            try {
+              await retired.promise;
+              expect(canReconcile?.()).toBe(false);
+              await stopOther();
+              expect(canReconcile?.()).toBe(false);
+            } finally {
+              await stopOther();
+              await closeOpenClawStateDatabaseByPathAsync(otherContext.admission.databasePath);
+            }
+          });
+        });
+      } finally {
+        gate.resolve();
+        await Promise.all([observed, stopOld()]);
+      }
+    });
+  });
+
   it("drains a newly scheduled durable entry", async () => {
     vi.useFakeTimers();
     await withRuntime(async (startRuntime, queueContext) => {

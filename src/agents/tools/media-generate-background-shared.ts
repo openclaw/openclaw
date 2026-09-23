@@ -10,6 +10,10 @@ import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/tr
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  observeSessionDeliveryRuntime,
+  type SessionDeliveryObservation,
+} from "../../infra/session-delivery-queue-runtime.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import {
@@ -34,7 +38,10 @@ import {
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { AgentGeneratedAttachment } from "../generated-attachments.js";
 import type { AgentInternalEvent } from "../internal-events.js";
-import { MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS } from "../media-generation-task-status-shared.js";
+import {
+  MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
+  MEDIA_GENERATION_QUEUED_COMPLETION_PROGRESS,
+} from "../media-generation-task-status-shared.js";
 import { loadRequesterSessionEntry } from "../subagents/announce/subagent-announce-delivery.js";
 import { resolveAnnounceOrigin } from "../subagents/announce/subagent-announce-origin.js";
 import {
@@ -149,37 +156,111 @@ type MediaGenerationTaskLifecycle = {
   ) => Promise<MediaGenerationCompletionWakeOutcome>;
 };
 
-function waitForMediaGenerationCompletionHandoffRetry(delayMs: number): Promise<void> {
+function waitForMediaGenerationCompletionHandoffRetry(
+  delayMs: number,
+  signal?: AbortSignal,
+  keepAlive = false,
+): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, delayMs);
-    timer.unref?.();
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, delayMs);
+    if (!keepAlive) {
+      timer.unref?.();
+    }
+    signal?.addEventListener("abort", finish, { once: true });
+    if (signal?.aborted) {
+      finish();
+    }
   });
 }
 
 async function wakeMediaGenerationTaskCompletionWithRetry(params: {
   wake: () => Promise<MediaGenerationCompletionWakeOutcome>;
-  beforeRetry?: () => void;
+  beforeRetry?: (outcome: MediaGenerationCompletionWakeOutcome) => void;
+  observation?: SessionDeliveryObservation;
 }): Promise<MediaGenerationCompletionWakeOutcome> {
-  const deadline = Date.now() + MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS;
-  let outcome = await params.wake();
-  let retryIndex = 0;
-  while (outcome.status === "pending") {
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      throw new Error("cron continuation did not become ready before the handoff deadline");
+  const runtimeSignal = params.observation?.signal;
+  let queueAccepted = false;
+  let progressStatus: MediaGenerationCompletionWakeOutcome["status"] | undefined;
+  let progressRecordedAt = 0;
+  try {
+    const deadline = Date.now() + MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS;
+    let outcome = await params.wake();
+    let retryIndex = 0;
+    while (outcome.status === "pending" || outcome.status === "session_queued") {
+      queueAccepted ||= outcome.status === "session_queued";
+      const now = Date.now();
+      if (
+        outcome.status === "session_queued" &&
+        (progressStatus !== outcome.status ||
+          now - progressRecordedAt >= MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS)
+      ) {
+        // Record custody even when the first admission overlaps shutdown. Receipt
+        // polling must not turn into a task-ledger write on every observation.
+        params.beforeRetry?.(outcome);
+        progressStatus = outcome.status;
+        progressRecordedAt = now;
+      }
+      runtimeSignal?.throwIfAborted();
+      if (outcome.status === "session_queued" && !runtimeSignal) {
+        return outcome;
+      }
+      // Accepted queue work owns its own delivery deadline and terminal result.
+      // The short producer budget only bounds an unconfirmed cron handoff.
+      const remainingMs =
+        outcome.status === "session_queued" ? Number.POSITIVE_INFINITY : deadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error("cron continuation did not become ready before the handoff deadline");
+      }
+      if (outcome.status === "pending") {
+        // Unconfirmed cron handoffs retain their existing per-attempt progress.
+        params.beforeRetry?.(outcome);
+        progressStatus = outcome.status;
+      }
+      // Reuse the idempotent handoff to observe settlement without creating a new send.
+      const delayMs =
+        MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS[
+          Math.min(retryIndex, MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS.length - 1)
+        ] ?? 2_000;
+      await waitForMediaGenerationCompletionHandoffRetry(
+        Math.min(delayMs, remainingMs),
+        runtimeSignal,
+      );
+      runtimeSignal?.throwIfAborted();
+      outcome = await params.wake();
+      retryIndex += 1;
     }
-    // Pending means the original cron run still owns the continuation. Keep the
-    // task live and cap backoff until delivery, unavailability, or the deadline.
-    const delayMs =
-      MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS[
-        Math.min(retryIndex, MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS.length - 1)
-      ] ?? 2_000;
-    await waitForMediaGenerationCompletionHandoffRetry(Math.min(delayMs, remainingMs));
-    params.beforeRetry?.();
-    outcome = await params.wake();
-    retryIndex += 1;
+    return outcome;
+  } catch (error) {
+    // Shutdown only leaves recoverable work after the queue confirmed custody.
+    // An unaccepted handoff failure must still settle the original media task.
+    if (runtimeSignal?.aborted && queueAccepted) {
+      let retryIndex = 0;
+      while (params.observation?.canReconcileAfterDrain()) {
+        try {
+          // The owner has joined its active deliveries. Read the existing
+          // idempotent outcome before releasing task terminalization.
+          return await params.wake();
+        } catch (readError) {
+          const delayMs = MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS[retryIndex++];
+          if (delayMs === undefined) {
+            // Preserve the existing unconfirmed-completion error contract instead
+            // of leaving a running task whose delivery may already have settled.
+            throw readError;
+          }
+          // Runtime retirement joins these bounded retries before disposing its
+          // database. Unlike a parked observer, this final read must keep Node alive.
+          await waitForMediaGenerationCompletionHandoffRetry(delayMs, undefined, true);
+        }
+      }
+      return { status: "session_queued" };
+    }
+    throw error;
   }
-  return outcome;
 }
 
 function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
@@ -276,9 +357,16 @@ function recordMediaGenerationTaskProgress(params: {
   });
 }
 
-function clearMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle): void {
+function clearMediaGenerationTaskRunContext(
+  handle: MediaGenerationTaskHandle,
+  settled = true,
+): void {
   clearGeneratedMediaTaskActivity(handle.runId);
   clearAgentRunContext(handle.runId);
+  if (!settled) {
+    // Runtime shutdown releases only process-local observation, not durable continuation state.
+    return;
+  }
   // A one-shot cron job can be deleted before detached media settles, leaving no
   // later timer tick to reap its exact continuation row.
   void removeCronRunContinuationSessionIfIdle(handle.requesterSessionKey).catch(
@@ -467,47 +555,14 @@ export function scheduleMediaGenerationTaskCompletion<
   onWakeFailure: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   const runBackgroundWork = async () => {
-    let executed: T;
-    try {
-      executed = await withMediaGenerationTaskKeepalive({
-        handle: params.handle,
-        progressSummary: params.progressSummary,
-        run: params.run,
-      });
-    } catch (error) {
-      try {
-        const wakeOutcome = await wakeMediaGenerationTaskCompletionWithRetry({
-          wake: async () =>
-            await params.lifecycle.wakeTaskCompletion({
-              config: params.config,
-              handle: params.handle,
-              status: "error",
-              statusLabel: "failed",
-              result: formatErrorMessage(error),
-            }),
-        });
-        if (wakeOutcome.status !== "delivered") {
-          params.onWakeFailure(`${params.toolName} failure completion delivery was not confirmed`, {
-            taskId: params.handle?.taskId,
-            runId: params.handle?.runId,
-          });
-        }
-      } catch (wakeError) {
-        params.onWakeFailure(`${params.toolName} failure wake failed`, {
-          taskId: params.handle?.taskId,
-          runId: params.handle?.runId,
-          error: wakeError,
-        });
-      }
-      params.lifecycle.failTaskRun({ handle: params.handle, error });
-      return;
-    }
-
-    const recordCompletionDeliveryProgress = () => {
+    const recordCompletionDeliveryProgress = (outcome?: MediaGenerationCompletionWakeOutcome) => {
       try {
         params.lifecycle.recordTaskProgress({
           handle: params.handle,
-          progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
+          progressSummary:
+            outcome?.status === "session_queued"
+              ? MEDIA_GENERATION_QUEUED_COMPLETION_PROGRESS
+              : MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
         });
       } catch (error) {
         params.onWakeFailure(`${params.toolName} completion progress update failed`, {
@@ -517,65 +572,127 @@ export function scheduleMediaGenerationTaskCompletion<
         });
       }
     };
-    recordCompletionDeliveryProgress();
-    let terminalResult: RequiredCompletionTerminalResult | undefined;
+    let executed: T;
     try {
-      const wakeOutcome = await wakeMediaGenerationTaskCompletionWithRetry({
-        wake: async () =>
-          await params.lifecycle.wakeTaskCompletion({
-            config: params.config,
-            handle: params.handle,
-            status: "ok",
-            statusLabel: "completed successfully",
-            result: executed.wakeResult,
-            attachments: executed.attachments,
-            mediaUrls: executed.mediaUrls,
-          }),
-        // Keep both the detached-task ledger and process-local activity fresh
-        // while an exact cron continuation is still owned by its original run.
-        beforeRetry: recordCompletionDeliveryProgress,
+      executed = await withMediaGenerationTaskKeepalive({
+        handle: params.handle,
+        progressSummary: params.progressSummary,
+        run: params.run,
       });
-      if (wakeOutcome.status !== "delivered") {
-        const failureReason = "completion delivery was not confirmed after successful generation";
-        terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(failureReason);
-        params.onWakeFailure(`${params.toolName} ${failureReason}`, {
-          taskId: params.handle?.taskId,
-          runId: params.handle?.runId,
-        });
-      }
     } catch (error) {
-      terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
-        formatErrorMessage(error),
-      );
-      params.onWakeFailure(
-        `${params.toolName} completion wake failed after successful generation`,
-        {
+      return await observeSessionDeliveryRuntime(async (observation) => {
+        try {
+          const wakeOutcome = await wakeMediaGenerationTaskCompletionWithRetry({
+            observation,
+            wake: async () =>
+              await params.lifecycle.wakeTaskCompletion({
+                config: params.config,
+                handle: params.handle,
+                status: "error",
+                statusLabel: "failed",
+                result: formatErrorMessage(error),
+              }),
+            beforeRetry: (outcome) => {
+              if (outcome.status === "session_queued") {
+                recordCompletionDeliveryProgress(outcome);
+              }
+            },
+          });
+          if (wakeOutcome.status === "session_queued" || wakeOutcome.status === "pending") {
+            if (params.handle) {
+              clearMediaGenerationTaskRunContext(params.handle, false);
+            }
+            return;
+          }
+          if (wakeOutcome.status !== "delivered") {
+            params.onWakeFailure(
+              `${params.toolName} failure completion delivery was not confirmed`,
+              {
+                taskId: params.handle?.taskId,
+                runId: params.handle?.runId,
+              },
+            );
+          }
+        } catch (wakeError) {
+          params.onWakeFailure(`${params.toolName} failure wake failed`, {
+            taskId: params.handle?.taskId,
+            runId: params.handle?.runId,
+            error: wakeError,
+          });
+        }
+        params.lifecycle.failTaskRun({ handle: params.handle, error });
+      });
+    }
+
+    return await observeSessionDeliveryRuntime(async (observation) => {
+      recordCompletionDeliveryProgress();
+      let terminalResult: RequiredCompletionTerminalResult | undefined;
+      try {
+        const wakeOutcome = await wakeMediaGenerationTaskCompletionWithRetry({
+          observation,
+          wake: async () =>
+            await params.lifecycle.wakeTaskCompletion({
+              config: params.config,
+              handle: params.handle,
+              status: "ok",
+              statusLabel: "completed successfully",
+              result: executed.wakeResult,
+              attachments: executed.attachments,
+              mediaUrls: executed.mediaUrls,
+            }),
+          // Keep task activity fresh while the existing handoff owner is settling.
+          beforeRetry: recordCompletionDeliveryProgress,
+        });
+        if (wakeOutcome.status === "session_queued" || wakeOutcome.status === "pending") {
+          // The stopped runtime no longer owns observation. Its durable row remains
+          // recoverable; do not turn local observer cancellation into delivery failure.
+          if (params.handle) {
+            clearMediaGenerationTaskRunContext(params.handle, false);
+          }
+          return;
+        }
+        if (wakeOutcome.status !== "delivered") {
+          const failureReason = "completion delivery was not confirmed after successful generation";
+          terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(failureReason);
+          params.onWakeFailure(`${params.toolName} ${failureReason}`, {
+            taskId: params.handle?.taskId,
+            runId: params.handle?.runId,
+          });
+        }
+      } catch (error) {
+        terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
+          formatErrorMessage(error),
+        );
+        params.onWakeFailure(
+          `${params.toolName} completion wake failed after successful generation`,
+          {
+            taskId: params.handle?.taskId,
+            runId: params.handle?.runId,
+            error,
+          },
+        );
+      }
+      terminalResult = retainBlockedMediaReferences(terminalResult, executed.attachments);
+      try {
+        params.lifecycle.completeTaskRun({
+          handle: params.handle,
+          provider: executed.provider,
+          model: executed.model,
+          count: executed.count,
+          terminalResult,
+        });
+      } catch (error) {
+        params.onWakeFailure(`${params.toolName} completion state update failed`, {
           taskId: params.handle?.taskId,
           runId: params.handle?.runId,
           error,
-        },
-      );
-    }
-    terminalResult = retainBlockedMediaReferences(terminalResult, executed.attachments);
-    try {
-      params.lifecycle.completeTaskRun({
-        handle: params.handle,
-        provider: executed.provider,
-        model: executed.model,
-        count: executed.count,
-        terminalResult,
-      });
-    } catch (error) {
-      params.onWakeFailure(`${params.toolName} completion state update failed`, {
-        taskId: params.handle?.taskId,
-        runId: params.handle?.runId,
-        error,
-      });
-      params.lifecycle.failTaskRun({
-        handle: params.handle,
-        error,
-      });
-    }
+        });
+        params.lifecycle.failTaskRun({
+          handle: params.handle,
+          error,
+        });
+      }
+    });
   };
   // Detached completion needs its own transcript lock after the parent attempt exits.
   params.scheduleBackgroundWork(() => runWithoutOwnedSessionTranscriptWrites(runBackgroundWork));
