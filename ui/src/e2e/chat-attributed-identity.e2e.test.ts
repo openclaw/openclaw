@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, type Locator, type Page } from "playwright/test";
 import { beforeEach, it } from "vitest";
 // Control UI E2E tests cover attributed chat identity placement.
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -74,6 +75,87 @@ function expectStableNamePosition(
 }
 
 suite.define(() => {
+  it.each([320, 390])("keeps revealed assistant controls compact at %s px", async (width) => {
+    await suite.withPage(
+      {
+        viewport: { width, height: 1000 },
+        hasTouch: true,
+        permissions: ["clipboard-read", "clipboard-write"],
+      },
+      async ({ page }) => {
+        const reply = "The reply, its metadata, and its controls stay together.";
+        const timestamp = Date.now() - 7_200_000;
+        await installMockGateway(page, {
+          assistantName: "RoboClaw Frontend Engineer",
+          historyMessages: [
+            { role: "user", content: "Check the mobile controls.", timestamp },
+            {
+              role: "assistant",
+              content: reply,
+              timestamp: timestamp + 1000,
+              model: "gpt-5.5",
+              usage: { input: 4231, output: 217 },
+            },
+            {
+              role: "user",
+              content: "Keep the default visibility unchanged.",
+              timestamp: timestamp + 2000,
+            },
+            {
+              role: "assistant",
+              content: "I will inspect the earlier reply by tapping it.",
+              timestamp: timestamp + 3000,
+            },
+          ],
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+        const agent = page.locator(".chat-group.assistant").first();
+        const footer = agent.locator(".chat-group-footer");
+        await expect(agent).toContainText(reply);
+        await expect(footer).toHaveCSS("opacity", "0");
+        const restingHeight = (await agent.boundingBox())?.height;
+        await agent.locator(".chat-bubble").tap();
+        await expect(footer).toHaveCSS("opacity", "1");
+        const geometry = await readFooterGeometry(agent);
+        expect(geometry.actions.top).toBeLessThan(geometry.identity.bottom);
+        expect(geometry.actions.left - geometry.identity.right).toBeCloseTo(8, 0);
+        expect(geometry.actions.right).toBeLessThanOrEqual(geometry.footer.right + 1);
+        const alignment = await footer.evaluate((element) => {
+          const time = element.querySelector(".chat-group-timestamp")!.getBoundingClientRect();
+          const icon = element.querySelector(".chat-reply-btn svg")!.getBoundingClientRect();
+          return {
+            timeHeight: time.height,
+            centers: Math.abs(time.top + time.height / 2 - icon.top - icon.height / 2),
+          };
+        });
+        expect(alignment.timeHeight).toBeLessThan(20);
+        expect(alignment.centers).toBeLessThanOrEqual(1);
+        expect((await agent.boundingBox())?.height).toBe(restingHeight);
+        const copy = agent.locator(".chat-copy-btn");
+        const target = await copy.boundingBox();
+        expect(target?.width).toBeGreaterThanOrEqual(44);
+        expect(target?.height).toBeGreaterThanOrEqual(44);
+        await copy.tap();
+        await expect(copy).toHaveAttribute("data-copy-state", "copied");
+        await copy.evaluate(finishElementAnimations);
+        await expect
+          .poll(() =>
+            copy.evaluate((button) => ({
+              state: button.dataset.copyState,
+              background: getComputedStyle(button).backgroundColor,
+            })),
+          )
+          .toEqual({ state: "copied", background: "rgba(0, 0, 0, 0)" });
+        expect(await copy.boundingBox()).toEqual(target);
+        await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(reply);
+        await expect(copy).not.toHaveAttribute("data-copy-state", "copied");
+        await agent.locator(".chat-bubble").tap();
+        await page.getByRole("textbox", { name: "Chat composer" }).tap();
+        await expect(footer).toHaveCSS("opacity", "0");
+      },
+    );
+  });
+
   it.each(["none", "min-content", "max-content", "48rem", "82%", "min(768px, 82%)"])(
     "keeps restored message width %s inside the mobile safe area",
     async (messageWidth) => {

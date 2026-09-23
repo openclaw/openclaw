@@ -347,6 +347,8 @@
   /* Keep full-opacity --muted: opacity < 1 composites below WCAG AA on dark surfaces. */
   color: var(--muted);
   line-height: 1.2;
+  /* Keep relative dates intact while adjacent names truncate or move rows. */
+  white-space: nowrap;
 }
 
 /* ── Group footer action buttons ── */
@@ -792,6 +794,12 @@ img.chat-avatar {
     --chat-turn-gap: 0px;
   }
 
+  /* Keep assistant actions beside metadata; long names may shrink instead of
+     sending the whole action group to a detached, indented second row. */
+  .chat-group.assistant .chat-group-footer {
+    flex-wrap: nowrap;
+  }
+
   .chat-group.user.chat-group--peer .chat-group-footer {
     flex-wrap: nowrap;
     width: fit-content;
@@ -820,6 +828,13 @@ img.chat-avatar {
        the remaining touch target extends downward. */
     padding-top: 5px;
     align-items: flex-start;
+  }
+
+  /* The success check is the feedback, not the invisible 44px touch box. */
+  .chat-group
+    :is(.chat-group-footer-actions, .chat-message-actions-row)
+    .chat-copy-btn[data-copy-state="copied"] {
+    background: transparent;
   }
 }
 
