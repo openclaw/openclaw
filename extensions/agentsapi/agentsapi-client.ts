@@ -8,6 +8,8 @@ const usageSchema = z.object({
   input_tokens: z.number(),
   output_tokens: z.number(),
   input_tokens_details: z.object({ cached_tokens: z.number() }).optional(),
+  output_tokens_details: z.object({ reasoning_tokens: z.number() }).optional(),
+  total_tokens: z.number().optional(),
 });
 const errorSchema = z.object({ message: z.string() });
 const turnSchema = z.object({

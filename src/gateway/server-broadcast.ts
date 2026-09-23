@@ -46,10 +46,47 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
   "session.tool",
 ]);
 
-function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string {
+type MessageStringEncoding = {
+  values: Map<string, unknown>;
+  capture: boolean;
+};
+
+const rawJSON = "rawJSON" in JSON && typeof JSON.rawJSON === "function" ? JSON.rawJSON : undefined;
+
+function serializeFrameField(
+  name: "payload" | "stateVersion",
+  value: unknown,
+  messageStrings?: MessageStringEncoding,
+): string {
   // Keep the wrapper for toJSON's property key and reuse its serialized field.
   // Only splice wrappers that still start with that field after inherited toJSON.
-  const fieldJSON = JSON.stringify({ [name]: value });
+  const field = { [name]: value };
+  let payload: unknown;
+  const messageObjects = messageStrings ? new WeakSet<object>() : undefined;
+  const fieldJSON = JSON.stringify(
+    field,
+    messageStrings &&
+      function (this: object, key: string, current: unknown): unknown {
+        if (this === field) {
+          payload = current;
+        } else if ((this === payload && key === "message") || messageObjects!.has(this)) {
+          if (typeof current === "string" && current.length >= 1024) {
+            const encoded = messageStrings.values.get(current);
+            if (encoded !== undefined) {
+              return encoded;
+            }
+            if (messageStrings.capture) {
+              const prepared = rawJSON!(JSON.stringify(current));
+              messageStrings.values.set(current, prepared);
+              return prepared;
+            }
+          } else if (current !== null && typeof current === "object") {
+            messageObjects!.add(current);
+          }
+        }
+        return current;
+      },
+  );
   return fieldJSON.startsWith(`{"${name}":`) ? `,${fieldJSON.slice(1, -1)}` : "";
 }
 
@@ -284,6 +321,15 @@ export function createGatewayBroadcaster(params: {
       : targetConnIds
         ? params.clients.getByConnectionIds(targetConnIds)
         : params.clients;
+    // Reuse immutable string encodings, never recipient rows or mutable message objects.
+    // Only the first serialized projection populates this fanout-local cache.
+    const messageStrings: MessageStringEncoding | undefined =
+      rawJSON &&
+      event === "session.message" &&
+      !retained &&
+      (targetConnIds?.size ?? params.clients.size) > 1
+        ? { values: new Map(), capture: true }
+        : undefined;
     for (const c of recipients) {
       // Closing nodes remain discoverable until their owner drains admitted lifecycle work.
       if (
@@ -531,7 +577,14 @@ export function createGatewayBroadcaster(params: {
           if (projected === undefined) {
             continue;
           }
-          payloadFragment = serializeFrameField("payload", projected);
+          payloadFragment = serializeFrameField(
+            "payload",
+            projected,
+            messageStrings?.capture || messageStrings?.values.size ? messageStrings : undefined,
+          );
+          if (messageStrings) {
+            messageStrings.capture = false;
+          }
         }
         // A drained write can refresh the recipient; cache only the profile at this send.
         const recipientProfileId =

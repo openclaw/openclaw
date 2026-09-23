@@ -1464,6 +1464,9 @@ jobs:
               ? "./scripts/lib/ci-changed-node-test-plan.mts"
               : "./scripts/lib/ci-changed-node-test-plan.mjs",
           );
+          const dockerSeedPlan = existsSync("./scripts/lib/ci-docker-seed-plan.mts")
+            ? await import("./scripts/lib/ci-docker-seed-plan.mts")
+            : {};
           const channelContractPlan = await importTargetPlan(
             existsSync("./scripts/lib/channel-contract-test-plan.mts")
               ? "./scripts/lib/channel-contract-test-plan.mts"
@@ -1651,10 +1654,13 @@ jobs:
             existsSync("test/vitest/vitest.ui-e2e.config.ts") &&
             readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")
               .includes("ui-e2e-projects-contract-v1");
-          // Keep the existing twelve-shard split on 16-class capacity; the compact
-          // six-shard plan can exceed the unchanged job deadline. Earlier failed-job
-          // reruns retain their emitted matrix and existing live routing.
-          const uiE2eJobCount = supportsUiE2eProjects
+          const includeReleaseOnlyUiTests =
+            (eventName === "workflow_dispatch" && !releaseGate) ||
+            !isCanonicalRepository || compatibilityTarget || changedPaths === null;
+          // Ordinary CI shares eight 16-class browser jobs; full inventories retain
+          // twelve. Private source-server projects keep their own one-worker limit.
+          const compactUiE2e = supportsUiE2eProjects && !includeReleaseOnlyUiTests;
+          const uiE2eJobCount = compactUiE2e ? 9 : supportsUiE2eProjects
             ? 13
             : usesHostedRunnerProfile ? 14 : 4;
           // The logical profile already owns contributor routing. Reuse the
@@ -1755,18 +1761,13 @@ jobs:
           const ownerPathEvent = isCanonicalRepository &&
             eventName === "push" && eventRef === "refs/heads/main";
           const dockerSeedLanes =
-            ownerPathEvent &&
-            changedPaths &&
+            runProofTier && isCanonicalRepository &&
             supportsDockerSeedE2e &&
-            typeof changedNodeTestPlan.resolveChangedDockerSeedLanes === "function"
-              ? changedNodeTestPlan.resolveChangedDockerSeedLanes(changedPaths)
+            (ownerPathEvent || eventName === "workflow_dispatch")
+              ? typeof dockerSeedPlan.resolveDockerSeedLanes === "function"
+                ? dockerSeedPlan.resolveDockerSeedLanes({ includeReleaseOnly: eventName === "workflow_dispatch" })
+                : ["published-upgrade-survivor"]
               : [];
-          // Manual CI is Full Release Validation's owner for the exact
-          // legacy-operator-state + auto-auth seed contract.
-          if (runProofTier && isCanonicalRepository && supportsDockerSeedE2e && (
-              eventName === "workflow_dispatch" || (ownerPathEvent && changedPaths === null))) {
-            dockerSeedLanes.push("published-upgrade-survivor");
-          }
           // Canonical pushes also use compact bins: 80+ single-group jobs
           // drain the runner pool for minutes, and per-shard check names on
           // main have no branch-protection consumers. Dispatch (release
@@ -1897,9 +1898,7 @@ jobs:
           const uiTestGroups = runUiTests &&
             typeof nodeTestPlan.createUiTestShardGroups === "function"
               ? nodeTestPlan.createUiTestShardGroups({
-                  includeReleaseOnlyTests:
-                    (eventName === "workflow_dispatch" && !releaseGate) ||
-                    !isCanonicalRepository || compatibilityTarget || changedPaths === null,
+                  includeReleaseOnlyTests: includeReleaseOnlyUiTests,
                   changedPaths: changedPaths ?? [],
                 })
               : null;
@@ -2133,6 +2132,7 @@ jobs:
                 shard_count: uiE2eJobCount,
                 task: shard === uiE2eJobCount ? "browser-extension" : "control-ui",
                 vitest_shard_count: uiE2eJobCount - 1,
+                vitest_max_workers: compactUiE2e ? 3 : 2,
               };
             })),
             run_native_i18n: runNativeI18n,
@@ -3125,6 +3125,7 @@ jobs:
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           VITEST_SHARD_INDEX: ${{ matrix.shard }}
           VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
+          VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers || 2 }}
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}
         run: |
           if [[ -n "${OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:-}" ]]; then
@@ -3145,6 +3146,7 @@ jobs:
           node scripts/run-vitest.mjs run \
             --config test/vitest/vitest.ui-e2e.config.ts \
             --configLoader runner \
+            --maxWorkers "${VITEST_MAX_WORKERS:-2}" \
             --shard "$VITEST_SHARD_INDEX/$VITEST_SHARD_COUNT"
 
       - name: Upload Control UI E2E timeout diagnostics
@@ -5644,12 +5646,13 @@ jobs:
             swift_test_width=$(( logical_cpu < 12 ? logical_cpu : 12 ))
             echo "[macos-swift] Swift Testing parallelization width: $swift_test_width"
             swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")
-            if [[ "$HISTORICAL_TARGET" == "true" ]]; then
-              run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"
-            else
+            # Rendered Quick Chat keeps its former XCTest process isolation from executor-changing tests;
+            # parallel suites take key status and dismiss its panel. Frozen targets without the suite skip the lane.
+            if [[ "$HISTORICAL_TARGET" != "true" || -f apps/macos/Tests/OpenClawIPCTests/QuickChatCatalogPresentationTests.swift ]]; then
               run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests"
-              # Rendered Quick Chat keeps its former XCTest process isolation from executor-changing tests.
               run_apple_command_logged "$native_test_log_dir/default-rendered-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --filter "QuickChatCatalogPresentationTests"
+            else
+              run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"
             fi
             run_apple_command_logged "$native_test_log_dir/named-$native_test_log_id.log" node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter "AppStateIsolationTests|ProfileChatPreferencesTests"
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
@@ -6582,7 +6585,21 @@ jobs:
             --target-context-ref "$TARGET_CONTEXT_REF")"
           printf 'OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=%s\n' "$baseline" >> "$GITHUB_ENV"
 
-      - name: Run changed Docker seed owner lanes
+      # The main update tripwire needs the complete runtime and public SDK types.
+      # Manual/release validation retains the full declaration-complete package.
+      - name: Prepare main Docker smoke package
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main')
+        run: |
+          set -euo pipefail
+          pnpm clean:dist
+          pnpm build:ci-artifacts
+          package_dir="${RUNNER_TEMP}/docker-seed-package"
+          node scripts/package-openclaw-for-docker.mjs --skip-build \
+            --allow-unreleased-changelog --output-dir "$package_dir" \
+            --output-name openclaw-current.tgz
+          printf 'OPENCLAW_CURRENT_PACKAGE_TGZ=%s/openclaw-current.tgz\n' "$package_dir" >> "$GITHUB_ENV"
+
+      - name: Run Docker seed tier
         env:
           OPENCLAW_DOCKER_ALL_LANES: ${{ needs.preflight.outputs.docker_seed_lanes }}
           OPENCLAW_DOCKER_ALL_LIVE_MODE: skip

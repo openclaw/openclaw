@@ -39,7 +39,11 @@ import {
   runTaskRegistryWorkerMutation,
 } from "./task-registry-state.js";
 import type { TaskRegistryStore } from "./task-registry.store.js";
-import type { TaskPersistenceReceipt, TaskRecord } from "./task-registry.types.js";
+import {
+  isTerminalTaskStatus,
+  type TaskPersistenceReceipt,
+  type TaskRecord,
+} from "./task-registry.types.js";
 import { captureTaskRunOwnerBinding } from "./task-run-owner.js";
 
 const log = createSubsystemLogger("tasks/executor");
@@ -67,6 +71,9 @@ export async function createRunningTaskRunCoreWithReceiptAsync(
   const lineage: RunningTaskReceiptLineage = { close() {} };
   try {
     const creation = await createTaskRun({ ...params, status: "running" }, assertCurrent, lineage);
+    if (isTerminalTaskStatus(creation.task.status)) {
+      lineage.close();
+    }
     const receipt = createTaskRunReceipt(creation, lineage);
     let settlement: Promise<boolean> | undefined;
     return {
@@ -231,6 +238,8 @@ async function createTaskRun(
     {
       scope,
       admission: context.admission,
+      // Creation only inserts this ID or rewrites an exact run match, never other session runs.
+      readIdentity: { kind: "creation", taskId: scope.taskId, runId: scope.runId },
       readEventTarget: () =>
         readTaskCreationEventTarget(
           creationOwner?.committed?.facts,

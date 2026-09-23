@@ -204,6 +204,8 @@ async function runAgentsApiSession(
   let remoteSessionId = binding?.sessionId;
   let terminal: ReturnType<typeof agentHarnessAttemptTerminal.normalize> = { kind: "ok" };
   let reply: ReturnType<typeof createAgentsApiMessageProjection>["reply"] | undefined;
+  let projection: ReturnType<typeof createAgentsApiMessageProjection> | undefined;
+  let usageRecorded = false;
   let terminalTurnId: string | undefined;
   const handle = {
     kind: "embedded",
@@ -267,9 +269,10 @@ async function runAgentsApiSession(
       assertCurrent();
       await bind({ sessionId: remoteSessionId, authFingerprint: fingerprint });
     }
-    const projection = createAgentsApiMessageProjection(remoteSessionId, (event) => {
+    projection = createAgentsApiMessageProjection(remoteSessionId, (event) => {
       void emitEvent(event);
     });
+    const messageProjection = projection;
     reply = projection.reply;
     native = createAgentsApiSession({
       client,
@@ -279,8 +282,10 @@ async function runAgentsApiSession(
       signal: controller.signal,
       assertCurrent,
       onSettled: () => deadlines.beginSettlement(Date.now()),
+      onUsageError: (error) =>
+        embeddedAgentLog.warn("Agents API token accounting unavailable", { error }),
       onEvent: (event) => {
-        projection.observe(event);
+        messageProjection.observe(event);
         params.onRunProgress?.({
           reason: event.type,
           provider: "openai",
@@ -299,6 +304,11 @@ async function runAgentsApiSession(
     );
     // A terminal root turn is insufficient: run() also waits for native session idle.
     terminalTurnId = result.turn.id;
+    const turns = await native.readUsageTurns();
+    assertCurrent();
+    projection.recordUsage(params.model, turns);
+    usageRecorded = true;
+    params.hostCapabilities.reportOutputTokens?.(reply.usage?.output ?? 0);
     if (result.cancelled) {
       terminal = { kind: "aborted", source: "runtime" };
     } else {
@@ -321,6 +331,16 @@ async function runAgentsApiSession(
   } finally {
     try {
       await native?.close();
+    } catch (error) {
+      terminal = { kind: "failed", source: "prompt", error };
+    }
+    try {
+      if (native && projection && !usageRecorded) {
+        const turns = await native.readUsageTurns();
+        assertHarnessCurrent();
+        projection.recordUsage(params.model, turns);
+        usageRecorded = true;
+      }
     } catch (error) {
       terminal = { kind: "failed", source: "prompt", error };
     }

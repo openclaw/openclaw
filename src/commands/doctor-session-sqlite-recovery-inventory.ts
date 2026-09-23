@@ -13,9 +13,11 @@ import {
   sameMigrationArtifact,
   statMigrationPath,
   type MigrationArtifact,
-} from "./doctor-session-sqlite-artifact.js";
+} from "../infra/session-sqlite-migration-artifact.js";
+import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
 import {
   canonicalMigrationFilePath,
+  collectRecordedConsumedArchives,
   hasSymbolicLinkInDirectoryPath,
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
@@ -24,9 +26,7 @@ import {
   type ActiveSessionSqliteMigrationRun,
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
-} from "./doctor-session-sqlite-migration-run.js";
-import { collectRecordedConsumedArchives } from "./doctor-session-sqlite-restore.js";
-import { isSessionSqliteMigrationWarning } from "./doctor-session-sqlite-types.js";
+} from "../infra/session-sqlite-migration-manifest.js";
 
 type Outcome =
   | "candidate"

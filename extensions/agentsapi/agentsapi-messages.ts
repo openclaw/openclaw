@@ -1,16 +1,24 @@
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  normalizeUsage,
+  type AgentHarnessAttemptParamsV2,
+  type NormalizedUsage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { calculateCost, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { appendSessionTranscriptMessageByIdentityStrict } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { AgentsApiEvent, AgentsApiItem, AgentsApiTurn } from "./agentsapi-client.js";
 
 type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0];
-type AgentsApiReply = { lastAssistant?: AssistantMessage; usage: AssistantMessage["usage"] };
+type AgentsApiReply = {
+  lastAssistant?: AssistantMessage;
+  usage?: NormalizedUsage;
+  assistantUsage: AssistantMessage["usage"];
+};
 
 export function createAgentsApiMessageProjection(
   remoteSessionId: string,
   emitEvent: (event: AgentEvent) => void | Promise<void>,
 ) {
-  const reply: AgentsApiReply = { usage: emptyUsage() };
+  const reply: AgentsApiReply = { assistantUsage: emptyUsage() };
   const texts = new Map<string, Map<number, string>>();
   const assistantPhases = new Map<string, string | null | undefined>();
   let visibleAssistantItemId: string | undefined;
@@ -34,6 +42,37 @@ export function createAgentsApiMessageProjection(
   };
   return {
     reply,
+    recordUsage(model: AgentHarnessAttemptParamsV2["model"], turns: AgentsApiTurn[]): void {
+      const usage = emptyUsage();
+      let observed = false;
+      let reasoningTokens: number | undefined;
+      // Canonical turn snapshots replace SSE observations, never add to them.
+      for (const turn of new Map(turns.map((record) => [record.id, record])).values()) {
+        if (!turn.usage) {
+          continue;
+        }
+        const normalized = normalizeUsage(turn.usage);
+        if (!normalized) {
+          continue;
+        }
+        observed = true;
+        usage.input += normalized.input ?? 0;
+        usage.output += normalized.output ?? 0;
+        usage.cacheRead += normalized.cacheRead ?? 0;
+        usage.totalTokens += normalized.total ?? turn.usage.input_tokens + turn.usage.output_tokens;
+        if (normalized.reasoningTokens !== undefined) {
+          reasoningTokens = (reasoningTokens ?? 0) + normalized.reasoningTokens;
+        }
+      }
+      if (observed) {
+        calculateCost(model, usage);
+        reply.usage = {
+          ...normalizeUsage(usage),
+          ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+        };
+      }
+      reply.assistantUsage = usage;
+    },
     observe(event: AgentsApiEvent): void {
       if (event.item?.type === "message" && event.item.role === "assistant") {
         assistantPhases.set(event.item.id, event.item.phase);
@@ -141,21 +180,7 @@ async function commitAgentsApiReply(
           .join("") ?? "",
     )
     .join("\n");
-  let usage = emptyUsage();
-  if (turn.usage) {
-    usage = {
-      ...usage,
-      input: turn.usage.input_tokens - (turn.usage.input_tokens_details?.cached_tokens ?? 0),
-      output: turn.usage.output_tokens,
-      cacheRead: turn.usage.input_tokens_details?.cached_tokens ?? 0,
-      totalTokens: turn.usage.input_tokens + turn.usage.output_tokens,
-    };
-  }
-  reply.usage = usage;
-  if (turn.usage) {
-    params.hostCapabilities.reportOutputTokens?.(usage.output);
-    calculateCost(params.model, usage);
-  }
+  const usage = reply.assistantUsage;
   if (text) {
     const assistant: AssistantMessage & { idempotencyKey: string } = {
       role: "assistant",
@@ -203,6 +228,8 @@ function emptyUsage(): AssistantMessage["usage"] {
     cacheRead: 0,
     cacheWrite: 0,
     totalTokens: 0,
+    // Turn billing sums hosted model calls; it is not a latest-call context snapshot.
+    contextUsage: { state: "unavailable" },
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
 }

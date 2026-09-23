@@ -174,6 +174,53 @@ it("retains selection and sentinel options while the worker read is queued", asy
   });
 });
 
+it("keeps stored addresses and foreign lineage stable after main-alias changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const parents = ["agent:main:main", "agent:main:home", "agent:main:global"];
+    for (const [index, parent] of [...parents, "global"].entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: parent },
+        { sessionId: `parent-${index}`, updatedAt: 1 },
+      );
+      if (index < parents.length) {
+        replaceSessionEntrySync(
+          { agentId: "work", sessionKey: `agent:work:child-${index}` },
+          {
+            sessionId: `child-${index}`,
+            updatedAt: 2,
+            parentSessionKey: parent,
+            spawnedBy: parent,
+          },
+        );
+      }
+    }
+    for (const scope of ["per-sender", "global"] as const) {
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: { default: true }, work: {} } },
+        session: { mainKey: "home", scope },
+      };
+      for (const options of [{}, { agentId: "work" }]) {
+        const expected = loadCombinedSessionStoreForGatewayCore(cfg, options);
+        const result = await loadCombinedSessionStoreForGatewayCoreAsync(cfg, options);
+        expect(result.store).toEqual(expected.store);
+        for (const [index, parent] of parents.entries()) {
+          const key = `agent:work:child-${index}`;
+          expect(result.store[key]).toMatchObject({
+            parentSessionKey: parent,
+            spawnedBy: parent,
+          });
+          expect(result.targetsBySessionKey.get(key)?.readSourceEntry(parent)).toMatchObject({
+            sessionId: `parent-${index}`,
+          });
+          if (!options.agentId) {
+            expect(result.store[parent]?.sessionId).toBe(`parent-${index}`);
+          }
+        }
+      }
+    }
+  });
+});
+
 it("transfers a Windows-normalized environment through the real worker transport", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };

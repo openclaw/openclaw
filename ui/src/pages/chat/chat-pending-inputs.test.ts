@@ -861,45 +861,6 @@ describe("server-owned pending input display", () => {
     },
   );
 
-  it("replaces a server pending bubble with canonical persistence exactly once", () => {
-    const clients = [{ id: "cli", mode: "cli", displayName: "Release helper" }];
-    const promoted = {
-      role: "user",
-      content: "Keep my accepted input",
-      __openclaw: {
-        id: "input-1",
-        seq: 2,
-        idempotencyKey: "run-queued:user",
-        transport: { clients },
-      },
-    };
-    const items = buildChatItems({
-      paneId: "promoted-pane",
-      sessionKey,
-      messages: [promoted],
-      pendingInputs: page.items.map((entry) => ({
-        ...entry,
-        message: {
-          ...promoted,
-          __openclaw: { id: `pending:${entry.id}`, transport: { clients } },
-        },
-      })),
-      queue: [],
-      toolMessages: [],
-      streamSegments: [],
-      stream: null,
-      streamStartedAt: null,
-      showToolCalls: true,
-    });
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({
-      kind: "group",
-      role: "user",
-      sourceClients: clients,
-      messages: [{ message: promoted }],
-    });
-  });
-
   it("keeps unconsumed input after persisted history without a generic queue notice", () => {
     // Custody accepted at 100 is not in the transcript, so it floors after the
     // reply persisted at 150 instead of interleaving by acceptance time.

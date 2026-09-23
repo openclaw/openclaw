@@ -2492,14 +2492,12 @@ AFTER_CD
     expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
   });
 
-  it("runs changed Docker seed owners in one gated scheduler job", () => {
+  it("runs the Docker seed tier with the published updater and a checked main smoke package", () => {
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
     const jobs = readCiWorkflow().jobs;
     const job = jobs["docker-seed-e2e"];
     expect(source).toContain("docker-seed-e2e-contract-v1");
-    expect(source).toContain(
-      'typeof changedNodeTestPlan.resolveChangedDockerSeedLanes === "function"',
-    );
+    expect(source).toContain('typeof dockerSeedPlan.resolveDockerSeedLanes === "function"');
     expect(jobs.preflight.outputs).toMatchObject({
       docker_seed_lanes: "${{ steps.manifest.outputs.docker_seed_lanes }}",
       run_docker_seed_e2e: "${{ steps.manifest.outputs.run_docker_seed_e2e }}",
@@ -2516,7 +2514,7 @@ AFTER_CD
       "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
     });
     const run = job.steps.find(
-      (step: WorkflowStep) => step.name === "Run changed Docker seed owner lanes",
+      (step: WorkflowStep) => step.name === "Run Docker seed tier",
     ) as WorkflowStep;
     const parallelism = run.env?.OPENCLAW_DOCKER_ALL_PARALLELISM;
     expect(run).toMatchObject({
@@ -2532,6 +2530,17 @@ AFTER_CD
     });
     expect(parallelism).toContain("&& 3 || 1");
     expect(run.env).not.toHaveProperty("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC");
+    const prepare = job.steps.find(
+      (step: WorkflowStep) => step.name === "Prepare main Docker smoke package",
+    ) as WorkflowStep;
+    expect(prepare.if).toBe(
+      "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main')",
+    );
+    expect(prepare.run).toContain("pnpm build:ci-artifacts");
+    expect(prepare.run).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
+    expect(prepare.run).not.toContain("--skip-check");
+    expect(prepare.run).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ=");
+    expect(job.steps.indexOf(prepare)).toBeLessThan(job.steps.indexOf(run));
     const baseline = job.steps.find(
       (step: WorkflowStep) => step.name === "Resolve published Docker seed upgrade baseline",
     ) as WorkflowStep;
@@ -2589,7 +2598,7 @@ AFTER_CD
       (step: WorkflowStep) => step.name === "Resolve published Docker seed upgrade baseline",
     ) as WorkflowStep | undefined;
     const run = job.steps.find(
-      (step: WorkflowStep) => step.name === "Run changed Docker seed owner lanes",
+      (step: WorkflowStep) => step.name === "Run Docker seed tier",
     ) as WorkflowStep;
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-upgrade-baseline-"));
     try {

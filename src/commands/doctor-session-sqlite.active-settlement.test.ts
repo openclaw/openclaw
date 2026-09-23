@@ -7,11 +7,7 @@ import { importSqliteSessionRowsBatch } from "../config/sessions/session-accesso
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
-import { readMigrationArtifactIdentity } from "./doctor-session-sqlite-artifact.js";
+import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
 import {
   createSessionSqliteMigrationRun,
   listSessionSqliteMigrationManifestPaths,
@@ -21,11 +17,15 @@ import {
   updateMigrationManifestTarget,
   writeSessionSqliteMigrationManifest,
   type SessionSqliteMigrationMove,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
 import {
   createTranscriptEventReader,
   resolveTargetSqlitePath,
-} from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-readers.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   runDoctorSessionSqlite,
   settleRetainedDoctorSessionSources,
