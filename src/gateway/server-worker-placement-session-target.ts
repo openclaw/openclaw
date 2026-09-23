@@ -1,9 +1,17 @@
 import type { managedWorktrees } from "../agents/worktrees/service.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
+import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { isOpenClawAgentDatabasePathCurrent } from "../state/openclaw-agent-db-identity.js";
+import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import type * as sessionUtils from "./session-utils.js";
+import type { WithPreparedWorkerWorkspaceRecovery } from "./worker-environments/placement-reclaim-contract.js";
 import type {
   WorkerPlacementExecutionMode,
   WorkerSessionPlacementIdentity,
@@ -11,9 +19,107 @@ import type {
 import type * as placementSessionRuntime from "./worker-environments/placement-session-runtime.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
+import { createWorkerWorkspaceConflictTranscriptHandlers } from "./worker-workspace-conflict-transcript.js";
 
 export class WorkerDispatchTargetChangedError extends Error {
   readonly code = "invalid_state";
+}
+
+export function createWorkerWorkspaceRecoveryPreparer(options: {
+  loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>;
+  getConfig: () => OpenClawConfig;
+}): WithPreparedWorkerWorkspaceRecovery {
+  return async (identity, assertOwnerCurrent, run) => {
+    assertOwnerCurrent();
+    const sessionRuntime = await options.loadSessionRuntime();
+    assertOwnerCurrent();
+    const { target, entry, workspace } = resolveWorkerPlacementSessionTarget({
+      sessionRuntime,
+      config: options.getConfig(),
+      ...identity,
+      errorMessage: `Session ${identity.sessionKey} changed before workspace recovery`,
+    });
+    if (
+      target.agentId !== identity.agentId ||
+      target.canonicalKey !== identity.sessionKey ||
+      !target.readSource
+    ) {
+      throw new WorkerDispatchTargetChangedError(
+        "Workspace recovery lost its exact session target",
+      );
+    }
+    const binding = {
+      ...captureSessionTranscriptTargetBinding({ ...identity, storePath: target.readSource.path }),
+      defaultAgentId: target.readSource.agentId,
+    };
+    const preparedEntry = loadSessionEntryReadOnly({ ...binding, readConsistency: "latest" });
+    if (
+      preparedEntry?.sessionId !== identity.sessionId ||
+      preparedEntry.lifecycleRevision !== entry.lifecycleRevision
+    ) {
+      throw new WorkerDispatchTargetChangedError("Workspace recovery session generation changed");
+    }
+    const retained = retainOpenClawAgentDatabaseReadOnly(target.readSource);
+    if (!retained.found) {
+      throw new WorkerDispatchTargetChangedError("Workspace recovery session store is unavailable");
+    }
+    const transcriptTarget = {
+      ...binding,
+      expectedLifecycleRevision: preparedEntry.lifecycleRevision,
+      expectedWriterRunId: preparedEntry.activeWriterRunId,
+    };
+    let released = false;
+    const completion = createDeferredCore();
+    const controller = new AbortController();
+    let unregister = () => {};
+    const release = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      unregister();
+      retained.claim.release();
+    };
+    const assertCurrent = () => {
+      controller.signal.throwIfAborted();
+      assertOwnerCurrent();
+      if (
+        released ||
+        !retained.claim.isCurrent() ||
+        !isOpenClawAgentDatabasePathCurrent(retained.database)
+      ) {
+        throw new WorkerDispatchTargetChangedError("Workspace recovery session source changed");
+      }
+      const current = loadSessionEntryReadOnly({ ...transcriptTarget, readConsistency: "latest" });
+      if (
+        current?.sessionId !== identity.sessionId ||
+        current.lifecycleRevision !== transcriptTarget.expectedLifecycleRevision ||
+        current.activeWriterRunId !== transcriptTarget.expectedWriterRunId
+      ) {
+        throw new WorkerDispatchTargetChangedError("Workspace recovery session generation changed");
+      }
+    };
+    try {
+      unregister = registerOpenClawAgentDatabaseAsyncResource({
+        agentId: retained.database.agentId,
+        path: retained.database.path,
+        revoke: () =>
+          controller.abort(new WorkerDispatchTargetChangedError("Workspace recovery was revoked")),
+        close: () => completion.promise,
+      });
+      // A new recovery owns the current target; callbacks cannot select a later route.
+      return await withSessionTranscriptWriteAssertion(transcriptTarget, assertCurrent, () =>
+        run({
+          workspace,
+          assertCurrent,
+          ...createWorkerWorkspaceConflictTranscriptHandlers(transcriptTarget, assertCurrent),
+        }),
+      );
+    } finally {
+      release();
+      completion.resolve();
+    }
+  };
 }
 
 type WorkerPlacementSessionRuntime = {
