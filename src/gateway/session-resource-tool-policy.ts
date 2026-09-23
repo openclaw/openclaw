@@ -30,7 +30,7 @@ export function resolveSessionResourceToolPolicy(params: {
   config: OpenClawConfig;
   client: GatewayClient | null;
   current: NonNullable<ReturnType<SessionRowProjection["sharingTarget"]>>;
-  readSessionEntry: (query: {
+  readPreparedSessionEntry: (query: {
     key: string;
     agentId: string;
     storePath?: string;
@@ -51,7 +51,7 @@ export function resolveSessionResourceToolPolicy(params: {
     if (!parsed) {
       return undefined;
     }
-    const related = params.readSessionEntry({
+    const related = params.readPreparedSessionEntry({
       key,
       agentId: parsed.agentId,
       ...(parsed.agentId === current.agentId ? { storePath: current.storePath } : {}),

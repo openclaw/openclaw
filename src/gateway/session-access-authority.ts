@@ -218,7 +218,7 @@ export async function prepareGatewaySessionAccessAuthority(params: {
             config: params.context.getRuntimeConfig(),
             client: policyClient,
             current,
-            readSessionEntry: (sourceQuery) => projection.sharingTarget(sourceQuery)?.entry,
+            readPreparedSessionEntry: (sourceQuery) => projection.sharingTarget(sourceQuery)?.entry,
             toolName: params.policy.requiredTool,
           })
         : undefined;

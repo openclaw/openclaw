@@ -56,7 +56,7 @@ function fixture(
           storeKeys: [key],
           storePath: "/test/main/sessions",
         },
-        readSessionEntry: (query) => entries.get(query.key),
+        readPreparedSessionEntry: (query) => entries.get(query.key),
         toolName,
       }),
   };
