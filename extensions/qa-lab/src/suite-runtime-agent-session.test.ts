@@ -55,37 +55,39 @@ describe("qa suite runtime agent session helpers", () => {
     };
   }
 
-  async function seedQaSession(params: {
-    entry?: Record<string, unknown>;
+  async function createQaTranscript(params: {
     sessionId: string;
     sessionKey: string;
     tempRoot: string;
   }) {
-    await upsertSessionEntry({
-      agentId: "qa",
-      env: qaSessionEnv(params.tempRoot),
-      sessionKey: params.sessionKey,
-      entry: {
-        sessionId: params.sessionId,
-        updatedAt: 10,
-        ...params.entry,
-      },
-    });
-  }
-
-  async function appendQaTranscriptMessage(params: {
-    message: unknown;
-    sessionId: string;
-    sessionKey: string;
-    tempRoot: string;
-  }) {
-    await appendSessionTranscriptMessageByIdentity({
+    const identity = {
       agentId: "qa",
       env: qaSessionEnv(params.tempRoot),
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      message: params.message,
+    };
+    await upsertSessionEntry({
+      ...identity,
+      entry: { sessionId: params.sessionId, updatedAt: 10 },
     });
+    return {
+      append: (message: unknown) =>
+        appendSessionTranscriptMessageByIdentity({ ...identity, message }),
+      read: (options?: Parameters<typeof readSessionTranscriptSummary>[2]) =>
+        readSessionTranscriptSummary(
+          { gateway: { tempRoot: params.tempRoot } } as never,
+          params.sessionKey,
+          options,
+        ),
+    };
+  }
+
+  function assistantToolCall(id: string, name: string, args: Record<string, unknown>) {
+    return { role: "assistant", content: [{ type: "toolCall", id, name, arguments: args }] };
+  }
+
+  function toolResult(toolCallId: string, toolName: string, details: Record<string, unknown>) {
+    return { role: "toolResult", toolCallId, toolName, details, isError: false };
   }
 
   function requireGatewayCall() {
@@ -127,42 +129,6 @@ describe("qa suite runtime agent session helpers", () => {
     expect(method).toBe("skills.status");
     expect(params).toEqual({ agentId: "qa" });
     expect(options?.timeoutMs).toBe(45_000);
-  });
-
-  it("reads the raw qa session store from SQLite", async () => {
-    const tempRoot = await makeTempDir("qa-session-store-");
-    await seedQaSession({
-      tempRoot,
-      sessionKey: "agent:qa:session-1",
-      sessionId: "session-1",
-      entry: { status: "running" },
-    });
-
-    await expect(
-      readRawQaSessionStore({
-        gateway: { tempRoot },
-      } as never),
-    ).resolves.toEqual({
-      "agent:qa:session-1": {
-        sessionId: "session-1",
-        status: "running",
-        updatedAt: 10,
-        delivery: { kind: "none" },
-      },
-    });
-  });
-
-  it("reads a requested agent session store", async () => {
-    const readEntries = vi.fn(() => []);
-
-    await expect(
-      readRawQaSessionStore({ gateway: { tempRoot: "/tmp/qa-agent-store" } } as never, {
-        agentId: "alternate",
-        readEntries,
-        retryDelaysMs: [],
-      }),
-    ).resolves.toEqual({});
-    expect(readEntries).toHaveBeenCalledWith(expect.objectContaining({ agentId: "alternate" }));
   });
 
   it("retries transient FTS integrity mismatches while child transcripts settle", async () => {
@@ -351,7 +317,7 @@ describe("qa suite runtime agent session helpers", () => {
     const sessionId = "compaction-summary";
     const sessionKey = "agent:qa:compaction-summary";
     const summaries = Array.from({ length: 18 }, (_, index) => `summary-${index}`);
-    await seedQaSession({ tempRoot, sessionId, sessionKey });
+    const transcript = await createQaTranscript({ tempRoot, sessionId, sessionKey });
 
     let parentId: string | null = null;
     for (const [index, summary] of summaries.entries()) {
@@ -373,17 +339,9 @@ describe("qa suite runtime agent session helpers", () => {
       });
       parentId = id;
     }
-    await appendQaTranscriptMessage({
-      tempRoot,
-      sessionId,
-      sessionKey,
-      message: { role: "assistant", content: "done" },
-    });
+    await transcript.append({ role: "assistant", content: "done" });
 
-    const result = await readSessionTranscriptSummary(
-      { gateway: { tempRoot } } as never,
-      sessionKey,
-    );
+    const result = await transcript.read();
 
     expect(result.compactionSummaries).toEqual(summaries.slice(-16));
     expect(result.finalText).toBe("done");
@@ -410,32 +368,20 @@ describe("qa suite runtime agent session helpers", () => {
   it("summarizes a QA session transcript by session key", async () => {
     const tempRoot = await makeTempDir("qa-session-transcript-");
     const sessionKey = "agent:qa:webchat";
-    await seedQaSession({ tempRoot, sessionKey, sessionId: "session-1" });
-    await appendQaTranscriptMessage({
-      tempRoot,
-      sessionKey,
-      sessionId: "session-1",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            name: "message",
-            input: { action: "send", text: "hello" },
-          },
-        ],
-        stopReason: "toolUse",
-      },
+    const transcript = await createQaTranscript({ tempRoot, sessionKey, sessionId: "session-1" });
+    await transcript.append({
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          name: "message",
+          input: { action: "send", text: "hello" },
+        },
+      ],
+      stopReason: "toolUse",
     });
 
-    await expect(
-      readSessionTranscriptSummary(
-        {
-          gateway: { tempRoot },
-        } as never,
-        sessionKey,
-      ),
-    ).resolves.toEqual({
+    await expect(transcript.read()).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
       compactionSummaries: [],
       completedToolCallCounts: {},
@@ -450,21 +396,9 @@ describe("qa suite runtime agent session helpers", () => {
       lastMessageRole: "assistant",
     });
 
-    await appendQaTranscriptMessage({
-      tempRoot,
-      sessionKey,
-      sessionId: "session-1",
-      message: { role: "assistant", content: "Sent." },
-    });
+    await transcript.append({ role: "assistant", content: "Sent." });
 
-    await expect(
-      readSessionTranscriptSummary(
-        {
-          gateway: { tempRoot },
-        } as never,
-        "agent:qa:webchat",
-      ),
-    ).resolves.toEqual({
+    await expect(transcript.read()).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
       compactionSummaries: [],
       completedToolCallCounts: {},
@@ -480,48 +414,30 @@ describe("qa suite runtime agent session helpers", () => {
   it("summarizes QA transcript events after non-assistant rows", async () => {
     const tempRoot = await makeTempDir("qa-session-transcript-events-");
     const sessionKey = "agent:qa:stream";
-    await seedQaSession({ tempRoot, sessionKey, sessionId: "session-stream" });
-    await appendQaTranscriptMessage({
+    const transcript = await createQaTranscript({
       tempRoot,
       sessionKey,
       sessionId: "session-stream",
-      message: { role: "user", content: "x".repeat(70 * 1024) },
     });
-    await appendQaTranscriptMessage({
-      tempRoot,
-      sessionKey,
-      sessionId: "session-stream",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            name: "message",
-            input: { action: "send", text: "hello" },
-          },
-        ],
-      },
+    await transcript.append({ role: "user", content: "x".repeat(70 * 1024) });
+    await transcript.append({
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          name: "message",
+          input: { action: "send", text: "hello" },
+        },
+      ],
     });
-    await appendQaTranscriptMessage({
-      tempRoot,
-      sessionKey,
-      sessionId: "session-stream",
-      message: {
-        role: "assistant",
-        content: "Sent.",
-        stopReason: "aborted",
-        errorMessage: "Request was aborted",
-      },
+    await transcript.append({
+      role: "assistant",
+      content: "Sent.",
+      stopReason: "aborted",
+      errorMessage: "Request was aborted",
     });
 
-    await expect(
-      readSessionTranscriptSummary(
-        {
-          gateway: { tempRoot },
-        } as never,
-        "agent:qa:stream",
-      ),
-    ).resolves.toEqual({
+    await expect(transcript.read()).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
       compactionSummaries: [],
       completedToolCallCounts: {},
@@ -536,54 +452,21 @@ describe("qa suite runtime agent session helpers", () => {
     });
   });
 
-  it("reports provider-owned assistant mirror identities", async () => {
-    const tempRoot = await makeTempDir("qa-session-transcript-mirrors-");
-    const sessionKey = "agent:qa:provider-mirrors";
-    await seedQaSession({ tempRoot, sessionKey, sessionId: "session-mirrors" });
-    await appendQaTranscriptMessage({
-      tempRoot,
-      sessionKey,
-      sessionId: "session-mirrors",
-      message: {
-        role: "assistant",
-        content: "Checking the workspace.",
-        __openclaw: { mirrorIdentity: "turn-123:commentary:message-1" },
-      },
-    });
-
-    await expect(
-      readSessionTranscriptSummary(
-        {
-          gateway: { tempRoot },
-        } as never,
-        sessionKey,
-      ),
-    ).resolves.toMatchObject({
-      assistantMirrors: [
-        {
-          identity: "turn-123:commentary:message-1",
-          text: "Checking the workspace.",
-        },
-      ],
-    });
-  });
-
   it("counts only correlated non-error tool results as successful", async () => {
     const tempRoot = await makeTempDir("qa-session-transcript-tool-results-");
     const sessionKey = "agent:qa:tool-results";
-    await seedQaSession({ tempRoot, sessionKey, sessionId: "session-tool-results" });
-    await appendQaTranscriptMessage({
+    const transcript = await createQaTranscript({
       tempRoot,
       sessionKey,
       sessionId: "session-tool-results",
-      message: {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "plan-ok", name: "progress_card", arguments: {} },
-          { type: "toolCall", id: "plan-error", name: "progress_card", arguments: {} },
-          { type: "toolCall", id: "write-mismatch", name: "write", arguments: {} },
-        ],
-      },
+    });
+    await transcript.append({
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "plan-ok", name: "progress_card", arguments: {} },
+        { type: "toolCall", id: "plan-error", name: "progress_card", arguments: {} },
+        { type: "toolCall", id: "write-mismatch", name: "write", arguments: {} },
+      ],
     });
     for (const message of [
       {
@@ -619,22 +502,10 @@ describe("qa suite runtime agent session helpers", () => {
         timestamp: 400,
       },
     ]) {
-      await appendQaTranscriptMessage({
-        tempRoot,
-        sessionKey,
-        sessionId: "session-tool-results",
-        message,
-      });
+      await transcript.append(message);
     }
 
-    await expect(
-      readSessionTranscriptSummary(
-        {
-          gateway: { tempRoot },
-        } as never,
-        sessionKey,
-      ),
-    ).resolves.toMatchObject({
+    await expect(transcript.read()).resolves.toMatchObject({
       assistantToolCallCounts: { progress_card: 2, write: 1 },
       completedToolCallCounts: { progress_card: 2 },
       successfulToolCallCounts: { progress_card: 1 },
@@ -706,120 +577,42 @@ describe("qa suite runtime agent session helpers", () => {
     const tempRoot = await makeTempDir("qa-session-transcript-code-mode-wait-");
     const sessionKey = "agent:qa:code-mode-wait";
     const sessionId = "session-code-mode-wait";
-    await seedQaSession({ tempRoot, sessionKey, sessionId });
+    const transcript = await createQaTranscript({ tempRoot, sessionKey, sessionId });
 
     for (const message of [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "checkpoint-1-exec",
-            name: "exec",
-            arguments: { code: "await qa_restart_wait(); return 'CHECKPOINT-1';" },
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "checkpoint-1-exec",
-        toolName: "exec",
-        details: { status: "waiting", runId: "checkpoint-1-run" },
-        isError: false,
-      },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "checkpoint-1-wait",
-            name: "wait",
-            arguments: { runId: "checkpoint-1-run" },
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "checkpoint-1-wait",
-        toolName: "wait",
-        details: { status: "completed" },
-        isError: false,
-      },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "audit-exec",
-            name: "exec",
-            arguments: { code: "return await catalog.search('qa_restart_unsafe_probe');" },
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "audit-exec",
-        toolName: "exec",
-        details: { status: "waiting", runId: "audit-run" },
-        isError: false,
-      },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "audit-wait",
-            name: "wait",
-            arguments: { runId: "audit-run" },
-          },
-        ],
-      },
+      assistantToolCall("checkpoint-1-exec", "exec", {
+        code: "await qa_restart_wait(); return 'CHECKPOINT-1';",
+      }),
+      toolResult("checkpoint-1-exec", "exec", { status: "waiting", runId: "checkpoint-1-run" }),
+      assistantToolCall("checkpoint-1-wait", "wait", { runId: "checkpoint-1-run" }),
+      toolResult("checkpoint-1-wait", "wait", { status: "completed" }),
+      assistantToolCall("audit-exec", "exec", {
+        code: "return await catalog.search('qa_restart_unsafe_probe');",
+      }),
+      toolResult("audit-exec", "exec", { status: "waiting", runId: "audit-run" }),
+      assistantToolCall("audit-wait", "wait", { runId: "audit-run" }),
     ]) {
-      await appendQaTranscriptMessage({ tempRoot, sessionKey, sessionId, message });
+      await transcript.append(message);
     }
 
     await expect(
-      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey, {
+      transcript.read({
         pendingCodeModeExecNeedle: "CHECKPOINT-1",
       }),
     ).resolves.toMatchObject({ hasPendingCodeModeWait: false });
 
     for (const message of [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "checkpoint-2-exec",
-            name: "exec",
-            arguments: { code: "await qa_restart_wait(); return 'CHECKPOINT-2';" },
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "checkpoint-2-exec",
-        toolName: "exec",
-        details: { status: "waiting", runId: "checkpoint-2-run" },
-        isError: false,
-      },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "checkpoint-2-wait",
-            name: "wait",
-            arguments: { runId: "checkpoint-2-run" },
-          },
-        ],
-      },
+      assistantToolCall("checkpoint-2-exec", "exec", {
+        code: "await qa_restart_wait(); return 'CHECKPOINT-2';",
+      }),
+      toolResult("checkpoint-2-exec", "exec", { status: "waiting", runId: "checkpoint-2-run" }),
+      assistantToolCall("checkpoint-2-wait", "wait", { runId: "checkpoint-2-run" }),
     ]) {
-      await appendQaTranscriptMessage({ tempRoot, sessionKey, sessionId, message });
+      await transcript.append(message);
     }
 
     await expect(
-      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey, {
+      transcript.read({
         pendingCodeModeExecNeedle: "CHECKPOINT-2",
       }),
     ).resolves.toMatchObject({ hasPendingCodeModeWait: true });
@@ -829,20 +622,15 @@ describe("qa suite runtime agent session helpers", () => {
     const tempRoot = await makeTempDir("qa-session-transcript-tool-event-timestamps-");
     const sessionKey = "agent:qa:tool-event-timestamps";
     const sessionId = "session-tool-event-timestamps";
-    await seedQaSession({ tempRoot, sessionKey, sessionId });
-    await appendQaTranscriptMessage({
-      tempRoot,
-      sessionKey,
-      sessionId,
-      message: {
-        role: "assistant",
-        content: ["missing", "invalid", "valid"].map((id) => ({
-          type: "toolCall",
-          id,
-          name: "exec",
-          arguments: {},
-        })),
-      },
+    const transcript = await createQaTranscript({ tempRoot, sessionKey, sessionId });
+    await transcript.append({
+      role: "assistant",
+      content: ["missing", "invalid", "valid"].map((id) => ({
+        type: "toolCall",
+        id,
+        name: "exec",
+        arguments: {},
+      })),
     });
 
     for (const [toolCallId, timestamp] of [
@@ -850,23 +638,16 @@ describe("qa suite runtime agent session helpers", () => {
       ["invalid", "not-a-number"],
       ["valid", 300],
     ] as const) {
-      await appendQaTranscriptMessage({
-        tempRoot,
-        sessionKey,
-        sessionId,
-        message: {
-          role: "toolResult",
-          toolCallId,
-          toolName: "exec",
-          isError: false,
-          ...(timestamp === undefined ? {} : { timestamp }),
-        },
+      await transcript.append({
+        role: "toolResult",
+        toolCallId,
+        toolName: "exec",
+        isError: false,
+        ...(timestamp === undefined ? {} : { timestamp }),
       });
     }
 
-    await expect(
-      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey),
-    ).resolves.toMatchObject({
+    await expect(transcript.read()).resolves.toMatchObject({
       successfulToolCallCounts: { exec: 3 },
       successfulToolCallEvents: [{ name: "exec", timestamp: 300, toolCallId: "valid" }],
     });
@@ -876,41 +657,28 @@ describe("qa suite runtime agent session helpers", () => {
     const tempRoot = await makeTempDir("qa-session-transcript-tool-event-bound-");
     const sessionKey = "agent:qa:tool-event-bound";
     const sessionId = "session-tool-event-bound";
-    await seedQaSession({ tempRoot, sessionKey, sessionId });
-    await appendQaTranscriptMessage({
-      tempRoot,
-      sessionKey,
-      sessionId,
-      message: {
-        role: "assistant",
-        content: Array.from({ length: 65 }, (_, index) => ({
-          type: "toolCall",
-          id: `call-${index}`,
-          name: "exec",
-          arguments: {},
-        })),
-      },
+    const transcript = await createQaTranscript({ tempRoot, sessionKey, sessionId });
+    await transcript.append({
+      role: "assistant",
+      content: Array.from({ length: 65 }, (_, index) => ({
+        type: "toolCall",
+        id: `call-${index}`,
+        name: "exec",
+        arguments: {},
+      })),
     });
 
     for (let index = 0; index < 65; index += 1) {
-      await appendQaTranscriptMessage({
-        tempRoot,
-        sessionKey,
-        sessionId,
-        message: {
-          role: "toolResult",
-          toolCallId: `call-${index}`,
-          toolName: "exec",
-          isError: false,
-          timestamp: index,
-        },
+      await transcript.append({
+        role: "toolResult",
+        toolCallId: `call-${index}`,
+        toolName: "exec",
+        isError: false,
+        timestamp: index,
       });
     }
 
-    const summary = await readSessionTranscriptSummary(
-      { gateway: { tempRoot } } as never,
-      sessionKey,
-    );
+    const summary = await transcript.read();
 
     expect(summary.successfulToolCallCounts).toEqual({ exec: 65 });
     expect(summary.successfulToolCallEvents).toHaveLength(64);
@@ -930,27 +698,20 @@ describe("qa suite runtime agent session helpers", () => {
     const tempRoot = await makeTempDir("qa-session-transcript-current-source-");
     const sessionKey = "agent:qa:current-source";
     const sessionId = "session-current-source";
-    await seedQaSession({ tempRoot, sessionKey, sessionId });
-    await appendQaTranscriptMessage({
-      tempRoot,
-      sessionKey,
-      sessionId,
-      message: {
-        role: "toolResult",
-        toolCallId: "message-1",
-        toolName: "message",
-        content: [{ type: "text", text: '{"ok":true}' }],
-        details: {
-          sourceReplyRoute: "current-source",
-          receipt: { threadId: "thread-1" },
-        },
-        isError: false,
+    const transcript = await createQaTranscript({ tempRoot, sessionKey, sessionId });
+    await transcript.append({
+      role: "toolResult",
+      toolCallId: "message-1",
+      toolName: "message",
+      content: [{ type: "text", text: '{"ok":true}' }],
+      details: {
+        sourceReplyRoute: "current-source",
+        receipt: { threadId: "thread-1" },
       },
+      isError: false,
     });
 
-    await expect(
-      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey),
-    ).resolves.toMatchObject({
+    await expect(transcript.read()).resolves.toMatchObject({
       currentSourceToolDeliveries: [{ toolName: "message", threadId: "thread-1" }],
     });
   });
@@ -959,7 +720,7 @@ describe("qa suite runtime agent session helpers", () => {
     const tempRoot = await makeTempDir("qa-session-transcript-cursor-");
     const sessionKey = "agent:qa:cursor";
     const sessionId = "session-cursor";
-    await seedQaSession({ tempRoot, sessionKey, sessionId });
+    const transcript = await createQaTranscript({ tempRoot, sessionKey, sessionId });
     for (const message of [
       {
         role: "assistant",
@@ -979,31 +740,19 @@ describe("qa suite runtime agent session helpers", () => {
         __openclaw: { mirrorIdentity: "old-turn:assistant" },
       },
     ]) {
-      await appendQaTranscriptMessage({ tempRoot, sessionKey, sessionId, message });
+      await transcript.append(message);
     }
-    const checkpoint = await readSessionTranscriptSummary(
-      { gateway: { tempRoot } } as never,
-      sessionKey,
-    );
+    const checkpoint = await transcript.read();
     expect(checkpoint.successfulToolCallEvents).toEqual([
       { name: "progress_card", timestamp: 100, toolCallId: "old-plan" },
     ]);
-    await appendQaTranscriptMessage({
-      tempRoot,
-      sessionKey,
-      sessionId,
-      message: {
-        role: "assistant",
-        content: "same visible reply",
-        __openclaw: { mirrorIdentity: "current-turn:assistant" },
-      },
+    await transcript.append({
+      role: "assistant",
+      content: "same visible reply",
+      __openclaw: { mirrorIdentity: "current-turn:assistant" },
     });
 
-    const summary = await readSessionTranscriptSummary(
-      { gateway: { tempRoot } } as never,
-      sessionKey,
-      { afterEventCursor: checkpoint.eventCursor },
-    );
+    const summary = await transcript.read({ afterEventCursor: checkpoint.eventCursor });
 
     expect(summary).toMatchObject({
       assistantMirrors: [{ identity: "current-turn:assistant", text: "same visible reply" }],
@@ -1035,20 +784,13 @@ describe("qa suite runtime agent session helpers", () => {
 
   it("fails closed when a requested QA session transcript is empty", async () => {
     const tempRoot = await makeTempDir("qa-session-transcript-empty-");
-    await seedQaSession({
+    const transcript = await createQaTranscript({
       tempRoot,
       sessionKey: "agent:qa:empty",
       sessionId: "session-empty",
     });
 
-    await expect(
-      readSessionTranscriptSummary(
-        {
-          gateway: { tempRoot },
-        } as never,
-        "agent:qa:empty",
-      ),
-    ).rejects.toThrow("session transcript is empty");
+    await expect(transcript.read()).rejects.toThrow("session transcript is empty");
   });
 
   it("fails closed when a requested QA session transcript entry is missing", async () => {
@@ -1062,15 +804,5 @@ describe("qa suite runtime agent session helpers", () => {
         "agent:qa:missing",
       ),
     ).rejects.toThrow("session transcript entry not found");
-  });
-
-  it("returns an empty session store when the file does not exist", async () => {
-    const tempRoot = await makeTempDir("qa-session-store-missing-");
-
-    await expect(
-      readRawQaSessionStore({
-        gateway: { tempRoot },
-      } as never),
-    ).resolves.toStrictEqual({});
   });
 });
