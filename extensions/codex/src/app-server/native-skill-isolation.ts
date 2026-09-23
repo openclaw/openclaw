@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveRequiredHomeDir, resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { CodexAppServerClient } from "./client.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
@@ -16,23 +17,19 @@ const MAX_PERSONAL_SKILL_ENTRIES = 10_000;
 const nativeSkillIsolationByClient = new WeakMap<
   CodexAppServerClient,
   {
-    key: string;
-    result: Promise<CodexNativeSkillIsolation | undefined>;
-    settled: boolean;
-    signal?: AbortSignal;
+    revision: number;
+    snapshot?: {
+      key: string;
+      revision: number;
+      result: Promise<CodexNativeSkillIsolation | undefined>;
+      settled: boolean;
+      signal?: AbortSignal;
+    };
   }
 >();
 
 function isMissingPathError(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === "ENOENT";
-}
-
-function isPathWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
-  );
 }
 
 async function canonicalizeExistingPath(candidate: string): Promise<string> {
@@ -72,13 +69,13 @@ async function collectPersonalSkillRealPaths(
     const realDefaultCodexHome = await canonicalizeExistingPath(defaultCodexHome);
     roots.push({
       dir: path.join(defaultCodexHome, "skills"),
-      onlyEscapedStateTargets: isPathWithin(realStateDir, realDefaultCodexHome),
+      onlyEscapedStateTargets: isPathInside(realStateDir, realDefaultCodexHome),
     });
   }
   const configuredCodexHome = codexHome?.trim() || process.env.CODEX_HOME?.trim();
   if (configuredCodexHome) {
     const realCodexHome = await canonicalizeExistingPath(configuredCodexHome);
-    const stateOwned = isPathWithin(realStateDir, realCodexHome);
+    const stateOwned = isPathInside(realStateDir, realCodexHome);
     roots.push({
       dir: path.join(configuredCodexHome, "skills"),
       // Direct descendants of a state-owned Codex home belong to this isolated instance.
@@ -98,7 +95,7 @@ async function collectPersonalSkillRealPaths(
   const recordSkillFile = async (filePath: string, onlyEscapedStateTargets: boolean) => {
     try {
       const skillRealPath = await fs.realpath(filePath);
-      if (!onlyEscapedStateTargets || !isPathWithin(realStateDir, skillRealPath)) {
+      if (!onlyEscapedStateTargets || !isPathInside(realStateDir, skillRealPath)) {
         skillPaths.add(skillRealPath);
       }
     } catch (error) {
@@ -218,25 +215,45 @@ export async function resolveCodexNativeSkillIsolation(params: {
     params.home?.trim() || process.env.HOME?.trim() || "",
     params.userProfile?.trim() || process.env.USERPROFILE?.trim() || "",
   ]);
-  const cached = nativeSkillIsolationByClient.get(params.client);
-  if (cached?.key === key && (cached.settled || cached.signal === params.signal)) {
-    const isolation = await cached.result;
-    params.signal?.throwIfAborted();
-    return isolation;
+  let cache = nativeSkillIsolationByClient.get(params.client);
+  if (!cache) {
+    cache = { revision: 0 };
+    nativeSkillIsolationByClient.set(params.client, cache);
+    const clientCache = cache;
+    params.client.addNotificationHandler((notification) => {
+      if (notification.method === "skills/changed") {
+        clientCache.revision += 1;
+        clientCache.snapshot = undefined;
+      }
+    });
   }
-  const result = resolveUncachedCodexNativeSkillIsolation(params);
-  const entry = { key, result, settled: false, signal: params.signal };
-  nativeSkillIsolationByClient.set(params.client, entry);
-  try {
-    const isolation = await result;
-    entry.settled = true;
+  for (;;) {
     params.signal?.throwIfAborted();
-    return isolation;
-  } catch (error) {
-    if (nativeSkillIsolationByClient.get(params.client)?.result === result) {
-      nativeSkillIsolationByClient.delete(params.client);
+    let snapshot = cache.snapshot;
+    if (snapshot?.key !== key || (!snapshot.settled && snapshot.signal !== params.signal)) {
+      snapshot = {
+        key,
+        revision: cache.revision,
+        result: resolveUncachedCodexNativeSkillIsolation(params),
+        settled: false,
+        signal: params.signal,
+      };
+      cache.snapshot = snapshot;
     }
-    throw error;
+    try {
+      const isolation = await snapshot.result;
+      snapshot.settled = true;
+      params.signal?.throwIfAborted();
+      // A notification can invalidate even a scan that has not settled yet.
+      if (snapshot.revision === cache.revision) {
+        return isolation;
+      }
+    } catch (error) {
+      if (cache.snapshot === snapshot) {
+        cache.snapshot = undefined;
+      }
+      throw error;
+    }
   }
 }
 

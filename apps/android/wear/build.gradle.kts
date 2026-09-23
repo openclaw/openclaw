@@ -8,17 +8,19 @@ plugins {
 }
 
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
+val openClawMobileCutterInstruction =
+  "Run scripts/mobile-release-version.ts --prepare, capture the iOS release plan, then run --finalize."
 val openClawAndroidVersionProperties =
   Properties().apply {
     if (!openClawAndroidVersionFile.isFile) {
-      error("Missing Android version properties. Run `pnpm android:version:sync`.")
+      error("Missing Android version properties. $openClawMobileCutterInstruction")
     }
     openClawAndroidVersionFile.inputStream().use(::load)
   }
 
 fun requireOpenClawAndroidVersionProperty(name: String): String =
   openClawAndroidVersionProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }
-    ?: error("Missing $name in Config/Version.properties. Run `pnpm android:version:sync`.")
+    ?: error("Missing $name in Config/Version.properties. $openClawMobileCutterInstruction")
 
 val openClawAndroidPhoneVersionCode = requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_CODE").toInt()
 val openClawAndroidBuildNumber = openClawAndroidPhoneVersionCode % 100
@@ -46,11 +48,16 @@ android {
     applicationId = "ai.openclaw.app"
     minSdk = 31
     targetSdk = 36
+    testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     versionCode = openClawAndroidWearVersionCode
     versionName = requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_NAME")
   }
 
   buildTypes {
+    debug {
+      applicationIdSuffix = ".debug"
+      versionNameSuffix = "-debug"
+    }
     release {
       if (phoneReleaseSigning != null) {
         signingConfig = phoneReleaseSigning
@@ -63,6 +70,10 @@ android {
 
   buildFeatures {
     compose = true
+  }
+
+  testOptions {
+    unitTests.isIncludeAndroidResources = true
   }
 
   compileOptions {
@@ -82,6 +93,12 @@ android {
   }
 }
 
+androidComponents {
+  onVariants(selector().withBuildType("release")) { variant ->
+    variant.lifecycleTasks.registerPreBuild(":app:validateOpenClawReleaseSigning")
+  }
+}
+
 kotlin {
   compilerOptions {
     jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
@@ -90,6 +107,7 @@ kotlin {
 }
 
 ktlint {
+  version.set(libs.versions.ktlint.cli)
   android.set(true)
   ignoreFailures.set(false)
   filter {
@@ -123,4 +141,9 @@ dependencies {
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
+  testImplementation(libs.androidx.compose.ui.test.junit4)
+
+  androidTestImplementation(libs.androidx.test.ext.junit)
+  androidTestImplementation(libs.androidx.test.runner)
+  androidTestImplementation(libs.androidx.uiautomator)
 }

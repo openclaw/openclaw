@@ -1,15 +1,22 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
-import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 
+// v23 compacts payloads and replaces deployed v22 lazy FTS ownership without rewriting FTS content.
+// v22 introduced exact FTS row ownership with nullable completeness and lazy repair.
+// v21 records canonical-session invalidation under node, window and policy mutations.
+// v20 records authoritative cold transcript archives; older readers cannot treat absent raw rows as empty history.
+// v19 qualifies immutable creator namespaces without deriving authority from sandbox policy.
+// v18 separates participant identity namespaces and preserves unknown historical times.
+// v17 retires the tenant-free per-agent state lease table.
 // v16 retires legacy top-level Media* transcript fields. It is a downgrade
 // guard only; the physical schema is unchanged and Doctor owns the data rewrite.
 // v15 makes board and session-sharing tables part of the canonical agent schema.
 // v14 = logical session nodes, generation windows, and node-owned artifact FKs.
 // v13 = one durable rewrite watermark per raw session transcript.
 // v12 = session-owned ACP parent-stream events.
-// v11 = agent-scoped runtime leases, durable delivery operations, canonical
-// external conversation addresses, and bounded per-session heartbeat outcome context.
+// v11 = durable delivery operations, canonical external conversation addresses,
+// and bounded per-session heartbeat outcome context.
 // v10 = materialized active transcript paths.
 // v9 = SQLite STRICT tables.
 // v8 added per-transcript session provenance. v7 added per-entry lifecycle status projection.
@@ -18,7 +25,11 @@ import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 // The v4 session/transcript flip and main's v2 memory-identity
 // change is folded in structure-gated migrations, so v2 main DBs and
 // pre-merge v4 flip DBs both converge on this schema.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 16;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 23;
+export const AGENT_STORAGE_SCHEMA_VERSION = 23;
+export const TRANSCRIPT_FTS_ROW_SCHEMA_VERSION = 22;
+export const AGENT_MEDIA_SCHEMA_VERSION = 17;
+export const CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION = 21;
 
 /** Open per-agent SQLite database handle plus lifecycle maintenance. */
 export type OpenClawAgentDatabase = {
@@ -42,7 +53,20 @@ export type OpenClawRegisteredAgentDatabase = {
   sizeBytes: number | null;
 };
 
+export type OpenClawAgentDatabaseRegistryReadResult =
+  | { status: "available"; entries: OpenClawRegisteredAgentDatabase[] }
+  | { status: "unavailable" };
+
+export type OpenClawAgentDatabaseRegistrationCommit = Readonly<{
+  agentId: string;
+  agentPath: string;
+  stateDatabasePath: string;
+  stateDatabaseIdentity: string;
+}>;
+
 export type OpenClawAgentDatabaseOwnerInspection =
   | { status: "owned"; agentId: string }
   | { status: "unowned" }
   | { status: "unreadable" };
+
+export const SESSION_PARTICIPANTS_TABLE = "session_participants";

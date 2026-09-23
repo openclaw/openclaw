@@ -1,7 +1,8 @@
+import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import {
   clearSessionQueues,
@@ -16,9 +17,18 @@ import {
   getCommandLaneSnapshot,
   setCommandLaneConcurrency,
 } from "../../process/command-queue.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import type { GatewayRequestContext, RespondFn, GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   upstreamFork: vi.fn(),
@@ -30,21 +40,26 @@ vi.mock("../../media/store.js", async (importOriginal) => {
   return { ...actual, readMediaBuffer: mocks.readMediaBuffer };
 });
 
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
-  upsertSessionEntry,
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
-import type { GatewayClient } from "./types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// One teardown owns drainage and deletion so a failed drain retains the fixture root.
+const tempDirs = createTempDirTracker();
 const sessionKey = "agent:main:rewind-handler";
 const sourceSessionId = "rewind-handler-source";
 const sessionLane = resolveEmbeddedSessionLane(sessionKey);
@@ -68,7 +83,7 @@ beforeEach(async () => {
   });
   setActivePluginRegistry(createEmptyPluginRegistry());
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-rewind-handler-"));
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
     {
       sessionId: sourceSessionId,
@@ -134,10 +149,48 @@ afterEach(async () => {
   setCommandLaneConcurrency(sessionLane, 1);
   await Promise.all(queuedCommandSettlements);
   queuedCommandSettlements.clear();
-  resetPluginRuntimeStateForTest();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  vi.unstubAllEnvs();
+  try {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    resetPluginRuntimeStateForTest();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    tempDirs.cleanup();
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+it("drains rewind fixture owners before closing handles and restoring selectors", ({
+  onTestFinished,
+}) => {
+  const stateDir = process.env.OPENCLAW_STATE_DIR!;
+  const agent = openOpenClawAgentDatabase({ agentId: "main" });
+  const state = openOpenClawStateDatabase();
+  const closing: unknown[] = [];
+  registerOpenClawAgentDatabaseAsyncResource({
+    agentId: "main",
+    path: agent.path,
+    revoke: () => {},
+    close: async () => {
+      await Promise.resolve();
+      closing.push({
+        agentOpen: agent.db.isOpen,
+        stateOpen: state.db.isOpen,
+        rootExists: fs.existsSync(stateDir),
+        selector: process.env.OPENCLAW_STATE_DIR,
+      });
+    },
+  });
+  onTestFinished(() => {
+    expect(closing).toEqual([
+      { agentOpen: true, stateOpen: true, rootExists: true, selector: stateDir },
+    ]);
+    expect(agent.db.isOpen).toBe(false);
+    expect(state.db.isOpen).toBe(false);
+    expect(fs.existsSync(stateDir)).toBe(false);
+  });
 });
 
 function context(active = false): GatewayRequestContext {
@@ -162,6 +215,7 @@ async function invoke(
   entryId?: string,
   client: GatewayClient | null = null,
   active = false,
+  runtimeConfig?: GatewayRequestContext["getRuntimeConfig"],
 ) {
   const respond = vi.fn();
   await expectDefined(
@@ -178,7 +232,9 @@ async function invoke(
           : { entryId }),
     },
     respond: respond as unknown as RespondFn,
-    context: context(active),
+    context: runtimeConfig
+      ? { ...context(active), getRuntimeConfig: runtimeConfig }
+      : context(active),
     client,
     isWebchatConnect: () => false,
   });
@@ -257,7 +313,14 @@ function linkToUpstreamConversation(): void {
   ).toBe(true);
 }
 
-function installUpstreamForkHarness(): void {
+function installUpstreamForkHarness(
+  executionEnvironment?: "host-only",
+  contract: "dual" | "legacy" | "v2" = "v2",
+): void {
+  const sessionFork = {
+    upstreamKinds: ["codex-app-server" as const],
+    fork: mocks.upstreamFork,
+  };
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses.push({
     pluginId: "test-harness",
@@ -268,17 +331,122 @@ function installUpstreamForkHarness(): void {
       runAttempt: async () => {
         throw new Error("not used");
       },
-      sessionFork: {
-        upstreamKinds: ["codex-app-server"],
-        fork: mocks.upstreamFork,
-      },
+      ...(contract !== "v2"
+        ? { ...(executionEnvironment ? { executionEnvironment } : {}), sessionFork }
+        : {}),
+      ...(contract !== "legacy"
+        ? {
+            sessionForkV2: {
+              ...(executionEnvironment ? { executionEnvironment } : {}),
+              ...sessionFork,
+            },
+          }
+        : {}),
       supports: () => ({ supported: false }),
     },
   });
   setActivePluginRegistry(registry);
 }
 
+async function archiveSourceSession(storePath?: string): Promise<void> {
+  const entry = expectDefined(
+    loadSessionEntry({ agentId: "main", sessionKey, storePath }),
+    "source session",
+  );
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey, storePath },
+    { ...entry, archivedAt: Date.now() },
+  );
+}
+
 describe("session message-cut methods", () => {
+  it("rejects a disallowed agent fork without restricting existing-session rewind", async () => {
+    const profile = ensureProfileForEmail("restricted-fork-creator@example.com");
+    setUserProfileRole(profile.id, "guest");
+    const client = {
+      connect: { scopes: ["operator.write"] },
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      },
+    } as GatewayClient;
+    const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
+      agents: { list: [{ id: "main", default: true }] },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              sessions: { others: "view" },
+              agents: ["guest-only"],
+              scopes: ["operator.read", "operator.write"],
+            },
+          },
+        },
+      },
+    });
+
+    const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
+    expect(fork).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.FORBIDDEN,
+        message: expect.stringContaining('agent "main"'),
+      }),
+    );
+    expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(1);
+
+    const rewind = await invoke("sessions.rewind", "user-entry", client, false, runtimeConfig);
+    expect(rewind).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+  });
+
+  it("stamps a required sandbox on a session fork created by a restricted operator", async () => {
+    const profile = ensureProfileForEmail("sandbox-required-fork-creator@example.com");
+    setUserProfileRole(profile.id, "guest");
+    const client = {
+      connect: { scopes: ["operator.write"] },
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      },
+    } as GatewayClient;
+    const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
+      agents: { list: [{ id: "main", default: true }] },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              sessions: { others: "view" },
+              agents: ["main"],
+              scopes: ["operator.read", "operator.write"],
+              sandbox: "required",
+            },
+          },
+        },
+      },
+    });
+
+    const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
+    const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
+
+    expect(fork).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionKey: expect.any(String) }),
+      undefined,
+    );
+    expect(loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" })).toMatchObject({
+      createdActor: { type: "human", id: profile.id },
+      sandbox: "required",
+    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey })).not.toHaveProperty("sandbox");
+  });
+
   it("returns an empty branch list for a not-yet-materialized session", async () => {
     const respond = vi.fn() as unknown as RespondFn;
     await expectDefined(
@@ -383,7 +551,54 @@ describe("session message-cut methods", () => {
     );
   });
 
+  it.each(["sessions.rewind", "sessions.fork"] as const)(
+    "%s restores canonical inbound media facts and skips invalid URI hints",
+    async (method) => {
+      await appendTranscriptMessage(
+        { agentId: "main", sessionId: sourceSessionId, sessionKey },
+        {
+          eventId: "canonical-image",
+          parentId: "assistant-entry",
+          message: {
+            role: "user",
+            content: "canonical image prompt",
+            __openclaw: {
+              media: [
+                { url: `media://inbound/${storedImageId}`, contentType: "image/png" },
+                { url: "media://inbound/%73tored-image.png", contentType: "image/png" },
+                { url: `media://outbound/${storedImageId}`, contentType: "image/png" },
+                { url: "media://inbound/nested%2Fimage.png", contentType: "image/png" },
+                { url: `media://inbound/${storedImageId}?query=1`, contentType: "image/png" },
+                { url: "https://example.test/stored-image.png", contentType: "image/png" },
+                { url: "file:///tmp/stored-image.png", contentType: "image/png" },
+              ],
+            },
+          },
+        },
+      );
+      const respond = await invoke(method, "canonical-image");
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          editorText: "canonical image prompt",
+          editorAttachments: [{ mimeType: "image/png", data: storedImageData.toString("base64") }],
+        }),
+        undefined,
+      );
+      expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(1);
+      expect(mocks.readMediaBuffer).toHaveBeenCalledWith(
+        storedImageId,
+        "inbound",
+        expect.any(Number),
+      );
+    },
+  );
+
   it("returns editor text for rewind and a new key for fork", async () => {
+    await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
+      sandboxMode: "off",
+      nativeRuntimeConsent: "native-fixture",
+    }));
     const profileId = "profile-fork-creator";
     const fork = await invoke("sessions.fork", "user-entry", {
       connect: { scopes: ["operator.write"] },
@@ -410,6 +625,8 @@ describe("session message-cut methods", () => {
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
     expect(forkKey).toBeTruthy();
     const forkEntry = loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" });
+    expect(forkEntry).not.toHaveProperty("sandboxMode");
+    expect(forkEntry).not.toHaveProperty("nativeRuntimeConsent");
     expect(forkEntry).toMatchObject({
       createdVia: "operator",
       createdActor: { type: "human", id: profileId },
@@ -436,6 +653,67 @@ describe("session message-cut methods", () => {
       undefined,
     );
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
+    expect(loadSessionEntry({ agentId: "main", sessionKey })?.sandboxMode).toBe("off");
+  });
+
+  it.each([
+    ["sessions.rewind", "user-entry", "Rewind"],
+    ["sessions.branches.switch", "off-path-entry", "Branch switch"],
+  ] as const)("rejects archived %s", async (method, entryId, label) => {
+    await archiveSourceSession();
+
+    const respond = await invoke(method, entryId);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: `${label} is unavailable for archived sessions.`,
+      }),
+    );
+  });
+
+  it("allows archived sessions to fork", async () => {
+    await archiveSourceSession();
+
+    const respond = await invoke("sessions.fork", "user-entry");
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionKey: expect.any(String) }),
+      undefined,
+    );
+  });
+
+  it("rechecks archived state after waiting for the session lifecycle lock", async () => {
+    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+    const mutationEntered = createDeferredCore();
+    const releaseMutation = createDeferredCore();
+    const archiving = runExclusiveSessionLifecycleMutation({
+      scope: storePath,
+      identities: [sourceSessionId],
+      run: async () => {
+        mutationEntered.resolve();
+        await releaseMutation.promise;
+        await archiveSourceSession(storePath);
+      },
+    });
+    await mutationEntered.promise;
+
+    const rewinding = invoke("sessions.rewind", "user-entry");
+    releaseMutation.resolve();
+    await archiving;
+
+    const respond = await rewinding;
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "Rewind is unavailable for archived sessions.",
+      }),
+    );
   });
 
   it.each([
@@ -454,21 +732,21 @@ describe("session message-cut methods", () => {
     );
   });
 
-  it("rejects externally owned conversations", async () => {
+  it("rejects mutation but lists empty branches for externally owned conversations", async () => {
     linkToUpstreamConversation();
     const respond = await invoke("sessions.branches.switch", "off-path-entry");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("external agent harness"),
+      }),
+    );
+    // Listing is read-only: "no local branches" is the truthful steady state,
+    // not an error to latch into the UI.
     const listed = await invoke("sessions.branches.list");
-
-    for (const response of [respond, listed]) {
-      expect(response).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.INVALID_REQUEST,
-          message: expect.stringContaining("external agent harness"),
-        }),
-      );
-    }
+    expect(listed).toHaveBeenCalledWith(true, { branches: [] }, undefined);
   });
 
   it.each(["sessions.rewind", "sessions.branches.switch"] as const)(
@@ -492,7 +770,7 @@ describe("session message-cut methods", () => {
 
   it("delegates complete upstream fork materialization to the harness", async () => {
     linkToUpstreamConversation();
-    installUpstreamForkHarness();
+    installUpstreamForkHarness(undefined, "dual");
     mocks.upstreamFork.mockResolvedValue({
       status: "created",
       key: "agent:main:dashboard:forked",
@@ -507,6 +785,7 @@ describe("session message-cut methods", () => {
     );
     expect(mocks.upstreamFork).toHaveBeenCalledWith(
       expect.objectContaining({
+        assertCurrent: expect.any(Function),
         source: expect.objectContaining({ entryId: "user-entry", sessionKey }),
         targetKey: expect.stringMatching(/^agent:main:dashboard:/),
         upstream: expect.objectContaining({
@@ -519,6 +798,88 @@ describe("session message-cut methods", () => {
     );
   });
 
+  it.each(["created", "failed"] as const)(
+    "expires native-write authority when the upstream fork settles %s",
+    async (outcome) => {
+      linkToUpstreamConversation();
+      installUpstreamForkHarness();
+      let retainedAssertCurrent: (() => void) | undefined;
+      mocks.upstreamFork.mockImplementation(
+        async ({ assertCurrent }: { assertCurrent: () => void }) => {
+          assertCurrent();
+          retainedAssertCurrent = assertCurrent;
+          return outcome === "created"
+            ? { status: "created", key: "agent:main:dashboard:forked" }
+            : {
+                status: "failed",
+                code: "upstream-unavailable",
+                message: "Codex is offline. Try again.",
+              };
+        },
+      );
+
+      await invoke("sessions.fork", "user-entry");
+
+      const nativeWrites = vi.fn();
+      expect(() => {
+        expectDefined(retainedAssertCurrent, "retained native-write authority")();
+        nativeWrites();
+      }).toThrow("Session initialization source is closed");
+      expect(nativeWrites).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["dual", "legacy", "v2"] as const)(
+    "rejects the current creator's required sandbox before invoking a host-only %s upstream fork",
+    async (contract) => {
+      const profile = ensureProfileForEmail(`sandbox-required-${contract}-fork@example.com`);
+      setUserProfileRole(profile.id, "guest");
+      const client = {
+        connect: { scopes: ["operator.write"] },
+        authenticatedUserProfile: {
+          profileId: profile.id,
+          displayName: profile.displayName,
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        },
+      } as GatewayClient;
+      const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
+        agents: { list: [{ id: "main", default: true }] },
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "view" },
+                agents: ["main"],
+                scopes: ["operator.read", "operator.write"],
+                sandbox: "required",
+              },
+            },
+          },
+        },
+      });
+      linkToUpstreamConversation();
+      installUpstreamForkHarness("host-only", contract);
+      const fork = await withPluginRuntimeGatewayRequestScope(
+        { client, isWebchatConnect: () => false },
+        () => invoke("sessions.fork", "user-entry", client, false, runtimeConfig),
+      );
+      expect(fork).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          details: expect.objectContaining({
+            code: "AGENT_RUNTIME_RESTRICTED",
+            reason: "sandbox-required",
+          }),
+        }),
+      );
+      expect(mocks.upstreamFork).not.toHaveBeenCalled();
+      expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(1);
+    },
+  );
+
   it("does not mutate the local session when the upstream fork fails", async () => {
     linkToUpstreamConversation();
     installUpstreamForkHarness();
@@ -528,7 +889,7 @@ describe("session message-cut methods", () => {
       message: "Codex is offline. Try again.",
     });
 
-    const entryCount = listSessionEntries({ agentId: "main" }).length;
+    const entryCount = listSessionEntriesCore({ agentId: "main" }).length;
     const respond = await invoke("sessions.fork", "user-entry");
 
     expect(respond).toHaveBeenCalledWith(
@@ -539,7 +900,7 @@ describe("session message-cut methods", () => {
         details: { reason: "upstream-unavailable" },
       }),
     );
-    expect(listSessionEntries({ agentId: "main" })).toHaveLength(entryCount);
+    expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(entryCount);
   });
 
   it.each(["steer-message", "in-progress-turn", "drift-mismatch"] as const)(

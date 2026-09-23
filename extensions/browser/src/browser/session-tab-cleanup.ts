@@ -34,29 +34,6 @@ function resolveBrowserTabCleanupRuntimeConfig(): ResolvedBrowserTabCleanupConfi
   return resolveBrowserConfig(cfg.browser, cfg).tabCleanup;
 }
 
-/** Runs one Browser tab cleanup sweep from runtime config or injected test config. */
-async function runTrackedBrowserTabCleanupOnce(params?: {
-  now?: number;
-  cleanup?: ResolvedBrowserTabCleanupConfig;
-  closeTab?: (tab: { targetId: string; baseUrl?: string; profile?: string }) => Promise<void>;
-  getResolvedBrowserConfig?: () => ResolvedBrowserConfig | null;
-  onWarn?: (message: string) => void;
-}): Promise<number> {
-  const cleanup = params?.cleanup ?? resolveBrowserTabCleanupRuntimeConfig();
-  if (!cleanup.enabled) {
-    return 0;
-  }
-  return await sweepTrackedBrowserTabs({
-    now: params?.now,
-    idleMs: minutesToMs(cleanup.idleMinutes),
-    maxTabsPerSession: cleanup.maxTabsPerSession,
-    sessionFilter: isPrimaryTrackedBrowserSessionKey,
-    closeTab: params?.closeTab,
-    getResolvedBrowserConfig: params?.getResolvedBrowserConfig,
-    onWarn: params?.onWarn,
-  });
-}
-
 /** Starts the recurring Browser tab cleanup timer and returns its disposer. */
 export function startTrackedBrowserTabCleanupTimer(params: {
   getResolvedBrowserConfig?: () => ResolvedBrowserConfig | null;
@@ -84,21 +61,23 @@ export function startTrackedBrowserTabCleanupTimer(params: {
     if (stopped) {
       return;
     }
-    if (!running) {
-      running = runTrackedBrowserTabCleanupOnce({
-        getResolvedBrowserConfig: params.getResolvedBrowserConfig,
-        onWarn: params.onWarn,
+    running = (async () => {
+      const cleanup = resolveBrowserTabCleanupRuntimeConfig();
+      await sweepTrackedBrowserTabs({
+        idleMs: cleanup.enabled ? minutesToMs(cleanup.idleMinutes) : undefined,
+        maxTabsPerSession: cleanup.enabled ? cleanup.maxTabsPerSession : undefined,
+        ordinaryCleanup: cleanup.enabled,
+        sessionFilter: isPrimaryTrackedBrowserSessionKey,
+        ...params,
+      });
+    })()
+      .catch((error: unknown) => {
+        params.onWarn(`failed to sweep tracked browser tabs: ${String(error)}`);
       })
-        .catch((error: unknown) => {
-          params.onWarn(`failed to sweep tracked browser tabs: ${String(error)}`);
-        })
-        .finally(() => {
-          running = null;
-          schedule();
-        });
-      return;
-    }
-    schedule();
+      .finally(() => {
+        running = null;
+        schedule();
+      });
   };
 
   schedule();

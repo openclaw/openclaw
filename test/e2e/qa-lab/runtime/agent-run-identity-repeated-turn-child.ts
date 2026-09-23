@@ -2,6 +2,7 @@
 import { pathToFileURL } from "node:url";
 import { createAuditEventRecorder } from "../../../../src/audit/audit-recorder.js";
 import { configureExecutionIdentityAdmissionSink } from "../../../../src/audit/execution-identity-admission.js";
+import { getRuntimeConfig } from "../../../../src/config/io.js";
 import { agentCommandFromIngress } from "../../../../src/plugin-sdk/agent-runtime.js";
 
 async function main() {
@@ -9,7 +10,7 @@ async function main() {
   if (!sessionId) {
     throw new Error("session id is required");
   }
-  const recorder = createAuditEventRecorder({ messageMode: "off" });
+  const recorder = createAuditEventRecorder({ getConfig: getRuntimeConfig });
   const clearSink = configureExecutionIdentityAdmissionSink(recorder.recordExecutionIdentity);
   try {
     for (const message of [
@@ -38,8 +39,11 @@ async function main() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  });
+  main().then(
+    () => process.exit(0),
+    (error: unknown) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    },
+  );
 }

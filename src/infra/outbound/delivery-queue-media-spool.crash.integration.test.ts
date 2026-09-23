@@ -1,17 +1,22 @@
 // Proves the production crash boundary this change exists for: a process
 // commits a durable row, dies before dispatch, and a fresh process still
 // delivers the media. Uses a real child process, real SQLite, and no network.
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import {
   collectEntrySpoolPaths,
   pruneOrphanedDeliveryQueueMedia,
 } from "./delivery-queue-media-spool.js";
-import { ackDelivery, loadPendingDeliveries } from "./delivery-queue-storage.js";
+import { ackDelivery } from "./delivery-queue-storage.js";
+import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 const CHILD_SCRIPT = fileURLToPath(
@@ -22,7 +27,7 @@ type ChildResult = { id: string; pid: number; artifacts: string[] };
 
 let stateDir: string;
 let sourceDir: string;
-let child: ChildProcess | null = null;
+let stopChild: (() => Promise<void>) | undefined;
 
 /** Runs the enqueueing child until it reports a committed row, then kills it. */
 async function enqueueThenKillChild(source: string): Promise<ChildResult> {
@@ -34,7 +39,14 @@ async function enqueueThenKillChild(source: string): Promise<ChildResult> {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     },
   );
-  child = spawned;
+  const closed = new Promise<void>((resolve) => {
+    spawned.once("close", () => resolve());
+  });
+  const stop = async () => {
+    spawned.kill("SIGKILL");
+    await closed;
+  };
+  stopChild = stop;
   const result = await new Promise<ChildResult>((resolve, reject) => {
     let stdout = "";
     let stderr = "";
@@ -54,14 +66,14 @@ async function enqueueThenKillChild(source: string): Promise<ChildResult> {
       clearTimeout(timer);
       reject(new Error(`child exited early (${code}): ${stderr}`));
     });
+    spawned.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
   });
   // Kill at the boundary: row committed, nothing dispatched.
-  const exited = new Promise<void>((resolve) => {
-    spawned.once("exit", () => resolve());
-  });
-  spawned.kill("SIGKILL");
-  await exited;
-  child = null;
+  await stop();
+  stopChild = undefined;
   return result;
 }
 
@@ -71,8 +83,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  child?.kill("SIGKILL");
-  child = null;
+  await stopChild?.();
+  stopChild = undefined;
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
   await fs.rm(stateDir, { recursive: true, force: true });
   await fs.rm(sourceDir, { recursive: true, force: true });
 });

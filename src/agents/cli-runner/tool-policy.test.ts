@@ -1,27 +1,13 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildCliBackendToolAvailability,
-  resolveCliRuntimeToolsAllow,
-  stripOpenClawMcpToolPrefix,
-} from "./tool-policy.js";
-
-describe("buildCliBackendToolAvailability", () => {
-  it("keeps canonical names and projects the shipped beta MCP transport names", () => {
-    expect(
-      buildCliBackendToolAvailability({ native: ["Read"], openClaw: ["message", "write"] }),
-    ).toEqual({
-      native: ["Read"],
-      openClaw: ["message", "write"],
-      mcp: ["mcp__openclaw__message", "mcp__openclaw__write"],
-    });
-  });
-});
+import { resolveCliRuntimeToolsAllow, stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 
 describe("stripOpenClawMcpToolPrefix", () => {
   it("strips only the loopback transport prefix", () => {
     expect(stripOpenClawMcpToolPrefix("mcp__openclaw__memory_search")).toBe("memory_search");
+    expect(stripOpenClawMcpToolPrefix("mcp_openclaw_memory_search")).toBe("memory_search");
     expect(stripOpenClawMcpToolPrefix("memory_search")).toBe("memory_search");
     expect(stripOpenClawMcpToolPrefix("mcp__other__tool")).toBe("mcp__other__tool");
+    expect(stripOpenClawMcpToolPrefix("mcp_other_tool")).toBe("mcp_other_tool");
   });
 });
 

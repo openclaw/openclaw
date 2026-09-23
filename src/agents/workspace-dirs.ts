@@ -5,20 +5,18 @@
  * plus the default agent workspace without duplicating agent-scope logic.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveUserPath } from "../utils.js";
-import {
-  listAgentEntries,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "./agent-scope.js";
+import { resolveUserPath } from "../infra/home-dir.js";
+import { listAgentEntries, listAgentIds, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 
 /** Lists unique workspace directories for configured agents and the default agent. */
-export function listAgentWorkspaceDirs(cfg: OpenClawConfig): string[] {
+export function listAgentWorkspaceDirs(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
   const dirs = new Set<string>();
-  for (const entry of listAgentEntries(cfg)) {
-    dirs.add(resolveAgentWorkspaceDir(cfg, entry.id));
+  for (const agentId of listAgentIds(cfg)) {
+    dirs.add(resolveAgentWorkspaceDir(cfg, agentId, env));
   }
-  dirs.add(resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
   return [...dirs];
 }
 

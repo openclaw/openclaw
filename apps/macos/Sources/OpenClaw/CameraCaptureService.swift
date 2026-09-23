@@ -68,9 +68,8 @@ actor CameraCaptureService {
             preferFrontCamera: facing == .front,
             deviceId: deviceId,
             pickCamera: { preferFrontCamera, deviceId in
-                Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
             },
-            cameraUnavailableError: CameraError.cameraUnavailable,
             mapSetupError: { setupError in
                 CameraError.captureFailed(setupError.localizedDescription)
             })
@@ -80,6 +79,23 @@ actor CameraCaptureService {
 
         session.startRunning()
         defer { session.stopRunning() }
+        // The photo preset can choose a portrait format at startup on external webcams.
+        // Select its landscape counterpart only after negotiation and before capturing.
+        let formats = device.formats
+        if let index = CameraDeviceResolver.landscapePhotoFormatIndex(
+            deviceType: device.deviceType,
+            activeFormat: device.activeFormat.formatDescription,
+            formats: formats.map(\.formatDescription))
+        {
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                device.activeFormat = formats[index]
+            } catch {
+                self.logger.warning(
+                    "camera landscape format selection failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
         try await CameraCapturePipelineSupport.warmUpCaptureSession()
         await self.waitForExposureAndWhiteBalance(device: device)
         await self.sleepDelayMs(delayMs)
@@ -123,21 +139,6 @@ actor CameraCaptureService {
             try await self.ensureAccess(for: .audio)
         }
 
-        let prepared = try await CameraCapturePipelineSupport.prepareWarmMovieSession(
-            options: CameraMovieSessionOptions(
-                preferFrontCamera: facing == .front,
-                deviceId: deviceId,
-                includeAudio: includeAudio,
-                durationMs: durationMs),
-            pickCamera: { preferFrontCamera, deviceId in
-                Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
-            },
-            cameraUnavailableError: CameraError.cameraUnavailable,
-            mapSetupError: Self.mapMovieSetupError)
-        let session = prepared.session
-        let output = prepared.output
-        defer { session.stopRunning() }
-
         let tmpMovURL = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mov")
         defer { try? FileManager().removeItem(at: tmpMovURL) }
@@ -149,17 +150,29 @@ actor CameraCaptureService {
             return FileManager().temporaryDirectory
                 .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mp4")
         }()
-        // Ensure we don't fail exporting due to an existing file.
-        try? FileManager().removeItem(at: outputURL)
-
         let logger = self.logger
-        var delegate: MovieFileDelegate?
-        let recordedURL: URL = try await withCheckedThrowingContinuation { cont in
-            let d = MovieFileDelegate(cont, logger: logger)
-            delegate = d
-            output.startRecording(to: tmpMovURL, recordingDelegate: d)
-        }
-        withExtendedLifetime(delegate) {}
+        let recordedURL = try await CameraCapturePipelineSupport.withWarmMovieSession(
+            options: CameraMovieSessionOptions(
+                preferFrontCamera: facing == .front,
+                deviceId: deviceId,
+                includeAudio: includeAudio,
+                durationMs: durationMs),
+            pickCamera: { preferFrontCamera, deviceId in
+                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+            },
+            mapSetupError: Self.mapMovieSetupError,
+            operation: { output in
+                // Replace the export destination only after camera setup succeeds.
+                try? FileManager().removeItem(at: outputURL)
+                var delegate: MovieFileDelegate?
+                let recordedURL: URL = try await withCheckedThrowingContinuation { cont in
+                    let captureDelegate = MovieFileDelegate(cont, logger: logger)
+                    delegate = captureDelegate
+                    output.startRecording(to: tmpMovURL, recordingDelegate: captureDelegate)
+                }
+                withExtendedLifetime(delegate) {}
+                return recordedURL
+            })
         try await Self.exportToMP4(inputURL: recordedURL, outputURL: outputURL)
         return (path: outputURL.path, durationMs: durationMs, hasAudio: includeAudio)
     }
@@ -172,21 +185,19 @@ actor CameraCaptureService {
 
     private nonisolated static func pickCamera(
         facing: CameraFacing,
-        deviceId: String?) -> AVCaptureDevice?
+        deviceId: String?) throws -> AVCaptureDevice
     {
-        if let deviceId, !deviceId.isEmpty {
-            if let match = CameraDeviceResolver.camera(deviceId: deviceId) {
-                return match
-            }
-        }
-        let position: AVCaptureDevice.Position = (facing == .front) ? .front : .back
-
-        if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) {
-            return device
-        }
-
-        // Many macOS cameras report `unspecified` position; fall back to any default.
-        return AVCaptureDevice.default(for: .video)
+        try CameraCapturePipelineSupport.selectCamera(
+            deviceId: deviceId,
+            matching: CameraDeviceResolver.camera,
+            fallback: {
+                let position: AVCaptureDevice.Position = facing == .front ? .front : .back
+                // Many macOS cameras report `unspecified` position; fall back only without an explicit device.
+                return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) ??
+                    AVCaptureDevice.default(for: .video)
+            },
+            unavailableError: CameraError.cameraUnavailable,
+            deviceNotFoundError: { CameraPTZError.deviceNotFound($0) })
     }
 
     private nonisolated static func clampQuality(_ quality: Double?) -> Double {
@@ -221,33 +232,10 @@ actor CameraCaptureService {
         }
         export.shouldOptimizeForNetworkUse = true
 
-        if #available(macOS 15.0, *) {
-            do {
-                try await export.export(to: outputURL, as: .mp4)
-                return
-            } catch {
-                throw CameraError.exportFailed(error.localizedDescription)
-            }
-        } else {
-            export.outputURL = outputURL
-            export.outputFileType = .mp4
-
-            try await withCheckedThrowingContinuation(isolation: nil) { (cont: CheckedContinuation<Void, Error>) in
-                export.exportAsynchronously {
-                    cont.resume(returning: ())
-                }
-            }
-
-            switch export.status {
-            case .completed:
-                return
-            case .failed:
-                throw CameraError.exportFailed(export.error?.localizedDescription ?? "export failed")
-            case .cancelled:
-                throw CameraError.exportFailed("export cancelled")
-            default:
-                throw CameraError.exportFailed("export did not complete (\(export.status.rawValue))")
-            }
+        do {
+            try await export.export(to: outputURL, as: .mp4)
+        } catch {
+            throw CameraError.exportFailed(error.localizedDescription)
         }
     }
 

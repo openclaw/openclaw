@@ -1,25 +1,38 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
+import { buildInboundMediaNoteProjection } from "../../auto-reply/media-note.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { hasInboundAudio } from "../../auto-reply/reply/inbound-media.js";
 import { emitMessageReceivedHooks } from "../../auto-reply/reply/message-received-hooks.js";
 import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import {
-  abortReplyMessageInjectionTarget,
   beginReplyMessageInjectionTarget,
-  recordAcceptedReplyMessageInjectionTarget,
+  finalizeReplyMessageInjectionAttempt,
   type ReplyBackendQueueMessageOptions,
   type ReplyMessageInjectionAttempt,
-  type ReplyMessageInjectionOutcome,
   type ReplyMessageInjectionTarget,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { isRestartRecoveryTerminalDeliveryFailClosed } from "../../config/sessions/restart-recovery-receipt.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
+import type { InboundDocumentContext } from "../../media-understanding/file-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
-import { broadcastChatFinal } from "./chat-broadcast.js";
+import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
+import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
+import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import type { ChatImageContent } from "../chat-attachments.js";
+import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import { buildChatSendReplyInjectionText } from "./chat-send-reply-context.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
@@ -29,17 +42,79 @@ import type { GatewayRequestContext } from "./types.js";
 /** Captures the prepared request data used by both pre-ACK and detached injection attempts. */
 export function createChatSendMessageInjectionStarter(params: {
   target: ReplyMessageInjectionTarget | undefined;
+  abortSignal: AbortSignal;
   request: Pick<NormalizedChatSendRequest, "p" | "rawMessage" | "supportsTaskSuggestions">;
-  session: Pick<PreparedChatSendSession, "cfg" | "entry">;
-  turn: ReturnType<typeof prepareChatSendUserTurn>;
+  session: Pick<
+    PreparedChatSendSession,
+    "cfg" | "entry" | "sessionKey" | "storePath" | "clientRunId"
+  >;
+  admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
+  turn: Pick<
+    ReturnType<typeof prepareChatSendUserTurn>,
+    "ctx" | "isInternalTextSlashCommandTurn" | "replyOptionImages" | "replyOptionMedia"
+  >;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
-  userTurnTranscriptRecorder: ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"];
+  documentContext?: ({ status: "rendered" } & InboundDocumentContext) | { status: "failed" };
+  userTurnTranscriptRecorder: NonNullable<
+    ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"]
+  >;
+  logGateway: GatewayRequestContext["logGateway"];
+  assertCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 }) {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
-  const { cfg, entry } = params.session;
+  const { cfg, entry, sessionKey, storePath, clientRunId } = params.session;
   const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
+  const assertCurrent =
+    params.assertCurrent || params.operatorAuthority
+      ? () => {
+          params.assertCurrent?.();
+          params.operatorAuthority?.assertCurrent();
+        }
+      : undefined;
   return (): ReplyMessageInjectionAttempt | undefined => {
     if (!params.target || isInternalTextSlashCommandTurn) {
+      return undefined;
+    }
+    assertCurrent?.();
+    // Preparation can outlive terminal delivery. Recheck before the backend
+    // takes this input; an unreadable receipt cannot authorize steering.
+    let fenceEntry = entry;
+    if (sessionKey) {
+      try {
+        fenceEntry =
+          loadSessionEntry({
+            sessionKey,
+            storePath,
+            readConsistency: "latest",
+          }) ?? entry;
+      } catch (error: unknown) {
+        params.logGateway.warn(
+          `failed to reload session entry before steering fence on ${sessionKey}: ${String(error)}`,
+        );
+        return undefined;
+      }
+    }
+    // Terminal run ids are accumulated session history; compare the fence
+    // against the active source-turn identity (carried on the injection target
+    // by the owning registry, falling back to the entry's own claim source) so
+    // an unrelated earlier tombstone does not force a safe steer into
+    // follow-up mode.
+    const activeSourceTurnId =
+      normalizeOptionalString(params.target?.sourceTurnId) ??
+      normalizeOptionalString(fenceEntry?.restartRecoveryDeliverySourceRunId) ??
+      "";
+    if (
+      fenceEntry &&
+      isRestartRecoveryTerminalDeliveryFailClosed(
+        fenceEntry,
+        fenceEntry.sessionId,
+        activeSourceTurnId,
+      )
+    ) {
+      params.logGateway.warn(
+        `active run ${clientRunId} cannot own another terminal source-reply send on session ${sessionKey}; rejecting steer injection before queueing`,
+      );
       return undefined;
     }
     const { debounceMs } = resolveQueueSettings({
@@ -48,24 +123,73 @@ export function createChatSendMessageInjectionStarter(params: {
       sessionEntry: entry,
       inlineMode: p.queueMode,
     });
-    const text = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
-    return beginReplyMessageInjectionTarget(
+    const baseText = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
+    const rendered =
+      params.documentContext?.status === "rendered" ? params.documentContext : undefined;
+    const documentContext = rendered?.text.trim();
+    let text = baseText;
+    if (documentContext || params.documentContext?.status === "failed") {
+      text = [buildInboundMediaNoteProjection(ctx).text, baseText.trim(), documentContext]
+        .filter(Boolean)
+        .join("\n\n");
+    }
+    const documentImages = rendered?.images ?? [];
+    const injectionImages: ChatImageContent[] | undefined =
+      documentImages.length > 0
+        ? [
+            ...(replyOptionImages ?? []),
+            // Extracted page images follow the prepared inbound images, the
+            // same inline-then-extracted ordering reply dispatch produces; each
+            // keeps its attachment index as ordering provenance.
+            ...documentImages.map((image): ChatImageContent => ({
+              type: "image",
+              data: image.data,
+              mimeType: image.mimeType,
+              sourceIndex: image.attachmentIndex,
+            })),
+          ]
+        : replyOptionImages;
+    const authorization = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: ctx.CommandAuthorized === true,
+    });
+    const attempt = beginReplyMessageInjectionTarget(
       params.target,
       p.replyToId
         ? buildChatSendReplyInjectionText({ body: text, cfg, ctx, sessionEntry: entry })
         : text,
       {
+        assertCurrent,
         steeringMode: "all",
         isInboundUserMessage: true,
-        ...(replyOptionImages?.length ? { images: replyOptionImages } : {}),
+        ...(isProgressCardRefreshInputProvenance(ctx.InputProvenance)
+          ? { allowPendingUserInputAnswer: false as const, debounceMs: 0 }
+          : {}),
+        toolAuthorityOverlay: resolveInboundReplyToolAuthorityOverlay({
+          ctx,
+          sessionEntry: {
+            spawnedBy: entry?.spawnedBy,
+            permissionMode: params.admittedSessionSettings?.permissionMode,
+            toolOverrides: params.admittedSessionSettings?.toolOverrides,
+          },
+          senderIsOwner: authorization.senderIsOwner,
+          operatorAuthority: params.operatorAuthority,
+          disableTools: false,
+        }),
+        ...(injectionImages?.length ? { images: injectionImages } : {}),
         ...(params.imageOrder?.length ? { imageOrder: params.imageOrder } : {}),
         ...(replyOptionMedia?.length ? { media: replyOptionMedia } : {}),
         waitForTranscriptCommit: true,
-        ...(debounceMs !== undefined ? { debounceMs } : {}),
+        abortSignal: params.abortSignal,
+        ...(!isProgressCardRefreshInputProvenance(ctx.InputProvenance) && debounceMs !== undefined
+          ? { debounceMs }
+          : {}),
         taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
       },
     );
+    return attempt;
   };
 }
 
@@ -78,16 +202,15 @@ export async function settleChatSendPreAckMessageInjection(params: {
   attempt: ReplyMessageInjectionAttempt | undefined;
   isAborted: () => boolean;
   sessionRoutingChanged: () => boolean;
-  onActiveLeafChanged: () => Promise<void>;
   onAborted: () => void;
   onSessionRoutingChanged: () => void;
 }): Promise<PreAckMessageInjectionResult> {
-  if (params.attempt?.rejectBeforeAck) {
-    await params.onActiveLeafChanged();
-    return { status: "handled" };
-  }
   if (!params.attempt || (await params.attempt.acceptance)) {
     return { status: "continue", attempt: params.attempt };
+  }
+  const outcome = await params.attempt.outcome;
+  if (outcome.status === "failed") {
+    throw outcome.error;
   }
   if (params.isAborted()) {
     params.onAborted();
@@ -100,11 +223,14 @@ export async function settleChatSendPreAckMessageInjection(params: {
   return { status: "continue", attempt: undefined };
 }
 
-/** Finish an irrevocably accepted steer without entering reply dispatch. */
+/** Finish an accepted steer without entering reply dispatch, or return false for fallback. */
 export async function finalizeAcceptedChatSendMessageInjection(params: {
+  attempt: ReplyMessageInjectionAttempt;
+  sessionBinding?: Readonly<
+    Pick<ChatAbortControllerEntry, "sessionKey" | "sessionId" | "agentId" | "lifecycleGeneration">
+  >;
   context: GatewayRequestContext;
   ctx: RuntimeMsgContext;
-  outcome: Extract<ReplyMessageInjectionOutcome, { status: "accepted" }>;
   persistUserTurnTranscriptBestEffort: () => Promise<void>;
   session: Pick<
     PreparedChatSendSession,
@@ -112,11 +238,23 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
   >;
   startedAt: number;
   target: ReplyMessageInjectionTarget;
-  targetRunId: string | undefined;
-}): Promise<void> {
-  const { context, ctx, outcome, session, target } = params;
+}): Promise<boolean> {
+  const { context, ctx, session } = params;
   const { agentId, cfg, clientRunId, entry, sessionKey, storePath } = session;
   const finalizedCtx = finalizeInboundContext(ctx);
+  const progressRefresh = isProgressCardRefreshInputProvenance(ctx.InputProvenance);
+  const finalization = await finalizeReplyMessageInjectionAttempt({
+    attempt: params.attempt,
+    target: params.target,
+    inboundAudio: hasInboundAudio(finalizedCtx),
+    ...(progressRefresh ? { abortOnUnconfirmedTranscript: false as const } : {}),
+  });
+  if (finalization.status === "rejected") {
+    // Rejection also covers withdrawing a canceled queued steer. Fallback
+    // dispatch retains the source run's abort signal and skips canceled input.
+    return false;
+  }
+  recordAcceptedSessionParticipantInput(ctx, { agentId, sessionKey, storePath });
   const channel = normalizeLowercaseStringOrEmpty(
     finalizedCtx.Surface ?? finalizedCtx.Provider ?? "unknown",
   );
@@ -126,13 +264,25 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     finalizedCtx.MessageSid ??
     finalizedCtx.MessageSidFirst ??
     finalizedCtx.MessageSidLast;
-  recordAcceptedReplyMessageInjectionTarget(target, {
-    inboundAudio: hasInboundAudio(finalizedCtx),
-  });
-  if (outcome.result?.transcriptCommit === "unconfirmed") {
-    abortReplyMessageInjectionTarget(target);
+  const indeterminate =
+    finalization.status === "indeterminate"
+      ? finalization.outcome.errorMessage
+      : progressRefresh &&
+          finalization.status === "accepted" &&
+          finalization.outcome.result?.transcriptCommit === "unconfirmed"
+        ? finalization.outcome.result.errorMessage
+        : undefined;
+  const steerAborted = finalization.status === "accepted" && finalization.aborted;
+  const outcomeReason = indeterminate
+    ? progressRefresh
+      ? "progress_refresh_receipt_unconfirmed"
+      : "question_response_indeterminate"
+    : steerAborted
+      ? "reply_operation_aborted"
+      : "active_run_injected";
+  if (steerAborted) {
     context.logGateway.warn(
-      `active run ${params.targetRunId ?? "unknown"} accepted chat steering without transcript confirmation; aborted exact target without replay`,
+      `active run ${finalization.targetRunId ?? "unknown"} accepted chat steering without transcript confirmation; aborted exact target without replay`,
     );
   }
   await params.persistUserTurnTranscriptBestEffort();
@@ -151,8 +301,8 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
       sessionId: entry?.sessionId,
       sessionKey,
       durationMs: Math.max(0, Date.now() - params.startedAt),
-      outcome: "completed",
-      reason: "active_run_injected",
+      outcome: indeterminate ? "error" : steerAborted ? "skipped" : "completed",
+      reason: outcomeReason,
     });
   }
   emitMessageReceivedHooks({
@@ -170,7 +320,11 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     ctx: finalizedCtx,
     observedRunId: clientRunId,
     startedAt: params.startedAt,
-    terminal: { outcome: "completed", options: { reason: "active_run_injected" } },
+    terminal: indeterminate
+      ? { outcome: "error", options: { reason: outcomeReason, error: indeterminate } }
+      : steerAborted
+        ? { outcome: "skipped", options: { reason: outcomeReason } }
+        : { outcome: "completed", options: { reason: outcomeReason } },
   });
   const updatedAt = Date.now();
   if (entry) {
@@ -186,12 +340,33 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     setGatewayDedupeEntry({
       dedupe: context.dedupe,
       key: `chat:${clientRunId}`,
+      session: captureAgentJobSession(params.sessionBinding),
       entry: {
         ts: Date.now(),
-        ok: true,
-        payload: { runId: clientRunId, status: "ok" as const },
+        ok: progressRefresh || !indeterminate,
+        payload: {
+          runId: clientRunId,
+          // An accepted refresh steer is not a completed status turn, even if
+          // its transcript receipt is unconfirmed. Retrying must not replay it.
+          status: progressRefresh ? "accepted" : indeterminate ? "error" : "ok",
+          ...(indeterminate ? { summary: indeterminate } : {}),
+        },
+        ...(!progressRefresh && indeterminate
+          ? { error: errorShape(ErrorCodes.UNAVAILABLE, indeterminate) }
+          : {}),
       },
     });
-    broadcastChatFinal({ context, runId: clientRunId, sessionKey, agentId });
+    if (indeterminate) {
+      broadcastChatError({
+        context,
+        runId: clientRunId,
+        sessionKey,
+        agentId,
+        errorMessage: indeterminate,
+      });
+    } else {
+      broadcastChatFinal({ context, runId: clientRunId, sessionKey, agentId });
+    }
   }
+  return true;
 }

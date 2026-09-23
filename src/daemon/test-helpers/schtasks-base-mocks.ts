@@ -1,9 +1,9 @@
 /** Base Vitest mocks for Windows schtasks daemon tests. */
 import { vi } from "vitest";
 import {
-  inspectPortUsage,
-  killProcessTree,
-  resolveGatewayServiceProbeHosts,
+  gatewayServiceProbeHostsMock,
+  inspectPortUsageMock,
+  killProcessTreeMock,
   schtasksCalls,
   schtasksResponses,
 } from "./schtasks-fixtures.js";
@@ -12,21 +12,28 @@ import {
 vi.mock("../schtasks-exec.js", () => ({
   execSchtasks: async (argv: string[]) => {
     schtasksCalls.push(argv);
-    return schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" };
+    const response = schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" };
+    return argv[0] === "/Query" && argv.includes("/XML") && response.code === 0 && !response.stdout
+      ? {
+          ...response,
+          stdout:
+            "<Task><Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>gateway.cmd</Command></Exec></Actions></Task>",
+        }
+      : response;
   },
 }));
 
 vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortUsage: (port: number, options?: { probeHosts?: readonly string[] }) =>
-    inspectPortUsage(port, options),
+    inspectPortUsageMock(port, options),
 }));
 
 vi.mock("../gateway-service-probe-hosts.js", () => ({
-  resolveGatewayServiceProbeHosts: () => resolveGatewayServiceProbeHosts(),
+  resolveGatewayServiceProbeHosts: () => gatewayServiceProbeHostsMock(),
 }));
 
 vi.mock("../../process/kill-tree.js", () => ({
-  killProcessTree: (pid: number, opts?: { graceMs?: number }) => killProcessTree(pid, opts),
+  killProcessTree: (pid: number, opts?: { graceMs?: number }) => killProcessTreeMock(pid, opts),
 }));
 
 // Launcher encode/decode must not depend on the dev or CI machine's code page;

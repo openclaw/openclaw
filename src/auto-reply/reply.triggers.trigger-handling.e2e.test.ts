@@ -1,7 +1,7 @@
 /** E2E tests for auto-reply trigger and command handling. */
 import fs from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   expectInlineCommandHandledAndStripped,
   getAbortEmbeddedAgentRunMock,
@@ -15,7 +15,8 @@ import {
   expectBareNewOrResetAcknowledged,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import { renderControlUiAgentFailureCopy } from "../agents/failover/user-copy.js";
 import { resolveSessionKey } from "../config/sessions.js";
 import {
   loadExactSessionEntry,
@@ -24,12 +25,28 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
-import { buildControlUiAgentFailureText } from "./reply/agent-runner-failure-copy.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
 import type { MsgContext } from "./templating.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
-type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
+type GetReplyFromConfig = typeof import("./reply/get-reply.js").getReplyFromConfig;
+
+async function withUnavailableThinkingCatalog(
+  run: (
+    catalog: MockInstance<
+      typeof import("../agents/model-catalog.runtime.js").loadProviderScopedThinkingCatalog
+    >,
+  ) => Promise<void>,
+): Promise<void> {
+  const catalog = vi
+    .spyOn(await import("../agents/model-catalog.runtime.js"), "loadProviderScopedThinkingCatalog")
+    .mockRejectedValue(new Error("thinking catalog unavailable"));
+  try {
+    return await run(catalog);
+  } finally {
+    catalog.mockRestore();
+  }
+}
 
 const TEST_PRIMARY_PROFILE_ID = "openai:primary@example.test";
 const TEST_SECONDARY_PROFILE_ID = "openai:secondary@example.test";
@@ -65,7 +82,7 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
       if (/context window exceeded/i.test(message)) {
         return "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.";
       }
-      return buildControlUiAgentFailureText(message);
+      return renderControlUiAgentFailureCopy(message);
     };
     const stripHeartbeat = (text?: string) => {
       const trimmed = text?.trim();
@@ -300,8 +317,11 @@ function makeUnauthorizedWhatsAppCfg(home: string) {
   return baseCfg;
 }
 
-async function expectResetBlockedForNonOwner(params: { home: string }): Promise<void> {
-  const { home } = params;
+async function expectResetBlockedForNonOwner(params: {
+  home: string;
+  command: "/new" | "/reset";
+}): Promise<void> {
+  const { home, command } = params;
   const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
   runEmbeddedAgentMock.mockClear();
   const cfg = makeCfg(home);
@@ -318,18 +338,21 @@ async function expectResetBlockedForNonOwner(params: { home: string }): Promise<
     ...cfg.session,
     store: join(home, "blocked-reset.sessions.json"),
   };
-  const res = await getReplyFromConfig(
-    {
-      Body: "/reset",
-      From: "+1003",
-      To: "+2000",
-      CommandAuthorized: false,
-    },
-    {},
-    cfg,
-  );
-  expect(res).toBeUndefined();
-  expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  await withUnavailableThinkingCatalog(async (catalog) => {
+    const res = await getReplyFromConfig(
+      {
+        Body: command,
+        From: "+1003",
+        To: "+2000",
+        CommandAuthorized: false,
+      },
+      {},
+      cfg,
+    );
+    expect(res).toBeUndefined();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(catalog).not.toHaveBeenCalled();
+  });
 }
 
 function mockEmbeddedOk() {
@@ -361,7 +384,7 @@ describe("trigger handling", () => {
   for (const testCase of [
     {
       error: "sandbox is not defined.",
-      expected: buildControlUiAgentFailureText("sandbox is not defined."),
+      expected: renderControlUiAgentFailureCopy("sandbox is not defined."),
     },
     {
       error: "Context window exceeded",
@@ -422,10 +445,12 @@ describe("trigger handling", () => {
 
       const cfg = makeStartupContextCfg(home);
 
-      const res = await runAuthorizedSmsCommand("/new", cfg);
-
-      expect(maybeReplyText(res)).toBe("✅ New session started.");
-      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      await withUnavailableThinkingCatalog(async (catalog) => {
+        const res = await runAuthorizedSmsCommand("/new", cfg);
+        expect(maybeReplyText(res)).toBe("✅ New session started.");
+        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+        expect(catalog).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -442,31 +467,61 @@ describe("trigger handling", () => {
 
       const cfg = makeStartupContextCfg(home, { applyOn: ["reset"] });
 
-      const res = await runAuthorizedSmsCommand("/RESET", cfg);
-
-      expect(maybeReplyText(res)).toBe("✅ Session reset.");
-      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      await withUnavailableThinkingCatalog(async (catalog) => {
+        const res = await runAuthorizedSmsCommand("/RESET", cfg);
+        expect(maybeReplyText(res)).toBe("✅ Session reset.");
+        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+        expect(catalog).not.toHaveBeenCalled();
+      });
     });
   });
 
-  it("sanitizes thinking directives before the agent run", async () => {
+  it("resolves model capabilities when /new includes follow-up text", async () => {
     await withTempHome(async (home) => {
+      const runEmbeddedAgentMock = mockRunEmbeddedAgentText("hello", 1);
+      await withUnavailableThinkingCatalog(async (catalog) => {
+        await expect(runAuthorizedSmsCommand("/new take notes", makeCfg(home))).rejects.toThrow(
+          "thinking catalog unavailable",
+        );
+        expect(catalog).toHaveBeenCalledOnce();
+        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  it("strips current thinking directives without rewriting history", async () => {
+    await withTempHome(async (home) => {
+      const historyBody = [
+        "[Chat messages since your last reply - for context]",
+        "Peter: /thinking high [2025-12-05T21:45:00.000Z]",
+        "",
+        "[Current message - respond to this]",
+        "Give me the status",
+      ].join("\n");
+      const currentBody = "Give me the status\n\nif ready:\n    report_status()";
       const thinkCases = [
         {
           label: "context-wrapper",
           request: {
-            Body: [
-              "[Chat messages since your last reply - for context]",
-              "Peter: /thinking high [2025-12-05T21:45:00.000Z]",
-              "",
-              "[Current message - respond to this]",
-              "Give me the status",
-            ].join("\n"),
+            Body: historyBody,
+            commandText: "Give me the status",
             From: "+1002",
             To: "+2000",
+            CommandAuthorized: true,
           },
           options: {},
-          assertPrompt: true,
+          expectedPrompt: historyBody,
+        },
+        {
+          label: "current-message",
+          request: {
+            Body: `/thinking high ${currentBody}`,
+            From: "+1002",
+            To: "+2000",
+            CommandAuthorized: true,
+          },
+          options: {},
+          expectedPrompt: currentBody,
         },
         {
           label: "heartbeat",
@@ -476,7 +531,7 @@ describe("trigger handling", () => {
             To: "+1003",
           },
           options: { isHeartbeat: true },
-          assertPrompt: false,
+          expectedPrompt: undefined,
         },
       ] as const;
 
@@ -489,12 +544,10 @@ describe("trigger handling", () => {
         expect(text, testCase.label).toBe("ok");
         expect(text, testCase.label).not.toMatch(/Thinking level set/i);
         expect(runEmbeddedAgentMock, testCase.label).toHaveBeenCalledOnce();
-        if (testCase.assertPrompt) {
+        if (testCase.expectedPrompt !== undefined) {
           const prompt =
             firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent").prompt ?? "";
-          expect(prompt).toContain("Give me the status");
-          expect(prompt).not.toContain("/thinking high");
-          expect(prompt).not.toContain("/think high");
+          expect(prompt, testCase.label).toBe(testCase.expectedPrompt);
         }
       }
     });
@@ -545,13 +598,17 @@ describe("trigger handling", () => {
       const storePath = join(home, "compact-main.sessions.json");
       const cfg = makeCfg(home);
       cfg.session = { ...cfg.session, store: storePath };
-      mockSuccessfulCompaction();
-
       const request = {
         Body: "/compact focus on decisions",
         From: "+1003",
         To: "+2000",
       };
+      const sessionKey = resolveSessionKey("per-sender", request, undefined, "main");
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        { sessionId: "compact-main-session", updatedAt: Date.now() },
+      );
+      mockSuccessfulCompaction();
 
       const res = await getReplyFromConfig(
         {
@@ -564,7 +621,6 @@ describe("trigger handling", () => {
       const text = maybeReplyText(res);
       expect(text).toMatch(/^⚙️ Compacted/u);
       expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
-      const sessionKey = resolveSessionKey("per-sender", request, undefined, "main");
       expect(loadSessionEntry({ storePath, sessionKey })?.compactionCount).toBe(1);
     });
   });
@@ -574,13 +630,19 @@ describe("trigger handling", () => {
       getCompactEmbeddedAgentSessionMock().mockReset();
       mockSuccessfulCompaction();
       const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: join(home, "compact-worker.sessions.json") };
+      const storePath = join(home, "compact-worker.sessions.json");
+      const sessionKey = "agent:worker1:telegram:12345";
+      cfg.session = { ...cfg.session, store: storePath };
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        { sessionId: "compact-worker-session", updatedAt: Date.now() },
+      );
       const res = await getReplyFromConfig(
         {
           Body: "/compact",
           From: "+1004",
           To: "+2000",
-          SessionKey: "agent:worker1:telegram:12345",
+          SessionKey: sessionKey,
           CommandAuthorized: true,
         },
         {},
@@ -838,7 +900,9 @@ describe("trigger handling", () => {
   it("handles bare session reset, inline commands, and unauthorized inline status", async () => {
     await withTempHome(async (home) => {
       await expectBareNewOrResetAcknowledged({ home, body: "/new", getReplyFromConfig });
-      await expectResetBlockedForNonOwner({ home });
+      for (const command of ["/new", "/reset"] as const) {
+        await expectResetBlockedForNonOwner({ home, command });
+      }
       await expectInlineCommandHandledAndStripped({
         home,
         getReplyFromConfig,

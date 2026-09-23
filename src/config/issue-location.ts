@@ -1,9 +1,12 @@
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
+import { VERSION } from "../version.js";
+import { formatConfigIssueLines } from "./issue-format.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
-import type { ConfigValidationIssue } from "./types.js";
+import type { ConfigFileSnapshot, ConfigValidationIssue } from "./types.js";
 import { isSecretRef } from "./types.secrets.js";
+import { shouldWarnOnTouchedVersion } from "./version.js";
 
 type ConfigIssuePathSegment = string | number;
 
@@ -91,31 +94,16 @@ function skipValue(raw: string, cursor: Cursor): void {
     scanQuoted(raw, cursor);
     return;
   }
-  if (char === "{") {
+  if (char === "{" || char === "[") {
+    const close = char === "{" ? "}" : "]";
     cursor.pos++;
     while (cursor.pos < raw.length) {
       skipTrivia(raw, cursor);
-      if (raw[cursor.pos] === "}") {
+      if (raw[cursor.pos] === close) {
         cursor.pos++;
         return;
       }
-      if (readObjectKey(raw, cursor) === null || !consume(raw, cursor, ":")) {
-        return;
-      }
-      skipValue(raw, cursor);
-      skipTrivia(raw, cursor);
-      if (raw[cursor.pos] === ",") {
-        cursor.pos++;
-      }
-    }
-    return;
-  }
-  if (char === "[") {
-    cursor.pos++;
-    while (cursor.pos < raw.length) {
-      skipTrivia(raw, cursor);
-      if (raw[cursor.pos] === "]") {
-        cursor.pos++;
+      if (char === "{" && (readObjectKey(raw, cursor) === null || !consume(raw, cursor, ":"))) {
         return;
       }
       skipValue(raw, cursor);
@@ -209,18 +197,6 @@ function lineAtOffset(raw: string, offset: number): number {
     }
   }
   return line;
-}
-
-function formatConfigIssuePath(segments: readonly ConfigIssuePathSegment[]): string {
-  return segments.reduce<string>(
-    (result, segment) =>
-      typeof segment === "number"
-        ? `${result}[${segment}]`
-        : result
-          ? `${result}.${segment}`
-          : segment,
-    "",
-  );
 }
 
 function resolveConfigValueAtPath(
@@ -327,7 +303,6 @@ type AttachConfigIssueDiagnosticsParams = {
   parsed: unknown;
   effective: unknown;
   configPath?: string | null;
-  formatPathForDisplay?: boolean;
   includeReceivedValueHint?: boolean;
 };
 
@@ -336,7 +311,7 @@ type ConfigIssueDiagnostics = ConfigValidationIssue & {
   sourceFile?: string;
 };
 
-export function attachConfigIssueDiagnostics(
+function attachConfigIssueDiagnostics(
   issues: readonly ConfigValidationIssue[],
   params: AttachConfigIssueDiagnosticsParams,
 ): ConfigIssueDiagnostics[] {
@@ -362,9 +337,32 @@ export function attachConfigIssueDiagnostics(
         : issue.message;
     return {
       ...issue,
-      path: params.formatPathForDisplay ? formatConfigIssuePath(segments) : issue.path,
+      // Validation path metadata is non-enumerable; preserve it through this display copy.
+      pathSegments: segments,
       message,
       ...(line === undefined ? {} : { line, sourceFile }),
     };
   });
+}
+
+/** Render invalid config issues with source locations, received values, and version-skew advice. */
+export function renderConfigValidationIssueLines(
+  snapshot: Pick<ConfigFileSnapshot, "issues" | "raw" | "parsed" | "sourceConfig" | "path">,
+  marker = "-",
+): string[] {
+  const issues = attachConfigIssueDiagnostics(snapshot.issues, {
+    raw: snapshot.raw,
+    parsed: snapshot.parsed,
+    effective: snapshot.sourceConfig,
+    configPath: snapshot.path,
+    includeReceivedValueHint: true,
+  });
+  const lines = formatConfigIssueLines(issues, marker, { normalizeRoot: true });
+  const touchedVersion = snapshot.sourceConfig.meta?.lastTouchedVersion;
+  return shouldWarnOnTouchedVersion(VERSION, touchedVersion)
+    ? [
+        ...lines,
+        `Config was last written by OpenClaw ${touchedVersion}, but you are running ${VERSION} — upgrade or re-run setup.`,
+      ]
+    : lines;
 }

@@ -1,144 +1,137 @@
-/**
- * Provider/model failover error classification.
- * Converts nested provider, transport, timeout, auth, and local coordination
- * failures into structured failover reasons and remediation metadata.
- */
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  asOptionalObjectRecord,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
-import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
+import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
+import { collectErrorGraphCandidates, formatErrorMessage, readErrorName } from "../infra/errors.js";
+import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
   classifyFailoverSignal,
   extractFailoverSignalDetails,
+  isProviderRequestSizeCeilingError,
   isUnclassifiedNoBodyHttpSignal,
-  isTimeoutErrorMessage,
 } from "./failover/classify.js";
+import {
+  FailoverError,
+  findErrorProperty,
+  getErrorMessage,
+  isFailoverError,
+  isTimeoutError,
+  readDirectErrorCode,
+  readDirectErrorMessage,
+  type CliTimeoutContext,
+} from "./failover/error.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
-import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
+import {
+  AgentHarnessSessionSupersededError,
+  isAgentHarnessPreflightError,
+} from "./harness/errors.js";
+import { isRecordedModelFallbackStop } from "./model-fallback-stop.js";
+import {
+  isSessionPlacementSettlementClosedError,
+  isAgentRunSupersededAbortReason,
+} from "./run-termination.js";
 
-const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
+export {
+  FailoverError,
+  isFailoverError,
+  isSignalTimeoutReason,
+  isTimeoutError,
+  type CliTimeoutContext,
+  type FallbackAttemptRecord,
+} from "./failover/error.js";
+
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
 const MISSING_TOOL_RESULT_REASON = "missing_tool_result";
 const MISSING_TOOL_RESULT_TEXT_RE = /native Codex tool\.call without a matching tool\.result/i;
+const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
+  "GatewayDrainingError",
+  "WorkerRunnerUnavailableError",
+  "WorkerRunnerCapacityError",
+  "WorkerWorkspaceReconciliationError",
+  "ActiveTurnClaimError",
+]);
 
-export type CliTimeoutContext = {
-  mode: "overall" | "no-output";
-  timeoutSeconds: number;
-  observedActivity: boolean;
-  activeToolCount: number;
-  backgroundTaskCount: number;
-};
+export { recordModelFallbackStop } from "./model-fallback-stop.js";
 
-export type FallbackAttemptRecord = {
-  provider: string;
-  model: string;
-  reason: FailoverReason;
-  status?: number;
-  error?: string;
-};
-
-/** Structured error used to carry model fallback/failover metadata across layers. */
-export class FailoverError extends Error {
-  readonly reason: FailoverReason;
-  readonly provider?: string;
-  readonly model?: string;
-  readonly profileId?: string;
-  readonly authMode?: string;
-  readonly status?: number;
-  readonly code?: string;
-  readonly rawError?: string;
-  readonly authProfileFailure?: { allInCooldown: boolean };
-  // Originating request attribution propagated through wrapper errors so
-  // structured log ingestion (e.g. api_health_log) can attribute exhausted
-  // failover failures back to a session/lane and the last attempted provider.
-  // See #42713.
-  readonly sessionId?: string;
-  readonly lane?: string;
-  readonly suspend?: boolean;
-  readonly cliTimeout?: CliTimeoutContext;
-  readonly attempts?: readonly FallbackAttemptRecord[];
-  readonly soonestCooldownExpiry?: number | null;
-
-  constructor(
-    message: string,
-    params: {
-      reason: FailoverReason;
-      provider?: string;
-      model?: string;
-      profileId?: string;
-      authMode?: string;
-      status?: number;
-      code?: string;
-      rawError?: string;
-      authProfileFailure?: { allInCooldown: boolean };
-      sessionId?: string;
-      lane?: string;
-      cause?: unknown;
-      suspend?: boolean;
-      cliTimeout?: CliTimeoutContext;
-      attempts?: readonly FallbackAttemptRecord[];
-      soonestCooldownExpiry?: number | null;
-    },
-  ) {
-    super(message, { cause: params.cause });
-    this.name = "FailoverError";
-    this.reason = params.reason;
-    this.provider = params.provider;
-    this.model = params.model;
-    this.profileId = params.profileId;
-    this.authMode = params.authMode;
-    this.status = params.status;
-    this.code = params.code;
-    this.rawError = params.rawError;
-    this.authProfileFailure = params.authProfileFailure;
-    this.sessionId = params.sessionId;
-    this.lane = params.lane;
-    this.suspend = params.suspend;
-    this.cliTimeout = params.cliTimeout;
-    this.attempts = params.attempts;
-    this.soonestCooldownExpiry = params.soonestCooldownExpiry;
-  }
+export function hasRecordedModelFallbackStop(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, resolveNestedErrors).some(isRecordedModelFallbackStop);
 }
 
-/** Return true for native or serialized failover errors. */
-export function isFailoverError(err: unknown): err is FailoverError {
-  if (err instanceof FailoverError) {
-    return true;
-  }
-  return Boolean(
-    err &&
-    typeof err === "object" &&
-    (err as { name?: unknown }).name === "FailoverError" &&
-    typeof (err as { reason?: unknown }).reason === "string",
+export function hasModelFallbackStop(error: unknown): boolean {
+  return (
+    isSessionPlacementSettlementClosedError(error) ||
+    isAgentRunSupersededAbortReason(error) ||
+    collectErrorGraphCandidates(error, resolveNestedErrors).some(
+      (candidate) =>
+        isRecordedModelFallbackStop(candidate) ||
+        (isFailoverError(candidate) && isCliTerminalStopCode(candidate.code)),
+    )
   );
 }
 
-export function findCliMaxTurnsError(
+function resolveNestedErrors(candidate: Record<string, unknown>): unknown[] {
+  const errors = candidate.errors;
+  const nested = [candidate.error, candidate.cause, ...(Array.isArray(errors) ? errors : [])];
+  try {
+    nested.push(candidate.suppressed);
+  } catch {
+    // An opaque disposal branch must not hide the other recorded CLI facts.
+  }
+  return nested;
+}
+
+/** Distinguishes the provider's request ceiling from context pressure and bucket state. */
+export function hasProviderRequestSizeCeiling(err: unknown): boolean {
+  return collectErrorGraphCandidates(err, resolveNestedErrors).some((candidate) =>
+    isFailoverError(candidate)
+      ? candidate.requestSizeCeiling
+      : isProviderRequestSizeCeilingError(formatErrorMessage(candidate)),
+  );
+}
+
+function findCliFailoverError<T extends FailoverError>(
   err: unknown,
-  seen: Set<object> = new Set(),
-): FailoverError | undefined {
-  if (isFailoverError(err) && err.code === "cli_max_turns") {
-    return err;
+  match: (error: FailoverError) => T | undefined,
+  seen: Set<object>,
+): T | undefined {
+  const direct = isFailoverError(err) ? match(err) : undefined;
+  if (direct) {
+    return direct;
   }
   if (!err || typeof err !== "object" || seen.has(err)) {
     return undefined;
   }
-  // Fork persistence can aggregate a terminal run error with its own failure.
-  // Keep max-turn replay protection intact across those wrapper boundaries.
+  // Preserve depth-first error/cause/aggregate order for both CLI facts,
+  // including a terminal run wrapped by a fork-persistence failure.
   seen.add(err);
-  const candidate = err as { error?: unknown; cause?: unknown; errors?: unknown };
-  const nested = [
-    candidate.error,
-    candidate.cause,
-    ...(Array.isArray(candidate.errors) ? candidate.errors : []),
-  ];
-  for (const value of nested) {
-    const found = findCliMaxTurnsError(value, seen);
+  for (const value of resolveNestedErrors(err as Record<string, unknown>)) {
+    const found = findCliFailoverError(value, match, seen);
     if (found) {
       return found;
     }
   }
   return undefined;
+}
+
+// Codes for turns the CLI backend ended itself. Their tool effects already ran,
+// so replay, model rotation, and generic failure copy must all defer to them.
+const CLI_TERMINAL_STOP_CODES = new Set(["cli_max_turns", "cli_turn_stopped"]);
+
+export function isCliTerminalStopCode(code: string | undefined): boolean {
+  return code !== undefined && CLI_TERMINAL_STOP_CODES.has(code);
+}
+
+export function findCliTerminalStopError(err: unknown): FailoverError | undefined {
+  return findCliFailoverError(
+    err,
+    (error) => (isCliTerminalStopCode(error.code) ? error : undefined),
+    new Set(),
+  );
 }
 
 function hasCliTimeoutContext(error: FailoverError): error is FailoverError & {
@@ -160,93 +153,41 @@ function hasCliTimeoutContext(error: FailoverError): error is FailoverError & {
 
 export function findCliTimeoutError(
   err: unknown,
-  seen: Set<object> = new Set(),
 ): (FailoverError & { cliTimeout: CliTimeoutContext }) | undefined {
-  if (isFailoverError(err) && hasCliTimeoutContext(err)) {
-    return err;
-  }
-  if (!err || typeof err !== "object" || seen.has(err)) {
-    return undefined;
-  }
-  // Failover summaries and persistence failures can wrap the terminal CLI error.
-  seen.add(err);
-  const candidate = err as { error?: unknown; cause?: unknown; errors?: unknown };
-  const nested = [
-    candidate.error,
-    candidate.cause,
-    ...(Array.isArray(candidate.errors) ? candidate.errors : []),
-  ];
-  for (const value of nested) {
-    const found = findCliTimeoutError(value, seen);
-    if (found) {
-      return found;
-    }
-  }
-  return undefined;
-}
-
-/** Map a failover reason to the closest HTTP-like status code. */
-export function resolveFailoverStatus(reason: FailoverReason): number | undefined {
-  switch (reason) {
-    case "billing":
-      return 402;
-    case "server_error":
-      return 500;
-    case "rate_limit":
-      return 429;
-    case "overloaded":
-      return 503;
-    case "auth":
-      return 401;
-    case "auth_permanent":
-      return 403;
-    case "timeout":
-      return 408;
-    case "tls_certificate":
-      return 502;
-    case "context_overflow":
-      return 413;
-    case "format":
-      return 400;
-    case "model_not_found":
-      return 404;
-    case "session_expired":
-      return 410; // Gone - session no longer exists
-    default:
-      return undefined;
-  }
-}
-
-function findErrorProperty<T>(
-  err: unknown,
-  reader: (candidate: unknown) => T | undefined,
-  seen: Set<object> = new Set(),
-): T | undefined {
-  const direct = reader(err);
-  if (direct !== undefined) {
-    return direct;
-  }
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  if (seen.has(err)) {
-    return undefined;
-  }
-  seen.add(err);
-  const candidate = err as { error?: unknown; cause?: unknown };
-  return (
-    findErrorProperty(candidate.error, reader, seen) ??
-    findErrorProperty(candidate.cause, reader, seen)
+  return findCliFailoverError(
+    err,
+    (error) => (hasCliTimeoutContext(error) ? error : undefined),
+    new Set(),
   );
 }
 
+/** Map a failover reason to the closest HTTP-like status code. */
+export function resolveFailoverStatus(reason: FailoverReason, code?: string): number | undefined {
+  return normalizeFailoverStatus(FAILOVER_STATUS.get(reason), code);
+}
+
+function normalizeFailoverStatus(status: number | undefined, code?: string): number | undefined {
+  return code === "selected_auth_profile_unavailable" ? undefined : status;
+}
+
+const FAILOVER_STATUS = new Map<FailoverReason, number>([
+  ["billing", 402],
+  ["server_error", 500],
+  ["rate_limit", 429],
+  ["overloaded", 503],
+  ["auth", 401],
+  ["auth_permanent", 403],
+  ["timeout", 408],
+  ["tls_certificate", 502],
+  ["context_overflow", 413],
+  ["format", 400],
+  ["model_not_found", 404],
+  ["session_expired", 410],
+]);
+
 function readDirectStatusCode(err: unknown): number | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const candidate =
-    (err as { status?: unknown; statusCode?: unknown }).status ??
-    (err as { statusCode?: unknown }).statusCode;
+  const record = asOptionalObjectRecord(err);
+  const candidate = record?.status ?? record?.statusCode;
   if (typeof candidate === "number") {
     return candidate;
   }
@@ -256,103 +197,44 @@ function readDirectStatusCode(err: unknown): number | undefined {
   return undefined;
 }
 
-function getStatusCode(err: unknown): number | undefined {
-  return findErrorProperty(err, readDirectStatusCode);
-}
-
-function readDirectErrorCode(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const directCode = (err as { code?: unknown }).code;
-  if (typeof directCode === "string") {
-    const trimmed = directCode.trim();
-    return trimmed ? trimmed : undefined;
-  }
-  const detailCode = (err as { detail?: { code?: unknown } }).detail?.code;
-  if (typeof detailCode === "string") {
-    const trimmed = detailCode.trim();
-    return trimmed ? trimmed : undefined;
-  }
-  const status = (err as { status?: unknown }).status;
-  if (typeof status !== "string" || /^\d+$/.test(status)) {
-    return undefined;
-  }
-  const trimmed = status.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function getErrorCode(err: unknown): string | undefined {
-  return findErrorProperty(err, readDirectErrorCode);
-}
-
-function isStableProviderErrorType(value: string): boolean {
-  if (
-    /^(?:api|authentication|invalid_request|not_found|overloaded|permission|rate_limit|server)_error$/i.test(
+function readStableProviderErrorType(raw: string): string | undefined {
+  const value = raw.trim();
+  return /^[A-Z][A-Z0-9_:-]*$/.test(value) &&
+    !/^(?:api|authentication|invalid_request|not_found|overloaded|permission|rate_limit|server)_error$/i.test(
       value,
     )
-  ) {
-    return false;
-  }
-  return /^[A-Z][A-Z0-9_:-]*$/.test(value);
+    ? value
+    : undefined;
 }
 
 function readDirectErrorType(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") {
+  const record = asOptionalObjectRecord(err);
+  if (!record) {
     return undefined;
   }
-  const directType = (err as { errorType?: unknown }).errorType;
+  const directType = record.errorType;
   if (typeof directType === "string") {
-    const trimmed = directType.trim();
-    return trimmed && isStableProviderErrorType(trimmed) ? trimmed : undefined;
+    return readStableProviderErrorType(directType);
   }
-  const detailType = (err as { detail?: { type?: unknown } }).detail?.type;
+  const detailType = (record.detail as { type?: unknown } | undefined)?.type;
   if (typeof detailType === "string") {
-    const trimmed = detailType.trim();
-    return trimmed && isStableProviderErrorType(trimmed) ? trimmed : undefined;
+    return readStableProviderErrorType(detailType);
   }
-  const type = (err as { type?: unknown }).type;
-  if (typeof type === "string") {
-    const trimmed = type.trim();
-    if (!trimmed || /^(?:error|exception)$/i.test(trimmed)) {
-      return undefined;
-    }
-    return isStableProviderErrorType(trimmed) ? trimmed : undefined;
-  }
-  return undefined;
-}
-
-function getErrorType(err: unknown): string | undefined {
-  return findErrorProperty(err, readDirectErrorType);
+  const type = normalizeOptionalString(record.type);
+  return type && !/^(?:error|exception)$/i.test(type)
+    ? readStableProviderErrorType(type)
+    : undefined;
 }
 
 function readDirectProvider(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const provider = (err as { provider?: unknown }).provider;
-  if (typeof provider !== "string") {
-    return undefined;
-  }
-  const trimmed = provider.trim();
-  return trimmed || undefined;
-}
-
-function getProvider(err: unknown): string | undefined {
-  return findErrorProperty(err, readDirectProvider);
+  return normalizeOptionalString(asOptionalObjectRecord(err)?.provider);
 }
 
 function readDirectErrorDetails(err: unknown): string[] | undefined {
-  if (!err || typeof err !== "object") {
+  const candidate = asOptionalObjectRecord(err);
+  if (!candidate) {
     return undefined;
   }
-  const candidate = err as {
-    body?: unknown;
-    detail?: unknown;
-    error?: unknown;
-    errorBody?: unknown;
-    param?: unknown;
-  };
   return extractFailoverSignalDetails(
     candidate.param,
     candidate.errorBody,
@@ -362,37 +244,12 @@ function readDirectErrorDetails(err: unknown): string[] | undefined {
   );
 }
 
-function readDirectErrorMessage(err: unknown): string | undefined {
-  if (err instanceof Error) {
-    return err.message || undefined;
-  }
-  if (typeof err === "string") {
-    return err || undefined;
-  }
-  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
-    return String(err);
-  }
-  if (typeof err === "symbol") {
-    return err.description ?? undefined;
-  }
-  if (err && typeof err === "object") {
-    const message = (err as { message?: unknown }).message;
-    if (typeof message === "string") {
-      return message || undefined;
-    }
-  }
-  return undefined;
-}
-
-function getErrorMessage(err: unknown): string {
-  return findErrorProperty(err, readDirectErrorMessage) ?? "";
-}
-
 function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
   const message = readDirectErrorMessage(err);
+  const code = readDirectErrorCode(err);
   return {
-    status: readDirectStatusCode(err),
-    code: readDirectErrorCode(err),
+    status: normalizeFailoverStatus(readDirectStatusCode(err), code),
+    code,
     errorType: readDirectErrorType(err),
     message: message || undefined,
     provider: readDirectProvider(err),
@@ -404,21 +261,14 @@ function hasSessionTranscriptWriterClaimRebound(
   err: unknown,
   seen: Set<object> = new Set(),
 ): boolean {
-  if (
-    err &&
-    typeof err === "object" &&
-    readErrorName(err) === "SessionTranscriptWriterClaimReboundError"
-  ) {
+  if (readErrorName(err) === "SessionTranscriptWriterClaimReboundError") {
     return true;
   }
-  if (!err || typeof err !== "object") {
+  const candidate = asOptionalObjectRecord(err);
+  if (!candidate || seen.has(candidate)) {
     return false;
   }
-  if (seen.has(err)) {
-    return false;
-  }
-  seen.add(err);
-  const candidate = err as { error?: unknown; cause?: unknown; reason?: unknown };
+  seen.add(candidate);
   return (
     hasSessionTranscriptWriterClaimRebound(candidate.error, seen) ||
     hasSessionTranscriptWriterClaimRebound(candidate.cause, seen) ||
@@ -426,43 +276,23 @@ function hasSessionTranscriptWriterClaimRebound(
   );
 }
 
-function readField(value: unknown, key: string): unknown {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  return (value as Record<string, unknown>)[key];
-}
-
-function readStringField(value: unknown, key: string): string | undefined {
-  const field = readField(value, key);
-  return typeof field === "string" ? field : undefined;
-}
-
-function isMissingToolResultMessage(value: string): boolean {
-  return MISSING_TOOL_RESULT_TEXT_RE.test(value);
-}
-
-function isMissingToolResultMarker(value: string): boolean {
-  return value.trim() === MISSING_TOOL_RESULT_REASON;
-}
-
 function readMissingToolResultMarker(err: unknown): true | undefined {
   const message = readDirectErrorMessage(err);
-  if (message && isMissingToolResultMessage(message)) {
+  if (message && MISSING_TOOL_RESULT_TEXT_RE.test(message)) {
     return true;
   }
+  const record = asOptionalObjectRecord(err);
   for (const key of ["code", "reason", "status"] as const) {
-    const value = readStringField(err, key);
-    if (value && isMissingToolResultMarker(value)) {
+    if (readStringField(record, key)?.trim() === MISSING_TOOL_RESULT_REASON) {
       return true;
     }
   }
-  const output = readStringField(err, "output");
-  if (output && isMissingToolResultMessage(output)) {
+  const output = readStringField(record, "output");
+  if (output && MISSING_TOOL_RESULT_TEXT_RE.test(output)) {
     return true;
   }
-  const resultReason = readStringField(readField(err, "result"), "reason");
-  const detailReason = readStringField(readField(err, "detail"), "reason");
+  const resultReason = readStringField(asOptionalObjectRecord(record?.result), "reason");
+  const detailReason = readStringField(asOptionalObjectRecord(record?.detail), "reason");
   if (resultReason === MISSING_TOOL_RESULT_REASON || detailReason === MISSING_TOOL_RESULT_REASON) {
     return true;
   }
@@ -481,11 +311,10 @@ function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
   );
 }
 
-function hasGatewayDrainingFailure(err: unknown): boolean {
-  return collectErrorGraphCandidates(err, (candidate) => {
-    const errors = candidate.errors;
-    return [candidate.error, candidate.cause, ...(Array.isArray(errors) ? errors : [])];
-  }).some((candidate) => readErrorName(candidate) === "GatewayDrainingError");
+function hasRuntimeCoordinationFailure(err: unknown): boolean {
+  return collectErrorGraphCandidates(err, resolveNestedErrors).some((candidate) =>
+    RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)),
+  );
 }
 
 function hasDirectProviderFailureIdentity(err: unknown): boolean {
@@ -496,79 +325,27 @@ function hasDirectProviderFailureIdentity(err: unknown): boolean {
   return Boolean(signal.status || signal.code || signal.errorType || signal.provider);
 }
 
-/**
- * True when the error is a local runtime coordination/tool-execution error
- * rather than a provider/model failure. The model fallback chain must abort on
- * these instead of consuming candidate slots — retrying any model would hit the
- * same local condition. See #83510 and #95474.
- */
+/** Local coordination failures stop fallback because changing models cannot repair them. */
 export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
   return resolveModelFallbackError(err).kind === "coordination";
 }
 
-function hasTimeoutHint(err: unknown): boolean {
-  if (!err) {
-    return false;
-  }
-  if (readErrorName(err) === "TimeoutError") {
-    return true;
-  }
-  const message = getErrorMessage(err);
-  return Boolean(message && isTimeoutErrorMessage(message));
-}
-
-/** Return true when an unknown error shape represents a timeout. */
-export function isTimeoutError(err: unknown): boolean {
-  if (hasTimeoutHint(err)) {
-    return true;
-  }
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  if (readErrorName(err) !== "AbortError") {
-    return false;
-  }
-  const message = getErrorMessage(err);
-  if (message && ABORT_TIMEOUT_RE.test(message)) {
-    return true;
-  }
-  const cause = "cause" in err ? (err as { cause?: unknown }).cause : undefined;
-  const reason = "reason" in err ? (err as { reason?: unknown }).reason : undefined;
-  return hasTimeoutHint(cause) || hasTimeoutHint(reason);
-}
-
-/** Return true when an abort-signal reason is an intentional timeout; plain AbortError is a cancellation, not a timeout. */
-export function isSignalTimeoutReason(reason: unknown): boolean {
-  return readErrorName(reason) === "TimeoutError";
-}
-
-function failoverReasonFromClassification(
-  classification: FailoverClassification | null,
-): FailoverReason | null {
-  if (!classification) {
-    return null;
-  }
-  return classification.kind === "reason" ? classification.reason : "context_overflow";
-}
-
 function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSignal {
   const message = getErrorMessage(err);
+  const code = findErrorProperty(err, readDirectErrorCode);
   return {
-    status: getStatusCode(err),
-    code: getErrorCode(err),
-    errorType: getErrorType(err),
+    status: normalizeFailoverStatus(findErrorProperty(err, readDirectStatusCode), code),
+    code,
+    errorType: findErrorProperty(err, readDirectErrorType),
     message: message || undefined,
-    provider: getProvider(err) ?? providerHint,
+    provider: findErrorProperty(err, readDirectProvider) ?? providerHint,
     details: readDirectErrorDetails(err),
   };
 }
 
 function getNestedErrorCandidates(err: unknown): unknown[] {
-  if (!err || typeof err !== "object") {
-    return [];
-  }
-  const candidate = err as { error?: unknown; cause?: unknown };
-  return [candidate.error, candidate.cause].filter(
+  const candidate = asOptionalObjectRecord(err);
+  return [candidate?.error, candidate?.cause].filter(
     (value): value is unknown => value !== undefined && value !== err,
   );
 }
@@ -688,6 +465,11 @@ function resolveFailoverClassificationFromError(
   err: unknown,
   providerHint?: string,
 ): FailoverClassification | null {
+  // A direct preflight owns the refusal; its cause is diagnostic, not a failed
+  // provider attempt that may rotate credentials or replay the turn.
+  if (isAgentHarnessPreflightError(err)) {
+    return null;
+  }
   return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0, providerHint);
 }
 
@@ -701,18 +483,9 @@ export function resolveFailoverReasonFromError(
   );
 }
 
-/**
- * Build an actionable remediation hint for a failover error when the failure
- * reason is `auth` / `auth_permanent` and we have enough provider attribution
- * to suggest a re-authentication command. Returns `undefined` for any other
- * failure shape so callers can opportunistically append the hint without
- * branching on every reason themselves.
- *
- * Keep the string short and copy-pasteable — operators see it in fallback
- * summary errors and TUI status lines.
- */
+/** Build a copy-pasteable reauthentication hint for attributed auth failures. */
 export function buildFailoverRemediationHint(err: unknown): string | undefined {
-  if (!isFailoverError(err)) {
+  if (!isFailoverError(err) || err.code === "selected_auth_profile_unavailable") {
     return undefined;
   }
   if (err.reason !== "auth" && err.reason !== "auth_permanent") {
@@ -772,12 +545,15 @@ export function describeFailoverError(err: unknown): {
   sessionId?: string;
   lane?: string;
 } {
+  if (isAgentHarnessPreflightError(err)) {
+    return { message: err.message };
+  }
   if (isFailoverError(err)) {
     return {
       message: err.message,
       rawError: err.rawError,
       reason: err.reason,
-      status: err.status,
+      status: normalizeFailoverStatus(err.status, err.code),
       code: err.code,
       provider: err.provider,
       model: err.model,
@@ -805,10 +581,12 @@ type FailoverErrorContext = {
   authMode?: string;
   sessionId?: string;
   lane?: string;
+  timeout?: FailoverError["timeout"];
 };
 
 type ModelFallbackErrorResolution =
   | { kind: "failover"; error: FailoverError }
+  | { kind: "terminal"; error: unknown }
   | { kind: "coordination"; error: unknown }
   | { kind: "unknown"; error: unknown };
 
@@ -817,41 +595,47 @@ export function coerceToFailoverError(
   err: unknown,
   context?: FailoverErrorContext,
 ): FailoverError | null {
-  const sourceError = err;
-  if (isFailoverError(sourceError)) {
-    if (context?.authMode && !sourceError.authMode) {
-      const message =
-        typeof sourceError.message === "string" ? sourceError.message : String(sourceError);
-      return new FailoverError(message, {
-        reason: sourceError.reason,
-        provider: sourceError.provider,
-        model: sourceError.model,
-        profileId: sourceError.profileId,
-        authMode: context.authMode,
-        status: sourceError.status,
-        code: sourceError.code,
-        rawError: sourceError.rawError,
-        authProfileFailure: sourceError.authProfileFailure,
-        sessionId: sourceError.sessionId,
-        lane: sourceError.lane,
-        cause: sourceError.cause,
-        suspend: sourceError.suspend,
-        cliTimeout: sourceError.cliTimeout,
-        attempts: sourceError.attempts,
-        soonestCooldownExpiry: sourceError.soonestCooldownExpiry,
+  if (isFailoverError(err)) {
+    const status = normalizeFailoverStatus(err.status, err.code);
+    if (
+      !Object.is(status, err.status) ||
+      (context?.authMode && !err.authMode) ||
+      (context?.timeout && !err.timeout)
+    ) {
+      const message = typeof err.message === "string" ? err.message : String(err);
+      const enriched = new FailoverError(message, {
+        reason: err.reason,
+        provider: err.provider,
+        model: err.model,
+        profileId: err.profileId,
+        authMode: err.authMode ?? context?.authMode,
+        status,
+        code: err.code,
+        rawError: err.rawError,
+        authProfileFailure: err.authProfileFailure,
+        sessionId: err.sessionId,
+        lane: err.lane,
+        cause: err.cause,
+        suspend: err.suspend,
+        cliTimeout: err.cliTimeout,
+        timeout: err.timeout ?? context?.timeout,
+        attempts: err.attempts,
+        soonestCooldownExpiry: err.soonestCooldownExpiry,
       });
+      copyErrorDiagnostic(err, enriched);
+      return enriched;
     }
-    return sourceError;
+    return err;
   }
-  const reason = resolveFailoverReasonFromError(sourceError, context?.provider);
+  const reason = resolveFailoverReasonFromError(err, context?.provider);
   if (!reason) {
     return null;
   }
 
-  const signal = normalizeErrorSignal(sourceError);
-  const message = signal.message ?? String(sourceError);
-  const status = signal.status ?? resolveFailoverStatus(reason);
+  const signal = normalizeErrorSignal(err);
+  const message = signal.message ?? String(err);
   const code = signal.code;
+  const status = signal.status ?? resolveFailoverStatus(reason, code);
 
   // Suspend when hitting rate limits or billing issues in an attributed session
   const shouldSuspend =
@@ -869,6 +653,7 @@ export function coerceToFailoverError(
     code,
     rawError: message,
     cause: err instanceof Error ? err : undefined,
+    timeout: context?.timeout,
     suspend: shouldSuspend,
   });
 }
@@ -883,7 +668,7 @@ export function resolveModelFallbackError(
   }
   // Gateway admission can fail before any provider turn starts. Preserve that
   // identity through wrappers and aggregates so fallback cannot blame a model.
-  if (hasGatewayDrainingFailure(err)) {
+  if (hasRuntimeCoordinationFailure(err)) {
     return { kind: "coordination", error: err };
   }
   const staleLifecycleFailure = hasStaleAgentRunLifecycleFailure(err);
@@ -898,6 +683,14 @@ export function resolveModelFallbackError(
   if (hasSessionTranscriptWriterClaimRebound(err)) {
     return { kind: "coordination", error: err };
   }
+  // Recorded terminal stops prohibit replay regardless of provider policy.
+  // Keep the wrapper identity before coercion can discard the terminal fact.
+  if (hasModelFallbackStop(err)) {
+    return { kind: "terminal", error: err };
+  }
+  if (isAgentHarnessPreflightError(err)) {
+    return { kind: "coordination", error: err };
+  }
   const failoverError = coerceToFailoverError(err, context);
   if (failoverError) {
     return { kind: "failover", error: failoverError };
@@ -907,4 +700,3 @@ export function resolveModelFallbackError(
   }
   return { kind: "unknown", error: err };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,81 +2,46 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Transcript filter for removing heartbeat-only prompt/ack artifacts.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  collectToolCallIds,
+  isContractToolCallBlock,
+  isContractToolResultBlock,
+  readToolCallName,
+} from "../shared/tool-block-contract.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "./heartbeat-tool-response.js";
 import {
+  HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
-  HEARTBEAT_TRANSCRIPT_PROMPT,
+  INTERNAL_WAKE_TRANSCRIPT_PROMPTS,
+  isHeartbeatAcknowledgementText,
   resolveHeartbeatPromptForResponseTool,
-  stripHeartbeatToken,
 } from "./heartbeat.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "./tokens.js";
 
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
-const HEARTBEAT_TASK_PROMPT_ACK = "After completing all due tasks, reply HEARTBEAT_OK.";
-const TOOL_CALL_BLOCK_TYPES = new Set([
-  "toolCall",
-  "functionCall",
-  "toolUse",
-  "tool_call",
-  "function_call",
-  "tool_use",
-]);
-const TOOL_RESULT_BLOCK_TYPES = new Set([
-  "toolResult",
-  "tool_result",
-  "tool_result_error",
-  "function_call_output",
-]);
+const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [
+  ...[HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN].map(
+    (token) => `After completing all due tasks, reply ${token}.`,
+  ),
+  HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
+  `After completing all due tasks, use ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+];
 type HeartbeatTranscriptMessage = { role: string; content?: unknown };
-
-function readNestedString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  const direct = readString(value);
-  if (direct) {
-    return direct;
-  }
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  return readString(value.name);
-}
 
 function collectToolCallBlocks(content: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(content)) {
     return [];
   }
-  return content.filter(
-    (block): block is Record<string, unknown> =>
-      isRecord(block) && TOOL_CALL_BLOCK_TYPES.has(readString(block.type) ?? ""),
-  );
+  return content.filter(isContractToolCallBlock);
 }
 
 function collectToolResultBlocks(content: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(content)) {
     return [];
   }
-  return content.filter(
-    (block): block is Record<string, unknown> =>
-      isRecord(block) && TOOL_RESULT_BLOCK_TYPES.has(readString(block.type) ?? ""),
-  );
-}
-
-function readToolCallName(block: Record<string, unknown>): string | undefined {
-  return readString(block.name) ?? readNestedString(block, "function");
-}
-
-function collectToolCallIds(block: Record<string, unknown>): string[] {
-  const ids = [
-    readString(block.call_id),
-    readString(block.tool_call_id),
-    readString(block.toolCallId),
-    readString(block.tool_use_id),
-    readString(block.toolUseId),
-    readString(block.id),
-  ].filter((id): id is string => Boolean(id));
-  return uniqueStrings(ids);
+  return content.filter(isContractToolResultBlock);
 }
 
 function readNestedToolCallArguments(record: Record<string, unknown>): unknown {
@@ -175,9 +140,7 @@ function isEmbeddedToolResultOnlyContent(content: unknown): boolean {
   return (
     Array.isArray(content) &&
     content.length > 0 &&
-    content.every(
-      (block) => isRecord(block) && TOOL_RESULT_BLOCK_TYPES.has(readString(block.type) ?? ""),
-    )
+    content.every((block) => isContractToolResultBlock(block))
   );
 }
 
@@ -236,10 +199,10 @@ function collectSuccessfulToolResultCallIds(message: {
       ids.push(...collectToolCallIds(block));
     }
   }
-  return uniqueStrings(ids);
+  return [...new Set(ids)];
 }
 
-export function isRealNonHeartbeatUserMessage(
+function isRealNonHeartbeatUserMessage(
   message: { role: string; content?: unknown },
   heartbeatPrompt?: string,
 ): boolean {
@@ -306,12 +269,13 @@ export function isHeartbeatUserMessage(
     return false;
   }
   const normalizedHeartbeatPrompt = heartbeatPrompt?.trim();
-  if (trimmed === HEARTBEAT_TRANSCRIPT_PROMPT) {
+  const transcriptPrompts = Object.values(INTERNAL_WAKE_TRANSCRIPT_PROMPTS);
+  if (transcriptPrompts.some((prompt) => trimmed === prompt)) {
     return true;
   }
   if (
     MESSAGE_TOOL_DELIVERY_HINTS.some((prefix) => trimmed.startsWith(prefix)) &&
-    trimmed.endsWith(HEARTBEAT_TRANSCRIPT_PROMPT)
+    transcriptPrompts.some((prompt) => trimmed.endsWith(prompt))
   ) {
     return true;
   }
@@ -331,7 +295,8 @@ export function isHeartbeatUserMessage(
     return true;
   }
   return (
-    trimmed.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX) && trimmed.includes(HEARTBEAT_TASK_PROMPT_ACK)
+    trimmed.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX) &&
+    HEARTBEAT_TASK_PROMPT_COMPLETIONS.some((completion) => trimmed.includes(completion))
   );
 }
 
@@ -350,7 +315,7 @@ export function isHeartbeatOkResponse(
   if (hasNonTextContent) {
     return false;
   }
-  return stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars: ackMaxChars }).shouldSkip;
+  return isHeartbeatAcknowledgementText(text, ackMaxChars);
 }
 
 function advancePastAdjacentToolResults(
@@ -385,7 +350,8 @@ function hasCompletedVisibleHeartbeatResponseToolCall(
     return false;
   }
   const callIds = new Set(visibleCalls.flatMap((call) => collectToolCallIds(call)));
-  for (const result of messages.slice(index + 1)) {
+  for (let resultIndex = index + 1; resultIndex < messages.length; resultIndex++) {
+    const result = expectDefined(messages[resultIndex], "messages entry at resultIndex");
     if (!isToolResultCompletionCandidate(result)) {
       break;
     }

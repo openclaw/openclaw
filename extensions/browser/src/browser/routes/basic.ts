@@ -41,28 +41,6 @@ function remainingChromeMcpStatusTimeoutMs(startedAtMs: number): number {
   return Math.max(1, STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS - (Date.now() - startedAtMs));
 }
 
-async function probeChromeMcpPageReady(
-  profileCtx: ProfileContext,
-  timeoutMs: number,
-  signal: AbortSignal,
-) {
-  const abort = new AbortController();
-  const timer = setTimeout(() => {
-    abort.abort(new Error(`Chrome MCP page-readiness probe timed out after ${timeoutMs}ms.`));
-  }, timeoutMs);
-  try {
-    return await profileCtx.isReachable(timeoutMs, {
-      ephemeral: true,
-      signal: AbortSignal.any([signal, abort.signal]),
-    });
-  } catch {
-    signal.throwIfAborted();
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
   if (isProfileRestartRequiredError(err)) {
     throw err;
@@ -96,10 +74,31 @@ async function withBasicProfileRoute(params: {
     return;
   }
   try {
-    await params.run(profileCtx);
+    await withBasicRequestAdmission(params.req, () => params.run(profileCtx), profileCtx.profile);
   } catch (err) {
     return handleBrowserRouteError(params.res, err);
   }
+}
+
+async function withBasicRequestAdmission<T>(
+  req: BrowserRequest,
+  run: () => Promise<T>,
+  profile?: ProfileContext["profile"],
+): Promise<T> {
+  const assertRequesterCurrent = () => {
+    req.signal?.throwIfAborted();
+    req.requester?.signal.throwIfAborted();
+    if (req.requester?.isCurrent() === false) {
+      throw new BrowserError(
+        "The Gateway connection that requested the browser operation has ended.",
+        401,
+      );
+    }
+  };
+  assertRequesterCurrent();
+  await req.assertCurrent?.(profile);
+  assertRequesterCurrent();
+  return await run();
 }
 
 function registerBasicProfilePost(
@@ -123,13 +122,15 @@ function registerBasicProfilePost(
 }
 
 async function withProfilesServiceMutation(params: {
+  req: BrowserRequest;
   res: BrowserResponse;
   ctx: BrowserRouteContext;
   run: (service: ReturnType<typeof createBrowserProfilesService>) => Promise<unknown>;
 }) {
   try {
-    const service = createBrowserProfilesService(params.ctx);
-    const result = await params.run(service);
+    const result = await withBasicRequestAdmission(params.req, () =>
+      params.run(createBrowserProfilesService(params.ctx)),
+    );
     params.res.json(result);
   } catch (err) {
     return handleBrowserRouteError(params.res, err);
@@ -153,20 +154,14 @@ async function buildBrowserStatus(
   const [cdpHttp, cdpReady, pageReady] = capabilities.usesChromeMcp
     ? await (async () => {
         const statusStartedAtMs = Date.now();
+        let pageReachable = false;
         const transportReady = await profileCtx.isTransportAvailable(
           STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS,
           signal,
-        );
-        if (!transportReady) {
-          return [false, false, false] as const;
-        }
-        // Status-safe page probe: ephemeral so a passive status call does not seed
-        // a persistent cached Chrome MCP session. Keep the whole status route inside
-        // the public client timeout; page probe failures degrade to pageReady=false.
-        const pageReachable = await probeChromeMcpPageReady(
-          profileCtx,
-          remainingChromeMcpStatusTimeoutMs(statusStartedAtMs),
-          signal,
+          {
+            timeoutMs: () => remainingChromeMcpStatusTimeoutMs(statusStartedAtMs),
+            onResult: (tabCount) => (pageReachable = tabCount !== null),
+          },
         );
         return [transportReady, transportReady, pageReachable] as const;
       })()
@@ -202,16 +197,16 @@ async function buildBrowserStatus(
           }),
       )
     : null;
-  let detectedBrowser: string | null = null;
-  let detectedExecutablePath: string | null = null;
+  let detected: ReturnType<typeof resolveBrowserExecutableForPlatform> = null;
   let detectError: string | null = null;
 
   try {
-    const detected = resolveBrowserExecutableForPlatform(current.resolved, process.platform);
-    if (detected) {
-      detectedBrowser = detected.kind;
-      detectedExecutablePath = detected.path;
-    }
+    detected = resolveBrowserExecutableForPlatform(
+      capabilities.mode === "local-managed" && capabilities.browserFilesystemLocal
+        ? { ...current.resolved, executablePath: profileCtx.profile.executablePath }
+        : current.resolved,
+      process.platform,
+    );
   } catch (err) {
     detectError = String(err);
   }
@@ -248,8 +243,8 @@ async function buildBrowserStatus(
     cdpPort: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpPort,
     cdpUrl: profileCtx.profile.cdpUrl ? (redactCdpUrl(profileCtx.profile.cdpUrl) ?? null) : null,
     chosenBrowser: profileState?.running?.exe.kind ?? null,
-    detectedBrowser,
-    detectedExecutablePath,
+    detectedBrowser: detected?.kind ?? null,
+    detectedExecutablePath: detected?.path ?? null,
     detectError,
     userDataDir: profileState?.running?.userDataDir ?? profileCtx.profile.userDataDir ?? null,
     color: profileCtx.profile.color,
@@ -288,7 +283,11 @@ async function runBrowserLiveProbe(profileCtx: ProfileContext, signal: AbortSign
         summary: "No per-tab CDP WebSocket available for the lightweight live snapshot probe",
       };
     }
-    const snap = await snapshotAria({ wsUrl: tab.wsUrl, limit: 25 });
+    const snap = await snapshotAria({
+      wsUrl: tab.wsUrl,
+      ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
+      limit: 25,
+    });
     return {
       id: "live-snapshot",
       label: "Live snapshot",
@@ -402,6 +401,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       const status = await runProfileRouteOperation({
         profileCtx,
         signal: req.signal,
+        assertCurrent: req.assertCurrent,
         run: async (signal) => await buildBrowserStatus(ctx, profileCtx, signal),
       });
       res.json(status);
@@ -419,9 +419,19 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       const report = await runProfileRouteOperation({
         profileCtx,
         signal: req.signal,
+        assertCurrent: req.assertCurrent,
         run: async (signal) => {
           const status = await buildBrowserStatus(ctx, profileCtx, signal);
-          const doctorReport = buildBrowserDoctorReport({ status });
+          const relay = ctx.state().extensionRelays?.get(profileCtx.profile.name);
+          const identity =
+            relay?.ownership === "borrowed"
+              ? (await relay.client.status()).identity
+              : relay?.bridge.identity;
+          const doctorReport = buildBrowserDoctorReport({
+            status,
+            extensionVersion:
+              status.transport === "extension" ? identity?.extensionVersion : undefined,
+          });
           if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
             doctorReport.checks.push(await runBrowserLiveProbe(profileCtx, signal));
             doctorReport.ok = doctorReport.checks.every((check) => check.status !== "fail");
@@ -484,6 +494,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     }
 
     await withProfilesServiceMutation({
+      req,
       res,
       ctx,
       run: async (service) =>
@@ -512,22 +523,22 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     } catch (err) {
       return jsonError(res, 400, err instanceof Error ? err.message : "invalid domains");
     }
-    try {
-      const service = createBrowserProfilesService(ctx);
-      const result = await service.importSystemProfile(
-        {
-          browser: toStringOrEmpty(body.browser) || undefined,
-          systemProfile: toStringOrEmpty(body.systemProfile) || undefined,
-          into: toStringOrEmpty(body.into) || undefined,
-          domains,
-          makeDefault: toBoolean(body.makeDefault) ?? false,
-        },
-        { signal: req.signal },
-      );
-      res.json(result);
-    } catch (err) {
-      return handleBrowserRouteError(res, err);
-    }
+    await withProfilesServiceMutation({
+      req,
+      res,
+      ctx,
+      run: async (service) =>
+        await service.importSystemProfile(
+          {
+            browser: toStringOrEmpty(body.browser) || undefined,
+            systemProfile: toStringOrEmpty(body.systemProfile) || undefined,
+            into: toStringOrEmpty(body.into) || undefined,
+            domains,
+            makeDefault: toBoolean(body.makeDefault) ?? false,
+          },
+          { signal: req.signal },
+        ),
+    });
   });
 
   // Delete a profile
@@ -538,6 +549,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     }
 
     await withProfilesServiceMutation({
+      req,
       res,
       ctx,
       run: async (service) => await service.deleteProfile(name),

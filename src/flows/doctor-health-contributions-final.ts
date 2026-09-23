@@ -1,4 +1,5 @@
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
+import { shouldDeferConfiguredPluginInstallRepair } from "../commands/doctor/shared/update-phase.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { runCoreHealthFindingNote } from "./doctor-health-contribution-core.js";
 import {
@@ -11,6 +12,8 @@ import {
   runDevicePairingHealth,
   runGatewayDaemonHealth,
   runGatewayServicesHealth,
+  runHostDesktopHealth,
+  runGitHubProjectHealth,
   runOpenAIOAuthTlsHealth,
   runSecurityHealth,
   runStartupChannelMaintenanceHealth,
@@ -19,7 +22,7 @@ import {
 } from "./doctor-health-contribution-runners.gateway.js";
 import {
   collectMemorySearchHealthFindings,
-  collectWorkspaceStatusPluginVersionDrift,
+  collectWorkspaceStatusPluginVersionReadiness,
   runBootstrapSizeHealth,
   runHeartbeatCadenceMigrationHealth,
   runHeartbeatScratchMigrationHealth,
@@ -28,6 +31,7 @@ import {
   runMemorySearchHealthContribution,
   runSkillsHealth,
   runToolsMdMigrationHealth,
+  runWorkspaceAliasHealth,
   runWorkspaceStatusHealth,
   runWorkspaceSuggestionsHealth,
 } from "./doctor-health-contribution-runners.workspace.js";
@@ -38,6 +42,9 @@ import type {
 } from "./doctor-health-contribution-types.js";
 import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import type { HealthCheck } from "./health-checks.js";
+
+const CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID =
+  "core/doctor/channel-package-state-capabilities";
 
 export function resolveFinalDoctorHealthContributions(params: {
   runSystemdLingerHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
@@ -56,8 +63,23 @@ export function resolveFinalDoctorHealthContributions(params: {
       run: runGatewayServicesHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:host-desktop",
+      label: "Host desktop",
+      healthChecks: {
+        description: "Gateway-host desktop enablement, reachability, and RFB security state.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectHostDesktopHealthFindings } =
+            await import("../commands/doctor-host-desktop.js");
+          return collectHostDesktopHealthFindings(ctx.cfg);
+        },
+      },
+      run: runHostDesktopHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:default-account-routing",
       label: "Default account routing",
+      updateWork: { kind: "inspection", scope: "run" },
       healthChecks: {
         description: "Multi-account channels have explicit default routing or complete bindings.",
         defaultEnabled: false,
@@ -73,6 +95,30 @@ export function resolveFinalDoctorHealthContributions(params: {
             checkId: "core/doctor/default-account-routing",
             severity: "warning" as const,
             message: message.replace(/^- /, "").trim(),
+          }));
+        },
+      },
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:channel-package-state-capabilities",
+      label: "Channel package-state capabilities",
+      healthChecks: {
+        id: CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID,
+        description: "Declared channel package-state checker modules must load.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          if (shouldDeferConfiguredPluginInstallRepair(ctx.env ?? process.env)) {
+            return [];
+          }
+          const { collectBundledChannelPackageStateLoadFailures } =
+            await import("../channels/plugins/package-state-probes.js");
+          return collectBundledChannelPackageStateLoadFailures().map((failure) => ({
+            checkId: CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID,
+            severity: "warning" as const,
+            message: `Plugin ${failure.pluginId} declared ${failure.metadataKey}, but its checker failed to load: ${failure.detail}`,
+            target: failure.pluginId,
+            requirement: "declared-channel-package-state-capability-loadable",
+            fixHint: `Rebuild or reinstall plugin ${failure.pluginId}, then rerun \`openclaw doctor\`.`,
           }));
         },
       },
@@ -112,13 +158,21 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:security",
       label: "Security",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/security"],
       run: runSecurityHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:web-fetch-proxy",
       label: "Web fetch proxy",
+      updateWork: { kind: "inspection", scope: "run" },
       run: runWebFetchProxyHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:github-projects",
+      label: "GitHub projects",
+      updateWork: { kind: "standalone" },
+      run: runGitHubProjectHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:browser",
@@ -129,38 +183,64 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:oauth-tls",
       label: "OAuth TLS",
+      updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/oauth-tls"],
       run: runOpenAIOAuthTlsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:hooks-model",
       label: "Hooks model",
+      updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/hooks-model"],
       run: runHooksModelHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:model-references",
+      label: "Model references",
+      updateWork: { kind: "inspection", scope: "agent" },
+      healthCheckIds: ["core/doctor/model-references"],
+      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/model-references"),
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:acp-agent-model",
+      label: "ACP agent model",
+      updateWork: { kind: "inspection", scope: "agent" },
+      healthCheckIds: ["core/doctor/acp-agent-model"],
+      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/acp-agent-model"),
+    }),
+    createDoctorHealthContribution({
       id: "doctor:provider-catalog-projection",
       label: "Provider catalog projection",
+      updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/provider-catalog-projection"],
       run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/provider-catalog-projection"),
     }),
     createDoctorHealthContribution({
       id: "doctor:local-audio-acceleration",
       label: "Local audio acceleration",
+      updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/local-audio-acceleration"],
       run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/local-audio-acceleration"),
     }),
     createDoctorHealthContribution({
       id: "doctor:runtime-tool-schemas",
       label: "Runtime tool schemas",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/runtime-tool-schemas"],
       run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/runtime-tool-schemas"),
     }),
     createDoctorHealthContribution({
       id: "doctor:skill-workshop-tool-policy",
       label: "Skill Workshop tool policy",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/skill-workshop-tool-policy"],
       run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-tool-policy"),
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:skill-workshop-relocation",
+      label: "Skill Workshop relocation",
+      healthCheckIds: ["core/doctor/skill-workshop-relocation"],
+      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-relocation"),
     }),
     createDoctorHealthContribution({
       id: "doctor:systemd-linger",
@@ -175,20 +255,21 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:workspace-status",
       label: "Workspace status",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
         description: "Workspace plugin/status diagnostics are exposed as findings.",
         defaultEnabled: false,
         async detect(ctx) {
           const { collectWorkspaceStatusHealthFindings } =
             await import("../commands/doctor-workspace-status.js");
-          const pluginVersionDrift = await collectWorkspaceStatusPluginVersionDrift({
+          const pluginVersionReadiness = await collectWorkspaceStatusPluginVersionReadiness({
             cfg: ctx.cfg,
             options: { nonInteractive: true, allowExec: ctx.allowExecSecretRefs === true },
           });
           const runWithPluginMetadataSnapshot = (ctx as DoctorHealthCheckContext)
             .runWithPluginMetadataSnapshot;
           return collectWorkspaceStatusHealthFindings(ctx.cfg, {
-            pluginVersionDrift,
+            pluginVersionReadiness,
             ...(runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : {}),
           });
         },
@@ -206,39 +287,31 @@ export function resolveFinalDoctorHealthContributions(params: {
         ]
       : []),
     createDoctorHealthContribution({
-      id: "doctor:skill-curator",
-      label: "Skill curator",
+      id: "doctor:workspace-alias",
+      label: "Workspace alias",
       healthChecks: {
-        description: "Stalled skill lifecycle curation is reported as a warning.",
-        defaultEnabled: false,
-        async detect() {
-          const { getSkillCuratorDoctorWarning } = await import("../skills/workshop/curator.js");
-          const warning = getSkillCuratorDoctorWarning();
-          return warning
-            ? [
-                {
-                  checkId: "core/doctor/skill-curator",
-                  severity: "warning" as const,
-                  source: "doctor",
-                  message: warning,
-                  target: "skill-curator",
-                  requirement:
-                    "latest sweep succeeds and attempts do not trail success by seven days",
-                },
-              ]
-            : [];
+        description:
+          "Persisted workspace aliases must resolve to the canonical target that owns their stored state.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectRepointedWorkspaceAliasFindings } =
+            await import("../commands/doctor-workspace-alias.js");
+          return collectRepointedWorkspaceAliasFindings(ctx.cfg);
         },
       },
+      run: runWorkspaceAliasHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:skills",
       label: "Skills",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/skills-readiness"],
       run: runSkillsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:bootstrap-size",
       label: "Bootstrap size",
+      updateWork: { kind: "standalone" },
       healthCheckIds: ["core/doctor/bootstrap-size"],
       run: runBootstrapSizeHealth,
     }),
@@ -313,28 +386,33 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:whatsapp-responsiveness",
       label: "WhatsApp responsiveness",
+      updateWork: { kind: "inspection", scope: "run" },
       healthChecks: {
-        description:
-          "WhatsApp responsiveness pressure from degraded Gateway and local TUI clients.",
+        description: "Gateway pressure and local TUI observations when WhatsApp is enabled.",
         defaultEnabled: false,
         async detect(ctx) {
           const { collectWhatsappResponsivenessHealthFindings } =
             await import("../commands/doctor-whatsapp-responsiveness.js");
-          let status: import("../status/types.js").StatusSummary | undefined;
+          const { bindAgentToolGatewayRequest } =
+            await import("../agents/tools/in-process-gateway.js");
+          const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
+          let status: import("../status/summary.js").StatusSummary | undefined;
           if (
             !(
               (await hasActiveGatewayExecCredential({ cfg: ctx.cfg })) &&
               ctx.allowExecSecretRefs !== true
             )
           ) {
-            const { callGateway } = await import("../gateway/call.js");
-            status = await callGateway<import("../status/types.js").StatusSummary>({
+            const request = {
               method: "status",
               params: { includeChannelSummary: false },
               timeoutMs: 3000,
               config: ctx.cfg,
               deviceIdentity: null,
-            }).catch(() => undefined);
+            };
+            status = await requestGateway<import("../status/summary.js").StatusSummary>(
+              request,
+            ).catch(() => undefined);
           }
           return collectWhatsappResponsivenessHealthFindings({ cfg: ctx.cfg, status });
         },
@@ -344,6 +422,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:memory-search",
       label: "Memory search",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
         description: "Memory search provider and backend readiness are captured as findings.",
         defaultEnabled: false,
@@ -360,7 +439,11 @@ export function resolveFinalDoctorHealthContributions(params: {
         async detect(ctx) {
           const { collectDevicePairingHealthFindings } =
             await import("../commands/doctor-device-pairing.js");
-          return collectDevicePairingHealthFindings({ cfg: ctx.cfg, healthOk: false });
+          return collectDevicePairingHealthFindings({
+            cfg: ctx.cfg,
+            healthOk: false,
+            env: ctx.env,
+          });
         },
       },
       run: runDevicePairingHealth,
@@ -374,22 +457,27 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:write-config",
       label: "Write config",
+      updateWork: { kind: "finalize" },
       healthChecks: {
         description: "Config write blockers are findings before doctor repair writes.",
         defaultEnabled: false,
         detect: collectWriteConfigHealthFindings,
       },
-      run: runWriteConfigHealth,
+      async run(ctx) {
+        await runWriteConfigHealth(ctx);
+      },
     }),
     createDoctorHealthContribution({
       id: "doctor:workspace-suggestions",
       label: "Workspace suggestions",
+      updateWork: { kind: "standalone" },
       healthCheckIds: ["core/doctor/workspace-suggestions"],
       run: runWorkspaceSuggestionsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:final-config-validation",
       label: "Final config validation",
+      updateWork: { kind: "finalize" },
       healthCheckIds: ["core/doctor/final-config-validation"],
       run: runFinalConfigValidationHealth,
     }),

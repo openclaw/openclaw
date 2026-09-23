@@ -2,11 +2,20 @@
 import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
 import { createConfigIO, resolveGatewayPort } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
+import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import type { ConfigWriteAfterWrite } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
-import { transformConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
+import {
+  transformConfigWithPendingPluginInstalls,
+  stripPendingPluginInstallRecords,
+} from "../plugins/install-record-commit.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import {
+  captureSetupInferenceFileUndo,
+  type SetupInferenceConfigTarget,
+  type SetupInferenceConfigWriteOptions,
+} from "../system-agent/setup-inference-transition.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import {
@@ -25,7 +34,6 @@ type QuickstartGatewayOptionOverrides = Pick<
   | "gatewayTokenRefEnv"
   | "gatewayPassword"
   | "tailscale"
-  | "tailscaleResetOnExit"
 >;
 
 export function hasQuickstartGatewayOverrides(
@@ -38,10 +46,58 @@ export function hasQuickstartGatewayOverrides(
     overrides.gatewayToken !== undefined ||
     overrides.gatewayTokenRefEnv !== undefined ||
     overrides.gatewayPassword !== undefined ||
-    overrides.tailscale !== undefined ||
-    overrides.tailscaleResetOnExit !== undefined
+    overrides.tailscale !== undefined
   );
 }
+
+export function formatQuickstartGatewaySummary(
+  defaults: QuickstartGatewayDefaults,
+  keepExisting: boolean,
+): string {
+  const bind = {
+    auto: t("wizard.gateway.bindAuto"),
+    custom: t("wizard.gateway.bindCustom"),
+    lan: t("wizard.gateway.bindLan"),
+    loopback: t("wizard.gateway.bindLoopback"),
+    tailnet: t("wizard.gateway.bindTailnet"),
+  }[defaults.bind];
+  return [
+    ...(keepExisting ? [t("wizard.setup.quickstartKeepSettings")] : []),
+    t("wizard.setup.quickstartGatewayPort", { port: defaults.port }),
+    t("wizard.setup.quickstartGatewayBind", { bind }),
+    ...(defaults.bind === "custom" && defaults.customBindHost
+      ? [
+          t("wizard.setup.quickstartGatewayCustomIp", {
+            host: defaults.customBindHost,
+          }),
+        ]
+      : []),
+    t("wizard.setup.quickstartGatewayAuth", {
+      auth:
+        defaults.authMode === "token"
+          ? t("wizard.setup.quickstartAuthTokenDefault")
+          : t("common.password"),
+    }),
+    t("wizard.setup.quickstartTailscaleExposure", {
+      exposure: t(`wizard.gatewayTailscale.${defaults.tailscaleMode}`),
+    }),
+    t("wizard.setup.quickstartDirectChannels"),
+  ].join("\n");
+}
+
+export type WizardConfigWriteOptions = {
+  allowConfigSizeDrop?: boolean;
+  /** Reject the write if config changed after the caller's verified snapshot. */
+  baseHash?: string;
+  /** Preserve an absent-file precondition that cannot be represented by baseHash. */
+  baseSnapshot?: ConfigFileSnapshot;
+  /** Apply only the wizard's delta to the latest authored config. */
+  mergeBase?: OpenClawConfig;
+  writeOptions?: ConfigWriteOptions;
+  /** Runtime follow-up intent for the Gateway config watcher. */
+  afterWrite?: ConfigWriteAfterWrite;
+  onPreparedCommit?: (snapshot: ConfigFileSnapshot, config: OpenClawConfig) => void;
+};
 
 /**
  * Config writes go through the pending-plugin-install commit helper so wizard
@@ -49,20 +105,9 @@ export function hasQuickstartGatewayOverrides(
  */
 export async function writeWizardConfigFile(
   config: OpenClawConfig,
-  opts: {
-    allowConfigSizeDrop?: boolean;
-    /** Reject the write if config changed after the caller's verified snapshot. */
-    baseHash?: string;
-    /** Preserve an absent-file precondition that cannot be represented by baseHash. */
-    baseSnapshot?: ConfigFileSnapshot;
-    /** Apply only the wizard's delta to the latest authored config. */
-    mergeBase?: OpenClawConfig;
-    writeOptions?: ConfigWriteOptions;
-    /** Runtime follow-up intent for the Gateway config watcher. */
-    afterWrite?: ConfigWriteAfterWrite;
-  } = {},
-): Promise<OpenClawConfig> {
-  const committed = await transformConfigWithPendingPluginInstalls({
+  opts: WizardConfigWriteOptions = {},
+) {
+  return await transformConfigWithPendingPluginInstalls({
     ...(opts.baseHash !== undefined ? { baseHash: opts.baseHash } : {}),
     // Caller-owned snapshots are one-shot CAS preconditions, not retry baselines.
     ...(opts.baseHash !== undefined || opts.baseSnapshot ? { maxAttempts: 1 } : {}),
@@ -74,13 +119,48 @@ export async function writeWizardConfigFile(
         : {}),
       ...(opts.baseSnapshot ? { baseSnapshot: opts.baseSnapshot } : {}),
     },
-    transform: (current) => ({
-      nextConfig: opts.mergeBase
+    transform: (current, context) => {
+      // SAFETY: Both sides of the wizard delta are typed configs.
+      const nextConfig = opts.mergeBase
         ? (applyMergePatch(current, createMergePatch(opts.mergeBase, config)) as OpenClawConfig)
-        : config,
-    }),
+        : config;
+      opts.onPreparedCommit?.(context.snapshot, nextConfig);
+      return { nextConfig };
+    },
   });
-  return committed.nextConfig;
+}
+
+export function createWizardInferenceConfigTarget(
+  commit: typeof writeWizardConfigFile,
+): SetupInferenceConfigTarget {
+  const write = async (
+    config: OpenClawConfig,
+    options: SetupInferenceConfigWriteOptions,
+    baseSnapshot?: ConfigFileSnapshot,
+  ) => {
+    const result = await commit(config, {
+      baseSnapshot,
+      writeOptions: options.writeOptions,
+      onPreparedCommit: (snapshot, next) =>
+        options.captureUndo(
+          captureSetupInferenceFileUndo(
+            { ...snapshot, sourceConfig: stripPendingPluginInstallRecords(snapshot.sourceConfig) },
+            stripPendingPluginInstallRecords(next),
+          ),
+        ),
+    });
+    return result.nextConfig;
+  };
+  return {
+    write,
+    read: async () => {
+      const snapshot = await readSetupConfigFileSnapshot();
+      return {
+        config: snapshot.sourceConfig,
+        write: (config, options) => write(config, options, snapshot),
+      };
+    },
+  };
 }
 
 export async function readSetupConfigFileSnapshot() {
@@ -90,7 +170,9 @@ export async function readSetupConfigFileSnapshot() {
 export async function readValidSetupConfigFile(): Promise<OpenClawConfig> {
   const snapshot = await readSetupConfigFileSnapshot();
   if (!snapshot.valid) {
-    throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+    throw new Error(
+      "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
+    );
   }
   return snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
 }
@@ -125,13 +207,43 @@ function applySecurityAcknowledgement(config: OpenClawConfig): OpenClawConfig {
   if (config.wizard?.securityAcknowledgedAt) {
     return config;
   }
-  return {
+  return inheritLegacyDefaultAgentId(config, {
     ...config,
     wizard: {
       ...config.wizard,
       securityAcknowledgedAt: new Date().toISOString(),
     },
-  };
+  });
+}
+
+/** Ask once during interactive setup; automation never creates telemetry consent. */
+export async function requestTelemetryConsent(params: {
+  opts: OnboardOptions;
+  prompter: WizardPrompter;
+  config: OpenClawConfig;
+}): Promise<OpenClawConfig> {
+  if (params.opts.nonInteractive === true || params.config.telemetry?.consentedAt) {
+    return params.config;
+  }
+
+  await params.prompter.note(t("wizard.telemetry.description"), t("wizard.telemetry.title"));
+  const enabled = await params.prompter.select<boolean>({
+    message: t("wizard.telemetry.title"),
+    options: [
+      { value: false, label: t("wizard.telemetry.decline") },
+      { value: true, label: t("wizard.telemetry.accept") },
+    ],
+    initialValue: false,
+  });
+
+  return inheritLegacyDefaultAgentId(params.config, {
+    ...params.config,
+    telemetry: {
+      ...params.config.telemetry,
+      enabled,
+      consentedAt: new Date().toISOString(),
+    },
+  });
 }
 
 /** Derive quickstart gateway defaults, preserving any existing gateway settings. */
@@ -199,7 +311,5 @@ export function resolveQuickstartGatewayDefaults(
         : (overrides.gatewayToken ?? baseConfig.gateway?.auth?.token),
     password: overrides.gatewayPassword ?? baseConfig.gateway?.auth?.password,
     customBindHost: baseConfig.gateway?.customBindHost,
-    tailscaleResetOnExit:
-      overrides.tailscaleResetOnExit ?? baseConfig.gateway?.tailscale?.resetOnExit ?? false,
   };
 }

@@ -4,14 +4,16 @@ import type {
   ChannelThreadingContext,
   ChannelThreadingToolContext,
 } from "openclaw/plugin-sdk/channel-contract";
+import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
+  type ChannelMessageSendTextContext,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
-  composeAccountWarningCollectors,
   createAllowlistProviderOpenWarningCollector,
+  createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
   createChannelDirectoryAdapter,
@@ -39,11 +41,24 @@ import {
   sanitizeGoogleChatText,
 } from "./format.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
+import { googleChatIngressIdentity } from "./ingress-identity.js";
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "googleChatChannelRuntime",
 );
+
+type GoogleChatTextSendContext = Pick<
+  ChannelMessageSendTextContext,
+  | "cfg"
+  | "to"
+  | "text"
+  | "accountId"
+  | "replyToId"
+  | "threadId"
+  | "assertDirectAdapterHandoff"
+  | "onPlatformSendDispatch"
+>;
 
 function createGoogleChatSendReceipt(params: {
   messageId?: string;
@@ -79,19 +94,24 @@ const collectGoogleChatGroupPolicyWarnings =
         'Set channels.googlechat.groupPolicy="allowlist" and configure channels.googlechat.groups',
     },
   });
+const collectGoogleChatOpenGroupFindings = createConditionalWarningCollector.findings({
+  collectWarnings: collectGoogleChatGroupPolicyWarnings,
+  checkId: "channels.googlechat.groups.open",
+  severity: "warn",
+  title: "Google Chat security warning",
+});
 
-const collectGoogleChatSecurityWarnings = composeAccountWarningCollectors<
-  ResolvedGoogleChatAccount,
-  {
-    cfg: OpenClawConfig;
-    account: ResolvedGoogleChatAccount;
-  }
->(
-  collectGoogleChatGroupPolicyWarnings,
-  (account) =>
-    account.config.dmPolicy === "open" &&
-    '- Google Chat DMs are open to anyone. Set channels.googlechat.dmPolicy="pairing" or "allowlist".',
-);
+const collectGoogleChatSecurityWarnings = (params: {
+  cfg: OpenClawConfig;
+  account: ResolvedGoogleChatAccount;
+}) => [
+  ...collectGoogleChatOpenGroupFindings(params),
+  ...(params.account.config.dmPolicy === "open"
+    ? [
+        '- Google Chat DMs are open to anyone. Set channels.googlechat.dmPolicy="pairing" or "allowlist".',
+      ]
+    : []),
+];
 
 export const googlechatGroupsAdapter = {
   resolveRequireMention: resolveGoogleChatGroupRequireMention,
@@ -119,6 +139,7 @@ export const googlechatSecurityAdapter = {
     resolvePolicy: (account: ResolvedGoogleChatAccount) => account.config.dmPolicy,
     resolveAllowFrom: (account: ResolvedGoogleChatAccount) => account.config.allowFrom,
     allowFromPathSuffix: "",
+    classifyEntryAuthentication: identityEntryAuthenticationClassifier(googleChatIngressIdentity),
     normalizeEntry: (raw: string) => formatGoogleChatAllowFromEntry(raw),
   },
   collectWarnings: collectGoogleChatSecurityWarnings,
@@ -226,19 +247,18 @@ export const googlechatOutboundAdapter = {
       accountId,
       replyToId,
       threadId,
-    }: {
-      cfg: OpenClawConfig;
-      to: string;
-      text: string;
-      accountId?: string | null;
-      replyToId?: string | null;
-      threadId?: string | number | null;
-    }) => {
+      assertDirectAdapterHandoff,
+      onPlatformSendDispatch,
+    }: GoogleChatTextSendContext) => {
       const account = resolveGoogleChatAccount({
         cfg,
         accountId,
       });
-      const space = await resolveGoogleChatOutboundSpace({ account, target: to });
+      const space = await resolveGoogleChatOutboundSpace({
+        account,
+        target: to,
+        assertDirectAdapterHandoff,
+      });
       const thread =
         typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
       const { sendGoogleChatMessage } = await loadGoogleChatChannelRuntime();
@@ -247,6 +267,8 @@ export const googlechatOutboundAdapter = {
         space,
         text,
         thread,
+        assertDirectAdapterHandoff,
+        onPlatformSendDispatch,
       });
       const messageId = result?.messageName ?? "";
       return {

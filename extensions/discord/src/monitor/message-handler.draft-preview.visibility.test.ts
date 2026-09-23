@@ -10,7 +10,7 @@ const draftStream = vi.hoisted(() => ({
   seal: vi.fn(async () => {}),
   stop: vi.fn(async () => {}),
   retarget: vi.fn(async () => {}),
-  cleanupRetargeted: vi.fn(async () => {}),
+  cleanupPendingMessages: vi.fn(async () => {}),
   forceNewMessage: vi.fn(),
 }));
 
@@ -36,16 +36,13 @@ describe("Discord progress visibility", () => {
   it("retries identical progress until Discord acknowledges a draft message", async () => {
     const controller = createDiscordDraftPreviewController({
       cfg: {},
-      discordConfig: { streaming: { mode: "progress" } },
+      discordConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } },
       accountId: "default",
       sourceRepliesAreToolOnly: false,
       textLimit: 2_000,
       deliveryRest: {} as never,
       deliverChannelId: "channel-1",
       replyReference: { peek: () => undefined },
-      tableMode: "off",
-      maxLinesPerMessage: undefined,
-      chunkMode: "length",
       log: vi.fn(),
     });
     const progress = { itemId: "item-1", progressText: "still working" };

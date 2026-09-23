@@ -23,6 +23,8 @@ function readLastAuditEntry(): Record<string, unknown> {
   return (listSystemAgentAuditEntriesForTests().at(-1)?.value ?? {}) as Record<string, unknown>;
 }
 
+const runPluginInstallCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+
 const mockConfig = vi.hoisted(() => {
   const state = {
     path: "/tmp/openclaw.json",
@@ -82,6 +84,10 @@ const mockConfig = vi.hoisted(() => {
     ),
   };
 });
+
+vi.mock("../cli/plugins-install-command.js", () => ({
+  runPluginInstallCommand: runPluginInstallCommandMock,
+}));
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -203,6 +209,7 @@ describe("OpenClaw rescue message", () => {
 
   beforeEach(() => {
     mockConfig.reset();
+    runPluginInstallCommandMock.mockClear();
   });
 
   afterAll(async () => {
@@ -271,13 +278,6 @@ describe("OpenClaw rescue message", () => {
     await expect(runRescue("/openclaw connect telegram", cfg)).resolves.toContain(
       "cannot host the interactive channel setup",
     );
-  });
-
-  it("refuses model provider setup from remote rescue with a local pointer", async () => {
-    const cfg: OpenClawConfig = {};
-    const reply = await runRescue("/openclaw configure model provider", cfg);
-    expect(reply).toContain("cannot host model-provider credential setup");
-    expect(reply).toContain("openclaw onboard");
   });
 
   it("refuses doctor repairs without creating a pending approval", async () => {
@@ -496,16 +496,11 @@ describe("OpenClaw rescue message", () => {
 
   it("refuses plugin install from remote rescue", async () => {
     const cfg: OpenClawConfig = {};
-    const deps = {
-      runPluginInstall: vi.fn(async () => {
-        throw new Error("remote rescue must not install plugins");
-      }),
-    };
 
     await expect(
-      runRescue("/openclaw plugin install clawhub:openclaw-demo", cfg, commandContext(), deps),
+      runRescue("/openclaw plugin install clawhub:openclaw-demo", cfg),
     ).resolves.toContain("cannot install plugins from a message channel");
-    expect(deps.runPluginInstall).not.toHaveBeenCalled();
+    expect(runPluginInstallCommandMock).not.toHaveBeenCalled();
   });
 
   it("allows plugin list and search from remote rescue", async () => {
@@ -655,53 +650,71 @@ describe("OpenClaw rescue message", () => {
     });
   });
 
-  it("queues and applies agent creation through conversational approval", async () => {
-    await withRescueStateDir("agent-", async () => {
-      const cfg: OpenClawConfig = {};
-      const deps = {
-        createAgent: vi.fn(async () => ({
-          status: "created" as const,
-          agentId: "work",
-          name: "work",
-          workspace: "/tmp/work",
-          agentDir: "/tmp/agent-work",
-          bootstrapPending: true,
-        })),
-      };
-
-      await expect(
-        runRescue("/openclaw create agent work workspace /tmp/work", cfg, commandContext(), deps),
-      ).resolves.toBe(
-        "Plan: create agent work with workspace /tmp/work. Reply /openclaw yes to apply.",
-      );
-      await expect(runRescue("/openclaw yes", cfg, commandContext(), deps)).resolves.toContain(
-        "[openclaw] done: agents.create",
-      );
-
-      expect(deps.createAgent).toHaveBeenCalledTimes(1);
-      const [agentParams] = requireFirstMockCall(deps.createAgent, "agents add") as unknown as [
-        { name: string; workspace: string },
-      ];
-      expect(agentParams).toEqual({
-        name: "work",
-        workspace: "/tmp/work",
-      });
-      const audit = readLastAuditEntry() as {
-        operation?: string;
-        details?: {
-          rescue?: boolean;
-          channel?: string;
-          senderId?: string;
-          agentId?: string;
-          workspace?: string;
+  it.each([
+    { role: undefined, name: undefined },
+    { role: "writer", name: undefined },
+    { role: undefined, name: "QA Writer" },
+    { role: "writer", name: "QA Writer" },
+  ])(
+    "queues and applies agent creation with role $role and name $name through conversational approval",
+    async ({ role, name }) => {
+      await withRescueStateDir("agent-", async () => {
+        const cfg: OpenClawConfig = {};
+        const deps = {
+          createAgent: vi.fn(async () => ({
+            status: "created" as const,
+            agentId: "work",
+            name: name ?? "work",
+            workspace: "/tmp/work",
+            agentDir: "/tmp/agent-work",
+            bootstrapPending: true,
+            config: cfg,
+            configPath: "/tmp/openclaw.json",
+          })),
         };
-      };
-      expect(audit.operation).toBe("agents.create");
-      expect(audit.details?.rescue).toBe(true);
-      expect(audit.details?.channel).toBe("whatsapp");
-      expect(audit.details?.senderId).toBe("user:owner");
-      expect(audit.details?.agentId).toBe("work");
-      expect(audit.details?.workspace).toBe("/tmp/work");
-    });
-  });
+
+        await expect(
+          runRescue(
+            `/openclaw create agent work${name ? ` name ${JSON.stringify(name)}` : ""}${role ? ` role ${role}` : ""} workspace /tmp/work`,
+            cfg,
+            commandContext(),
+            deps,
+          ),
+        ).resolves.toBe(
+          `Plan: create agent work with workspace /tmp/work${name ? `, name: ${JSON.stringify(name)}` : ""}${role ? ", role: Writer" : ""}. Reply /openclaw yes to apply.`,
+        );
+        expect(deps.createAgent).not.toHaveBeenCalled();
+        await expect(runRescue("/openclaw yes", cfg, commandContext(), deps)).resolves.toContain(
+          "[openclaw] done: agents.create",
+        );
+
+        expect(deps.createAgent).toHaveBeenCalledTimes(1);
+        expect(deps.createAgent).toHaveBeenCalledWith({
+          entry: {
+            id: "work",
+            ...(name ? { name, identity: { name } } : {}),
+          },
+          ...(role ? { role } : {}),
+          workspace: "/tmp/work",
+          provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
+        });
+        const audit = readLastAuditEntry() as {
+          operation?: string;
+          details?: {
+            rescue?: boolean;
+            channel?: string;
+            senderId?: string;
+            agentId?: string;
+            workspace?: string;
+          };
+        };
+        expect(audit.operation).toBe("agents.create");
+        expect(audit.details?.rescue).toBe(true);
+        expect(audit.details?.channel).toBe("whatsapp");
+        expect(audit.details?.senderId).toBe("user:owner");
+        expect(audit.details?.agentId).toBe("work");
+        expect(audit.details?.workspace).toBe("/tmp/work");
+      });
+    },
+  );
 });

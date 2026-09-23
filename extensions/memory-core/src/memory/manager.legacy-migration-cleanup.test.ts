@@ -2,20 +2,23 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import "./test-runtime-mocks.js";
-import { closeAllMemoryIndexManagers, MemoryIndexManager } from "./manager.js";
+import { closeAllMemoryIndexManagers } from "./manager-runtime.js";
+import { MemoryIndexManager } from "./manager.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
@@ -35,7 +38,9 @@ describe("memory legacy migration cleanup", () => {
     await manager?.close();
     manager = undefined;
     await closeAllMemoryIndexManagers();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     if (originalStateDir === undefined) {
       Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
@@ -46,16 +51,12 @@ describe("memory legacy migration cleanup", () => {
   });
 
   it("removes migrated chunks and FTS rows when the dirty source file is already deleted", async () => {
-    const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    await fs.mkdir(path.dirname(dbPath), { recursive: true });
-    const seedDb = new DatabaseSync(dbPath, { allowExtension: true });
-    let vectorExtensionPath: string | undefined;
-    try {
-      const loaded = await loadSqliteVecExtension({ db: seedDb });
-      expect(loaded.ok, loaded.error).toBe(true);
-      vectorExtensionPath = loaded.extensionPath;
-      ensureMemoryIndexSchema({ db: seedDb, cacheEnabled: false, ftsEnabled: true });
-      seedDb.exec(`
+    const seedDb = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const loaded = await loadSqliteVecExtension({ db: seedDb });
+    expect(loaded.ok, loaded.error).toBe(true);
+    const vectorExtensionPath = loaded.extensionPath;
+    ensureMemoryIndexSchema({ db: seedDb, cacheEnabled: false, ftsEnabled: true });
+    seedDb.exec(`
         INSERT INTO memory_index_sources (path, source, hash, mtime, size)
           VALUES
             ('memory/deleted.md', 'memory', 'canonical-hash', 200, 20),
@@ -64,25 +65,14 @@ describe("memory legacy migration cleanup", () => {
           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
         VALUES (
           'chunk-canonical', 'memory/deleted.md', 'memory', 1, 2, 'canonical-chunk-hash',
-          'fts-only', 'obsolete saffronquasar', '[]', 200
+          'fts-only', 'obsolete saffronquasar', x'', 200
         );
         INSERT INTO memory_index_chunks
           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
         VALUES (
           'chunk-ownerless', 'memory/ownerless.md', 'memory', 1, 2, 'ownerless-chunk-hash',
-          'fts-only', 'obsolete ambercomet', '[]', 190
+          'fts-only', 'obsolete ambercomet', x'', 190
         );
-        INSERT INTO memory_index_chunks_fts
-          (text, id, path, source, model, start_line, end_line)
-        VALUES
-          (
-            'obsolete saffronquasar', 'chunk-canonical', 'memory/deleted.md',
-            'memory', 'fts-only', 1, 2
-          ),
-          (
-            'obsolete ambercomet', 'chunk-ownerless', 'memory/ownerless.md',
-            'memory', 'fts-only', 1, 2
-          );
         CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
           id TEXT PRIMARY KEY,
           embedding FLOAT[3]
@@ -120,12 +110,9 @@ describe("memory legacy migration cleanup", () => {
           'fts-only', 'stale legacy tail', '[]', 100
         );
       `);
-      expect(seedDb.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual(
-        { count: 2 },
-      );
-    } finally {
-      seedDb.close();
-    }
+    expect(seedDb.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
+      count: 2,
+    });
 
     const createConfig = (params: {
       extensionPath?: string;
@@ -147,7 +134,6 @@ describe("memory legacy migration cleanup", () => {
               },
             },
             cache: { enabled: false },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
             query: { hybrid: { enabled: true } },
           },
         },
@@ -234,19 +220,9 @@ describe("memory legacy migration cleanup", () => {
         .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
         .get(),
     ).toEqual({ value: "1" });
-    const observerDb = new DatabaseSync(dbPath, { allowExtension: true });
-    try {
-      const observerLoaded = await loadSqliteVecExtension({
-        db: observerDb,
-        extensionPath: vectorExtensionPath,
-      });
-      expect(observerLoaded.ok, observerLoaded.error).toBe(true);
-      expect(
-        observerDb.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get(),
-      ).toEqual({ count: 2 });
-    } finally {
-      observerDb.close();
-    }
+    expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
+      count: 2,
+    });
     // Exercise the later vector-enabled load directly. Recreating the public
     // manager here also tests unrelated provider/cache retirement lifecycles.
     const vectorState = Reflect.get(manager, "vector") as {
@@ -254,18 +230,10 @@ describe("memory legacy migration cleanup", () => {
       enabled: boolean;
       extensionPath?: string;
     };
-    const vectorDb = new DatabaseSync(dbPath, { allowExtension: true });
-    const managerLoaded = await loadSqliteVecExtension({
-      db: vectorDb,
-      extensionPath: vectorExtensionPath,
-    });
-    expect(managerLoaded.ok, managerLoaded.error).toBe(true);
-    db.close();
-    Reflect.set(manager, "db", vectorDb);
     vectorState.enabled = true;
     vectorState.available = true;
     vectorState.extensionPath = vectorExtensionPath;
-    Reflect.set(manager, "vectorReady", null);
+    Reflect.set(Reflect.get(manager, "database"), "vectorReady", null);
     await expect(
       (
         manager as unknown as {
@@ -273,14 +241,12 @@ describe("memory legacy migration cleanup", () => {
         }
       ).loadVectorExtension(),
     ).resolves.toBe(false);
-    expect(vectorDb.prepare("SELECT vec_version() AS version").get()).toEqual({
+    expect(db.prepare("SELECT vec_version() AS version").get()).toEqual({
       version: expect.any(String),
     });
-    expect(vectorDb.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual(
-      {
-        count: 2,
-      },
-    );
+    expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
+      count: 2,
+    });
     expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
   });
 });

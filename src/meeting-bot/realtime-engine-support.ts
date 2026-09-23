@@ -1,5 +1,6 @@
 import { normalizeOptionalString as readLogString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RuntimeLogger } from "../plugins/runtime/types.js";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -9,24 +10,48 @@ import {
   listRealtimeTranscriptionProviders,
 } from "../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
-import { resolveConfiguredRealtimeVoiceProvider } from "../talk/provider-resolver.js";
-import type { RealtimeVoiceProviderConfig } from "../talk/provider-types.js";
+import {
+  resolveConfiguredRealtimeVoiceProvider,
+  type ResolvedRealtimeVoiceProvider,
+} from "../talk/provider-resolver.js";
+import type {
+  RealtimeVoiceBridgeEvent,
+  RealtimeVoiceProviderConfig,
+  RealtimeVoiceResponseOutcome,
+} from "../talk/provider-types.js";
+import type { RealtimeVoiceSessionHarness } from "../talk/realtime-session-harness.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
+import type { createMeetingRealtimeOutputOwner } from "./realtime-output-owner.js";
+
+const MEETING_REALTIME_CANCELLATION_RACE_DETAIL = "Cancellation failed: no active response found";
+
+type MeetingRealtimeLifecycleHandlersParams = {
+  clearOutputPlayback: () => void;
+  lifecycle: {
+    realtimeReady: boolean;
+    continuityResetActive: boolean;
+    outputGenerationActive: boolean;
+  };
+  harness: RealtimeVoiceSessionHarness;
+  invalidateOutputPlayback: () => void;
+  logScope: string;
+  logger: RuntimeLogger;
+  outputOwner: ReturnType<typeof createMeetingRealtimeOutputOwner>;
+  outputTalkPayload: { bridgeId: string } | { meetingSessionId: string };
+  realtimeLogScope: string;
+  resetToolContinuity: (reason: string) => void;
+};
 
 type MeetingRealtimeProviderSelectionConfig = {
   realtime: {
+    agentId?: string;
     provider?: string;
     transcriptionProvider?: string;
     voiceProvider?: string;
     model?: string;
     providers: Record<string, Record<string, unknown>>;
   };
-};
-
-type ResolvedRealtimeProvider = {
-  provider: RealtimeVoiceProviderPlugin;
-  providerConfig: RealtimeVoiceProviderConfig;
 };
 
 type ResolvedRealtimeTranscriptionProvider = {
@@ -42,12 +67,15 @@ export function resolveMeetingRealtimeProvider(params: {
   config: MeetingRealtimeProviderSelectionConfig;
   fullConfig: OpenClawConfig;
   providers?: RealtimeVoiceProviderPlugin[];
-}): ResolvedRealtimeProvider {
+}): ResolvedRealtimeVoiceProvider {
   const providerId = params.config.realtime.voiceProvider ?? params.config.realtime.provider;
   return resolveConfiguredRealtimeVoiceProvider({
     configuredProviderId: providerId,
     providerConfigs: params.config.realtime.providers,
     cfg: params.fullConfig,
+    agentId: params.config.realtime.agentId,
+    surface: "gateway-relay",
+    useProviderDefaultModel: true,
     providers: params.providers,
     defaultModel: params.config.realtime.model,
     noRegisteredProviderMessage: "No configured realtime voice provider registered",
@@ -199,4 +227,91 @@ export function normalizeMeetingTtsPromptText(text: string | undefined): string 
     return sayExactly.replace(/^["']|["']$/g, "").trim() || trimmed;
   }
   return trimmed;
+}
+
+export function createMeetingRealtimeLifecycleHandlers(
+  params: MeetingRealtimeLifecycleHandlersParams,
+) {
+  const onEvent = (event: RealtimeVoiceBridgeEvent) => {
+    if (event.direction === "server" && event.type === "session.created") {
+      params.lifecycle.continuityResetActive = false;
+    }
+    if (event.direction === "client" && event.type === "session.continuity.reset") {
+      if (params.lifecycle.continuityResetActive) {
+        return;
+      }
+      params.lifecycle.continuityResetActive = true;
+      params.lifecycle.realtimeReady = false;
+      params.outputOwner.reset();
+      params.lifecycle.outputGenerationActive = false;
+      params.resetToolContinuity(event.type);
+      const turnId = params.harness.talk.activeTurnId;
+      params.invalidateOutputPlayback();
+      params.harness.flushOutput(params.clearOutputPlayback);
+      params.harness.finishOutputAudio(event.type);
+      if (turnId) {
+        params.harness.talk.cancelTurn({
+          turnId,
+          payload: { ...params.outputTalkPayload, reason: event.type },
+        });
+      }
+      return;
+    }
+    params.outputOwner.noteEvent(event);
+    if (event.type === "input_audio_buffer.speech_started") {
+      params.harness.ensureTurn();
+    } else if (event.type === "input_audio_buffer.speech_stopped") {
+      const turnId = params.harness.talk.activeTurnId;
+      if (!turnId) {
+        return;
+      }
+      params.harness.emit({
+        type: "input.audio.committed",
+        turnId,
+        payload: { ...params.outputTalkPayload, source: event.type },
+        final: true,
+      });
+    } else if (
+      event.type === "error" &&
+      event.detail === MEETING_REALTIME_CANCELLATION_RACE_DETAIL
+    ) {
+      if (params.outputOwner.clearBlocked()) {
+        params.lifecycle.outputGenerationActive = false;
+        params.harness.finishOutputAudio(event.type);
+      }
+    } else if (event.type === "error") {
+      params.harness.emit({
+        type: "session.error",
+        payload: { message: event.detail ?? "Realtime provider error" },
+        final: true,
+      });
+    }
+    if (
+      event.type === "error" ||
+      event.type === "response.done" ||
+      event.type === "input_audio_buffer.speech_started" ||
+      event.type === "input_audio_buffer.speech_stopped" ||
+      event.type === "conversation.item.input_audio_transcription.completed" ||
+      event.type === "conversation.item.input_audio_transcription.failed"
+    ) {
+      const detail = event.detail ? ` ${event.detail}` : "";
+      params.logger.info(
+        `${params.logScope} ${params.realtimeLogScope} ${event.direction}:${event.type}${detail}`,
+      );
+    }
+  };
+
+  const onResponseDone = (outcome: RealtimeVoiceResponseOutcome) => {
+    if (!params.outputOwner.terminal(outcome.responseId)) {
+      return;
+    }
+    params.lifecycle.outputGenerationActive = false;
+    if (outcome.status === "failed" || outcome.status === "incomplete") {
+      params.logger.warn(
+        `${params.logScope} ${params.realtimeLogScope} response ${outcome.status}: ${outcome.message}`,
+      );
+    }
+  };
+
+  return { onEvent, onResponseDone };
 }

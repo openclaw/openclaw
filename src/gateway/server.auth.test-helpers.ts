@@ -11,14 +11,14 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
+import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import {
   connectReq,
   getTrackedConnectChallengeNonce,
-  getFreePort,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
-  startGatewayServer,
+  startTestGatewayServer,
   startServer,
   startServerWithClient,
   trackConnectChallengeNonce,
@@ -80,8 +80,11 @@ const readConnectChallengeNonce = async (ws: WebSocket) => {
   return String(nonce);
 };
 
-const openTailscaleWs = async (port: number, headers?: Record<string, string>) => {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+const openTailscaleWs = async (
+  endpoint: GatewayTailscaleIngressEndpoint,
+  headers?: Record<string, string>,
+) => {
+  const ws = new WebSocket(`ws://${endpoint.host}:${endpoint.port}`, {
     headers: {
       "x-forwarded-for": "100.64.0.1",
       "x-forwarded-proto": "https",
@@ -219,7 +222,8 @@ function resolveGatewayTokenOrEnv(): string {
 }
 
 async function approvePendingPairingIfNeeded() {
-  const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
+  const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+  const { listDevicePairing } = await import("../infra/device-pairing.js");
   const list = await listDevicePairing();
   const pending = list.pending.at(0);
   if (!pending?.requestId) {
@@ -380,7 +384,6 @@ export {
   createSignedDevice,
   ensurePairedDeviceTokenForCurrentIdentity,
   expectHelloOkServerVersion,
-  getFreePort,
   installGatewayTestHooks,
   MIN_PROBE_PROTOCOL_VERSION,
   NODE_CLIENT,
@@ -393,7 +396,7 @@ export {
   restoreGatewayToken,
   rpcReq,
   sendRawConnectReq,
-  startGatewayServer,
+  startTestGatewayServer,
   startRateLimitedTokenServerWithPairedDeviceToken,
   startServer,
   startServerWithClient,

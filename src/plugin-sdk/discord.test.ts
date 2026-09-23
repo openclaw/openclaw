@@ -66,7 +66,7 @@ const mocks = vi.hoisted(() => {
     collectDiscordAuditChannelIds: vi.fn(() => ({ channelIds: [], unresolvedChannels: [] })),
     editDiscordComponentMessage: vi.fn(async () => componentEditResult),
     listThreadBindingsBySessionKey: vi.fn(() => []),
-    registerBuiltDiscordComponentMessage: vi.fn(),
+    registerBuiltDiscordComponentMessage: vi.fn().mockResolvedValue(undefined),
     unbindThreadBindingsBySessionKey: vi.fn(() => []),
   };
 
@@ -75,7 +75,7 @@ const mocks = vi.hoisted(() => {
     componentEditResult,
     runtimeModule,
     runtimeConfig,
-    loadBundledPluginPublicSurfaceModuleSync: vi.fn((params: { artifactBasename: string }) => {
+    loadBundledPluginPublicSurfaceModuleSyncCore: vi.fn((params: { artifactBasename: string }) => {
       if (params.artifactBasename === "runtime-api.js") {
         return runtimeModule;
       }
@@ -94,7 +94,7 @@ vi.mock("./facade-loader.js", () => ({
         },
       },
     ),
-  loadBundledPluginPublicSurfaceModuleSync: mocks.loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSyncCore: mocks.loadBundledPluginPublicSurfaceModuleSyncCore,
 }));
 
 vi.mock("./runtime-config-snapshot.js", () => ({
@@ -158,7 +158,7 @@ describe("discord plugin-sdk facade", () => {
       { text: "edited" },
       { cfg: mocks.runtimeConfig },
     );
-    registerBuiltDiscordComponentMessage({
+    await registerBuiltDiscordComponentMessage({
       buildResult: built,
       messageId: "message",
     });

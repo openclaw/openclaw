@@ -1,10 +1,12 @@
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { NpmIntegrityDrift, NpmSpecResolution } from "../infra/install-source-utils.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import type { PluginInstallArtifactInspection } from "./install-artifact-inspection.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
+import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
 import type { PackageManifest as PluginPackageManifest, PluginManifestSetup } from "./manifest.js";
 
-export type PluginInstallLogger = {
+export type PluginInstallLogger = import("../infra/install-progress.js").InstallActivityObserver & {
   info?: (message: string) => void;
   warn?: (message: string) => void;
 };
@@ -16,6 +18,7 @@ export type PackageManifest = PluginPackageManifest & {
 };
 
 export const PLUGIN_INSTALL_ERROR_CODE = {
+  CONFIG_MUTATION_BLOCKED: "config_mutation_blocked",
   INVALID_NPM_SPEC: "invalid_npm_spec",
   INVALID_MIN_HOST_VERSION: "invalid_min_host_version",
   UNKNOWN_HOST_VERSION: "unknown_host_version",
@@ -28,6 +31,7 @@ export const PLUGIN_INSTALL_ERROR_CODE = {
   INVALID_OPENCLAW_EXTENSIONS: "invalid_openclaw_extensions",
   NPM_METADATA_FAILURE: "npm_metadata_failure",
   NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
+  RELEASE_COHORT_UNAVAILABLE: "release_cohort_unavailable",
   PLUGIN_ID_MISMATCH: "plugin_id_mismatch",
   SECURITY_SCAN_BLOCKED: "security_scan_blocked",
   SECURITY_SCAN_FAILED: "security_scan_failed",
@@ -50,7 +54,12 @@ export type InstallPluginResult =
       npmResolution?: NpmSpecResolution;
       integrityDrift?: NpmIntegrityDrift;
     }
-  | { ok: false; error: string; code?: PluginInstallErrorCode };
+  | {
+      ok: false;
+      error: string;
+      code?: PluginInstallErrorCode;
+      installPolicyWarning?: InstallPolicyWarningDetails;
+    };
 
 export type PluginInstallFailureResult = Extract<InstallPluginResult, { ok: false }>;
 
@@ -67,10 +76,24 @@ export type PluginInstallPolicyRequest = {
   source?: InstallPolicySource;
 };
 
+export type PluginInstallArtifactConsentRequest = {
+  pluginId: string;
+  currentArtifactDir?: string;
+  stagedArtifactDir: string;
+  mode: "install" | "update";
+  /** Source facts supplied by the installer after validating the staged artifact. */
+  sourceRecord?: PluginInstallRecord;
+};
+
+export type PluginInstallArtifactConsentHandler = (
+  request: PluginInstallArtifactConsentRequest,
+) => Promise<void>;
+
 export type PackageInstallCommonParams = InstallSafetyOverrides & {
   extensionsDir?: string;
   npmDir?: string;
   timeoutMs?: number;
+  workTimeoutMs?: number | null;
   logger?: PluginInstallLogger;
   mode?: "install" | "update";
   dryRun?: boolean;
@@ -78,8 +101,21 @@ export type PackageInstallCommonParams = InstallSafetyOverrides & {
   requirePluginManifest?: boolean;
   allowSourceTypeScriptEntries?: boolean;
   installPolicyRequest?: PluginInstallPolicyRequest;
+  onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+  beforePersistentApply?: () => void;
 };
 
 export type InternalPackageInstallCommonParams = PackageInstallCommonParams & {
   onEffectiveMode?: (mode: "install" | "update") => void;
 };
+
+/**
+ * Detects npm failures caused by a target that is not published, as opposed to a
+ * broken install. Channel-aware installs use this to widen the selector instead
+ * of failing when the requested release has no artifact.
+ */
+export function isUnavailableNpmTarget(result: { ok: false; code?: string }): boolean {
+  // Only the target lookup owns absence. Later failures can quote arbitrary
+  // package names, including npm error words, without authorizing fallback.
+  return result.code === PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND;
+}

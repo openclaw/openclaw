@@ -1,15 +1,27 @@
 // Codex tests cover attempt startup plugin behavior.
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import {
-  AgentHarnessPreflightError,
-  type CodexBundleMcpThreadConfig,
-  type EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { fileURLToPath } from "node:url";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { startCodexAttemptThread } from "./attempt-startup.js";
+import type { startCodexAttemptThread } from "./attempt-startup.js";
+import {
+  answerInitialize,
+  answerPreparedApiKeyLogin,
+  captureExpectedRuntimeArtifact,
+  createPairedAttemptRuntime,
+  createAttemptPaths,
+  createAttemptClientHarness,
+  createAttemptThreadStarter,
+  createAttemptParams,
+  type AttemptPaths,
+  HARNESS_REQUEST_TIMEOUT_MS,
+  readHarnessMessages,
+  readHarnessRequestMethods,
+  waitForRequest,
+  waitForThreadStart,
+  type AttemptClientHarness as ClientHarness,
+} from "./attempt-startup.test-support.js";
 import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
 import { CodexAppServerClient, isCodexAppServerRequestTimeoutError } from "./client.js";
 import { threadStartResult as createThreadStartResult } from "./codex-app-server.test-fixtures.js";
@@ -17,229 +29,127 @@ import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   type CodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
-  resolveCodexComputerUseConfig,
 } from "./config.js";
+import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
+import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
+import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
+import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
+import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import {
-  resetCodexTestBindingStore,
-  testCodexAppServerBindingStore,
-} from "./session-binding.test-helpers.js";
-import {
-  clearSharedCodexAppServerClient,
   clearSharedCodexAppServerClientAndWait,
+  createIsolatedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
-  resolveCodexAppServerSpawnIdentity,
-  type CodexAppServerPreparedAuth,
+  retainSharedCodexAppServerClientIfCurrent,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
-import { createClientHarness, createCodexTestModel } from "./test-support.js";
+import { createClientHarness } from "./test-support.js";
+import { createCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
+import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
 
-type ClientHarness = ReturnType<typeof createClientHarness>;
+const desktopGeneration = vi.hoisted(() => ({
+  current: undefined as { epoch: number; fingerprint: string } | undefined,
+}));
+const computerUseReadinessFailure = vi.hoisted(() => ({
+  next: undefined as Error | undefined,
+}));
 
-type AttemptPaths = {
-  agentDir: string;
-  cwd: string;
-  sessionFile: string;
-  workspaceDir: string;
-};
+vi.mock("./desktop-generation.js", () => ({
+  isCodexDesktopGenerationCurrent: (candidate: { epoch: number; fingerprint: string }) =>
+    candidate.epoch === desktopGeneration.current?.epoch &&
+    candidate.fingerprint === desktopGeneration.current?.fingerprint,
+  waitForCodexDesktopGeneration: async () => desktopGeneration.current,
+}));
+
+vi.mock("./computer-use.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./computer-use.js")>();
+  return {
+    ...actual,
+    ensureCodexComputerUse: async (...args: Parameters<typeof actual.ensureCodexComputerUse>) => {
+      const error = computerUseReadinessFailure.next;
+      computerUseReadinessFailure.next = undefined;
+      if (error) {
+        desktopGeneration.current = { epoch: 2, fingerprint: "desktop-y" };
+        throw error;
+      }
+      return await actual.ensureCodexComputerUse(...args);
+    },
+  };
+});
 
 const tempRoots = new Set<string>();
 
-function createAttemptPaths(): AttemptPaths {
-  const root = path.join(os.tmpdir(), `openclaw-codex-attempt-startup-${randomUUID()}`);
-  tempRoots.add(root);
-  return {
-    agentDir: path.join(root, "agent"),
-    cwd: path.join(root, "workspace"),
-    sessionFile: path.join(root, "session.jsonl"),
-    workspaceDir: path.join(root, "workspace"),
+const pluginConfig: CodexPluginConfig = { appServer: { command: "codex" } };
+
+const startThreadWithHarness = createAttemptThreadStarter(tempRoots, pluginConfig);
+
+async function startIsolatedPairedAttempt(params: {
+  harness: ClientHarness;
+  sessionId: string;
+  runtime: NonNullable<Parameters<typeof startCodexAttemptThread>[0]["runtime"]>;
+  paths?: AttemptPaths;
+}) {
+  const paths = params.paths ?? createAttemptPaths(tempRoots);
+  const sandbox = {
+    ...createSandboxContext({}),
+    backendId: "node",
+    backend: undefined,
+    fsBridge: undefined,
+    runtimeId: `paired-node-${params.sessionId}`,
+    placementExecutionMode: "remote-exec" as const,
+    placementNodeId: "paired-device-1",
+    placementEnvironmentId: `environment-${params.sessionId}`,
+    placementSessionId: params.sessionId,
+    placementOwnerEpoch: 1,
   };
+  const run = startThreadWithHarness(5_000, new AbortController().signal, {
+    harness: params.harness,
+    paths,
+    skipStartSpy: true,
+    runtime: params.runtime,
+    sandbox,
+    attemptClientFactory: () => createIsolatedCodexAppServerClient,
+    buildAttemptParams: () => ({
+      ...createAttemptParams(paths),
+      sessionId: params.sessionId,
+      sessionKey: `agent:agent-1:${params.sessionId}`,
+    }),
+  }).run;
+  await answerInitialize(params.harness);
+  const environmentAdd = await waitForRequest(params.harness, "environment/add");
+  params.harness.send({ id: environmentAdd.id, result: {} });
+  const threadStart = await waitForThreadStart(params.harness);
+  params.harness.send({ id: threadStart.id, result: threadStartResult(params.sessionId) });
+  const result = await run;
+  const environmentId = (environmentAdd.params as { environmentId?: string }).environmentId;
+  expect(environmentId).toMatch(/^openclaw-node-/u);
+  expect(
+    readHarnessMessages(params.harness.writes).filter(({ method }) => method === "environment/add"),
+  ).toHaveLength(1);
+  return { result, sandbox, environmentId };
 }
 
-function createAttemptParams(paths: AttemptPaths): EmbeddedRunAttemptParams {
-  return {
-    prompt: "hello",
-    sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
-    agentDir: paths.agentDir,
-    sessionFile: paths.sessionFile,
-    effectiveCwd: paths.cwd,
-    workspaceDir: paths.workspaceDir,
-    runId: "run-1",
-    provider: "codex",
-    modelId: "gpt-5.4-codex",
-    model: createCodexTestModel("codex"),
-    thinkLevel: "medium",
-    disableTools: true,
-    timeoutMs: 5_000,
-    authStorage: {} as never,
-    authProfileStore: { version: 1, profiles: {} },
-    modelRegistry: {} as never,
-  } as EmbeddedRunAttemptParams;
-}
-
-const pluginConfig: CodexPluginConfig = {
-  appServer: { command: "codex" },
-};
-
-const bundleMcpThreadConfig = {
-  configPatch: undefined,
-  diagnostics: [],
-  evaluated: false,
-  fingerprint: undefined,
-  staticServerNames: [],
-  userStaticServerNames: [],
-} satisfies CodexBundleMcpThreadConfig;
-
-const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
-
-function readHarnessMessages(
-  writes: string[],
-): Array<{ id?: number; method?: string; params?: unknown }> {
-  return writes.map(
-    (write) => JSON.parse(write) as { id?: number; method?: string; params?: unknown },
-  );
-}
-
-function startThreadWithHarness(
-  startupTimeoutMs: number,
-  signal = new AbortController().signal,
-  overrides?: {
-    pluginConfig?: CodexPluginConfig;
-    startupPreparedAuth?: CodexAppServerPreparedAuth;
-    attemptClientFactory?: (harness: ClientHarness) => CodexAppServerClientFactory;
-    buildAttemptParams?: () => EmbeddedRunAttemptParams;
-    harness?: ClientHarness;
-    paths?: AttemptPaths;
-    skipStartSpy?: boolean;
-    runtimeArtifactRequest?: Parameters<
-      typeof startCodexAttemptThread
-    >[0]["runtimeArtifactRequest"];
-  },
-) {
-  const harness = overrides?.harness ?? createClientHarness();
-  const paths = overrides?.paths ?? createAttemptPaths();
-  const startSpy = overrides?.skipStartSpy
-    ? undefined
-    : vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
-  const effectivePluginConfig = overrides?.pluginConfig ?? pluginConfig;
-
-  const run = startCodexAttemptThread({
-    bindingStore: testCodexAppServerBindingStore,
-    attemptClientFactory:
-      overrides?.attemptClientFactory?.(harness) ?? getLeasedSharedCodexAppServerClient,
-    appServer: resolveCodexAppServerRuntimeOptions({ pluginConfig: effectivePluginConfig }),
-    pluginConfig: effectivePluginConfig,
-    computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig: effectivePluginConfig }),
-    startupAuthProfileId: undefined,
-    startupAuthBindingFingerprint: undefined,
-    ...(overrides?.runtimeArtifactRequest
-      ? { runtimeArtifactRequest: overrides.runtimeArtifactRequest }
-      : {}),
-    startupPreparedAuth: overrides?.startupPreparedAuth,
-    startupAuthAccountCacheKey: undefined,
-    startupEnvApiKeyCacheKey: undefined,
-    agentDir: paths.agentDir,
-    config: undefined,
-    buildAttemptParams: overrides?.buildAttemptParams ?? (() => createAttemptParams(paths)),
-    sessionAgentId: "agent-1",
-    effectiveWorkspace: paths.workspaceDir,
-    effectiveCwd: paths.cwd,
-    dynamicTools: [],
-    webSearchAllowed: false,
-    developerInstructions: undefined,
-    finalConfigPatch: undefined,
-    bundleMcpThreadConfig,
-    nativeToolSurfaceEnabled: true,
-    nativeProviderWebSearchSupport: "supported",
-    sandboxExecServerEnabled: false,
-    sandbox: null,
-    contextEngineProjection: undefined,
-    startupTimeoutMs,
-    signal,
-    onStartupTimeout: vi.fn(),
-    spawnedBy: undefined,
-  });
-
-  return { harness, run, startSpy };
-}
-
-async function captureExpectedRuntimeArtifact(
-  appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
-) {
-  const { captureCodexAppServerRuntimeArtifactBeforeStart, finalizeCodexAppServerRuntimeArtifact } =
-    await import("./runtime-artifact.js");
-  const spawnIdentity = resolveCodexAppServerSpawnIdentity(appServer.start);
-  const before = await captureCodexAppServerRuntimeArtifactBeforeStart({
-    startOptions: appServer.start,
-    spawnIdentity,
-  });
-  return finalizeCodexAppServerRuntimeArtifact({
-    before,
-    startOptions: appServer.start,
-    spawnIdentity,
-    runtimeIdentity: { serverVersion: "0.147.0", userAgent: "openclaw/0.147.0 (macOS; test)" },
-  });
-}
-
-async function answerInitialize(harness: ClientHarness): Promise<void> {
-  await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1), {
-    interval: 1,
-    timeout: HARNESS_REQUEST_TIMEOUT_MS,
-  });
-  const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.147.0 (macOS; test)" } });
-}
-
-async function waitForRequest(
-  harness: ClientHarness,
-  method: string,
-): Promise<{ id?: number; method?: string }> {
-  await vi.waitFor(
-    () =>
-      expect(readHarnessMessages(harness.writes).some((write) => write.method === method)).toBe(
-        true,
-      ),
-    { interval: 1, timeout: HARNESS_REQUEST_TIMEOUT_MS },
-  );
-  const request = readHarnessMessages(harness.writes).find((write) => write.method === method);
-  if (!request) {
-    throw new Error(`${method} request was not written`);
-  }
-  return request;
-}
-
-async function waitForThreadStart(harness: ClientHarness): Promise<{ id?: number }> {
-  return waitForRequest(harness, "thread/start");
-}
-
-function threadStartResult(threadId = "thread-1") {
-  return createThreadStartResult(threadId, "/repo");
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
+const threadStartResult = (threadId = "thread-1") => createThreadStartResult(threadId, "/repo");
 
 describe("startCodexAttemptThread", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers();
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
-    clearSharedCodexAppServerClient();
+    await clearSharedCodexAppServerClientAndWait();
+    // Direct runtime tests supply the plugin root normally owned by loader registration.
+    setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
     defaultCodexPluginMetadataCache.clear();
     resetCodexTestBindingStore();
+    desktopGeneration.current = undefined;
+    computerUseReadinessFailure.next = undefined;
   });
 
   afterEach(async () => {
     vi.useRealTimers();
-    clearSharedCodexAppServerClient();
+    await clearSharedCodexAppServerClientAndWait();
+    setManagedCodexPluginRoot(undefined);
     defaultCodexPluginMetadataCache.clear();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
@@ -286,11 +196,11 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("rejects an expected artifact mismatch before any native thread request", async () => {
-    const paths = createAttemptPaths();
+    const paths = createAttemptPaths(tempRoots);
     await fs.mkdir(paths.workspaceDir, { recursive: true });
     const command = path.join(paths.workspaceDir, "codex-runtime");
     await fs.writeFile(command, "native-v1");
-    const harness = createClientHarness();
+    const harness = createAttemptClientHarness();
     const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
       harness,
       paths,
@@ -308,14 +218,14 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("returns a matching expected artifact with the started thread", async () => {
-    const paths = createAttemptPaths();
+    const paths = createAttemptPaths(tempRoots);
     await fs.mkdir(paths.workspaceDir, { recursive: true });
     const command = path.join(paths.workspaceDir, "codex-runtime");
     await fs.writeFile(command, "native-v1");
     const configuredPlugin: CodexPluginConfig = { appServer: { command } };
     const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: configuredPlugin });
     const expected = await captureExpectedRuntimeArtifact(appServer);
-    const harness = createClientHarness();
+    const harness = createAttemptClientHarness();
     const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
       harness,
       paths,
@@ -333,20 +243,25 @@ describe("startCodexAttemptThread", () => {
     result.releaseSharedClientLease();
   });
 
-  it("restarts managed app-server when Computer Use is enabled after acquire", async () => {
-    const first = createClientHarness();
-    const second = createClientHarness();
+  it("reapplies prepared auth before thread startup after a managed Computer Use restart", async () => {
+    const first = createAttemptClientHarness();
+    const second = createAttemptClientHarness();
+    const preparedAuth = {
+      kind: "api-key" as const,
+      apiKey: "prepared-platform-key",
+    };
     const startSpy = vi
       .spyOn(CodexAppServerClient, "start")
-      .mockReturnValueOnce(first.client)
-      .mockReturnValueOnce(second.client);
-    const paths = createAttemptPaths();
+      .mockResolvedValueOnce(first.client)
+      .mockResolvedValueOnce(second.client);
+    const paths = createAttemptPaths(tempRoots);
     let persistedComputerUse = false;
     const { run } = startThreadWithHarness(10_000, new AbortController().signal, {
       harness: first,
       paths,
       pluginConfig: {},
       skipStartSpy: true,
+      startupPreparedAuth: preparedAuth,
       attemptClientFactory: () => async (options) => {
         const client = await getLeasedSharedCodexAppServerClient(options);
         if (!persistedComputerUse) {
@@ -364,6 +279,7 @@ describe("startCodexAttemptThread", () => {
     });
 
     await answerInitialize(first);
+    await answerPreparedApiKeyLogin(first);
     await vi.waitFor(() => expect(startSpy).toHaveBeenCalledTimes(2), {
       timeout: HARNESS_REQUEST_TIMEOUT_MS,
     });
@@ -373,21 +289,119 @@ describe("startCodexAttemptThread", () => {
     );
 
     await answerInitialize(second);
+    await answerPreparedApiKeyLogin(second);
     const threadStart = await waitForThreadStart(second);
-    second.send({ id: threadStart.id, result: threadStartResult("thread-restarted") });
+    second.send({
+      id: threadStart.id,
+      error: { code: -32000, message: "401 authentication_error: Invalid bearer token" },
+    });
 
-    const result = await run;
-    expect(result.thread.threadId).toBe("thread-restarted");
-    result.turnRoute.release();
-    result.releaseSharedClientLease();
+    await expect(run).rejects.toMatchObject({
+      name: "CodexThreadStartRequestError",
+      message: "thread/start: 401 authentication_error: Invalid bearer token",
+      cause: expect.objectContaining({
+        name: "CodexAppServerRpcError",
+        method: "thread/start",
+        message: "401 authentication_error: Invalid bearer token",
+      }),
+    });
+    expect(readHarnessRequestMethods(first)).toEqual([
+      "initialize",
+      "account/login/start",
+      "config/read",
+      "configRequirements/read",
+      "account/read",
+    ]);
+    expect([
+      [
+        "initialize",
+        "account/login/start",
+        "config/read",
+        "configRequirements/read",
+        "thread/start",
+      ],
+      [
+        "initialize",
+        "account/login/start",
+        "config/read",
+        "configRequirements/read",
+        "account/read",
+        "thread/start",
+      ],
+    ]).toContainEqual(readHarnessRequestMethods(second));
+    expect(startSpy).toHaveBeenCalledTimes(2);
     expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
     await vi.waitFor(() => expect(first.process.stdin.destroyed).toBe(true));
+    await vi.waitFor(() => expect(second.process.stdin.destroyed).toBe(true));
   });
 
+  it.each(["initialize", "Computer Use readiness"] as const)(
+    "restarts when the desktop generation changes during %s",
+    async (changeStage) => {
+      const first = createAttemptClientHarness();
+      const second = createAttemptClientHarness();
+      const startSpy = vi
+        .spyOn(CodexAppServerClient, "start")
+        .mockResolvedValueOnce(first.client)
+        .mockResolvedValueOnce(second.client);
+      desktopGeneration.current = { epoch: 1, fingerprint: "desktop-x" };
+      if (changeStage === "Computer Use readiness") {
+        computerUseReadinessFailure.next = Object.assign(new Error("desktop selection changed"), {
+          code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
+        });
+      }
+      const { run } = startThreadWithHarness(10_000, new AbortController().signal, {
+        harness: first,
+        paths: createAttemptPaths(tempRoots),
+        pluginConfig: {},
+        skipStartSpy: true,
+        startupPreparedAuth: { kind: "api-key", apiKey: "prepared-platform-key" },
+        appServer: resolveCodexAppServerRuntimeOptions({
+          pluginConfig: {},
+          managedCommandOrder: "desktop-first",
+        }),
+      });
+
+      await vi.waitFor(() => expect(first.writes).toHaveLength(1));
+      if (changeStage === "initialize") {
+        desktopGeneration.current = { epoch: 2, fingerprint: "desktop-y" };
+      }
+      await answerInitialize(first);
+      if (changeStage === "Computer Use readiness") {
+        await answerPreparedApiKeyLogin(first);
+      }
+      await vi.waitFor(() => expect(startSpy).toHaveBeenCalledTimes(2), {
+        timeout: HARNESS_REQUEST_TIMEOUT_MS,
+      });
+      expect(readHarnessRequestMethods(first)).toEqual(
+        changeStage === "initialize" ? ["initialize"] : ["initialize", "account/login/start"],
+      );
+
+      await answerInitialize(second);
+      await answerPreparedApiKeyLogin(second);
+      const threadStart = await waitForThreadStart(second);
+      second.send({ id: threadStart.id, result: threadStartResult("thread-y") });
+      const result = await run;
+
+      expect(readHarnessRequestMethods(second)).toEqual([
+        "initialize",
+        "account/login/start",
+        "config/read",
+        "configRequirements/read",
+        "thread/start",
+      ]);
+      await vi.waitFor(() => expect(first.process.stdin.destroyed).toBe(true));
+      result.turnRoute.release();
+      result.releaseSharedClientLease();
+      await clearSharedCodexAppServerClientAndWait();
+      await vi.waitFor(() => expect(second.process.stdin.destroyed).toBe(true));
+    },
+  );
+
   it("retires the startup generation when context restart sees a new executable owner", async () => {
-    const harness = createClientHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
-    const paths = createAttemptPaths();
+    const harness = createAttemptClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const paths = createAttemptPaths(tempRoots);
     const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
       harness,
       paths,
@@ -410,7 +424,9 @@ describe("startCodexAttemptThread", () => {
     await expect(result.restartContextEngineCodexThread()).rejects.toThrow(
       "codex app-server client is closed",
     );
-    expect(harness.writes).toHaveLength(writesBeforeRestart);
+    expect(
+      readHarnessMessages(harness.writes.slice(writesBeforeRestart)).map(({ method }) => method),
+    ).toEqual(["config/read", "configRequirements/read", "account/read"]);
 
     result.turnRoute.release();
     result.releaseSharedClientLease();
@@ -418,14 +434,14 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("retires a failed startup client after another active lease releases", async () => {
-    const retained = createClientHarness();
-    const replacement = createClientHarness();
+    const retained = createAttemptClientHarness();
+    const replacement = createAttemptClientHarness();
     const startSpy = vi
       .spyOn(CodexAppServerClient, "start")
-      .mockReturnValueOnce(retained.client)
-      .mockReturnValueOnce(replacement.client);
+      .mockResolvedValueOnce(retained.client)
+      .mockResolvedValueOnce(replacement.client);
     const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-    const paths = createAttemptPaths();
+    const paths = createAttemptPaths(tempRoots);
 
     const retainedLease = getLeasedSharedCodexAppServerClient({
       startOptions: appServer.start,
@@ -461,6 +477,72 @@ describe("startCodexAttemptThread", () => {
     expect(releaseLeasedSharedCodexAppServerClient(replacement.client)).toBe(true);
   });
 
+  it("preserves the healthy shared client and incognito history after a prewrite resume refusal", async () => {
+    const paths = createAttemptPaths(tempRoots);
+    const harness = createCodexLifecycleHarness({
+      respond: async (method, params) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
+        if (method === "thread/start") {
+          return threadStartResult(
+            (params as { ephemeral?: boolean }).ephemeral ? "incognito" : "ordinary",
+          );
+        }
+        throw new Error(`unexpected method: ${method}`);
+      },
+    });
+    const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const common = { paths, harness, skipStartSpy: true };
+    const ordinary = await startThreadWithHarness(5_000, undefined, common).run;
+    await harness.endTurn(ordinary.thread.threadId);
+    ordinary.turnRoute.release();
+    ordinary.releaseSharedClientLease();
+    const incognito = {
+      ...common,
+      buildAttemptParams: () => ({
+        ...createAttemptParams(paths),
+        sessionId: "incognito-session",
+        sessionKey: "agent:agent-1:dashboard:incognito-refusal",
+      }),
+    };
+    const previous = await startThreadWithHarness(5_000, undefined, incognito).run;
+    await retainCodexAppServerBindingSubscription(harness.client, previous.thread.threadId, {
+      configFingerprint: previous.thread.liveThreadConfigFingerprint,
+      ephemeralPolicy: previous.thread.liveThreadEphemeralPolicy,
+    });
+    previous.turnRoute.release();
+    previous.releaseSharedClientLease();
+
+    const sibling = retainSharedCodexAppServerClientIfCurrent(harness.client);
+    expect(sibling).toBeTypeOf("function");
+    const before = harness.writes.length;
+    const refused = new AgentHarnessPreflightError("session owner revoked");
+    const attemptParams = createAttemptParams(paths);
+    const assertActive = () => {
+      throw refused;
+    };
+    const hostCapabilities = { ...attemptParams.hostCapabilities, assertActive };
+    const buildAttemptParams = () => ({ ...attemptParams, hostCapabilities });
+    await expect(
+      startThreadWithHarness(5_000, undefined, { ...common, buildAttemptParams }).run,
+    ).rejects.toBe(refused);
+    sibling?.();
+    const continued = await startThreadWithHarness(5_000, undefined, incognito).run;
+    expect(continued.client).toBe(harness.client);
+    expect(continued.thread.threadId).toBe(previous.thread.threadId);
+    expect(readHarnessMessages(harness.writes.slice(before)).map(({ method }) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+    ]);
+    expect(start).toHaveBeenCalledTimes(1);
+    continued.turnRoute.release();
+    continued.releaseSharedClientLease();
+  });
+
   it("clears the shared app-server when startup abandons an in-flight thread request", async () => {
     vi.useFakeTimers();
     const { harness, run } = startThreadWithHarness(500);
@@ -483,66 +565,74 @@ describe("startCodexAttemptThread", () => {
     expect(harness.stdinDestroyed).toBe(true);
   });
 
-  it("closes indeterminate thread startup even when another lease shares the app-server", async () => {
-    const retained = createClientHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(retained.client);
-    const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-    const paths = createAttemptPaths();
+  it.each([false, true])(
+    "bounds initialize and closes the transport with stderr=%s",
+    async (withStderr) => {
+      // Transport exit uses setImmediate; advance the deadline without freezing its delivery.
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const harness = createClientHarness({ autoEmitExit: !withStderr });
+      try {
+        const kill = vi.spyOn(harness.process, "kill").mockImplementation((signal) => {
+          if (signal === "SIGKILL") {
+            harness.process.emit("exit", null, signal);
+          }
+        });
+        // Retain the original subprocess test's budgets for the fixture that refuses EOF.
+        const requestTimeoutMs = withStderr ? 2_000 : 1_000;
+        const initializeTimeoutPluginConfig = {
+          ...pluginConfig,
+          appServer: { command: "codex", requestTimeoutMs },
+        } satisfies CodexPluginConfig;
+        const { run } = startThreadWithHarness(
+          withStderr ? 5_000 : 2_000,
+          new AbortController().signal,
+          { harness, pluginConfig: initializeTimeoutPluginConfig },
+        );
+        const runError = run.then(
+          () => undefined,
+          (error: unknown) => error,
+        );
 
-    const retainedLease = getLeasedSharedCodexAppServerClient({
-      startOptions: appServer.start,
-      agentDir: paths.agentDir,
-    });
-    await answerInitialize(retained);
-    await expect(retainedLease).resolves.toBe(retained.client);
+        const initialize = JSON.parse(await harness.waitForWrite(0)) as {
+          id?: number;
+          method?: string;
+        };
+        expect(initialize).toMatchObject({ id: expect.any(Number), method: "initialize" });
+        if (withStderr) {
+          harness.process.stderr.write(
+            "Error: failed to initialize sqlite state runtime token=secret-value\n",
+          );
+        }
+        await vi.advanceTimersByTimeAsync(requestTimeoutMs);
+        if (withStderr) {
+          expect(harness.stdinDestroyed).toBe(true);
+          expect(harness.process.exitCode).toBeNull();
+          expect(harness.process.signalCode).toBeNull();
+          expect(kill).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+        }
 
-    const { run } = startThreadWithHarness(100, new AbortController().signal, {
-      harness: retained,
-      paths,
-      skipStartSpy: true,
-    });
-    const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
-    const threadStart = await waitForThreadStart(retained);
-
-    await rejected;
-    expect(threadStart.id).toBeDefined();
-    expect(retained.process.stdin.destroyed).toBe(true);
-
-    expect(releaseLeasedSharedCodexAppServerClient(retained.client)).toBe(true);
-  });
-
-  it("closes the shared app-server when startup times out during initialize", async () => {
-    vi.useFakeTimers();
-    const initializeTimeoutPluginConfig = {
-      ...pluginConfig,
-      appServer: { command: "codex", requestTimeoutMs: 1_000 },
-    } satisfies CodexPluginConfig;
-    const { harness, run } = startThreadWithHarness(2_000, new AbortController().signal, {
-      pluginConfig: initializeTimeoutPluginConfig,
-    });
-    const runError = run.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-
-    const initialize = await waitForRequest(harness, "initialize");
-    expect(initialize.id).toBeDefined();
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    const error = await runError;
-    expect(error).toBeInstanceOf(Error);
-    expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
-    expect((error as Error).message).toBe("codex app-server initialize timed out");
-    await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
-      interval: 1,
-      timeout: 1_000,
-    });
-    expect(
-      readHarnessMessages(harness.writes).some((write) => write.method === "thread/start"),
-    ).toBe(false);
-  });
+        const error = await runError;
+        expect(error).toBeInstanceOf(Error);
+        expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
+        expect((error as Error).message).toBe(
+          withStderr
+            ? 'codex app-server initialize timed out; stderr="Error: failed to initialize sqlite state runtime token=<redacted>"'
+            : "codex app-server initialize timed out",
+        );
+        expect(harness.stdinDestroyed).toBe(true);
+        expect(harness.process.exitCode).toBe(withStderr ? null : 0);
+        expect(harness.process.signalCode).toBe(withStderr ? "SIGKILL" : null);
+        expect(readHarnessRequestMethods(harness)).toEqual(["initialize"]);
+      } finally {
+        harness.emitExit();
+      }
+    },
+  );
 
   it("does not retire shared startup when this attempt's initialize wait expires", async () => {
+    vi.useFakeTimers();
     const sharedInitializePluginConfig = {
       ...pluginConfig,
       appServer: { command: "codex", requestTimeoutMs: 1_000 },
@@ -550,19 +640,27 @@ describe("startCodexAttemptThread", () => {
     const appServer = resolveCodexAppServerRuntimeOptions({
       pluginConfig: sharedInitializePluginConfig,
     });
-    const paths = createAttemptPaths();
+    const paths = createAttemptPaths(tempRoots);
     const { harness, run, startSpy } = startThreadWithHarness(3_000, new AbortController().signal, {
       pluginConfig: sharedInitializePluginConfig,
       paths,
     });
     await waitForRequest(harness, "initialize");
+    let markPeerStarted: () => void = () => undefined;
+    const peerStarted = new Promise<void>((resolve) => {
+      markPeerStarted = resolve;
+    });
     const peerAcquire = getLeasedSharedCodexAppServerClient({
       startOptions: appServer.start,
       agentDir: paths.agentDir,
       timeoutMs: 3_000,
+      onStartedClient: markPeerStarted,
     });
+    await peerStarted;
 
-    await expect(run).rejects.toThrow("codex app-server initialize timed out");
+    const rejected = expect(run).rejects.toThrow("codex app-server initialize timed out");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejected;
     expect(harness.stdinDestroyed).toBe(false);
     await answerInitialize(harness);
     await expect(peerAcquire).resolves.toBe(harness.client);
@@ -578,75 +676,6 @@ describe("startCodexAttemptThread", () => {
     expect(releaseLeasedSharedCodexAppServerClient(harness.client)).toBe(true);
   });
 
-  it("bounds a real stdio initialize request and cleans up the child", async () => {
-    const paths = createAttemptPaths();
-    const root = path.dirname(paths.agentDir);
-    const fixturePath = path.join(root, "stall-initialize.mjs");
-    const requestLogPath = path.join(root, "requests.log");
-    const pidPath = path.join(root, "child.pid");
-    await fs.mkdir(root, { recursive: true });
-    await fs.writeFile(
-      fixturePath,
-      [
-        'import fs from "node:fs";',
-        'import readline from "node:readline";',
-        "const [requestLogPath, pidPath] = process.argv.slice(2);",
-        'fs.writeFileSync(pidPath, String(process.pid), "utf8");',
-        'process.stderr.write("Error: failed to initialize sqlite state runtime token=secret-value\\n");',
-        "const lines = readline.createInterface({ input: process.stdin });",
-        'lines.on("line", (line) => {',
-        "  const message = JSON.parse(line);",
-        '  fs.appendFileSync(requestLogPath, `${String(message.method)}\\n`, "utf8");',
-        "});",
-        "setInterval(() => undefined, 1000);",
-      ].join("\n"),
-      "utf8",
-    );
-    const stdioPluginConfig = {
-      appServer: {
-        transport: "stdio",
-        command: process.execPath,
-        args: [fixturePath, requestLogPath, pidPath],
-        requestTimeoutMs: 2_000,
-      },
-    } satisfies CodexPluginConfig;
-    let childPid: number | undefined;
-
-    try {
-      const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
-        pluginConfig: stdioPluginConfig,
-        paths,
-        skipStartSpy: true,
-      });
-
-      await expect(run).rejects.toThrow(
-        'codex app-server initialize timed out; stderr="Error: failed to initialize sqlite state runtime token=<redacted>"',
-      );
-
-      const requestMethods = (await fs.readFile(requestLogPath, "utf8")).trim().split(/\r?\n/u);
-      expect(requestMethods).toEqual(["initialize"]);
-      childPid = Number.parseInt(await fs.readFile(pidPath, "utf8"), 10);
-      expect(childPid).toBeGreaterThan(0);
-      const observedPid = childPid;
-      await vi.waitFor(() => expect(isProcessAlive(observedPid)).toBe(false), {
-        interval: 25,
-        timeout: 3_000,
-      });
-    } finally {
-      await clearSharedCodexAppServerClientAndWait({
-        exitTimeoutMs: 3_000,
-        forceKillDelayMs: 100,
-      });
-      if (childPid && isProcessAlive(childPid)) {
-        try {
-          process.kill(childPid, "SIGKILL");
-        } catch {
-          // The child can exit between the liveness probe and fallback kill.
-        }
-      }
-    }
-  });
-
   it("cleans up a client surfaced by a factory that later rejects", async () => {
     const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
       attemptClientFactory: (factoryHarness) => async (options) => {
@@ -657,6 +686,98 @@ describe("startCodexAttemptThread", () => {
 
     await expect(run).rejects.toThrow("custom initialize failed");
     expect(harness.stdinDestroyed).toBe(true);
+  });
+
+  it("retires each fresh paired-node app-server and its registered environment", async () => {
+    const runtime = createPairedAttemptRuntime();
+    const clients = [
+      createAttemptClientHarness(),
+      createAttemptClientHarness(),
+      createAttemptClientHarness(),
+    ];
+    const start = vi.spyOn(CodexAppServerClient, "start");
+    for (const harness of clients) {
+      start.mockResolvedValueOnce(harness.client);
+    }
+    const environmentIds = new Set<string>();
+
+    for (const [index, harness] of clients.entries()) {
+      const attempt = await startIsolatedPairedAttempt({
+        harness,
+        sessionId: `sequential-${index}`,
+        runtime: runtime.runtime,
+      });
+      environmentIds.add(attempt.environmentId!);
+      await releaseCodexSandboxExecServerEnvironment(
+        attempt.sandbox,
+        attempt.result.sandboxEnvironment,
+      );
+      attempt.result.releaseSharedClientLease();
+
+      expect(harness.process.stdin.destroyed).toBe(true);
+      expect(runtime.channels.every(({ close }) => close.mock.calls.length === 1)).toBe(true);
+      expect(sandboxExecServerRegistry.servers.size).toBe(0);
+    }
+
+    expect(environmentIds.size).toBe(clients.length);
+    expect(start).toHaveBeenCalledTimes(clients.length);
+    expect(runtime.openDuplex).toHaveBeenCalledTimes(clients.length);
+  });
+
+  it("closes each paired-node environment and client without interrupting an overlapping sibling", async () => {
+    const first = createAttemptClientHarness();
+    const second = createAttemptClientHarness();
+    const runtime = createPairedAttemptRuntime();
+    const firstPaths = createAttemptPaths(tempRoots);
+    const secondPaths = createAttemptPaths(tempRoots);
+    const start = vi.spyOn(CodexAppServerClient, "start").mockImplementation(async (options) => {
+      const codexHome = options?.env?.CODEX_HOME;
+      if (codexHome?.startsWith(`${firstPaths.agentDir}${path.sep}`)) {
+        return first.client;
+      }
+      if (codexHome?.startsWith(`${secondPaths.agentDir}${path.sep}`)) {
+        return second.client;
+      }
+      throw new Error(`Unexpected isolated Codex home: ${codexHome}`);
+    });
+    const [firstAttempt, secondAttempt] = await Promise.all([
+      startIsolatedPairedAttempt({
+        harness: first,
+        sessionId: "overlap-1",
+        runtime: runtime.runtime,
+        paths: firstPaths,
+      }),
+      startIsolatedPairedAttempt({
+        harness: second,
+        sessionId: "overlap-2",
+        runtime: runtime.runtime,
+        paths: secondPaths,
+      }),
+    ]);
+
+    expect(firstAttempt.result.client).toBe(first.client);
+    expect(secondAttempt.result.client).toBe(second.client);
+    expect(firstAttempt.environmentId).not.toBe(secondAttempt.environmentId);
+    expect(start).toHaveBeenCalledTimes(2);
+    const firstChannel = runtime.channels.find(({ sessionId }) => sessionId === "overlap-1");
+    const secondChannel = runtime.channels.find(({ sessionId }) => sessionId === "overlap-2");
+    await releaseCodexSandboxExecServerEnvironment(
+      firstAttempt.sandbox,
+      firstAttempt.result.sandboxEnvironment,
+    );
+    firstAttempt.result.releaseSharedClientLease();
+    expect(first.process.stdin.destroyed).toBe(true);
+    expect(second.process.stdin.destroyed).toBe(false);
+    expect(firstChannel?.close).toHaveBeenCalledOnce();
+    expect(secondChannel?.close).not.toHaveBeenCalled();
+    await releaseCodexSandboxExecServerEnvironment(
+      secondAttempt.sandbox,
+      secondAttempt.result.sandboxEnvironment,
+    );
+    secondAttempt.result.releaseSharedClientLease();
+    expect(second.process.stdin.destroyed).toBe(true);
+    expect(secondChannel?.close).toHaveBeenCalledOnce();
+    expect(sandboxExecServerRegistry.servers.size).toBe(0);
   });
 
   it("forwards prepared auth without a legacy profile selector", async () => {
@@ -680,6 +801,28 @@ describe("startCodexAttemptThread", () => {
     expect(clientFactory).not.toHaveBeenCalledWith(
       expect.objectContaining({ authProfileId: expect.anything() }),
     );
+  });
+
+  it("propagates environment registration failures for remote-exec placement", async () => {
+    const sandbox = {
+      ...createSandboxContext({}),
+      placementExecutionMode: "remote-exec" as const,
+    };
+    const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      sandbox,
+    });
+    await answerInitialize(harness);
+    const environmentAdd = await waitForRequest(harness, "environment/add");
+    harness.send({
+      id: environmentAdd.id,
+      error: { code: -32603, message: "environment registration failed" },
+    });
+
+    await expect(run).rejects.toThrow("environment registration failed");
+    expect(sandboxExecServerRegistry.servers.has(sandbox.runtimeId)).toBe(false);
+    expect(
+      readHarnessMessages(harness.writes).some((entry) => entry.method === "thread/start"),
+    ).toBe(false);
   });
 
   it("closes a startup client that arrives after startup timeout", async () => {

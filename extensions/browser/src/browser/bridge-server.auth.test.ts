@@ -54,19 +54,20 @@ describe("startBrowserBridgeServer auth", () => {
   async function expectAuthFlow(
     authConfig: { authToken?: string; authPassword?: string },
     headers: Record<string, string>,
+    host?: string,
   ) {
     const bridge = await startBrowserBridgeServer({
       resolved: buildResolvedConfig(),
       ...authConfig,
-      skipRouteRegistrationForTest: true,
+      host,
     });
     servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
 
-    const unauth = await fetch(`${bridge.baseUrl}/`);
+    const unauth = await fetch(`${bridge.baseUrl}/?profile=__auth_probe_missing__`);
     expect(unauth.status).toBe(401);
 
-    const authed = await fetch(`${bridge.baseUrl}/`, { headers });
-    expect(authed.status).toBe(200);
+    const authed = await fetch(`${bridge.baseUrl}/?profile=__auth_probe_missing__`, { headers });
+    expect(authed.status).toBe(404);
   }
 
   afterEach(async () => {
@@ -78,9 +79,16 @@ describe("startBrowserBridgeServer auth", () => {
     }
   });
 
-  it("rejects unauthenticated requests when authToken is set", async () => {
-    await expectAuthFlow({ authToken: "secret-token" }, { Authorization: "Bearer secret-token" });
-  });
+  it.each(["127.0.0.1", "::1"])(
+    "authenticates through the returned bridge URL on %s",
+    async (host) => {
+      await expectAuthFlow(
+        { authToken: "secret-token" },
+        { Authorization: "Bearer secret-token" },
+        host,
+      );
+    },
+  );
 
   it("accepts x-openclaw-password when authPassword is set", async () => {
     await expectAuthFlow(
@@ -114,7 +122,6 @@ describe("startBrowserBridgeServer auth", () => {
           authToken: "secret-token",
           host: "127.0.0.1",
           port: address.port,
-          skipRouteRegistrationForTest: true,
         }),
       ).rejects.toMatchObject({ code: "EADDRINUSE" });
     } finally {
@@ -128,7 +135,6 @@ describe("startBrowserBridgeServer auth", () => {
     const bridge = await startBrowserBridgeServer({
       resolved: buildResolvedConfig(),
       authToken: "secret-token",
-      skipRouteRegistrationForTest: true,
     });
     servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
     const close = vi
@@ -197,7 +203,6 @@ describe("startBrowserBridgeServer auth", () => {
     const bridge = await startBrowserBridgeServer({
       resolved: buildResolvedConfig(),
       authToken: "secret-token",
-      skipRouteRegistrationForTest: true,
       resolveSandboxNoVncToken: (token) => {
         resolveCalls += 1;
         if (token !== "valid-token") {

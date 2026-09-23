@@ -18,12 +18,12 @@ function buildCfgWithGroups(
         groups,
       },
     },
-  } as unknown as OpenClawConfig;
+  };
 }
 
 function buildDecisionParams(overrides: Partial<DecisionParams> = {}): DecisionParams {
   return {
-    cfg: overrides.cfg ?? ({} as OpenClawConfig),
+    cfg: overrides.cfg ?? {},
     accountId: "default",
     message: {
       id: 1,
@@ -35,7 +35,7 @@ function buildDecisionParams(overrides: Partial<DecisionParams> = {}): DecisionP
       chat_guid: "any;+;chatXYZ",
       chat_identifier: "chatXYZ",
       created_at: "2026-05-08T03:00:00Z",
-    } as DecisionParams["message"],
+    },
     messageText: "hi",
     bodyText: "hi",
     allowFrom: ["+15555550123"],
@@ -172,7 +172,7 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
           chat_identifier: "+15555550123",
           destination_caller_id: "+15555550456",
           created_at: "2026-05-08T03:00:00Z",
-        } as DecisionParams["message"],
+        },
         groupPolicy: "open",
       }),
     );
@@ -186,79 +186,68 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
 });
 
 describe("buildIMessageInboundContext forwards GroupSystemPrompt", () => {
-  function buildBuildParams(decision: {
+  async function buildBuildParams(options: {
     isGroup: boolean;
     groupSystemPrompt?: string;
     groupRequireMention?: boolean;
-  }): Parameters<typeof buildIMessageInboundContext>[0] {
-    return {
-      cfg: {} as OpenClawConfig,
-      decision: {
-        kind: "dispatch",
-        isGroup: decision.isGroup,
-        chatId: decision.isGroup ? 7 : undefined,
-        chatGuid: decision.isGroup ? "any;+;chatXYZ" : "any;-;+15555550123",
-        chatIdentifier: decision.isGroup ? "chatXYZ" : "+15555550123",
-        groupId: decision.isGroup ? "7" : undefined,
-        historyKey: undefined,
-        sender: "+15555550123",
-        senderNormalized: "+15555550123",
-        route: {
-          accountId: "default",
-          agentId: "lobster",
-          channel: "imessage",
-          sessionKey: "k",
-          mainSessionKey: "mk",
-          lastRoutePolicy: "main",
-          matchedBy: "default",
+  }): Promise<Parameters<typeof buildIMessageInboundContext>[0]> {
+    const params = buildDecisionParams({
+      cfg: buildCfgWithGroups({
+        "7": {
+          systemPrompt: options.groupSystemPrompt,
+          requireMention: options.groupRequireMention ?? false,
         },
-        bodyText: "hi",
-        createdAt: undefined,
-        replyContext: null,
-        effectiveWasMentioned: false,
-        groupRequireMention: decision.groupRequireMention ?? false,
-        commandAuthorized: false,
-        hasControlCommand: false,
-        effectiveDmAllowFrom: [],
-        effectiveGroupAllowFrom: [],
-        groupSystemPrompt: decision.groupSystemPrompt,
-      } as Parameters<typeof buildIMessageInboundContext>[0]["decision"],
-      message: {
-        sender: "+15555550123",
-        text: "hi",
-        is_group: decision.isGroup,
-        chat_id: decision.isGroup ? 7 : undefined,
-        chat_name: decision.isGroup ? "Test Group" : undefined,
-      } as Parameters<typeof buildIMessageInboundContext>[0]["message"],
+      }),
+    });
+    params.message = {
+      ...params.message,
+      is_group: options.isGroup,
+      chat_id: options.isGroup ? 7 : undefined,
+      chat_guid: options.isGroup ? "any;+;chatXYZ" : "any;-;+15555550123",
+      chat_identifier: options.isGroup ? "chatXYZ" : "+15555550123",
+      chat_name: options.isGroup ? "Test Group" : undefined,
+    };
+    const decision = await resolveIMessageInboundDecision(params);
+    if (decision.kind !== "dispatch") {
+      throw new Error("expected system-prompt fixture admission");
+    }
+    if (!options.isGroup) {
+      decision.groupSystemPrompt = options.groupSystemPrompt;
+    }
+    return {
+      cfg: params.cfg,
+      accountService: undefined,
+      decision,
+      message: params.message,
       historyLimit: 0,
-      groupHistories: new Map(),
-    } as Parameters<typeof buildIMessageInboundContext>[0];
+      groupHistories: params.groupHistories,
+    };
   }
 
   it("sets ctxPayload.GroupSystemPrompt for group messages", async () => {
     const { ctxPayload } = await buildIMessageInboundContext(
-      buildBuildParams({ isGroup: true, groupSystemPrompt: "Be concise." }),
+      await buildBuildParams({ isGroup: true, groupSystemPrompt: "Be concise." }),
     );
     expect(ctxPayload.GroupSystemPrompt).toBe("Be concise.");
   });
 
   it("forwards the effective group mention policy", async () => {
     const { ctxPayload } = await buildIMessageInboundContext(
-      buildBuildParams({ isGroup: true, groupRequireMention: true }),
+      await buildBuildParams({ isGroup: true, groupRequireMention: true }),
     );
     expect(ctxPayload.GroupRequireMention).toBe(true);
   });
 
   it("leaves ctxPayload.GroupSystemPrompt undefined when no per-group prompt is configured", async () => {
     const { ctxPayload } = await buildIMessageInboundContext(
-      buildBuildParams({ isGroup: true, groupSystemPrompt: undefined }),
+      await buildBuildParams({ isGroup: true, groupSystemPrompt: undefined }),
     );
     expect(ctxPayload.GroupSystemPrompt).toBeUndefined();
   });
 
   it("leaves ctxPayload.GroupSystemPrompt undefined for DMs even if a prompt is somehow on decision", async () => {
     const { ctxPayload } = await buildIMessageInboundContext(
-      buildBuildParams({ isGroup: false, groupSystemPrompt: "should-not-leak" }),
+      await buildBuildParams({ isGroup: false, groupSystemPrompt: "should-not-leak" }),
     );
     expect(ctxPayload.GroupSystemPrompt).toBeUndefined();
   });

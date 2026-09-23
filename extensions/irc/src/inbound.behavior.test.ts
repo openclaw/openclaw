@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { handleIrcInbound } from "./inbound.js";
 import type { IrcIngressLifecycle } from "./irc-ingress.js";
-import type { RuntimeEnv } from "./runtime-api.js";
 import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
@@ -27,31 +26,33 @@ const {
 });
 
 function installIrcRuntime() {
-  setIrcRuntime({
-    channel: {
-      pairing: {
-        readAllowFromStore: readAllowFromStoreMock,
-        upsertPairingRequest: upsertPairingRequestMock,
+  setIrcRuntime(
+    createPluginRuntimeMock({
+      channel: {
+        pairing: {
+          readAllowFromStore: readAllowFromStoreMock,
+          upsertPairingRequest: upsertPairingRequestMock,
+        },
+        commands: {
+          shouldHandleTextCommands: shouldHandleTextCommandsMock,
+        },
+        text: {
+          hasControlCommand: hasControlCommandMock,
+        },
+        mentions: {
+          buildMentionRegexes: buildMentionRegexesMock,
+          matchesMentionPatterns: matchesMentionPatternsMock,
+        },
       },
-      commands: {
-        shouldHandleTextCommands: shouldHandleTextCommandsMock,
-      },
-      text: {
-        hasControlCommand: hasControlCommandMock,
-      },
-      mentions: {
-        buildMentionRegexes: buildMentionRegexesMock,
-        matchesMentionPatterns: matchesMentionPatternsMock,
-      },
-    },
-  } as never);
+    }),
+  );
 }
 
 function createRuntimeEnv() {
   return {
     log: vi.fn(),
     error: vi.fn(),
-  } as unknown as RuntimeEnv;
+  };
 }
 
 function createAccount(overrides?: Partial<ResolvedIrcAccount>): ResolvedIrcAccount {
@@ -433,35 +434,38 @@ describe("irc inbound behavior", () => {
     );
   });
 
-  it("admits a sender matching a full nick!user@host DM allowlist entry", async () => {
-    const coreRuntime = createPluginRuntimeMock();
-    const runtime = createRuntimeEnv();
-    setIrcRuntime(coreRuntime as never);
+  it.each(["alice!ident@example.com", "alice@example.com"])(
+    "admits a sender matching the host-bound DM allowlist entry %s",
+    async (entry) => {
+      const coreRuntime = createPluginRuntimeMock();
+      const runtime = createRuntimeEnv();
+      setIrcRuntime(coreRuntime as never);
 
-    await handleIrcInbound({
-      message: createMessage({
-        target: "alice",
-        senderNick: "alice",
-        senderUser: "ident",
-        senderHost: "example.com",
-        text: "hello",
-      }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["alice!ident@example.com"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
-      config: { channels: { irc: {} } } as CoreConfig,
-      runtime,
-      sendReply: vi.fn(async () => {}),
-    });
+      await handleIrcInbound({
+        message: createMessage({
+          target: "alice",
+          senderNick: "alice",
+          senderUser: "ident",
+          senderHost: "example.com",
+          text: "hello",
+        }),
+        account: createAccount({
+          config: {
+            dmPolicy: "allowlist",
+            allowFrom: [entry],
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+          },
+        }),
+        config: { channels: { irc: {} } } as CoreConfig,
+        runtime,
+        sendReply: vi.fn(async () => {}),
+      });
 
-    expect(
-      (coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } })
-        .mock.calls.length,
-    ).toBe(1);
-  });
+      expect(
+        (coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } })
+          .mock.calls.length,
+      ).toBe(1);
+    },
+  );
 });

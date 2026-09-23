@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { GatewayClientRequestError, type GatewayClientOptions } from "../gateway/client.js";
+import {
+  NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+} from "../infra/node-runner-inventory.js";
 import type { configureNodeHost } from "./config.js";
 import { runNodeHost } from "./runner.js";
 
@@ -18,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   nodeHostCommands: [] as string[],
   nodeHostCaps: [] as string[],
   availabilityChanged: undefined as (() => void) | undefined,
+  closeMcpManager: vi.fn(async () => undefined),
   configureNodeHost: vi.fn(async (params: Parameters<typeof configureNodeHost>[0]) => ({
     version: 1 as const,
     nodeId: params.nodeId?.trim() || "node-test",
@@ -35,7 +40,7 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({ gateway: { handshakeTimeoutMs: 1_000 } })),
 }));
 
-vi.mock("../gateway/client-start-readiness.js", () => ({
+vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: mocks.startGatewayClientWhenEventLoopReady,
 }));
 
@@ -82,6 +87,7 @@ vi.mock("../infra/path-env.js", () => ({
 
 vi.mock("./config.js", () => ({
   configureNodeHost: mocks.configureNodeHost,
+  loadNodeHostConfig: async () => null,
 }));
 
 vi.mock("./plugin-node-host.js", () => ({
@@ -101,10 +107,9 @@ vi.mock("./plugin-node-host.js", () => ({
 
 vi.mock("./mcp.js", () => ({
   startNodeHostMcpManager: vi.fn(async () => ({
-    configuredServerCount: 0,
     descriptors: [],
     callMcpTool: vi.fn(),
-    close: vi.fn(async () => {}),
+    close: mocks.closeMcpManager,
   })),
 }));
 
@@ -127,7 +132,7 @@ async function withReadyNodeHost(
     aborted: false,
     elapsedMs: 0,
   });
-  const processOnceSpy = vi.spyOn(process, "once");
+  const processOnSpy = vi.spyOn(process, "on");
   const previousExitCode = process.exitCode;
   let running: Promise<void> | undefined;
   try {
@@ -139,23 +144,23 @@ async function withReadyNodeHost(
     }
     await runTest({ client, options: mocks.capturedGatewayClientOptions.at(-1) });
   } finally {
-    const onSigterm = processOnceSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
+    const onSigterm = processOnSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
     try {
       onSigterm?.("SIGTERM");
       await running;
     } finally {
-      for (const [event, listener] of processOnceSpy.mock.calls) {
+      for (const [event, listener] of processOnSpy.mock.calls) {
         if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
           process.off(event, listener);
         }
       }
       process.exitCode = previousExitCode;
-      processOnceSpy.mockRestore();
+      processOnSpy.mockRestore();
     }
   }
 }
 
-describe("runNodeHost optional publications", () => {
+describe("runNodeHost connection and optional publications", () => {
   beforeEach(() => {
     mocks.capturedGatewayClientOptions.length = 0;
     mocks.capturedGatewayClients.length = 0;
@@ -175,6 +180,98 @@ describe("runNodeHost optional publications", () => {
     vi.clearAllMocks();
   });
 
+  it("exits after three identical permanent Gateway upgrade rejections", async () => {
+    await withReadyNodeHost(async ({ client, options }) => {
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const rejection = new GatewayClientRequestError({
+          code: "UNAVAILABLE",
+          message: "gateway rejected websocket upgrade (HTTP 403)",
+          details: {
+            reason: "websocket-upgrade-rejected",
+            httpStatus: 403,
+            gatewayErrorType: "proxy_attribution_required",
+            gatewayErrorMessage: "Configure gateway.trustedProxies narrowly",
+          },
+        });
+        options?.onConnectError?.(rejection);
+        options?.onConnectError?.(rejection);
+        expect(client.stop).not.toHaveBeenCalled();
+        options?.onConnectError?.(rejection);
+
+        await vi.waitFor(() => expect(process.exitCode).toBe(1));
+        expect(client.stop).toHaveBeenCalledOnce();
+        expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
+        expect(stderr).toHaveBeenCalledWith(
+          "node host gateway permanently rejected connection (proxy_attribution_required): Configure gateway.trustedProxies narrowly; exiting\n",
+        );
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+  });
+
+  it("keeps retrying transient upgrade failures and resets permanent rejection streaks", async () => {
+    await withReadyNodeHost(async ({ client, options }) => {
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const permanentRejection = new GatewayClientRequestError({
+          code: "UNAVAILABLE",
+          details: {
+            reason: "websocket-upgrade-rejected",
+            httpStatus: 403,
+            gatewayErrorType: "proxy_attribution_required",
+          },
+        });
+        const rejectTwice = () => {
+          options?.onConnectError?.(permanentRejection);
+          options?.onConnectError?.(permanentRejection);
+        };
+        const transientErrors = [
+          new Error("connect ECONNRESET"),
+          ...[
+            { httpStatus: 429, gatewayErrorType: "rate_limited" },
+            { httpStatus: 503, gatewayErrorType: "proxy_attribution_required" },
+            { httpStatus: 403 },
+            { httpStatus: 403, gatewayErrorType: "another_rejection" },
+          ].map(
+            (details) =>
+              new GatewayClientRequestError({
+                code: "UNAVAILABLE",
+                details: { reason: "websocket-upgrade-rejected", ...details },
+              }),
+          ),
+        ];
+
+        for (const transientError of transientErrors) {
+          rejectTwice();
+          options?.onConnectError?.(transientError);
+          expect(client.stop).not.toHaveBeenCalled();
+        }
+        rejectTwice();
+        options?.onHelloOk?.({
+          type: "hello-ok",
+          protocol: 4,
+          server: { version: "test", connId: "test-connection" },
+          features: { methods: [], events: [] },
+          snapshot: {
+            presence: [],
+            health: {},
+            stateVersion: { presence: 0, health: 0 },
+            uptimeMs: 0,
+          },
+          auth: { role: "node", scopes: [] },
+          policy: { maxPayload: 1, maxBufferedBytes: 1, tickIntervalMs: 1 },
+        });
+        rejectTwice();
+        expect(client.stop).not.toHaveBeenCalled();
+        expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("permanently rejected"));
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+  });
+
   it("learns unsupported optional publications once per connection without a request flood", async () => {
     mocks.nodeSkillDescriptors = [
       {
@@ -185,7 +282,11 @@ describe("runNodeHost optional publications", () => {
     ];
     await withReadyNodeHost(async ({ client, options }) => {
       client.request.mockImplementation(async (method: string) => {
-        if (method === NODE_PLUGIN_TOOLS_UPDATE_METHOD || method === NODE_SKILLS_UPDATE_METHOD) {
+        if (
+          method === NODE_PLUGIN_TOOLS_UPDATE_METHOD ||
+          method === NODE_SKILLS_UPDATE_METHOD ||
+          method === NODE_RUNNER_INVENTORY_UPDATE_METHOD
+        ) {
           throw new GatewayClientRequestError({
             code: "INVALID_REQUEST",
             message: `unknown method: ${method}`,
@@ -211,6 +312,19 @@ describe("runNodeHost optional publications", () => {
         expect(
           client.request.mock.calls.filter(([method]) => method === NODE_SKILLS_UPDATE_METHOD),
         ).toHaveLength(1);
+        expect(
+          client.request.mock.calls.filter(
+            ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+          ),
+        ).toEqual([
+          [
+            NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+            {
+              protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+              workerHost: { enabled: false },
+            },
+          ],
+        ]);
       });
     });
   });
@@ -225,7 +339,11 @@ describe("runNodeHost optional publications", () => {
     ];
     await withReadyNodeHost(async ({ client, options }) => {
       client.request.mockImplementation(async (method: string) => {
-        if (method === NODE_PLUGIN_TOOLS_UPDATE_METHOD || method === NODE_SKILLS_UPDATE_METHOD) {
+        if (
+          method === NODE_PLUGIN_TOOLS_UPDATE_METHOD ||
+          method === NODE_SKILLS_UPDATE_METHOD ||
+          method === NODE_RUNNER_INVENTORY_UPDATE_METHOD
+        ) {
           throw new GatewayClientRequestError({
             code: "INVALID_REQUEST",
             message: "unauthorized role: node",
@@ -255,6 +373,11 @@ describe("runNodeHost optional publications", () => {
       expect(
         client.request.mock.calls.filter(([method]) => method === NODE_SKILLS_UPDATE_METHOD),
       ).toHaveLength(1);
+      expect(
+        client.request.mock.calls.filter(
+          ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+        ),
+      ).toHaveLength(1);
 
       client.request.mockResolvedValue({});
       options?.onClose?.(1000, "legacy gateway closed");
@@ -272,7 +395,49 @@ describe("runNodeHost optional publications", () => {
         expect(
           client.request.mock.calls.filter(([method]) => method === NODE_SKILLS_UPDATE_METHOD),
         ).toHaveLength(2);
+        expect(
+          client.request.mock.calls.filter(
+            ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+          ),
+        ).toHaveLength(2);
       });
+    });
+  });
+
+  it("treats the exact v4 inventory authorization shape as an unsupported hidden method", async () => {
+    await withReadyNodeHost(async ({ client, options }) => {
+      client.request.mockImplementation(async (method: string) => {
+        if (method === NODE_RUNNER_INVENTORY_UPDATE_METHOD) {
+          throw new GatewayClientRequestError({
+            code: "INVALID_REQUEST",
+            message: "unauthorized role: node",
+          });
+        }
+        return {};
+      });
+      options?.onHelloOk?.({
+        protocol: 4,
+        features: { methods: [], events: [] },
+      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      await vi.waitFor(() => {
+        expect(
+          client.request.mock.calls.filter(
+            ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+          ),
+        ).toHaveLength(1);
+      });
+
+      for (let index = 0; index < 10; index += 1) {
+        mocks.availabilityChanged?.();
+      }
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(
+        client.request.mock.calls.filter(
+          ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+        ),
+      ).toHaveLength(1);
     });
   });
 

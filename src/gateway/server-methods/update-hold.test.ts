@@ -11,7 +11,6 @@ const getUpdateCampaignStateMock = vi.hoisted(() =>
   vi.fn<() => UpdateCampaignState | undefined>(() => undefined),
 );
 const getUpdateScheduleMock = vi.hoisted(() => vi.fn<() => UpdateScheduleState | null>(() => null));
-const validateUpdateHoldResultMock = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock("../../infra/update-campaign.js", () => ({
   gatewayUpdateCampaign: {
@@ -21,17 +20,9 @@ vi.mock("../../infra/update-campaign.js", () => ({
   },
 }));
 
-vi.mock("../../infra/update-startup.js", () => ({
+vi.mock("../../infra/update-status-state.js", () => ({
   getUpdateAvailable: () => null,
   getUpdateSchedule: getUpdateScheduleMock,
-}));
-
-vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
-  validateUpdateHoldParams: () => true,
-  validateUpdateHoldResult: validateUpdateHoldResultMock,
-  validateUpdateRunParams: () => true,
-  validateUpdateStatusParams: () => true,
-  validateUpdateStatusResult: () => true,
 }));
 
 vi.mock("./validation.js", () => ({
@@ -45,7 +36,6 @@ beforeEach(() => {
   getUpdateCampaignStateMock.mockReturnValue(undefined);
   getUpdateScheduleMock.mockReset();
   getUpdateScheduleMock.mockReturnValue(null);
-  validateUpdateHoldResultMock.mockClear();
 });
 
 async function invokeUpdateHold(
@@ -111,7 +101,6 @@ describe("update.hold", () => {
       }),
     };
     expect(holdUpdateCampaignMock).toHaveBeenCalledOnce();
-    expect(validateUpdateHoldResultMock).toHaveBeenCalledWith(result);
     expect(respond).toHaveBeenCalledWith(true, result);
     expect(logInfo).toHaveBeenCalledWith(
       expect.stringMatching(

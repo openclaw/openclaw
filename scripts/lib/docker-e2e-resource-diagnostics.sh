@@ -27,36 +27,24 @@ docker_e2e_resource_limit_temp_dir() {
   local template="${TMPDIR:-/tmp}/openclaw-docker-resource-limits.XXXXXX"
   if command -v mktemp >/dev/null 2>&1; then
     mktemp -d "$template"
-    return
+    return "$?"
   fi
   if [ -x /usr/bin/mktemp ]; then
     /usr/bin/mktemp -d "$template"
-    return
+    return "$?"
   fi
   echo "mktemp command not found; cannot create Docker resource-limit diagnostics" >&2
   return 127
 }
 
-docker_e2e_tee_bin() {
-  if command -v tee >/dev/null 2>&1; then
-    command -v tee
-    return
+docker_e2e_diagnostic_bin() {
+  if command -v "$1" >/dev/null 2>&1; then
+    command -v "$1"
+    return "$?"
   fi
-  if [ -x /usr/bin/tee ]; then
-    printf '%s\n' /usr/bin/tee
-    return
-  fi
-  return 1
-}
-
-docker_e2e_tail_bin() {
-  if command -v tail >/dev/null 2>&1; then
-    command -v tail
-    return
-  fi
-  if [ -x /usr/bin/tail ]; then
-    printf '%s\n' /usr/bin/tail
-    return
+  if [ -x "/usr/bin/$1" ]; then
+    printf '%s\n' "/usr/bin/$1"
+    return "$?"
   fi
   return 1
 }
@@ -64,7 +52,7 @@ docker_e2e_tail_bin() {
 docker_e2e_remove_diagnostic_dir() {
   if command -v rm >/dev/null 2>&1; then
     rm -rf "$1"
-    return
+    return "$?"
   fi
   /bin/rm -rf "$1"
 }
@@ -78,7 +66,7 @@ docker_e2e_docker_run_with_resource_diagnostics() {
   shift
   if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -eq 0 ]; then
     docker_e2e_timeout_cmd "$timeout_value" docker run "$@"
-    return
+    return "$?"
   fi
 
   local diagnostic_dir=""
@@ -86,42 +74,39 @@ docker_e2e_docker_run_with_resource_diagnostics() {
     docker_e2e_timeout_cmd \
       "$timeout_value" \
       docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-    return
+    return "$?"
   fi
   local tee_bin=""
-  if ! tee_bin="$(docker_e2e_tee_bin)"; then
+  if ! tee_bin="$(docker_e2e_diagnostic_bin tee)"; then
     docker_e2e_remove_diagnostic_dir "$diagnostic_dir"
     docker_e2e_timeout_cmd \
       "$timeout_value" \
       docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-    return
+    return "$?"
   fi
   local tail_bin=""
-  if ! tail_bin="$(docker_e2e_tail_bin)"; then
+  if ! tail_bin="$(docker_e2e_diagnostic_bin tail)"; then
     docker_e2e_remove_diagnostic_dir "$diagnostic_dir"
     docker_e2e_timeout_cmd \
       "$timeout_value" \
       docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-    return
+    return "$?"
   fi
   local stderr_file="${diagnostic_dir}/stderr"
   local stderr_fifo="${diagnostic_dir}/stderr.pipe"
   local capture_fifo="${diagnostic_dir}/capture.pipe"
   local mkfifo_bin=""
-  if command -v mkfifo >/dev/null 2>&1; then
-    mkfifo_bin="$(command -v mkfifo)"
-  elif [ -x /usr/bin/mkfifo ]; then
-    mkfifo_bin=/usr/bin/mkfifo
-  fi
-  if [ -z "$mkfifo_bin" ] || ! "$mkfifo_bin" "$stderr_fifo" "$capture_fifo"; then
+  if ! mkfifo_bin="$(docker_e2e_diagnostic_bin mkfifo)" ||
+    ! "$mkfifo_bin" "$stderr_fifo" "$capture_fifo"; then
     docker_e2e_remove_diagnostic_dir "$diagnostic_dir"
     docker_e2e_timeout_cmd \
       "$timeout_value" \
       docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-    return
+    return "$?"
   fi
 
-  "$tail_bin" -c 65536 <"$capture_fifo" >"$stderr_file" &
+  # Some tail implementations reopen named FIFOs passed through stdin and wait for a new writer.
+  "$tail_bin" -c 65536 "$capture_fifo" >"$stderr_file" &
   local tail_pid="$!"
   "$tee_bin" "$capture_fifo" <"$stderr_fifo" >&2 &
   local tee_pid="$!"

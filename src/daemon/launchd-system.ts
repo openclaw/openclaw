@@ -3,17 +3,22 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { isMissingPathError } from "../infra/errors.js";
-import { execFileUtf8 } from "./exec-file.js";
 import {
   execLaunchctl,
   formatLaunchctlResultDetail,
   isLaunchctlNotLoaded,
+  launchctlInspectionReason,
   type LaunchctlResult,
 } from "./launchd-exec.js";
+import { decodeLaunchdPlistMetadata } from "./launchd-plist.js";
+import {
+  ServiceOwnershipRefusalError,
+  type ServiceInspectionReason,
+} from "./service-inspection-error.js";
 
 const SYSTEM_LAUNCH_DAEMON_DIR = "/Library/LaunchDaemons";
-const PLUTIL_PATH = "/usr/bin/plutil";
 
 type SystemLaunchDaemonOwnership =
   | { status: "absent"; serviceTarget: string }
@@ -24,6 +29,7 @@ type SystemLaunchDaemonOwnership =
       serviceTarget: string;
       operation: "launchctl" | "filesystem";
       detail: string;
+      reason?: ServiceInspectionReason;
     };
 
 type SystemLaunchDaemonConflict = Exclude<SystemLaunchDaemonOwnership, { status: "absent" }>;
@@ -48,15 +54,21 @@ openclaw_system_launchd_detail=""
 openclaw_system_launchd_target=${quotePosixArgument(serviceTarget)}
 openclaw_system_launchd_dir=${quotePosixArgument(SYSTEM_LAUNCH_DAEMON_DIR)}
 openclaw_system_launchd_label=${quotePosixArgument(label)}
-openclaw_system_launchd_probe=$(launchctl print "$openclaw_system_launchd_target" 2>&1)
-openclaw_system_launchd_probe_status=$?
-if [ "$openclaw_system_launchd_probe_status" -eq 0 ]; then
-  openclaw_system_launchd_conflict="$openclaw_system_launchd_target"
-  openclaw_system_launchd_detail="loaded system LaunchDaemon $openclaw_system_launchd_target"
-elif ! printf '%s' "$openclaw_system_launchd_probe" | /usr/bin/grep -Eiq 'could not find service|no such process|not found'; then
-  openclaw_system_launchd_conflict="$openclaw_system_launchd_target"
-  openclaw_system_launchd_detail="could not verify $openclaw_system_launchd_target: $openclaw_system_launchd_probe"
-fi
+openclaw_query_system_launchd() {
+  openclaw_system_launchd_probe=$(launchctl print "$openclaw_system_launchd_target" 2>&1)
+  openclaw_system_launchd_probe_status=$?
+  # POSIX shell status 126/127 means execution failed; >128 can represent a signal.
+  # Partial absence output cannot establish that the ownership query completed.
+  if [ "$openclaw_system_launchd_probe_status" -eq 0 ]; then
+    openclaw_system_launchd_conflict="$openclaw_system_launchd_target"
+    openclaw_system_launchd_detail="loaded system LaunchDaemon $openclaw_system_launchd_target"
+  elif [ "$openclaw_system_launchd_probe_status" -eq 126 ] || [ "$openclaw_system_launchd_probe_status" -eq 127 ] || [ "$openclaw_system_launchd_probe_status" -gt 128 ] ||
+       ! printf '%s' "$openclaw_system_launchd_probe" | /usr/bin/grep -Eiq 'could not find service|no such process|not found'; then
+    openclaw_system_launchd_conflict="$openclaw_system_launchd_target"
+    openclaw_system_launchd_detail="could not verify $openclaw_system_launchd_target (exit $openclaw_system_launchd_probe_status): $openclaw_system_launchd_probe"
+  fi
+}
+openclaw_query_system_launchd
 if [ -z "$openclaw_system_launchd_conflict" ]; then
   if [ ! -e "$openclaw_system_launchd_dir" ]; then
     :
@@ -100,65 +112,9 @@ if [ -z "$openclaw_system_launchd_conflict" ]; then
   fi
 fi
 if [ -z "$openclaw_system_launchd_conflict" ]; then
-  openclaw_system_launchd_probe=$(launchctl print "$openclaw_system_launchd_target" 2>&1)
-  openclaw_system_launchd_probe_status=$?
-  if [ "$openclaw_system_launchd_probe_status" -eq 0 ]; then
-    openclaw_system_launchd_conflict="$openclaw_system_launchd_target"
-    openclaw_system_launchd_detail="loaded system LaunchDaemon $openclaw_system_launchd_target"
-  elif ! printf '%s' "$openclaw_system_launchd_probe" | /usr/bin/grep -Eiq 'could not find service|no such process|not found'; then
-    openclaw_system_launchd_conflict="$openclaw_system_launchd_target"
-    openclaw_system_launchd_detail="could not verify $openclaw_system_launchd_target: $openclaw_system_launchd_probe"
-  fi
+  openclaw_query_system_launchd
 fi
 `;
-}
-
-type LaunchDaemonPlistLabelResult =
-  | { status: "ok"; label: string }
-  | { status: "unlabeled" }
-  | { status: "missing" }
-  | { status: "unreadable" }
-  | { status: "unverifiable"; detail: string };
-
-/** Reads the top-level Label through the native parser for XML and binary plists. */
-export async function readLaunchDaemonPlistLabel(
-  plistPath: string,
-): Promise<LaunchDaemonPlistLabelResult> {
-  const converted = await execFileUtf8(PLUTIL_PATH, [
-    "-convert",
-    "json",
-    "-o",
-    "-",
-    "--",
-    plistPath,
-  ]);
-  if (converted.code === 0) {
-    try {
-      const plist = JSON.parse(converted.stdout) as { Label?: unknown } | null;
-      const label = plist?.Label;
-      return typeof label === "string" && label.length > 0
-        ? { status: "ok", label }
-        : { status: "unlabeled" };
-    } catch (error) {
-      return { status: "unverifiable", detail: formatUnknownError(error) };
-    }
-  }
-  try {
-    await fs.access(plistPath, fs.constants.R_OK);
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return { status: "missing" };
-    }
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "EACCES" || code === "EPERM") {
-      return { status: "unreadable" };
-    }
-    return { status: "unverifiable", detail: formatUnknownError(error) };
-  }
-  return {
-    status: "unverifiable",
-    detail: formatLaunchctlResultDetail(converted) || "plutil could not decode the plist",
-  };
 }
 
 type InstalledSystemLaunchDaemonScan =
@@ -181,17 +137,28 @@ async function findInstalledSystemLaunchDaemon(
 
   for (const entry of entries.filter((candidate) => candidate.endsWith(".plist")).toSorted()) {
     const plistPath = path.posix.join(SYSTEM_LAUNCH_DAEMON_DIR, entry);
-    const result = await readLaunchDaemonPlistLabel(plistPath);
-    if (result.status === "ok" && result.label === label) {
-      return { status: "installed", plistPath };
-    }
-    // Unreadable plists are treated as foreign: loaded same-label daemons are caught by the
-    // bracketing launchctl probes; an unloaded unreadable same-label plist is an accepted operator-created edge (#120481).
-    if (result.status === "unreadable") {
-      continue;
-    }
-    if (result.status === "unverifiable") {
-      return { status: "unverifiable", detail: `${plistPath}: ${result.detail}` };
+    try {
+      const contents = await fs.readFile(plistPath).catch((error: unknown) => {
+        // Unreadable plists are foreign: bracketing queries catch loaded same-label daemons;
+        // an unloaded unreadable same-label plist is an accepted edge (#120481).
+        if (
+          isMissingPathError(error) ||
+          hasErrnoCode(error, "EACCES") ||
+          hasErrnoCode(error, "EPERM")
+        ) {
+          return null;
+        }
+        throw error;
+      });
+      if (contents === null) {
+        continue;
+      }
+      const plist = await decodeLaunchdPlistMetadata(contents);
+      if (plist?.Label === label) {
+        return { status: "installed", plistPath };
+      }
+    } catch (error) {
+      return { status: "unverifiable", detail: `${plistPath}: ${formatUnknownError(error)}` };
     }
   }
   return { status: "absent" };
@@ -211,12 +178,13 @@ function classifySystemLaunchDaemonQuery(
         serviceTarget,
         operation: "launchctl",
         detail: formatLaunchctlResultDetail(result) || `exit code ${result.code}`,
+        reason: launchctlInspectionReason(result, serviceTarget),
       };
 }
 
 export async function inspectSystemLaunchDaemonOwnership(
   label: string,
-  options: { scanInstalledPlists?: boolean } = {},
+  options: { scanInstalledPlists?: boolean; timeoutMs?: number } = {},
 ): Promise<SystemLaunchDaemonOwnership> {
   const serviceTarget = `system/${label}`;
   if (process.platform !== "darwin") {
@@ -225,7 +193,7 @@ export async function inspectSystemLaunchDaemonOwnership(
 
   const initialQuery = classifySystemLaunchDaemonQuery(
     serviceTarget,
-    await execLaunchctl(["print", serviceTarget]),
+    await execLaunchctl(["print", serviceTarget], options.timeoutMs),
   );
   if (initialQuery.status !== "absent") {
     return initialQuery;
@@ -251,7 +219,7 @@ export async function inspectSystemLaunchDaemonOwnership(
   // activation paths therefore repeat this complete probe immediately before use.
   return classifySystemLaunchDaemonQuery(
     serviceTarget,
-    await execLaunchctl(["print", serviceTarget]),
+    await execLaunchctl(["print", serviceTarget], options.timeoutMs),
   );
 }
 
@@ -287,11 +255,11 @@ function formatSystemLaunchDaemonOwnershipError(ownership: SystemLaunchDaemonCon
   ].join("\n");
 }
 
-class SystemLaunchDaemonOwnershipError extends Error {
+class SystemLaunchDaemonOwnershipError extends ServiceOwnershipRefusalError {
   readonly code = "SYSTEM_LAUNCH_DAEMON_OWNERSHIP";
 
   constructor(readonly ownership: SystemLaunchDaemonConflict) {
-    super(formatSystemLaunchDaemonOwnershipError(ownership));
+    super("launchd-system-owned", formatSystemLaunchDaemonOwnershipError(ownership));
     this.name = "SystemLaunchDaemonOwnershipError";
   }
 }

@@ -1,6 +1,8 @@
 // Cron turns must hydrate runtime-only model thinking through the provider-scoped helper,
 // never through a full live catalog build.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import type { resolveCronThinkingSelection } from "./model-selection.js";
 
 const scopedThinkingCatalogMock = vi.fn(
   async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => [],
@@ -20,7 +22,8 @@ const owner = {
   workspaceDir: "/tmp/cron-workspace",
   config: {},
   modelCatalog: { entries: [], routeVariants: [] },
-} as never;
+  metadataSnapshot: createPluginMetadataSnapshotFixture(),
+} satisfies Parameters<typeof resolveCronThinkingSelection>[0]["owner"];
 
 describe("resolveCronThinkingSelection scoped hydration", () => {
   beforeEach(() => {
@@ -28,32 +31,63 @@ describe("resolveCronThinkingSelection scoped hydration", () => {
     scopedThinkingCatalogMock.mockResolvedValue([]);
   });
 
-  it("hydrates a runtime-only model through the provider-scoped helper", async () => {
-    scopedThinkingCatalogMock.mockResolvedValue([
-      { provider: "ollama", id: "minimax-m3:cloud", reasoning: true },
-    ]);
-    const { resolveCronThinkingSelection } = await import("./model-selection.js");
-    const selection = await resolveCronThinkingSelection({
-      cfg: {},
-      owner,
+  it.each([
+    {
       provider: "ollama",
       model: "minimax-m3:cloud",
-      jobThinking: "medium",
-    });
-    expect(selection.requestedThinkLevel).toBe("medium");
-    expect(selection.catalog).toEqual([
-      expect.objectContaining({ provider: "ollama", id: "minimax-m3:cloud", reasoning: true }),
-    ]);
-    expect(scopedThinkingCatalogMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "ollama",
-        model: "minimax-m3:cloud",
-        agentId: "main",
-        agentDir: "/tmp/cron-agent",
-        workspaceDir: "/tmp/cron-workspace",
-      }),
-    );
-  });
+      agentRuntime: "openclaw",
+      thinking: "medium",
+      hasHostRow: false,
+    },
+    {
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      agentRuntime: "codex",
+      thinking: "medium",
+      hasHostRow: true,
+    },
+    {
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      agentRuntime: "codex",
+      thinking: "off",
+      hasHostRow: true,
+    },
+  ])(
+    "hydrates $provider/$model thinking=$thinking for $agentRuntime through the scoped owner",
+    async ({ provider, model, agentRuntime, thinking, hasHostRow }) => {
+      scopedThinkingCatalogMock.mockResolvedValue([{ provider, id: model, reasoning: true }]);
+      const { resolveCronThinkingSelection } = await import("./model-selection.js");
+      const selection = await resolveCronThinkingSelection({
+        cfg: {},
+        owner: {
+          ...owner,
+          modelCatalog: {
+            entries: hasHostRow ? [{ provider, id: model, name: model, reasoning: false }] : [],
+            routeVariants: [],
+          },
+        },
+        provider,
+        model,
+        agentRuntime,
+        jobThinking: thinking,
+      });
+      expect(selection.requestedThinkLevel).toBe(thinking);
+      expect(selection.catalog).toEqual([
+        expect.objectContaining({ provider, id: model, reasoning: true }),
+      ]);
+      expect(scopedThinkingCatalogMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider,
+          model,
+          agentRuntime,
+          agentId: "main",
+          agentDir: "/tmp/cron-agent",
+          workspaceDir: "/tmp/cron-workspace",
+        }),
+      );
+    },
+  );
 
   it("keeps the owner catalog and skips hydration when thinking is off", async () => {
     const { resolveCronThinkingSelection } = await import("./model-selection.js");
@@ -62,6 +96,7 @@ describe("resolveCronThinkingSelection scoped hydration", () => {
       owner,
       provider: "ollama",
       model: "minimax-m3:cloud",
+      agentRuntime: "openclaw",
       jobThinking: "off",
     });
     expect(selection.requestedThinkLevel).toBe("off");

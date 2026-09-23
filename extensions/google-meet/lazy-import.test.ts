@@ -37,6 +37,7 @@ describe("google-meet lazy imports", () => {
     let helperImports = 0;
     let runtimeImports = 0;
     let nodeHostImports = 0;
+    let nodeHostBusy = false;
     let nodePolicyImports = 0;
     let cliImports = 0;
     let gatewayRuntimeImports = 0;
@@ -54,6 +55,8 @@ describe("google-meet lazy imports", () => {
       runtimeImports += 1;
       return {
         GoogleMeetRuntime: class {
+          async reconcileTranscriptPolicy() {}
+
           async status() {
             return { sessions: [] };
           }
@@ -74,7 +77,13 @@ describe("google-meet lazy imports", () => {
     vi.doMock("./src/node-host.js", () => {
       nodeHostImports += 1;
       return {
-        handleGoogleMeetNodeHostCommand: async () => JSON.stringify({ ok: true }),
+        handleGoogleMeetNodeHostCommand: Object.assign(
+          async () => {
+            nodeHostBusy = true;
+            return JSON.stringify({ ok: true });
+          },
+          { hasActiveWork: () => nodeHostBusy },
+        ),
       };
     });
     vi.doMock("./src/node-invoke-policy.js", () => {
@@ -108,7 +117,7 @@ describe("google-meet lazy imports", () => {
     vi.doMock("openclaw/plugin-sdk/routing", () => {
       routingImports += 1;
       return {
-        normalizeAgentId: (value: string) => value,
+        normalizeAgentId: vi.fn((value: string) => value),
         parseAgentSessionKey: () => ({ agentId: "main" }),
       };
     });
@@ -142,6 +151,7 @@ describe("google-meet lazy imports", () => {
       }),
     );
 
+    expect(nodeCommands[0]?.hasActiveWork?.()).toBe(false);
     expect({
       helperImports,
       runtimeImports,
@@ -202,6 +212,9 @@ describe("google-meet lazy imports", () => {
 
     await nodeCommands[0]?.handle();
     await nodeCommands[0]?.handle();
+    expect(nodeCommands[0]?.hasActiveWork?.()).toBe(true);
+    nodeHostBusy = false;
+    expect(nodeCommands[0]?.hasActiveWork?.()).toBe(false);
     await nodePolicies[0]?.handle({} as never);
     await nodePolicies[0]?.handle({} as never);
     await cliRegistrars[0]?.({ program: {} } as never);

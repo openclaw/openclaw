@@ -139,6 +139,7 @@ function parseScope<T extends string>(
 
 export function createStandingIntentTool(options: {
   agentId: string;
+  assertCurrent?: () => void;
   sourceSessionId?: string;
   conversationId?: string;
   provider?: string;
@@ -148,7 +149,7 @@ export function createStandingIntentTool(options: {
   return {
     label: "Standing Intent",
     name: "intent",
-    description: `Create, list, or explicitly cancel event-conditioned standing intents. Creating an intent arms it immediately. ${STANDING_INTENT_AUTOMATION_GUIDANCE} ${STANDING_INTENT_SCOPE_GUIDANCE} Use cron or scheduled tasks for time-based reminders; use this tool only for events expressed by trigger keywords.`,
+    description: `Create, list, or explicitly cancel event-conditioned standing intents. Creating an intent arms it immediately. ${STANDING_INTENT_AUTOMATION_GUIDANCE} ${STANDING_INTENT_SCOPE_GUIDANCE} Use scheduled tasks for time-based reminders; use this tool only for events expressed by trigger keywords.`,
     parameters: {
       type: "object",
       properties: {
@@ -185,6 +186,18 @@ export function createStandingIntentTool(options: {
     execute: async (_toolCallId, rawParams) => {
       const params = (rawParams ?? {}) as IntentToolParams;
       if (params.action === "create") {
+        const provider = options.provider?.trim();
+        const senderId = options.senderId?.trim();
+        if (!provider || !senderId) {
+          const missingIdentity = !provider
+            ? senderId
+              ? "channel"
+              : "channel and sender"
+            : "sender";
+          throw new Error(
+            `authenticated ${missingIdentity} identity is unavailable for this turn; retry from an authenticated channel conversation`,
+          );
+        }
         const nowMs = Date.now();
         const scope = parseScope<IntentScope>(
           params.scope,
@@ -198,8 +211,9 @@ export function createStandingIntentTool(options: {
           ["sender", "anyone"],
           "sender",
         );
-        const intent = createStandingIntent({
+        const intent = await createStandingIntent({
           agentId: options.agentId,
+          assertCurrent: options.assertCurrent,
           description: trimRequiredString(
             params.description,
             "description",
@@ -223,7 +237,7 @@ export function createStandingIntentTool(options: {
                   accountId: options.accountId,
                   senderId: options.senderId ?? "",
                 }),
-          creatorSender: options.senderId ?? "",
+          creatorSender: senderId,
           expiresAt: parseExpiry(params.expiresAt, nowMs),
           maxFires: positiveInteger(params.maxFires, "maxFires", DEFAULT_INTENT_MAX_FIRES),
           cooldownSeconds: nonNegativeInteger(
@@ -238,15 +252,20 @@ export function createStandingIntentTool(options: {
       }
       if (params.action === "list") {
         return jsonResult({
-          intents: listStandingIntents({
+          intents: await listStandingIntents({
             agentId: options.agentId,
+            assertCurrent: options.assertCurrent,
             status: parseStatus(params.status),
           }),
         });
       }
       if (params.action === "cancel") {
         const id = trimRequiredString(params.id, "id", 200);
-        const intent = cancelStandingIntent({ agentId: options.agentId, id });
+        const intent = await cancelStandingIntent({
+          agentId: options.agentId,
+          id,
+          assertCurrent: options.assertCurrent,
+        });
         return jsonResult({ cancelled: intent !== null, intent });
       }
       throw new Error("action must be create, list, or cancel");

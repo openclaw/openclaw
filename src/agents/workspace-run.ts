@@ -3,20 +3,16 @@
  *
  * Selects per-run workspace directories and redacts run identifiers for logs/prompts.
  */
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { redactIdentifier } from "../logging/redact-identifier.js";
-import {
-  classifySessionKeyShape,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
+import { classifySessionKeyShape, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { hasAgentRosterProperty } from "./agent-scope-config.js";
 import {
   resolveAgentConfig,
+  resolveSessionAgentId,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
 } from "./agent-scope.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
@@ -54,47 +50,6 @@ class RunWorkspaceAgentNotConfiguredError extends Error {
   }
 }
 
-function resolveRunAgentId(params: {
-  sessionKey?: string;
-  agentId?: string;
-  config: OpenClawConfig;
-}): {
-  agentId: string;
-  agentIdSource: AgentIdSource;
-} {
-  const rawSessionKey = params.sessionKey?.trim() ?? "";
-  const shape = classifySessionKeyShape(rawSessionKey);
-  if (shape === "malformed_agent") {
-    throw new Error("Malformed agent session key; refusing workspace resolution.");
-  }
-
-  const explicit =
-    typeof params.agentId === "string" && params.agentId.trim()
-      ? normalizeAgentId(params.agentId)
-      : undefined;
-  if (explicit) {
-    return { agentId: explicit, agentIdSource: "explicit" };
-  }
-
-  if (shape === "missing" || shape === "legacy_or_alias") {
-    return {
-      agentId: resolveDefaultAgentId(params.config),
-      agentIdSource: "default",
-    };
-  }
-
-  const parsed = parseAgentSessionKey(rawSessionKey);
-  if (parsed?.agentId) {
-    return {
-      agentId: normalizeAgentId(parsed.agentId),
-      agentIdSource: "session_key",
-    };
-  }
-
-  // Defensive fallback, should be unreachable for non-malformed shapes.
-  throw new Error("Session key does not resolve to a configured agent.");
-}
-
 /** Redacts a run/session identifier for logs and prompts. */
 export function redactRunIdentifier(value: string | undefined): string {
   return redactIdentifier(value, { len: 12 });
@@ -120,11 +75,16 @@ export function resolveRunWorkspaceDir(params: {
   }
   const env = params.env ?? process.env;
   const requested = params.workspaceDir;
-  const { agentId, agentIdSource } = resolveRunAgentId({
-    sessionKey: params.sessionKey,
+  const agentId = resolveSessionAgentId({
+    sessionKey: rawSessionKey || undefined,
     agentId: params.agentId,
     config,
   });
+  const agentIdSource: AgentIdSource = params.agentId
+    ? "explicit"
+    : parseAgentSessionKey(rawSessionKey)?.agentId
+      ? "session_key"
+      : "default";
   if (!resolveAgentConfig(config, agentId)) {
     throw new RunWorkspaceAgentNotConfiguredError(agentId);
   }

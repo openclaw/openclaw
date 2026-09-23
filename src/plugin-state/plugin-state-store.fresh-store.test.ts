@@ -1,12 +1,12 @@
-// Fresh-store reads: a startup-checkpoint DB created before the first plugin-state write has no
-// plugin_state_entries table; read-only paths must report empty, not error (#117249).
+// Fresh-store reads remain empty after checkpoint bootstrap; missing canonical tables stay errors.
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  countPluginStateLiveEntries,
+  getPluginStateCapacity,
   createPluginStateKeyedStore,
   pluginStateEntriesInKeyRange,
   resetPluginStateStoreForTests,
@@ -19,7 +19,7 @@ afterEach(() => {
 
 async function expectPluginStateReadFailure(
   promise: Promise<unknown>,
-  expected: { operation: "entries" | "lookup"; path: string },
+  expected: { operation: "entries" | "lookup" | "count"; path: string },
 ): Promise<void> {
   let storeError: unknown;
   try {
@@ -36,7 +36,7 @@ async function expectPluginStateReadFailure(
 }
 
 describe("plugin state fresh-store reads", () => {
-  it("treats an existing state database without the lazy plugin-state table as empty", async () => {
+  it("initializes an empty canonical plugin-state store before startup checkpoint reads", async () => {
     await withOpenClawTestState(
       { label: "plugin-state-read-only-table-missing", applyEnv: false },
       async (state) => {
@@ -50,9 +50,11 @@ describe("plugin state fresh-store reads", () => {
         });
 
         await expect(store.lookup("k")).resolves.toBeUndefined();
+        await expect(store.lookupMany(["k"])).resolves.toEqual([{ ok: true, value: undefined }]);
         await expect(store.entries()).resolves.toEqual([]);
+        await expect(store.count()).resolves.toBe(0);
         expect(
-          pluginStateEntriesInKeyRange({
+          await pluginStateEntriesInKeyRange({
             pluginId: "discord",
             namespace: "read-only-table-missing",
             keyStartInclusive: "a",
@@ -61,14 +63,21 @@ describe("plugin state fresh-store reads", () => {
             env: state.env,
           }),
         ).toEqual([]);
-        expect(countPluginStateLiveEntries("discord", state.env)).toBe(0);
+        expect(getPluginStateCapacity("discord", state.env).liveEntries).toBe(0);
 
         const verify = new DatabaseSync(databasePath, { readOnly: true });
-        const tables = verify
-          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
-          .all();
-        verify.close();
-        expect(tables).toEqual([{ name: "schema_meta" }, { name: "state_leases" }]);
+        try {
+          expect(verify.prepare("PRAGMA user_version").get()).toEqual({
+            user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+          });
+          expect(
+            verify
+              .prepare("SELECT name FROM sqlite_schema WHERE name = 'plugin_state_entries'")
+              .get(),
+          ).toEqual({ name: "plugin_state_entries" });
+        } finally {
+          verify.close();
+        }
       },
     );
   });
@@ -80,13 +89,7 @@ describe("plugin state fresh-store reads", () => {
         const databasePath = resolveOpenClawStateSqlitePath(state.env);
         withOpenClawStateStartupMigrationCheckpointDatabase(() => undefined, { env: state.env });
         const database = new DatabaseSync(databasePath);
-        database.exec(`
-          CREATE TABLE config_machine_state (
-            state_key TEXT NOT NULL PRIMARY KEY,
-            value_json TEXT NOT NULL,
-            updated_at_ms INTEGER NOT NULL
-          ) STRICT
-        `);
+        database.exec("DROP TABLE plugin_state_entries");
         database.close();
 
         const store = createPluginStateKeyedStore("discord", {
@@ -101,6 +104,10 @@ describe("plugin state fresh-store reads", () => {
         });
         await expectPluginStateReadFailure(store.entries(), {
           operation: "entries",
+          path: databasePath,
+        });
+        await expectPluginStateReadFailure(store.count(), {
+          operation: "count",
           path: databasePath,
         });
       },

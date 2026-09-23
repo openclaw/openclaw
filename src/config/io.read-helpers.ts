@@ -1,9 +1,10 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
+import { sha256Hex } from "../infra/crypto-digest.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "../infra/errors.js";
@@ -11,14 +12,11 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
   applyConfigEnvVars,
+  cloneEnvWithPlatformSemantics,
   createConfigRuntimeEnvBase,
   getPublishedConfigRuntimeEnvState,
 } from "./config-env-vars.js";
-import {
-  type EnvSubstitutionWarning,
-  containsEnvVarReference,
-  resolveConfigEnvVars,
-} from "./env-substitution.js";
+import { type EnvSubstitutionWarning, resolveConfigEnvVars } from "./env-substitution.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import {
   type ConfigIncludeResolutionEvent,
@@ -30,32 +28,22 @@ import {
 } from "./includes.js";
 import type { ConfigIoDeps, NormalizedConfigIoDeps, ParseConfigJson5Result } from "./io.types.js";
 import { resolveConfigPath, resolveIncludeRoots, resolveStateDir } from "./paths.js";
+import { createConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
 import { getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 
 export function hashConfigRaw(raw: string | null): string {
   // Present-file hashes stay compatible with last-known-good recovery metadata.
   // Missing needs a distinct token so optimistic writes reject missing-to-empty races.
-  if (raw === null) {
-    return hashConfigIncludeRaw(null);
-  }
-  return crypto.createHash("sha256").update(raw).digest("hex");
+  return raw === null ? hashConfigIncludeRaw(null) : sha256Hex(raw);
 }
 
 export function resolveConfigSnapshotHash(snapshot: {
   hash?: string;
   raw?: string | null;
 }): string | null {
-  if (typeof snapshot.hash === "string") {
-    const trimmed = snapshot.hash.trim();
-    if (trimmed) {
-      return trimmed;
-    }
-  }
-  if (typeof snapshot.raw !== "string") {
-    return null;
-  }
-  return hashConfigRaw(snapshot.raw);
+  const hash = normalizeNullableString(snapshot.hash);
+  return hash ?? (typeof snapshot.raw === "string" ? hashConfigRaw(snapshot.raw) : null);
 }
 
 export function coerceConfig(value: unknown): OpenClawConfig {
@@ -63,46 +51,12 @@ export function coerceConfig(value: unknown): OpenClawConfig {
 }
 
 export function hasConfigMeta(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return isRecord(value.meta);
+  return isRecord(asOptionalRecord(value)?.meta);
 }
 
 export function resolveGatewayMode(value: unknown): string | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const gateway = value.gateway;
-  if (!isRecord(gateway) || typeof gateway.mode !== "string") {
-    return null;
-  }
-  const trimmed = gateway.mode.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-export function collectEnvRefPaths(
-  value: unknown,
-  pathLocal: string,
-  output: Map<string, string>,
-): void {
-  if (typeof value === "string") {
-    if (containsEnvVarReference(value)) {
-      output.set(pathLocal, value);
-    }
-    return;
-  }
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => {
-      collectEnvRefPaths(item, `${pathLocal}[${index}]`, output);
-    });
-    return;
-  }
-  if (isRecord(value)) {
-    for (const [key, child] of Object.entries(value)) {
-      collectEnvRefPaths(child, pathLocal ? `${pathLocal}.${key}` : key, output);
-    }
-  }
+  const gateway = asOptionalRecord(asOptionalRecord(value)?.gateway);
+  return normalizeNullableString(gateway?.mode);
 }
 
 export function containsConfigIncludeDirective(value: unknown): boolean {
@@ -297,6 +251,7 @@ type ConfigReadResolution = {
   resolvedConfigRaw: unknown;
   envSnapshotForRestore: Record<string, string | undefined>;
   envWarnings: EnvSubstitutionWarning[];
+  resolutionFacts: ConfigResolutionFacts;
 };
 
 export function resolveConfigForRead(
@@ -308,18 +263,27 @@ export function resolveConfigForRead(
     applyConfigEnvVars(resolvedIncludes as OpenClawConfig, env, { lowerPrecedenceEnv });
   }
   const envWarnings: EnvSubstitutionWarning[] = [];
+  const pendingEnvSecretRefs = new Map<string, string>();
+  const resolvedEnvSecretRefs = new Map<string, string>();
+  const resolvedConfigRaw = resolveConfigEnvVars(resolvedIncludes, env, {
+    onMissing: (warning) => envWarnings.push(warning),
+    onPendingEnvSecretRef: (id, configPath) => pendingEnvSecretRefs.set(configPath, id),
+    onResolvedEnvSecretRef: (id, configPath) => resolvedEnvSecretRefs.set(configPath, id),
+  });
   return {
-    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env, {
-      onMissing: (warning) => envWarnings.push(warning),
-    }),
-    envSnapshotForRestore: { ...env } as Record<string, string | undefined>,
+    resolvedConfigRaw,
+    envSnapshotForRestore: cloneEnvWithPlatformSemantics(env),
     envWarnings,
+    resolutionFacts: createConfigResolutionFacts(
+      envWarnings,
+      pendingEnvSecretRefs,
+      coerceConfig(resolvedConfigRaw).secrets?.defaults?.env,
+      resolvedEnvSecretRefs,
+    ),
   };
 }
 
-export function snapshotEnv(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
-  return { ...env };
-}
+export { snapshotEnv, restoreEnvChangesIfUnchanged } from "./config-env-vars.js";
 
 export function replaceEnvSnapshot(
   env: NodeJS.ProcessEnv,
@@ -335,6 +299,8 @@ export function resolveManagedRuntimeEnvBaseline(): {
   generation: number;
   sourceConfig: OpenClawConfig;
 } {
+  // Accepted restart candidates publish env before the runtime snapshot advances.
+  // Managed writes must stay on that publication generation to avoid mixed env refs.
   const published = getPublishedConfigRuntimeEnvState();
   return {
     generation: published.generation,
@@ -342,27 +308,12 @@ export function resolveManagedRuntimeEnvBaseline(): {
   };
 }
 
-export function createManagedRuntimeEnvBase(): NodeJS.ProcessEnv {
-  return createConfigRuntimeEnvBase(resolveManagedRuntimeEnvBaseline().sourceConfig, process.env, {
+export function createManagedRuntimeEnvBase(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return createConfigRuntimeEnvBase(resolveManagedRuntimeEnvBaseline().sourceConfig, env, {
+    // Copied caller environments still carry the published layer's recorded ownership.
+    ownedEnv: getPublishedConfigRuntimeEnvState().ownedEnv,
     preservedKeys: GATEWAY_CONFIG_SELECTION_ENV_KEYS,
   });
-}
-
-export function restoreEnvChangesIfUnchanged(params: {
-  env: NodeJS.ProcessEnv;
-  before: Record<string, string | undefined>;
-  after: Record<string, string | undefined>;
-}): void {
-  const keys = new Set([...Object.keys(params.before), ...Object.keys(params.after)]);
-  for (const key of keys) {
-    if (params.before[key] === params.after[key] || params.env[key] !== params.after[key]) {
-      continue;
-    }
-    const previous = params.before[key];
-    if (previous === undefined) {
-      delete params.env[key];
-    } else {
-      params.env[key] = previous;
-    }
-  }
 }

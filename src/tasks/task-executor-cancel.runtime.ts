@@ -7,32 +7,46 @@ import {
   cancelTaskById,
   getTaskById,
 } from "./runtime-internal.js";
+import {
+  prepareTaskCancellationControl,
+  prepareTaskCancellationRead,
+} from "./task-cancellation-context.js";
 
-export async function cancelDetachedTaskRunById(params: {
+export async function cancelDetachedTaskRunByIdCore(params: {
   cfg: OpenClawConfig;
   taskId: string;
   reason?: string;
 }) {
+  for (
+    let pending = prepareTaskCancellationRead();
+    pending;
+    pending = prepareTaskCancellationRead()
+  ) {
+    await pending;
+  }
   const task = getTaskById(params.taskId);
   const registeredRuntime = getRegisteredDetachedTaskLifecycleRuntime();
-  if (!task) {
-    if (registeredRuntime) {
-      const cancelled = await registeredRuntime.cancelDetachedTaskRunById(params);
-      if (cancelled.found) {
-        return cancelled;
-      }
-    }
-    return cancelTaskById(params);
-  }
   try {
-    assertTaskCancellationReadyById(task.taskId);
+    prepareTaskCancellationControl(task)?.assertCurrent();
   } catch (error) {
     return {
-      found: true,
+      found: task !== undefined,
       cancelled: false,
       reason: formatErrorMessage(error),
-      task,
+      ...(task ? { task } : {}),
     };
+  }
+  if (task) {
+    try {
+      assertTaskCancellationReadyById(task.taskId);
+    } catch (error) {
+      return {
+        found: true,
+        cancelled: false,
+        reason: formatErrorMessage(error),
+        task,
+      };
+    }
   }
   if (registeredRuntime) {
     const cancelled = await registeredRuntime.cancelDetachedTaskRunById(params);

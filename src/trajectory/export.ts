@@ -5,16 +5,19 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
-import { parseSessionFileEntriesWithWarnings } from "../agents/sessions/session-file-parser.js";
+import {
+  isSessionFileEntry,
+  parseSessionFileEntriesWithWarnings,
+} from "../agents/sessions/session-file-parser.js";
 import type { FileEntry, SessionEntry, SessionHeader } from "../agents/sessions/session-manager.js";
 import { resolveStateDir } from "../config/paths.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
+  type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
-import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import {
   isCanonicalSessionTranscriptEntry,
   scanSessionTranscriptTree,
@@ -25,7 +28,6 @@ import {
   supportBundleContents,
   textSupportBundleFile,
   writeSupportBundleDirectory,
-  type DiagnosticSupportBundleContent,
   type DiagnosticSupportBundleFile,
 } from "../logging/diagnostic-support-bundle.js";
 import {
@@ -107,17 +109,6 @@ function normalizeCompleteSessionTarget(
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
-}
-
-function isSessionFileEntry(value: unknown): value is FileEntry {
-  if (!isRecord(value) || typeof value.type !== "string") {
-    return false;
-  }
-  if (value.type !== "message") {
-    return true;
-  }
-  const message = value.message;
-  return isRecord(message) && typeof message.role === "string";
 }
 
 function formatSessionParseWarnings(
@@ -238,6 +229,7 @@ async function readSessionEntries(params: {
       sessionId: completeTarget.sessionId,
       sessionKey: completeTarget.sessionKey,
       storePath: completeTarget.storePath,
+      maxEventBytes: MAX_TRAJECTORY_SESSION_FILE_BYTES,
     });
     return collectSessionEntries(events.map((value, index) => ({ row: index + 1, value })));
   }
@@ -293,7 +285,7 @@ async function readSessionEntries(params: {
         storePath: marker.storePath,
       })
     : undefined;
-  const markerMatches = listSessionEntries({
+  const markerMatches = listSessionEntriesCore({
     agentId: marker.agentId,
     storePath: marker.storePath,
   }).filter(({ entry }) => entry.sessionId === marker.sessionId);
@@ -319,6 +311,7 @@ async function readSessionEntries(params: {
         sessionId: marker.sessionId,
         ...(markerSessionKey ? { sessionKey: markerSessionKey } : {}),
         storePath: marker.storePath,
+        maxEventBytes: MAX_TRAJECTORY_SESSION_FILE_BYTES,
       })
     ).map((value, index) => ({ row: index + 1, value })),
   );
@@ -491,12 +484,9 @@ async function readRuntimeTrajectoryEvents(params: {
       agentId: marker.agentId,
       sessionId: marker.sessionId,
       storePath: marker.storePath,
+      maxEventBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+      maxEventCount: MAX_TRAJECTORY_RUNTIME_EVENTS,
     });
-    if (events.length > MAX_TRAJECTORY_RUNTIME_EVENTS) {
-      throw new Error(
-        `Trajectory runtime store has too many events to export (limit ${MAX_TRAJECTORY_RUNTIME_EVENTS})`,
-      );
-    }
     return { events, warnings: [] };
   }
 
@@ -530,7 +520,7 @@ function isRuntimeTrajectoryEvent(value: unknown): value is TrajectoryEvent {
     value.source === "runtime" &&
     typeof value.type === "string" &&
     typeof value.ts === "string" &&
-    !Number.isNaN(Date.parse(value.ts)) &&
+    Number.isFinite(Date.parse(value.ts)) &&
     isFiniteNumber(value.seq) &&
     typeof value.sessionId === "string" &&
     (!("data" in value) || value.data === undefined || isRecord(value.data))
@@ -1232,6 +1222,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   header: SessionHeader | null;
   runtimeFile?: string;
   supplementalFiles: string[];
+  files: string[];
 }> {
   const redaction = buildTrajectoryExportRedaction({
     workspaceDir: params.workspaceDir,
@@ -1245,6 +1236,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
       );
     }
   }
+
   const {
     header,
     leafId,
@@ -1387,8 +1379,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   }
 
   const redactedFiles = files.map(redactTrajectoryBundleFileContent);
-  const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(redactedFiles)];
-  manifest.contents = contents;
+  manifest.contents = supportBundleContents(redactedFiles);
   const redactedManifest = redactTrajectoryExportValue(
     manifest,
     redaction,
@@ -1397,7 +1388,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     jsonSupportBundleFile("manifest.json", redactedManifest),
   );
 
-  await writeSupportBundleDirectory({
+  const writtenFiles = await writeSupportBundleDirectory({
     outputDir: params.outputDir,
     files: [manifestFile, ...redactedFiles],
   });
@@ -1410,6 +1401,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     runtimeFile:
       runtimeFile && (await isRegularNonSymlinkFile(runtimeFile)) ? runtimeFile : undefined,
     supplementalFiles,
+    files: writtenFiles.map((file) => file.path),
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

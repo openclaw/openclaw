@@ -1,7 +1,7 @@
-/** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
-
 import { expectDefined } from "@openclaw/normalization-core";
+/** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -13,6 +13,11 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
+import {
+  getOrCreateSessionMcpRuntime,
+  unopenedMcpConfig,
+} from "./agent-bundle-mcp-manager.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
@@ -38,7 +43,7 @@ const {
   runBeforeAgentRunMock,
   executePreparedCliRunMock,
   prepareCliRunContextMock,
-  closeClaudeLiveSessionForContextMock,
+  closeCliSessionMock,
   closeMcpLoopbackServerMock,
   retireSessionMcpRuntimeForSessionKeyMock,
   retireSessionMcpRuntimeMock,
@@ -55,7 +60,7 @@ const {
     (_context: unknown, _cliSessionIdToUse?: string) => Promise<CliOutput>
   >(async () => ({ text: "" })),
   prepareCliRunContextMock: vi.fn(),
-  closeClaudeLiveSessionForContextMock: vi.fn(),
+  closeCliSessionMock: vi.fn(),
   closeMcpLoopbackServerMock: vi.fn(),
   retireSessionMcpRuntimeForSessionKeyMock: vi.fn(),
   retireSessionMcpRuntimeMock: vi.fn(),
@@ -80,11 +85,11 @@ vi.mock("./cli-runner/execute.runtime.js", () => ({
   executePreparedCliRun: executePreparedCliRunMock,
 }));
 
-vi.mock("./cli-runner/claude-live-session.js", () => ({
-  closeClaudeLiveSessionForContext: closeClaudeLiveSessionForContextMock,
-  getClaudeLiveSessionGenerationForOwner: vi.fn(() => undefined),
-  hasClaudeLiveSessionForOwner: vi.fn(() => false),
-  shouldUseClaudeLiveSession: vi.fn(() => false),
+vi.mock("./cli-runner/cli-live-session-registry.js", () => ({
+  closeCliLiveSession: closeCliSessionMock,
+  getCliLiveSessionGeneration: vi.fn(() => undefined),
+  hasCliLiveSession: vi.fn(() => false),
+  acceptsCliLiveSession: vi.fn(() => false),
 }));
 
 vi.mock("../gateway/mcp-http.js", () => ({
@@ -109,7 +114,11 @@ const baseRunParams = {
   runId: "test-run-id",
 } as const;
 
-let runCliAgent: typeof import("./cli-runner.js").runCliAgent;
+type ProductionRunCliAgent = typeof import("./cli-runner.js").runCliAgent;
+type TestRunCliAgent = (
+  params: Omit<Parameters<ProductionRunCliAgent>[0], "admittedRunContext">,
+) => ReturnType<ProductionRunCliAgent>;
+let runCliAgent: TestRunCliAgent;
 let restoreCliRunnerTestDeps: typeof import("./cli-runner.js").restoreCliRunnerTestDeps;
 let setCliRunnerTestDeps: typeof import("./cli-runner.js").setCliRunnerTestDeps;
 
@@ -141,12 +150,12 @@ function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
   return {
     params,
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir: params.workspaceDir,
     modelId: params.model,
     normalizedModel: params.model,
     systemPrompt: "",
     systemPromptReport: {},
-    bootstrapPromptWarningLines: [],
     authEpochVersion: 0,
     backendResolved: {},
     preparedBackend: { backend: { sessionMode: "none" } },
@@ -167,7 +176,7 @@ beforeEach(() => {
   prepareCliRunContextMock.mockImplementation(async (params) =>
     makeStubContext(params as typeof baseRunParams & { trigger?: string }),
   );
-  closeClaudeLiveSessionForContextMock.mockReset();
+  closeCliSessionMock.mockReset();
   closeMcpLoopbackServerMock.mockReset();
   retireSessionMcpRuntimeForSessionKeyMock.mockReset();
   retireSessionMcpRuntimeForSessionKeyMock.mockResolvedValue(true);
@@ -184,8 +193,9 @@ beforeEach(() => {
 });
 
 beforeAll(async () => {
-  ({ runCliAgent, restoreCliRunnerTestDeps, setCliRunnerTestDeps } =
-    await import("./cli-runner.js"));
+  const cliRunner = await import("./cli-runner.js");
+  runCliAgent = wrapRunWithTestPreparedAdmission(cliRunner.runCliAgent);
+  ({ restoreCliRunnerTestDeps, setCliRunnerTestDeps } = cliRunner);
 });
 
 afterEach(() => {
@@ -196,6 +206,36 @@ afterEach(() => {
 });
 
 describe("runCliAgent before_agent_reply seam", () => {
+  it("waits for execution-start work and rechecks cancellation before preparing the runtime", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const abort = new AbortController();
+    const failure = new Error("run cancelled during execution-start work");
+    const operation = runCliAgent({
+      ...baseRunParams,
+      abortSignal: abort.signal,
+      onExecutionStarted: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    const outcome = operation.catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    } finally {
+      abort.abort(failure);
+      release.resolve();
+      await outcome;
+    }
+    expect(await outcome).toBe(failure);
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["claude-cli", "user"],
     ["google-gemini-cli", "cron"],
@@ -493,7 +533,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     });
 
     expect(error).toMatchObject({ message: "CLI process failed" });
-    expect(closeClaudeLiveSessionForContextMock).toHaveBeenCalledTimes(1);
+    expect(closeCliSessionMock).toHaveBeenCalledTimes(1);
     expect(events.find((event) => event.type === "harness.run.error")).toMatchObject({
       type: "harness.run.error",
       phase: "send",
@@ -520,9 +560,7 @@ describe("runCliAgent before_agent_reply seam", () => {
 
   it("classifies a surfaced outer cleanup failure as cleanup", async () => {
     executePreparedCliRunMock.mockResolvedValueOnce({ text: "real Claude reply" });
-    closeClaudeLiveSessionForContextMock.mockRejectedValueOnce(
-      new Error("managed session cleanup failed"),
-    );
+    closeCliSessionMock.mockRejectedValueOnce(new Error("managed session cleanup failed"));
 
     const { error, events } = await captureRejectedClaudeRun({
       ...baseRunParams,
@@ -698,10 +736,16 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
   });
 
-  it("treats empty CLI subprocess output as a failover failure, not a green cron run", async () => {
+  it("treats empty CLI subprocess output as a failover failure, not a green required cron run", async () => {
     executePreparedCliRunMock.mockResolvedValue({ text: "   " });
 
-    await expect(runCliAgent({ ...baseRunParams, trigger: "cron" })).rejects.toMatchObject({
+    await expect(
+      runCliAgent({
+        ...baseRunParams,
+        trigger: "cron",
+        terminalReplyExpectation: "required",
+      }),
+    ).rejects.toMatchObject({
       name: "FailoverError",
       reason: "empty_response",
       provider: baseRunParams.provider,
@@ -822,12 +866,13 @@ describe("runCliAgent before_agent_reply seam", () => {
     await runCliAgent({ ...baseRunParams, cleanupCliLiveSessionOnRunEnd: true });
 
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
-    expect(closeClaudeLiveSessionForContextMock).toHaveBeenCalledTimes(1);
-    expect(closeClaudeLiveSessionForContextMock).toHaveBeenCalledWith(
+    expect(closeCliSessionMock).toHaveBeenCalledTimes(1);
+    expect(closeCliSessionMock).toHaveBeenCalledWith(
       await expectDefined(
         prepareCliRunContextMock.mock.results[0],
         "prepareCliRunContextMock.mock.results[0] test invariant",
       ).value,
+      "restart",
     );
   });
 
@@ -837,7 +882,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     const { getActiveMcpLoopbackRuntime } = await vi.importActual<
       typeof import("../gateway/mcp-http.loopback-runtime.js")
     >("../gateway/mcp-http.loopback-runtime.js");
-    const server = await mcpHttp.ensureMcpLoopbackServer();
+    await mcpHttp.ensureMcpLoopbackServer();
     const runtime = getActiveMcpLoopbackRuntime();
     if (!runtime) {
       throw new Error("expected an active MCP loopback runtime");
@@ -851,7 +896,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     const openStreams = async (sessionKeys: readonly string[]) => {
       const responses = await Promise.all(
         sessionKeys.map((sessionKey) =>
-          fetch(`http://127.0.0.1:${server.port}/mcp`, {
+          fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
             method: "GET",
             headers: {
               authorization: `Bearer ${runtime.ownerToken}`,
@@ -877,7 +922,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     try {
       await openStreams(["agent:main:concurrent-one", "agent:main:concurrent-two"]);
 
-      const unauthorized = await fetch(`http://127.0.0.1:${server.port}/mcp`);
+      const unauthorized = await fetch(`http://127.0.0.1:${runtime.port}/mcp`);
       expect(unauthorized.status).toBe(401);
       await unauthorized.body?.cancel();
 
@@ -887,7 +932,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       if (!survivingRuntime) {
         throw new Error("helper cleanup incorrectly closed the active MCP loopback server");
       }
-      expect(survivingRuntime.port).toBe(server.port);
+      expect(survivingRuntime.port).toBe(runtime.port);
       expect(survivingRuntime.ownerToken === runtime.ownerToken).toBe(true);
       const originalStreamStates = await Promise.all(
         readers.map(async (reader) => {
@@ -918,7 +963,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       for (const result of await Promise.all(readers.map((reader) => reader.read()))) {
         expect(result.done).toBe(true);
       }
-      await expect(fetch(`http://127.0.0.1:${server.port}/mcp`)).rejects.toThrow();
+      await expect(fetch(`http://127.0.0.1:${runtime.port}/mcp`)).rejects.toThrow();
     } finally {
       await mcpHttp.closeMcpLoopbackServer();
       await Promise.allSettled(readers.map((reader) => reader.cancel()));
@@ -952,7 +997,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     const runtimeParams = {
       sessionKey,
       workspaceDir: baseRunParams.workspaceDir,
-      cfg: { mcp: { servers: {} } },
+      cfg: unopenedMcpConfig,
     };
     retireSessionMcpRuntimeForSessionKeyMock.mockImplementation(
       mcpTools.retireSessionMcpRuntimeForSessionKey,
@@ -961,14 +1006,15 @@ describe("runCliAgent before_agent_reply seam", () => {
     executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
 
     try {
-      await mcpTools.getOrCreateSessionMcpRuntime({
+      await getOrCreateSessionMcpRuntime({
         ...runtimeParams,
         sessionId: originalSessionId,
       });
-      const successorRuntime = await mcpTools.getOrCreateSessionMcpRuntime({
+      const successorRuntime = await getOrCreateSessionMcpRuntime({
         ...runtimeParams,
         sessionId: successorSessionId,
       });
+      expect(mcpTools.peekSessionMcpRuntime({ sessionKey })).toBe(successorRuntime);
 
       await runCliAgent({
         ...baseRunParams,
@@ -988,19 +1034,6 @@ describe("runCliAgent before_agent_reply seam", () => {
       await mcpTools.retireSessionMcpRuntime({ sessionId: originalSessionId, reason: "test-end" });
       await mcpTools.retireSessionMcpRuntime({ sessionId: successorSessionId, reason: "test-end" });
     }
-  });
-
-  it("retires the immutable session ID without resolving a rebound session key", async () => {
-    executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
-
-    await runCliAgent({ ...baseRunParams, cleanupBundleMcpOnRunEnd: true });
-
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: "test-session", reason: "cli-run-end" }),
-    );
-    expect(retireSessionMcpRuntimeForSessionKeyMock).not.toHaveBeenCalled();
-    expect(closeMcpLoopbackServerMock).not.toHaveBeenCalled();
   });
 
   it("preserves confirmed delivery when session MCP retirement fails", async () => {

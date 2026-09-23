@@ -2,8 +2,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { listMemoryWikiImportInsights } from "./import-insights.js";
-import { renderWikiMarkdown } from "./markdown.js";
+import { compileMemoryWikiVault } from "./compile.js";
+import { listMemoryWikiImportInsights, projectMemoryWikiImportInsight } from "./import-insights.js";
+import { renderWikiMarkdown, scanWikiPageSummary } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
@@ -26,10 +27,81 @@ function hasLoneSurrogate(value: string): boolean {
   return false;
 }
 
+describe("projectMemoryWikiImportInsight", () => {
+  it.each([
+    {
+      name: "deduplicates before the four-signal cap without folding case",
+      preferences: ["same", "same", "Same", "third", "fourth", "fifth"],
+      corrections: ["You're right, use docs."],
+      expected: ["same", "Same", "third", "fourth"],
+      expectedCorrections: ["You're right, use docs."],
+    },
+    {
+      name: "deduplicates prefixed corrections against preferences in input order",
+      preferences: ["Correction detected: You're right, use docs.", "first"],
+      corrections: ["You're right, use docs.", "Bad assumption, reset."],
+      expected: [
+        "Correction detected: You're right, use docs.",
+        "first",
+        "Correction detected: Bad assumption, reset.",
+      ],
+      expectedCorrections: ["You're right, use docs.", "Bad assumption, reset."],
+    },
+    {
+      name: "does not backfill duplicate corrections beyond the upstream two-correction cap",
+      preferences: [],
+      corrections: ["You're right.", "You're right.", "Bad assumption."],
+      expected: ["Correction detected: You're right."],
+      expectedCorrections: ["You're right.", "You're right."],
+    },
+    {
+      name: "keeps empty input empty",
+      preferences: [],
+      corrections: [],
+      expected: [],
+      expectedCorrections: [],
+    },
+    {
+      name: "keeps withheld content out of all signal lists",
+      preferences: ["private preference"],
+      corrections: ["You're right, private correction."],
+      withheld: true,
+      expected: [],
+      expectedCorrections: [],
+    },
+  ])("$name", ({ preferences, corrections, withheld, expected, expectedCorrections }) => {
+    const scan = scanWikiPageSummary({
+      absolutePath: "/vault/sources/signals.md",
+      relativePath: "sources/signals.md",
+      raw: renderWikiMarkdown({
+        frontmatter: { pageType: "source", sourceType: "chatgpt-export", title: "Signals" },
+        body: [
+          "## Auto Digest",
+          ...(withheld ? ["- Auto digest withheld from durable-candidate generation."] : []),
+          "- Preference signals:",
+          ...preferences.map((value) => `  - ${value}`),
+          "## Active Branch Transcript",
+          ...corrections.flatMap((value) => ["### Assistant", value]),
+        ].join("\n"),
+      }),
+    });
+    if (scan.status !== "valid") {
+      throw new Error(`Expected valid source page, got ${scan.status}`);
+    }
+    expect(projectMemoryWikiImportInsight(scan.page, scan.parsed)).toMatchObject({
+      candidateSignals: expected,
+      correctionSignals: expectedCorrections,
+      preferenceSignals: withheld ? [] : preferences,
+      digestStatus: withheld ? "withheld" : "available",
+    });
+  });
+});
+
 describe("listMemoryWikiImportInsights", () => {
   it("clusters ChatGPT import pages by topic and extracts digest fields", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-import-insights-",
+      config: { render: { createBacklinks: false, createDashboards: false } },
       initialize: true,
     });
     await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
@@ -109,6 +181,12 @@ describe("listMemoryWikiImportInsights", () => {
       "utf8",
     );
 
+    await compileMemoryWikiVault(config);
+    await Promise.all([
+      fs.unlink(path.join(rootDir, "sources", "chatgpt-travel.md")),
+      fs.unlink(path.join(rootDir, "sources", "chatgpt-health.md")),
+    ]);
+
     const result = await listMemoryWikiImportInsights(config);
 
     expect(result.sourceType).toBe("chatgpt");
@@ -161,6 +239,7 @@ describe("listMemoryWikiImportInsights", () => {
   it("truncates import insight summaries without leaving lone surrogates", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-import-insights-surrogate-",
+      config: { render: { createBacklinks: false, createDashboards: false } },
       initialize: true,
     });
     await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
@@ -202,6 +281,8 @@ describe("listMemoryWikiImportInsights", () => {
       }),
       "utf8",
     );
+
+    await compileMemoryWikiVault(config);
 
     const result = await listMemoryWikiImportInsights(config);
 

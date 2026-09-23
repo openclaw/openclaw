@@ -1,5 +1,6 @@
 import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import {
   MCP_APP_VIEW_EXPIRED_EVENT,
@@ -77,14 +78,6 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
 
 const { McpAppView } = await import("./mcp-app-view.ts");
 type McpAppViewElement = InstanceType<typeof McpAppView>;
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((promiseResolve) => {
-    resolve = promiseResolve;
-  });
-  return { promise, resolve };
-}
 
 const MCP_APP_VIEW_ELEMENT_NAME = `test-mcp-app-view-${crypto.randomUUID()}`;
 
@@ -198,7 +191,10 @@ describe("mcp-app-view localization", () => {
 
   it("accepts only focused visible plain-text ui/message requests through the chat seam", async () => {
     const { bridge, frame, view } = await mountBridge(`view-message-${crypto.randomUUID()}`);
-    expect(bridge.capabilities).toMatchObject({ message: { text: {} } });
+    expect(bridge.capabilities).toMatchObject({
+      message: { text: {} },
+      serverResources: {},
+    });
     expect(bridge.messageHandler).toBeTypeOf("function");
 
     const received: string[] = [];
@@ -297,6 +293,7 @@ describe("mcp-app-view localization", () => {
     expect(bridge.capabilities).not.toHaveProperty("message");
     expect(bridge.messageHandler).toBeUndefined();
     expect(bridge.capabilities).not.toHaveProperty("updateModelContext");
+    expect(bridge.capabilities).not.toHaveProperty("serverResources");
     expect(bridge.updateModelContextHandler).toBeUndefined();
   });
 
@@ -331,8 +328,9 @@ describe("mcp-app-view localization", () => {
       },
     );
     let width = 640;
+    let height = 480;
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
-      () => ({ width }) as DOMRect,
+      () => ({ width, height }) as DOMRect,
     );
     document.documentElement.dataset.themeMode = "dark";
     document.documentElement.style.setProperty("--card", "#161920");
@@ -385,14 +383,26 @@ describe("mcp-app-view localization", () => {
     bridge.onsizechange?.({ height: 900 });
     expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("900px");
 
-    view.fixedHeight = true;
+    view.fillContainer = true;
     await view.updateComplete;
-    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("100%");
     bridge.onsizechange?.({ height: 900 });
-    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("100%");
     expect(bridge.setHostContext).toHaveBeenLastCalledWith(
       expect.objectContaining({ containerDimensions: { width: 720, height: 480 } }),
     );
+
+    height = 760;
+    resize?.();
+    expect(bridge.setHostContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ containerDimensions: { width: 720, height: 760 } }),
+    );
+
+    view.fillContainer = false;
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    bridge.onsizechange?.({ height: 900 });
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("900px");
 
     view.remove();
     await expect.poll(() => disconnect).toHaveBeenCalledOnce();

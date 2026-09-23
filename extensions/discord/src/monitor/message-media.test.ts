@@ -47,14 +47,18 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-let resolveForwardedMediaList: typeof import("./message-utils.js").resolveForwardedMediaList;
-let resolveMediaList: typeof import("./message-utils.js").resolveMediaList;
+let resolveForwardedMediaList: typeof import("./message-media.js").resolveForwardedMediaList;
+let resolveMediaList: typeof import("./message-media.js").resolveMediaList;
+const DISCORD_API_URL_ENV = "DISCORD_API_URL";
 
 beforeAll(async () => {
-  ({ resolveForwardedMediaList, resolveMediaList } = await import("./message-utils.js"));
+  ({ resolveForwardedMediaList, resolveMediaList } = await import("./message-media.js"));
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  delete process.env[DISCORD_API_URL_ENV];
+  vi.restoreAllMocks();
+});
 beforeEach(() => vi.resetAllMocks());
 
 function asMessage(payload: Record<string, unknown>): Message {
@@ -89,6 +93,10 @@ function mockDownload(path: string, options: { buffer?: string; contentType?: st
     contentType,
   });
   saveMediaBuffer.mockResolvedValueOnce({ path, contentType });
+}
+
+function installMediaEndpoint(): void {
+  process.env[DISCORD_API_URL_ENV] = "http://127.0.0.1:43210/api/v10";
 }
 
 const DISCORD_CDN_HOSTNAMES = [
@@ -154,6 +162,7 @@ function expectSinglePngDownload(params: {
     {
       path: params.expectedPath,
       contentType: "image/png",
+      fileName: params.filePathHint,
       ...(params.kind ? { kind: params.kind } : {}),
     },
   ]);
@@ -303,6 +312,68 @@ describe("resolveForwardedMediaList", () => {
 });
 
 describe("resolveMediaList", () => {
+  it("downloads media from the configured endpoint origin without redirects", async () => {
+    installMediaEndpoint();
+    mockDownload("/tmp/provider-media.png");
+    const attachment = attachmentFixture("provider-media", "provider-media.png", {
+      url: "http://127.0.0.1:43210/media/provider-media.png",
+    });
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result[0]?.path).toBe("/tmp/provider-media.png");
+    expect(fetchParams()).toEqual(
+      expect.objectContaining({
+        url: "http://127.0.0.1:43210/media/provider-media.png",
+        maxRedirects: 0,
+        ssrfPolicy: expect.objectContaining({
+          allowedOrigins: ["http://127.0.0.1:43210"],
+        }),
+      }),
+    );
+  });
+
+  it("rejects public Discord CDN media before the downloader is called", async () => {
+    installMediaEndpoint();
+    const attachment = attachmentFixture("public-media", "public-media.png");
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual([{ contentType: "image/png" }]);
+  });
+
+  it("keeps the whole media batch bound to its originating environment value", async () => {
+    installMediaEndpoint();
+    readRemoteMediaBuffer.mockImplementationOnce(async () => {
+      process.env[DISCORD_API_URL_ENV] = "http://127.0.0.1:43211/api/v10";
+      return { buffer: Buffer.from("provider"), contentType: "image/png" };
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/provider-media.png",
+      contentType: "image/png",
+    });
+    const providerAttachment = attachmentFixture("provider", "provider.png", {
+      url: "http://127.0.0.1:43210/media/provider.png",
+    });
+    const publicAttachment = attachmentFixture("public", "public.png");
+
+    const result = await resolveMediaList(
+      asMessage({ attachments: [providerAttachment, publicAttachment] }),
+      512,
+    );
+
+    expect(readRemoteMediaBuffer).toHaveBeenCalledOnce();
+    expect(result).toEqual([
+      {
+        path: "/tmp/provider-media.png",
+        contentType: "image/png",
+        fileName: "provider.png",
+      },
+      { contentType: "image/png" },
+    ]);
+  });
+
   it("downloads stickers", async () => {
     const sticker = stickerFixture("sticker-2", "hello");
     mockDownload("/tmp/sticker-2.png", { buffer: "sticker" });
@@ -415,6 +486,7 @@ describe("resolveMediaList", () => {
         {
           path: "/tmp/voice.ogg",
           contentType: undefined,
+          fileName: "voice.ogg",
           kind: "audio",
         },
       ]);
@@ -464,6 +536,7 @@ describe("resolveMediaList", () => {
       {
         path: "/tmp/image.png",
         contentType: "image/png",
+        fileName: "image.ogg",
       },
     ]);
   });
@@ -480,6 +553,7 @@ describe("resolveMediaList", () => {
       {
         path: "/tmp/voice",
         contentType: "audio/ogg",
+        fileName: "voice",
         kind: "audio",
       },
     ]);
@@ -515,6 +589,7 @@ describe("resolveMediaList", () => {
       {
         path: "/tmp/image.png",
         contentType: "image/png",
+        fileName: "voice.ogg",
       },
     ]);
   });
@@ -533,6 +608,56 @@ describe("resolveMediaList", () => {
       {
         contentType: undefined,
         kind: "audio",
+      },
+    ]);
+  });
+
+  it("does not classify a duration-bearing video attachment as audio", async () => {
+    const attachment = attachmentFixture("att-video-duration", "PXL_2024.mp4", {
+      content_type: "video/mp4",
+      duration_secs: 11.262232780456543,
+    });
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result).toEqual([
+      {
+        contentType: "video/mp4",
+      },
+    ]);
+  });
+
+  it("keeps a fetched video MIME over a declared duration-only attachment", async () => {
+    const attachment = attachmentFixture("att-video-duration-fetched", "PXL_2024.mov", {
+      content_type: "video/quicktime",
+      duration_secs: 5.5,
+    });
+    mockDownload("/tmp/PXL_2024.mov", { buffer: "video", contentType: "video/quicktime" });
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result).toEqual([
+      {
+        path: "/tmp/PXL_2024.mov",
+        contentType: "video/quicktime",
+        fileName: "PXL_2024.mov",
+      },
+    ]);
+  });
+
+  it("keeps an image with a duration field as an image, not audio", async () => {
+    const attachment = attachmentFixture("att-image-duration", "photo.png", {
+      content_type: "image/png",
+      duration_secs: 0.5,
+    });
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result).toEqual([
+      {
+        contentType: "image/png",
       },
     ]);
   });
@@ -573,6 +698,7 @@ describe("resolveMediaList", () => {
       {
         path: "/tmp/good.png",
         contentType: "image/png",
+        fileName: "good.png",
       },
       {
         contentType: "application/pdf",

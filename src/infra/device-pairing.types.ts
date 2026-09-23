@@ -2,7 +2,11 @@
 // Leaf contract shared by the domain modules (device-pairing.ts,
 // device-bootstrap.ts) and the SQLite row mapper (device-pairing-store.ts);
 // keeping it import-free of both sides prevents module cycles.
-import type { DeviceBootstrapProfile } from "../shared/device-bootstrap-profile.js";
+import type {
+  DeviceBootstrapProfile,
+  PairingSetupAccess,
+} from "../shared/device-bootstrap-profile.js";
+import type { NodeHostStats } from "../shared/node-host-stats.js";
 
 /** Pending device pairing request awaiting owner approval. */
 export type DevicePairingPendingRequest = {
@@ -30,6 +34,11 @@ export type DevicePairingPendingRequest = {
 // crosses the protocol boundary, and ordering/--latest still use ts.
 export type DevicePairingPendingRecord = DevicePairingPendingRequest & {
   refreshedAtMs?: number;
+};
+
+export type DevicePairingStoreState = {
+  pendingById: Record<string, DevicePairingPendingRecord>;
+  pairedByDeviceId: Record<string, PairedDevice>;
 };
 
 /** Bearer token issued to one paired device role. */
@@ -82,9 +91,13 @@ export type PairedDeviceNodeSurface = {
   commands?: string[];
   permissions?: Record<string, boolean>;
   bins?: string[];
+  /** Last current-generation runner publication explicitly enabled session hosting. */
+  sessionHost?: boolean;
   createdAtMs: number;
   approvedAtMs: number;
   lastConnectedAtMs?: number;
+  lastDisconnectedAtMs?: number;
+  lastHostStats?: NodeHostStats;
 };
 
 /**
@@ -143,6 +156,7 @@ export type PairedDevice = {
 /** Persisted bootstrap token state, including binding and role/scope redemption progress. */
 export type DeviceBootstrapTokenRecord = {
   token: string;
+  setupId?: string;
   ts: number;
   deviceId?: string;
   publicKey?: string;
@@ -151,4 +165,19 @@ export type DeviceBootstrapTokenRecord = {
   pendingProfile?: DeviceBootstrapProfile;
   issuedAtMs: number;
   lastUsedAtMs?: number;
+};
+
+/**
+ * Durable terminal outcome for one setup credential. Redemption deletes the
+ * bootstrap row, so this record is what lets a presenting client answer
+ * "did my setup code succeed?" without having received the broadcast.
+ */
+export type DevicePairSetupCompletionRecord = {
+  setupId: string;
+  deviceId: string;
+  deviceName?: string;
+  access: PairingSetupAccess;
+  completedAtMs: number;
+  deliveryState: "uncertain" | "confirmed";
+  retainUntilMs: number;
 };

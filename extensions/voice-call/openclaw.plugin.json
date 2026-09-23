@@ -1,11 +1,19 @@
 {
   "id": "voice-call",
+  "categories": ["voice"],
   "doctorContract": {
     "resolveSessionStoreAgentIds": true,
-    "stateMigrations": true
+    "stateMigrations": [{ "id": "voice-call-calls-jsonl-to-plugin-state" }]
   },
   "name": "Voice Call",
   "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.",
+  "cliCommands": [
+    {
+      "name": "voicecall",
+      "description": "Voice call utilities",
+      "hasSubcommands": true
+    }
+  ],
   "skills": ["./skills"],
   "commandAliases": [{ "name": "voicecall" }],
   "activation": {
@@ -83,6 +91,11 @@
     },
     "tailscale.mode": {
       "label": "Tailscale Mode",
+      "advanced": true
+    },
+    "tailscale.port": {
+      "label": "Tailscale HTTPS Port",
+      "help": "External HTTPS port. Funnel supports 443, 8443, or 10000; Serve accepts any valid port.",
       "advanced": true
     },
     "tailscale.path": {
@@ -230,12 +243,12 @@
     },
     "agentId": {
       "label": "Response Agent ID",
-      "help": "Agent workspace used for voice response generation. Defaults to \"main\".",
+      "help": "Agent used for voice responses and session storage. Defaults to the sole configured agent; set explicitly for a multi-agent fleet.",
       "advanced": true
     },
     "sessionScope": {
       "label": "Session Scope",
-      "help": "Use per-phone to preserve caller memory across calls, or per-call to isolate every call into a fresh voice session."
+      "help": "Use per-phone to preserve caller memory, per-call to isolate every call, or main to share the configured agent's main session."
     },
     "responseModel": {
       "label": "Response Model",
@@ -251,6 +264,75 @@
       "advanced": true
     }
   },
+  "configGroups": [
+    {
+      "id": "phone-provider",
+      "title": "Phone provider",
+      "order": 10,
+      "properties": ["enabled", "provider", "telnyx", "twilio", "plivo", "fromNumber"]
+    },
+    {
+      "id": "inbound-calls",
+      "title": "Inbound calls",
+      "order": 20,
+      "properties": ["inboundPolicy", "allowFrom", "inboundGreeting", "numbers"]
+    },
+    {
+      "id": "outbound-calls",
+      "title": "Outbound calls",
+      "order": 30,
+      "properties": ["toNumber", "outbound"]
+    },
+    {
+      "id": "call-limits",
+      "title": "Call limits",
+      "order": 40,
+      "properties": [
+        "maxDurationSeconds",
+        "staleCallReaperSeconds",
+        "silenceTimeoutMs",
+        "transcriptTimeoutMs",
+        "ringTimeoutMs",
+        "maxConcurrentCalls"
+      ]
+    },
+    {
+      "id": "webhook-connection",
+      "title": "Webhook connection",
+      "order": 50,
+      "properties": ["serve", "publicUrl", "tailscale", "tunnel"]
+    },
+    {
+      "id": "webhook-security",
+      "title": "Webhook security",
+      "order": 60,
+      "properties": ["webhookSecurity", "skipSignatureVerification"]
+    },
+    {
+      "id": "speech-and-audio",
+      "title": "Speech and audio",
+      "order": 70,
+      "properties": ["streaming", "realtime", "tts"]
+    },
+    {
+      "id": "agent-responses",
+      "title": "Agent responses",
+      "order": 80,
+      "properties": [
+        "agentId",
+        "sessionScope",
+        "responseModel",
+        "responseSystemPrompt",
+        "responseTimeoutMs"
+      ]
+    },
+    {
+      "id": "call-logs",
+      "title": "Call logs",
+      "order": 90,
+      "properties": ["store"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -420,6 +502,12 @@
           "mode": {
             "type": "string",
             "enum": ["off", "serve", "funnel"]
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "default": 443
           },
           "path": {
             "type": "string"
@@ -926,7 +1014,7 @@
       },
       "sessionScope": {
         "type": "string",
-        "enum": ["per-phone", "per-call"]
+        "enum": ["per-phone", "per-call", "main"]
       },
       "responseModel": {
         "type": "string"

@@ -5,7 +5,10 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord as asParamRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isGoogleMeetBrowserManualActionError } from "./browser-manual-action-error.js";
 import {
   resolveGoogleMeetGatewayOperationTimeoutMs,
@@ -15,6 +18,8 @@ import {
 } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./transports/google-meet-platform-constants.js";
+
+export { asParamRecord };
 
 export const loadGoogleMeetPluginHelpers = createLazyRuntimeModule(
   () => import("./plugin-helpers.js"),
@@ -43,10 +48,6 @@ type LoadGoogleMeetNodeInvokePolicy = (
 
 const loadGoogleMeetNodeInvokePolicy: LoadGoogleMeetNodeInvokePolicy = async (config) =>
   (await loadGoogleMeetNodeInvokePolicyModule()).createGoogleMeetChromeNodeInvokePolicy(config);
-
-export function asParamRecord(params: unknown): Record<string, unknown> {
-  return isRecord(params) ? params : {};
-}
 
 export function normalizeTransport(value: unknown): GoogleMeetTransport | undefined {
   return value === "chrome" || value === "chrome-node" || value === "twilio" ? value : undefined;
@@ -111,9 +112,8 @@ function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolActio
 function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
   config: GoogleMeetConfig;
   raw: Record<string, unknown>;
-  platform?: NodeJS.Platform;
 }): boolean {
-  const platform = params.platform ?? googleMeetToolDeps.platform();
+  const platform = googleMeetToolDeps.platform();
   if (platform === "darwin" || platform === "linux") {
     return false;
   }
@@ -208,23 +208,38 @@ export function createGoogleMeetRuntimeAccessor(params: {
   api: OpenClawPluginApi;
   config: GoogleMeetConfig;
 }): () => Promise<GoogleMeetRuntime> {
+  let transcriptsEnabled = params.api.config.transcripts?.enabled !== false;
+  let runtime: GoogleMeetRuntime | undefined;
   let runtimePromise: Promise<GoogleMeetRuntime> | undefined;
+  params.api.registerService({
+    id: "google-meet-transcripts",
+    reload: { configPrefixes: ["transcripts.enabled"] },
+    start: ({ config }) => {
+      transcriptsEnabled = config.transcripts?.enabled !== false;
+      return runtime?.reconcileTranscriptPolicy(transcriptsEnabled);
+    },
+    stop: () => {
+      transcriptsEnabled = false;
+      return runtime?.reconcileTranscriptPolicy(false);
+    },
+  });
   return async () => {
     if (!params.config.enabled) {
       throw new Error("Google Meet plugin disabled in plugin config");
     }
-    const runtime =
-      runtimePromise ??
-      (runtimePromise = loadGoogleMeetRuntimeModule().then(
-        ({ GoogleMeetRuntime: Runtime }) =>
-          new Runtime({
-            config: params.config,
-            fullConfig: params.api.config,
-            runtime: params.api.runtime,
-            logger: params.api.logger,
-          }),
-      ));
-    return await runtime;
+    runtimePromise ??= loadGoogleMeetRuntimeModule().then(
+      async ({ GoogleMeetRuntime: Runtime }) => {
+        runtime = new Runtime({
+          config: params.config,
+          fullConfig: params.api.config,
+          runtime: params.api.runtime,
+          logger: params.api.logger,
+        });
+        await runtime.reconcileTranscriptPolicy(transcriptsEnabled);
+        return runtime;
+      },
+    );
+    return await runtimePromise;
   };
 }
 
@@ -280,6 +295,4 @@ export const testing = {
   setPlatformForTests(next?: () => NodeJS.Platform): void {
     googleMeetToolDeps.platform = next ?? (() => process.platform);
   },
-  isGoogleMeetAgentToolActionUnsupportedOnHost,
-  resolveGoogleMeetGatewayOperationTimeoutMs,
 };

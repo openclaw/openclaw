@@ -1,387 +1,174 @@
-// Control UI component renders the command palette.
+// The palette owns search/navigation; its draft reuses the canonical session owners.
 import { consume } from "@lit/context";
-import { html, nothing } from "lit";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { property, state } from "lit/decorators.js";
-import { ref } from "lit/directives/ref.js";
-import type { RouteId } from "../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
-import { t } from "../i18n/index.ts";
-import { formatRelativeTimestamp } from "../lib/format.ts";
-import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import { getVisibleSessionRows } from "../lib/sessions/index.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
+import { hasOperatorAdminAccess } from "../app/operator-access.ts";
+import { updateHumanMentions, type HumanMentionInput } from "../lib/chat/human-mentions.ts";
+import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
+import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
+import { GatewayPageController } from "../lit/gateway-page-controller.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import { isCommandPaletteShortcut } from "./command-palette-contract.ts";
-import { icons, type IconName } from "./icons.ts";
-import "./modal-dialog.ts";
-import { DESKTOP_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import {
+  HumanMentionMenu,
+  type HumanMentionMenuHost,
+} from "../pages/chat/components/chat-composer-mention-menu.ts";
+import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
+import {
+  getStaticCommandPaletteCatalogItems,
+  loadCommandPaletteCatalogItems,
+  toCommandPaletteItems,
+  type CommandPaletteItem,
+} from "./command-palette-catalog-search.ts";
+import {
+  isCommandPaletteShortcut,
+  type CommandPaletteOpenInput,
+  type CommandPaletteInputHandoff,
+} from "./command-palette-contract.ts";
+import {
+  buildCommandPaletteSessionItems,
+  SESSION_SEARCH_LIMIT,
+} from "./command-palette-session-search.ts";
+import { renderCommandPalette, type PaletteFilter } from "./command-palette-view.ts";
+import type { OpenClawModalDialog } from "./modal-dialog.ts";
 
-type PaletteItem = {
-  id: string;
-  label: string;
-  icon: IconName;
-  category: "search" | "navigation" | "skills" | "chats";
-  action: string;
-  description?: string;
-};
+type PaletteItem = CommandPaletteItem;
 
-const SESSION_ACTION_PREFIX = "session:";
-const SESSION_SEARCH_DEBOUNCE_MS = 250;
-const SESSION_SEARCH_LIMIT = 10;
-const SESSION_SEARCH_MAX_PAGES = 4;
-const SESSION_SEARCH_PAGE_SIZE = 50;
-
-function getPaletteBaseItems(desktopAvailable: boolean): PaletteItem[] {
-  return [
-    {
-      id: "nav-new-session",
-      label: t("newSession.title"),
-      icon: "plus",
-      category: "navigation",
-      action: "nav:new-session",
-    },
-    {
-      id: "nav-sessions",
-      label: t("palette.items.sessions"),
-      icon: "fileText",
-      category: "navigation",
-      action: "nav:sessions",
-    },
-    {
-      id: "nav-cron",
-      label: t("palette.items.scheduled"),
-      icon: "scrollText",
-      category: "navigation",
-      action: "nav:cron",
-    },
-    {
-      id: "nav-skills",
-      label: t("palette.items.skills"),
-      icon: "zap",
-      category: "navigation",
-      action: "nav:skills",
-    },
-    {
-      id: "nav-plugins",
-      label: t("palette.items.plugins"),
-      icon: "puzzle",
-      category: "navigation",
-      action: "nav:plugins",
-    },
-    {
-      id: "nav-apps",
-      label: t("palette.items.apps"),
-      icon: "layoutGrid",
-      category: "navigation",
-      action: "nav:apps",
-    },
-    {
-      id: "nav-config",
-      label: t("palette.items.settings"),
-      icon: "settings",
-      category: "navigation",
-      action: "nav:config",
-    },
-    {
-      id: "nav-agents",
-      label: t("palette.items.agents"),
-      icon: "folder",
-      category: "navigation",
-      action: "nav:agents",
-    },
-    {
-      id: "slash:verbose",
-      label: "/verbose",
-      icon: "terminal",
-      category: "search",
-      action: "/verbose full",
-      description: t("palette.descriptions.verboseMode"),
-    },
-    ...(desktopAvailable
-      ? [
-          {
-            id: "panel-desktop",
-            label: t("palette.items.desktop"),
-            icon: "monitor" as const,
-            category: "navigation" as const,
-            action: "panel:desktop",
-          },
-        ]
-      : []),
-  ];
-}
-
-function getPaletteItemsInternal(desktopAvailable: boolean): PaletteItem[] {
-  return getPaletteBaseItems(desktopAvailable);
-}
-
-type CommandPaletteProps = {
-  open: boolean;
-  query: string;
-  activeIndex: number;
-  sessionItems: readonly PaletteItem[];
-  onToggle: () => void;
-  onQueryChange: (query: string) => void;
-  onActiveIndexChange: (index: number) => void;
-  onNavigate: (routeId: RouteId) => void;
-  onSelectSession?: (sessionKey: string) => void;
-  onSlashCommand?: (command: string) => void;
-  desktopAvailable: boolean;
-  onInputRef: (element: Element | undefined) => void;
-};
-
-function filteredItems(
-  query: string,
-  includeSlashCommands = true,
-  sessionItems: readonly PaletteItem[] = [],
-  desktopAvailable = false,
-): PaletteItem[] {
-  const items = getPaletteItemsInternal(desktopAvailable).filter(
-    (item) => includeSlashCommands || item.category !== "search",
-  );
-  if (!query) {
-    return items;
-  }
-  const q = normalizeLowercaseStringOrEmpty(query);
-  const matches = items.filter(
-    (item) =>
-      normalizeLowercaseStringOrEmpty(item.label).includes(q) ||
-      normalizeLowercaseStringOrEmpty(item.description).includes(q),
-  );
-  // Gateway search already matched the chat rows, so lead with those before
-  // local navigation and slash-command matches.
-  return [...sessionItems, ...matches];
-}
-
-function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
-  const map = new Map<string, PaletteItem[]>();
-  for (const item of items) {
-    const group = map.get(item.category) ?? [];
-    group.push(item);
-    map.set(item.category, group);
-  }
-  return [...map.entries()];
-}
-
-const paletteDialogLabelId = "cmd-palette-label";
-const paletteInputId = "cmd-palette-input";
-const paletteListboxId = "cmd-palette-listbox";
-
-function selectItem(item: PaletteItem, props: CommandPaletteProps) {
-  if (item.action.startsWith("nav:")) {
-    props.onNavigate(item.action.slice(4) as RouteId);
-  } else if (item.action.startsWith(SESSION_ACTION_PREFIX)) {
-    props.onSelectSession?.(item.action.slice(SESSION_ACTION_PREFIX.length));
-  } else if (item.action === "panel:desktop") {
-    window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
-  } else {
-    props.onSlashCommand?.(item.action);
-  }
-  props.onToggle();
-}
-
-function closePalette(props: CommandPaletteProps) {
-  props.onToggle();
-}
-
-function scrollActiveIntoView() {
-  requestAnimationFrame(() => {
-    const el = document.querySelector(".cmd-palette__item--active");
-    el?.scrollIntoView({ block: "nearest" });
-  });
-}
-
-function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
-  const items = filteredItems(
-    props.query,
-    Boolean(props.onSlashCommand),
-    props.sessionItems,
-    props.desktopAvailable,
-  );
-  if (items.length === 0 && (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter")) {
-    return;
-  }
-  switch (e.key) {
-    case "ArrowDown":
-      e.preventDefault();
-      props.onActiveIndexChange((props.activeIndex + 1) % items.length);
-      scrollActiveIntoView();
-      break;
-    case "ArrowUp":
-      e.preventDefault();
-      props.onActiveIndexChange((props.activeIndex - 1 + items.length) % items.length);
-      scrollActiveIntoView();
-      break;
-    case "Enter":
-      e.preventDefault();
-      {
-        const item = items[props.activeIndex];
-        if (item) {
-          selectItem(item, props);
-        }
-      }
-      break;
-    case "Escape":
-      e.preventDefault();
-      e.stopPropagation();
-      closePalette(props);
-      break;
-  }
-}
-
-function getCategoryLabel(category: string): string {
-  switch (category) {
-    case "search":
-      return t("palette.categories.search");
-    case "navigation":
-      return t("palette.categories.navigation");
-    case "skills":
-      return t("palette.categories.skills");
-    case "chats":
-      return t("sessionsView.title");
-    default:
-      return category;
-  }
-}
-
-function getOptionId(item: PaletteItem): string {
-  return `cmd-palette-option-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-}
-
-function focusInput(el: Element | undefined) {
-  if (el instanceof HTMLInputElement) {
-    requestAnimationFrame(() => {
-      if (el.isConnected) {
-        el.focus();
-      }
-    });
-  }
-}
-
-function renderCommandPalette(props: CommandPaletteProps) {
-  if (!props.open) {
-    return nothing;
-  }
-  const items = filteredItems(
-    props.query,
-    Boolean(props.onSlashCommand),
-    props.sessionItems,
-    props.desktopAvailable,
-  );
-  const grouped = groupItems(items);
-  const activeItem = items[props.activeIndex];
-  const activeOptionId = activeItem ? getOptionId(activeItem) : nothing;
-  const paletteLabel = t("palette.placeholder");
-
-  return html`
-    <openclaw-modal-dialog
-      class="cmd-palette-overlay palette"
-      label=${paletteLabel}
-      style="--openclaw-modal-width: min(640px, calc(100vw - 32px));"
-      @modal-cancel=${() => closePalette(props)}
-    >
-      <div
-        class="cmd-palette"
-        @click=${(e: Event) => e.stopPropagation()}
-        @keydown=${(e: KeyboardEvent) => handleKeydown(e, props)}
-      >
-        <label id=${paletteDialogLabelId} class="cmd-palette__label" for=${paletteInputId}
-          >${paletteLabel}</label
-        >
-        <input
-          ${ref(props.onInputRef)}
-          autofocus
-          id=${paletteInputId}
-          class="cmd-palette__input"
-          role="combobox"
-          aria-autocomplete="list"
-          aria-controls=${paletteListboxId}
-          aria-activedescendant=${activeOptionId}
-          aria-expanded="true"
-          placeholder=${paletteLabel}
-          .value=${props.query}
-          @input=${(e: Event) => {
-            props.onQueryChange((e.target as HTMLInputElement).value);
-            props.onActiveIndexChange(0);
-          }}
-        />
-        <div id=${paletteListboxId} class="cmd-palette__results" role="listbox">
-          ${grouped.length === 0
-            ? html`<div class="cmd-palette__empty">
-                <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px"
-                  >${icons.search}</span
-                >
-                <span>${t("palette.noResults")}</span>
-              </div>`
-            : grouped.map(
-                ([category, groupedItems]) => html`
-                  <div class="cmd-palette__group-label">${getCategoryLabel(category)}</div>
-                  ${groupedItems.map((item) => {
-                    const globalIndex = items.indexOf(item);
-                    const isActive = globalIndex === props.activeIndex;
-                    return html`
-                      <div
-                        id=${getOptionId(item)}
-                        class="cmd-palette__item ${isActive ? "cmd-palette__item--active" : ""}"
-                        role="option"
-                        aria-selected=${isActive ? "true" : "false"}
-                        @click=${(e: Event) => {
-                          e.stopPropagation();
-                          selectItem(item, props);
-                        }}
-                        @mouseenter=${() => props.onActiveIndexChange(globalIndex)}
-                      >
-                        <span class="nav-item__icon">${icons[item.icon]}</span>
-                        <span>${item.label}</span>
-                        ${item.description
-                          ? html`<span class="cmd-palette__item-desc muted"
-                              >${item.description}</span
-                            >`
-                          : nothing}
-                      </div>
-                    `;
-                  })}
-                `,
-              )}
-        </div>
-        <div class="cmd-palette__footer">
-          <span><kbd>↑↓</kbd> ${t("palette.footer.navigate")}</span>
-          <span><kbd>↵</kbd> ${t("palette.footer.select")}</span>
-          <span><kbd>esc</kbd> ${t("palette.footer.close")}</span>
-        </div>
-      </div>
-    </openclaw-modal-dialog>
-  `;
-}
+const SEARCH_DEBOUNCE_MS = 200;
+const SESSION_SEARCH_MIN_CHARS = 2;
+const PROMPT_ENTER_CHARS = 60;
+const PROMPT_EXIT_CHARS = 50;
+const SESSION_SEARCH_SCOPE = {
+  includeGlobal: false,
+  includeUnknown: false,
+  configuredAgentsOnly: true,
+  excludeSubagents: true,
+  excludeCron: true,
+  excludeSystem: true,
+} as const;
+const CATALOG_CACHE_TTL_MS = 30_000;
 
 export class CommandPalette extends OpenClawLightDomContentsElement {
-  @property({ attribute: false }) onNavigate?: (routeId: RouteId) => void;
+  @property({ attribute: false }) onNavigate?: ApplicationContext["navigate"];
   @property({ attribute: false }) onSelectSession?: (sessionKey: string) => void;
   @property({ attribute: false }) onSlashCommand?: (command: string) => void;
   @property({ attribute: false }) desktopAvailable = false;
+  @property({ attribute: false }) custodianAvailable = false;
   @consume({ context: applicationContext, subscribe: true })
-  private context?: ApplicationContext<RouteId>;
+  private context?: ApplicationContext;
   @state() private open = false;
-  @state() private query = "";
-  @state() private activeIndex = 0;
+  private initialInput: CommandPaletteOpenInput | undefined;
+  private takeInitialInput: CommandPaletteInputHandoff | undefined;
+  private inputElement: HTMLTextAreaElement | undefined;
+  private readonly mentionMenu = new HumanMentionMenu();
+  private mentionInput: HumanMentionInput | undefined;
+  @state() private composing = false;
+  private readonly mentionHost: HumanMentionMenuHost = {
+    paneId: "command-palette",
+    getDraft: () => this.query,
+    getMentions: () => this.draft.mentions,
+    getTextarea: () => this.inputElement ?? null,
+    commitDraft: (value, mentions) => this.draft.setMessage(value, mentions),
+  };
+  private readonly requestMentionUpdate = () => {
+    if (this.mentionMenu.open || this.draft.mentions.length > 0) {
+      this.clearSessionSearch();
+      this.clearCatalogSearch();
+    } else {
+      this.scheduleSessionSearch(this.query);
+    }
+    this.requestUpdate();
+  };
+  private presentationScope: ReturnType<typeof gatewayPresentationScope> | undefined;
+  @state() private filter: PaletteFilter = "all";
+  private readonly draft = new PaletteSessionDraft(
+    this,
+    () => ({ context: this.context, open: this.open }),
+    {
+      onClose: () => this.closePalette(),
+      onMessageChange: (query) => {
+        const text = query.trim();
+        const length = Array.from(text).length;
+        // Separate entry/exit thresholds keep edits near the boundary from
+        // repeatedly collapsing and reopening search. Draft resets pass here too.
+        this.promptMode =
+          text.includes("\n") ||
+          (this.promptMode ? length > PROMPT_EXIT_CHARS : length >= PROMPT_ENTER_CHARS);
+        if (!text) {
+          this.filter = "all";
+        }
+        this.scheduleSessionSearch(query);
+      },
+    },
+  );
+
+  private get query(): string {
+    return this.draft.message;
+  }
+
+  @state() private searchQuery = "";
+  @state() private promptMode = false;
+  @state() private activeId: string | null = null;
   @state() private sessionItems: readonly PaletteItem[] = [];
+  @state() private catalogItems: readonly PaletteItem[] = [];
+  @state() private modelSearchError: string | null = null;
+  @state() private sessionSearchPending = false;
+  @state() private sessionSearchFailed = false;
+  @state() private sessionSearchPartial = false;
+  @state() private archivedTranscriptsExcluded = 0;
+  @state() private sessionSearchIndexing = false;
 
   private readonly subscriptions = new SubscriptionsController(this);
-  private sessionSearchTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  @state() private sessionSearchTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private sessionSearchId = 0;
-  private sessionSearchSource?: {
-    gateway: ApplicationContext<RouteId>["gateway"];
-    client: ApplicationContext<RouteId>["gateway"]["snapshot"]["client"];
-    connected: boolean;
+  @state() private catalogLoad?: {
+    client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
+    agentId: string;
+    promise: Promise<void>;
+    loadedAt?: number;
   };
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    invalidateRequests: () => {
+      this.clearSessionSearch();
+      this.clearCatalogSearch();
+      this.scheduleSessionSearch(this.query);
+    },
+    onSnapshot: () => this.synchronizePresentationScope(),
+    ensureInitialData: () => this.scheduleSessionSearch(this.query),
+  });
 
   constructor() {
     super();
-    this.subscriptions.watch(
+    this.subscriptions.effect(
       () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-      (gateway) => this.synchronizeGateway(gateway),
+      (gateway) =>
+        gateway.subscribeEvents((event) => {
+          if (
+            this.context?.gateway === gateway &&
+            (event.event === "cron" ||
+              event.event === "config.changed" ||
+              event.event === "chat.metadata.changed")
+          ) {
+            if (this.open) {
+              void this.ensureCatalogItems(true);
+            } else {
+              this.clearCatalogSearch();
+            }
+          }
+        }),
+    );
+    this.subscriptions.watch(
+      () => this.context?.agentSelection,
+      (selection, notify) => selection.subscribe(notify),
+      () => {
+        this.clearSessionSearch();
+        this.clearCatalogSearch();
+        this.scheduleSessionSearch(this.query);
+      },
     );
   }
 
@@ -392,19 +179,58 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
 
   override disconnectedCallback() {
     document.removeEventListener("keydown", this.handleGlobalKeydown);
+    this.initialInput = undefined;
+    this.takeInitialInput = undefined;
+    this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
+    this.inputElement = undefined;
     this.open = false;
-    this.query = "";
-    this.activeIndex = 0;
+    this.mentionMenu.dispose();
+    this.composing = false;
+    this.mentionInput = undefined;
+    this.activeId = null;
     this.clearSessionSearch();
-    this.sessionSearchSource = undefined;
+    this.clearCatalogSearch();
     super.disconnectedCallback();
   }
 
-  openPalette() {
+  openPalette(input?: CommandPaletteOpenInput | CommandPaletteInputHandoff) {
+    const returnFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.open = true;
-    this.query = "";
-    this.activeIndex = 0;
-    this.clearSessionSearch();
+    this.mentionMenu.close();
+    this.draft.open();
+    this.composing = false;
+    this.mentionInput = undefined;
+    this.takeInitialInput = typeof input === "function" ? input : undefined;
+    this.initialInput =
+      typeof input === "function"
+        ? undefined
+        : (input ?? {
+            value: this.query,
+            selectionStart: this.query.length,
+            selectionEnd: this.query.length,
+            selectionDirection: "none",
+            returnFocus,
+          });
+    if (this.initialInput) {
+      this.draft.setMessage(this.initialInput.value);
+    }
+    this.activeId = null;
+    this.filter = "all";
+    this.scheduleSessionSearch(this.query);
+  }
+
+  private synchronizePresentationScope() {
+    const gateway = this.context?.gateway;
+    const scope = gateway ? gatewayPresentationScope(gateway) : undefined;
+    if (this.presentationScope && this.presentationScope !== scope) {
+      // Account/connection replacement retires the visible launcher; ordinary
+      // transport reconnects keep the canonical presentation scope and query.
+      this.closePalette();
+      this.activeId = null;
+      this.clearCatalogSearch();
+    }
+    this.presentationScope = scope;
   }
 
   get isOpen(): boolean {
@@ -413,67 +239,210 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
 
   readonly togglePalette = () => {
     if (this.open) {
-      this.open = false;
-      this.clearSessionSearch();
+      if (!this.draft.submitting) {
+        this.closePalette();
+      }
       return;
     }
     this.openPalette();
   };
 
+  private closePalette() {
+    this.mentionMenu.close();
+    this.composing = false;
+    this.mentionInput = undefined;
+    this.initialInput = undefined;
+    this.takeInitialInput = undefined;
+    this.open = false;
+    this.draft.close();
+    this.clearSessionSearch();
+  }
+
   private readonly handleInputRef = (element: Element | undefined) => {
-    if (this.open) {
-      focusInput(element);
+    this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
+    this.inputElement = element instanceof HTMLTextAreaElement ? element : undefined;
+    this.inputElement?.addEventListener("focus", this.adoptInitialInput);
+  };
+
+  private readonly adoptInitialInput = () => {
+    const element = this.inputElement;
+    if (!this.open || !element?.isConnected || document.activeElement !== element) {
+      return;
+    }
+    if (this.takeInitialInput) {
+      const take = this.takeInitialInput;
+      this.takeInitialInput = undefined;
+      const input = take();
+      if (!input) {
+        this.closePalette();
+        return;
+      }
+      this.initialInput = input;
+      this.draft.setMessage(input.value);
+      // The dialog has accepted focus. Publish the captured value synchronously
+      // before the next key, then let the normal binding retain that same value.
+      element.value = input.value;
+    }
+    const input = this.initialInput;
+    if (!input) {
+      return;
+    }
+    this.initialInput = undefined;
+    if (input.returnFocus !== undefined) {
+      element
+        .closest<OpenClawModalDialog>("openclaw-modal-dialog")
+        ?.setReturnFocusTarget(input.returnFocus);
+    }
+    element.setSelectionRange(input.selectionStart, input.selectionEnd, input.selectionDirection);
+    if (
+      !input.submitRequested &&
+      input.mentionTrigger !== undefined &&
+      input.selectionStart === input.selectionEnd &&
+      input.value.slice(0, input.selectionStart).lastIndexOf("@") === input.mentionTrigger
+    ) {
+      this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
+      this.mentionMenu.update(element, this.requestMentionUpdate, "trigger");
+    }
+    if (input.imageFiles?.length) {
+      this.draft.adoptImageFiles(input.imageFiles, input.submitRequested);
+    } else if (input.submitRequested) {
+      void this.draft.submit();
     }
   };
 
-  private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
-    const snapshot = gateway.snapshot;
-    const previous = this.sessionSearchSource;
-    const sourceChanged = previous?.gateway !== gateway;
-    const clientChanged = previous?.client !== snapshot.client;
-    const reconnected = previous?.connected === false && snapshot.phase === "connected";
-    this.sessionSearchSource = {
-      gateway,
-      client: snapshot.client,
-      connected: snapshot.phase === "connected",
-    };
+  protected override updated() {
+    // ModalDialog owns autofocus. Focusing its not-yet-open slotted field here
+    // can retire the loader before the browser has admitted the new modal.
+    this.adoptInitialInput();
+  }
 
-    if (sourceChanged || clientChanged || snapshot.phase !== "connected") {
-      // Query results belong to one runtime/client connection. Discard them as
-      // soon as that owner changes so detached or reconnecting rows stay inert.
-      this.clearSessionSearch();
+  private invalidateSessionSearch() {
+    if (this.sessionSearchTimer !== null) {
+      globalThis.clearTimeout(this.sessionSearchTimer);
+      this.sessionSearchTimer = null;
     }
-    if (snapshot.phase === "connected" && (sourceChanged || clientChanged || reconnected)) {
-      this.scheduleSessionSearch(this.query);
-    }
+    this.sessionSearchId += 1;
   }
 
   private clearSessionSearch() {
-    if (this.sessionSearchTimer !== null) {
-      globalThis.clearTimeout(this.sessionSearchTimer);
-      this.sessionSearchTimer = null;
-    }
-    this.sessionSearchId += 1;
+    this.invalidateSessionSearch();
     this.sessionItems = [];
+    this.sessionSearchPending = false;
+    this.sessionSearchFailed = false;
+    this.sessionSearchPartial = false;
+    this.archivedTranscriptsExcluded = 0;
+    this.sessionSearchIndexing = false;
   }
 
-  private scheduleSessionSearch(query: string) {
-    if (this.sessionSearchTimer !== null) {
-      globalThis.clearTimeout(this.sessionSearchTimer);
-      this.sessionSearchTimer = null;
+  private clearCatalogSearch() {
+    this.catalogLoad = undefined;
+    this.catalogItems = [];
+    this.modelSearchError = null;
+  }
+
+  private ensureCatalogItems(force = false): Promise<void> {
+    const context = this.context;
+    const gateway = context?.gateway;
+    const client = gateway?.snapshot.client;
+    if (
+      !this.open ||
+      this.promptMode ||
+      this.mentionMenu.open ||
+      this.draft.mentions.length > 0 ||
+      !context ||
+      !this.gateway.connected ||
+      !gateway ||
+      !client
+    ) {
+      return Promise.resolve();
     }
-    // Invalidate the previous query immediately so late responses cannot
-    // repopulate selectable stale rows during the debounce window.
-    this.sessionSearchId += 1;
-    this.sessionItems = [];
-    const search = normalizeOptionalString(query);
-    if (!this.open || !search || !this.onSelectSession) {
+    const agentId =
+      context.agentSelection.state.selectedId ?? resolveUiSelectedGlobalAgentId(gateway.snapshot);
+    const current = this.catalogLoad;
+    if (
+      !force &&
+      current?.client === client &&
+      current.agentId === agentId &&
+      (current.loadedAt === undefined || Date.now() - current.loadedAt < CATALOG_CACHE_TTL_MS)
+    ) {
+      return current.promise;
+    }
+    const snapshot = gateway.snapshot;
+    const scope = gatewayPresentationScope(gateway);
+    const previousModels =
+      current?.client === client && current.agentId === agentId
+        ? this.catalogItems.filter((item) => item.category === "models")
+        : [];
+    const promise = loadCommandPaletteCatalogItems({
+      client,
+      agentId,
+      agents: () => context.agents?.ensureList?.() ?? Promise.resolve(null),
+      methodAvailable: (method) => Boolean(isGatewayMethodAdvertised(snapshot, method)),
+    }).then(({ items, modelRequestFailed, modelSearchError }) => {
+      if (
+        this.catalogLoad?.promise === promise &&
+        gatewayPresentationScope(gateway) === scope &&
+        this.context?.gateway === gateway &&
+        this.context?.agentSelection === context.agentSelection &&
+        gateway.snapshot.client === client
+      ) {
+        this.catalogItems = [
+          ...toCommandPaletteItems(items),
+          ...(modelRequestFailed ? previousModels : []),
+        ];
+        this.modelSearchError = modelSearchError;
+        this.catalogLoad = { ...this.catalogLoad, loadedAt: modelRequestFailed ? 0 : Date.now() };
+      }
+    });
+    this.catalogLoad = { client, agentId, promise };
+    return promise;
+  }
+
+  private scheduleSessionSearch(query: string, immediate = false) {
+    // Retire in-flight results immediately, but keep the settled search visible
+    // until the typing burst ends. The view disables selection during this pause.
+    this.invalidateSessionSearch();
+    if (this.promptMode || this.mentionMenu.open || this.draft.mentions.length > 0) {
+      // Retire catalog generations too: late results and refresh events must not
+      // revive search while the same field is being used as a session draft.
+      this.clearSessionSearch();
+      this.clearCatalogSearch();
       return;
     }
-    this.sessionSearchTimer = globalThis.setTimeout(() => {
-      this.sessionSearchTimer = null;
-      void this.searchSessions(search);
-    }, SESSION_SEARCH_DEBOUNCE_MS);
+    const search = normalizeOptionalString(query);
+    if (!this.open || !search) {
+      this.clearSessionSearch();
+      this.searchQuery = query;
+      this.activeId = null;
+      return;
+    }
+    if (this.composing) {
+      return;
+    }
+    const applySearch = () => {
+      this.clearSessionSearch();
+      if (this.searchQuery !== query) {
+        this.activeId = null;
+      }
+      this.searchQuery = query;
+      if (search.length < SESSION_SEARCH_MIN_CHARS) {
+        return;
+      }
+      this.sessionSearchPending = Boolean(
+        this.onSelectSession && this.context?.sessions && this.gateway.connected,
+      );
+      void this.ensureCatalogItems();
+      if (this.onSelectSession) {
+        void this.searchSessions(search);
+      } else {
+        this.sessionSearchPending = false;
+      }
+    };
+    if (immediate) {
+      applySearch();
+    } else {
+      this.sessionSearchTimer = globalThis.setTimeout(applySearch, SEARCH_DEBOUNCE_MS);
+    }
   }
 
   private async searchSessions(search: string) {
@@ -482,80 +451,70 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     const gateway = context?.gateway;
     const client = gateway?.snapshot.client;
     if (!sessions || gateway?.snapshot.phase !== "connected" || !client) {
+      this.sessionSearchPending = false;
       return;
     }
     const requestId = ++this.sessionSearchId;
-    const visibleRows: ReturnType<typeof getVisibleSessionRows> = [];
-    const visibleKeys = new Set<string>();
-    const seenOffsets = new Set<number>([0]);
-    let pagesLoaded = 0;
-    let offset: number | undefined;
+    const scope = gatewayPresentationScope(gateway);
+    const isCurrent = () =>
+      requestId === this.sessionSearchId &&
+      gatewayPresentationScope(gateway) === scope &&
+      this.open &&
+      this.context?.sessions === sessions &&
+      this.context?.gateway === gateway &&
+      this.context?.agentSelection === context?.agentSelection &&
+      gateway.snapshot.client === client &&
+      gateway.snapshot.phase === "connected";
+    const transcriptSearch = searchVisibleSessionTranscripts({
+      client,
+      query: search,
+      listOptions: SESSION_SEARCH_SCOPE,
+      isCurrent,
+    })
+      .then((result) => ({ error: false as const, result }))
+      .catch(() => ({ error: true as const, result: null }));
     try {
-      while (visibleRows.length < SESSION_SEARCH_LIMIT && pagesLoaded < SESSION_SEARCH_MAX_PAGES) {
-        const result = await sessions.list({
-          search,
-          limit: SESSION_SEARCH_PAGE_SIZE,
-          ...(offset === undefined ? {} : { offset }),
-          includeGlobal: false,
-          includeUnknown: false,
-        });
-        pagesLoaded += 1;
-        if (
-          requestId !== this.sessionSearchId ||
-          !this.open ||
-          this.context?.sessions !== sessions ||
-          this.context?.gateway !== gateway ||
-          gateway.snapshot.client !== client ||
-          gateway.snapshot.phase !== "connected" ||
-          !result
-        ) {
-          return;
-        }
-        const pageRows = getVisibleSessionRows(result, {
-          agentId: "",
-          defaultAgentId: "",
-          filterByAgent: false,
-        });
-        for (const row of pageRows) {
-          if (!visibleKeys.has(row.key)) {
-            visibleKeys.add(row.key);
-            visibleRows.push(row);
-          }
-        }
-        if (visibleRows.length >= SESSION_SEARCH_LIMIT || !result.hasMore) {
-          break;
-        }
-        const nextOffset =
-          typeof result.nextOffset === "number" && Number.isFinite(result.nextOffset)
-            ? Math.max(0, Math.floor(result.nextOffset))
-            : result.sessions.length > 0
-              ? (offset ?? 0) + result.sessions.length
-              : null;
-        // Malformed pagination must not turn a palette query into an RPC loop.
-        if (nextOffset === null || seenOffsets.has(nextOffset)) {
-          break;
-        }
-        seenOffsets.add(nextOffset);
-        offset = nextOffset;
+      const result = await sessions.list({
+        ...SESSION_SEARCH_SCOPE,
+        search,
+        limit: SESSION_SEARCH_LIMIT,
+      });
+      if (!isCurrent() || !result) {
+        return;
       }
-      this.sessionItems = visibleRows.slice(0, SESSION_SEARCH_LIMIT).map((row) => ({
-        id: `session-${row.key}`,
-        label: resolveSessionDisplayName(row.key, row),
-        icon: "messageSquare" as const,
-        category: "chats" as const,
-        action: `${SESSION_ACTION_PREFIX}${row.key}`,
-        description: formatRelativeTimestamp(row.updatedAt, { fallback: "" }),
-      }));
-      this.activeIndex = 0;
+      const visibleRows = result.sessions;
+      const visibleKeys = new Set(visibleRows.map((row) => row.key));
+      const transcriptOutcome = await transcriptSearch;
+      if (!isCurrent()) {
+        return;
+      }
+      const transcriptResult = transcriptOutcome.result;
+      this.sessionSearchPartial = transcriptOutcome.error;
+      this.archivedTranscriptsExcluded = transcriptResult?.archivedTranscriptsExcluded ?? 0;
+      this.sessionSearchIndexing = transcriptResult?.indexing === true;
+      this.sessionItems = buildCommandPaletteSessionItems({
+        visibleRows,
+        visibleKeys,
+        transcriptResult,
+        search,
+      });
     } catch {
-      // Session search is best-effort; navigation commands stay usable.
+      // Session search is best-effort; navigation commands stay usable. But a
+      // failed search must not render as "No results" — that reads as a
+      // successful search with zero matches and hides gateway-side failures
+      // (e.g. a store needing doctor migration) from the operator.
+      if (isCurrent()) {
+        this.sessionSearchFailed = true;
+      }
+    } finally {
+      if (isCurrent()) {
+        this.sessionSearchPending = false;
+      }
     }
   }
 
   private readonly handleGlobalKeydown = (event: KeyboardEvent) => {
-    if (!event.defaultPrevented && event.key === "Escape" && this.open) {
-      event.preventDefault();
-      this.togglePalette();
+    if (event.defaultPrevented || this.composing || event.isComposing || event.keyCode === 229) {
       return;
     }
     if (isCommandPaletteShortcut(event)) {
@@ -564,27 +523,124 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     }
   };
 
+  private updateMentionMenu(event?: InputEvent) {
+    this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
+    if (!this.mentionMenu.open && !event) {
+      return;
+    }
+    const input = this.inputElement;
+    if (
+      !input ||
+      this.composing ||
+      event?.isComposing ||
+      event?.inputType === "insertFromPaste" ||
+      event?.inputType === "insertFromDrop"
+    ) {
+      this.mentionMenu.close();
+      this.requestMentionUpdate();
+      return;
+    }
+    this.mentionMenu.update(
+      input,
+      this.requestMentionUpdate,
+      !event
+        ? "selection"
+        : event.inputType === "insertText" && event.data?.includes("@") === true
+          ? "trigger"
+          : "input",
+    );
+  }
+
   override render() {
-    return renderCommandPalette({
+    this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
+    return renderCommandPalette(() => ({
+      basePath: this.context?.basePath ?? "",
       open: this.open,
       query: this.query,
-      activeIndex: this.activeIndex,
+      searchQuery: this.searchQuery,
+      searchDebouncing: this.composing || this.query !== this.searchQuery,
+      onFlushSearch: () => this.scheduleSessionSearch(this.query, true),
+      promptMode: this.promptMode,
+      mentionMenu: this.mentionMenu,
+      mentionHost: this.mentionHost,
+      requestUpdate: this.requestMentionUpdate,
+      composing: this.composing,
+      onBeforeInput: (event) => {
+        const input = this.inputElement;
+        this.mentionInput = input
+          ? {
+              value: input.value,
+              start: input.selectionStart,
+              end: input.selectionEnd,
+              inputType: event.inputType,
+            }
+          : undefined;
+      },
+      onSelectionChange: () => this.updateMentionMenu(),
+      onCompositionStart: () => {
+        this.composing = true;
+        this.invalidateSessionSearch();
+        this.mentionMenu.close();
+        this.requestUpdate();
+      },
+      onCompositionEnd: () => {
+        this.composing = false;
+        this.updateMentionMenu();
+        this.scheduleSessionSearch(this.query);
+      },
+      activeId: this.activeId,
+      filter: this.filter,
+      onFilterChange: (filter) => {
+        this.filter = filter;
+        this.activeId = null;
+      },
+      agents: this.context?.agents.state.agentsList?.agents ?? [],
+      agentIdentity: this.context?.agentIdentity,
+      defaultAgentId:
+        this.context?.agentSelection.state.selectedId ??
+        resolveUiSelectedGlobalAgentId(this.context?.gateway.snapshot ?? {}),
       sessionItems: this.sessionItems,
+      modelSearchError: this.modelSearchError,
+      catalogItems: [
+        ...toCommandPaletteItems(
+          getStaticCommandPaletteCatalogItems(
+            hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
+            this.context?.nativeDeviceSettings,
+          ),
+        ),
+        ...this.catalogItems,
+      ],
+      sessionSearchPending: this.sessionSearchPending,
+      catalogSearchPending: Boolean(
+        normalizeOptionalString(this.searchQuery) &&
+        !this.promptMode &&
+        this.catalogLoad &&
+        this.catalogLoad.loadedAt === undefined,
+      ),
+      sessionSearchFailed: this.sessionSearchFailed,
+      sessionSearchPartial: this.sessionSearchPartial,
+      sessionSearchIndexing: this.sessionSearchIndexing,
+      archivedTranscriptsExcluded: this.archivedTranscriptsExcluded,
       desktopAvailable: this.desktopAvailable,
+      custodianAvailable: this.custodianAvailable,
       onToggle: this.togglePalette,
-      onQueryChange: (query) => {
-        this.query = query;
-        this.activeIndex = 0;
-        this.scheduleSessionSearch(query);
+      onQueryChange: (query, event) => {
+        this.draft.setMessage(
+          query,
+          updateHumanMentions(this.query, query, this.draft.mentions, this.mentionInput),
+        );
+        this.mentionInput = undefined;
+        this.updateMentionMenu(event);
       },
-      onActiveIndexChange: (index) => {
-        this.activeIndex = index;
+      onActiveIdChange: (id) => {
+        this.activeId = id;
       },
-      onNavigate: (routeId) => this.onNavigate?.(routeId),
+      onNavigate: this.onNavigate,
       onSelectSession: this.onSelectSession,
       onSlashCommand: this.onSlashCommand,
       onInputRef: this.handleInputRef,
-    });
+      draft: this.draft,
+    }));
   }
 }
 

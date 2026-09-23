@@ -17,12 +17,13 @@ describe("buildEmbeddedRunPayloads process-error warnings", () => {
     const payloads = buildPayloads({ lastToolError, verboseLevel: "off" });
 
     expectSingleToolErrorPayload(payloads, {
-      title: "Process: wild-lagoon",
+      title: "Process",
       absentDetail: "SAFE_PROCESS_STDERR",
     });
+    expect(payloads[0]?.text).not.toContain("wild-lagoon");
     expect(payloads[0]?.text).not.toContain(dummyTelegramToken);
     expect(payloads[0]?.text).toContain("exit 7");
-    expect(payloads[0]?.text).toContain("/verbose full");
+    expect(payloads[0]?.text).not.toContain("/verbose");
   });
 
   it("shows a sanitized bounded error only at full verbosity", () => {

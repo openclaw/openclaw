@@ -3,13 +3,25 @@ import {
   getSupportedThinkingLevels,
   modelsAreEqual,
 } from "@openclaw/ai/internal/runtime";
+import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  withSessionMetadataPublication,
+  withSessionTranscriptWriteAssertion,
+  type SessionMetadataCommit,
+} from "../../config/sessions/transcript-write-context.js";
 import type { Model } from "../../llm/types.js";
 import type { ThinkingLevel } from "../runtime/index.js";
 import { AgentSessionPrompting } from "./agent-session-prompting.js";
-import type { ModelCycleResult } from "./agent-session-types.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
+import type { ExtensionRunner } from "./extensions/runner.js";
+import type { ThinkingLevelSelectEvent } from "./extensions/types.js";
+import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
+import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
+
+type ThinkingSelection = { event: ThinkingLevelSelectEvent; saveDefault: boolean };
 
 export abstract class AgentSessionModels extends AgentSessionPrompting {
   // =========================================================================
@@ -19,121 +31,89 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
   private async emitModelSelect(
     nextModel: Model,
     previousModel: Model | undefined,
-    source: "set" | "cycle",
+    runner: ExtensionRunner,
+    isCurrent: () => boolean,
   ): Promise<void> {
-    if (modelsAreEqual(previousModel, nextModel)) {
+    if (!isCurrent() || modelsAreEqual(previousModel, nextModel)) {
       return;
     }
-    await this.currentExtensionRunner.emit({
+    await runner.emit({
       type: "model_select",
       model: nextModel,
       previousModel,
-      source,
+      source: "set",
     });
   }
 
-  private async applyModelSwitch(
-    model: Model,
-    thinkingLevel: ThinkingLevel,
-    source: "set" | "cycle",
-  ): Promise<void> {
-    const previousModel = this.model;
-    this.agent.state.model = model;
-    this.sessionManager.appendModelChange(model.provider, model.id);
-    this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
-    this.setThinkingLevel(thinkingLevel);
-    await this.emitModelSelect(model, previousModel, source);
-  }
-
-  /**
-   * Set model directly.
-   * Validates that auth is configured, saves to session and settings.
-   * @throws Error if no auth is configured for the model
-   */
+  /** Set the model after validating its current auth at write admission. */
   async setModel(model: Model): Promise<void> {
-    if (!this.sessionModelRegistry.hasConfiguredAuth(model)) {
-      throw new Error(`No API key for ${model.provider}/${model.id}`);
-    }
-
-    const thinkingLevel = this.getThinkingLevelForModelSwitch();
-    await this.applyModelSwitch(model, thinkingLevel, "set");
-  }
-
-  /**
-   * Cycle to next/previous model.
-   * Uses scoped models (from --models flag) if available, otherwise all available models.
-   * @param direction - "forward" (default) or "backward"
-   * @returns The new model info, or undefined if only one model available
-   */
-  async cycleModel(
-    direction: "forward" | "backward" = "forward",
-  ): Promise<ModelCycleResult | undefined> {
-    if (this.scopedModelEntries.length > 0) {
-      return this.cycleScopedModel(direction);
-    }
-    return this.cycleAvailableModel(direction);
-  }
-
-  private async cycleScopedModel(
-    direction: "forward" | "backward",
-  ): Promise<ModelCycleResult | undefined> {
-    const scopedModels = this.scopedModelEntries.filter((scoped) =>
-      this.sessionModelRegistry.hasConfiguredAuth(scoped.model),
+    const owner = this.captureMetadataOwner();
+    const {
+      previousModel,
+      thinkingSelection: committedThinkingSelection,
+      commit: committedMetadata,
+    } = await owner.run(() =>
+      withSessionManagerWrite(owner.manager, async () => {
+        owner.assertCurrent();
+        if (!this.sessionModelRegistry.hasConfiguredAuth(model)) {
+          throw new Error(`No API key for ${model.provider}/${model.id}`);
+        }
+        // Queued transitions replace the state at admission, not at invocation.
+        const previous = this.model;
+        const thinkingSelection = this.planThinkingLevel(
+          this.getThinkingLevelForModelSwitch(),
+          model,
+        );
+        const publication: { commit?: SessionMetadataCommit } = {};
+        await withSessionMetadataPublication(
+          owner.manager,
+          { type: "model_change", provider: model.provider, modelId: model.id },
+          (commit) => {
+            publication.commit = commit;
+            this.agent.state.model = model;
+            this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
+          },
+          () => owner.manager.appendModelChange(model.provider, model.id),
+        );
+        if (thinkingSelection) {
+          try {
+            owner.assertCurrent();
+            publication.commit =
+              (await this.appendThinkingSelection(owner, thinkingSelection)) ?? publication.commit;
+          } catch (cause) {
+            this.failAfterMetadataCommit(cause, publication.commit);
+          }
+        }
+        return {
+          previousModel: previous,
+          thinkingSelection: thinkingSelection?.event,
+          commit: publication.commit,
+        };
+      }),
     );
-    if (scopedModels.length <= 1) {
-      return undefined;
+    // Hooks can await another transition after this write has settled.
+    try {
+      const thinking = this.emitThinkingLevelSelect(
+        committedThinkingSelection,
+        owner.runner,
+        owner.isCurrent,
+      );
+      const selected = this.emitModelSelect(model, previousModel, owner.runner, owner.isCurrent);
+      const notifications = await Promise.allSettled([thinking, selected]);
+      const failures = notifications.flatMap((result): unknown[] =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Session metadata notifications failed", {
+          cause: failures[0],
+        });
+      }
+    } catch (cause) {
+      this.failAfterMetadataCommit(cause, committedMetadata);
     }
-
-    const currentModel = this.model;
-    let currentIndex = scopedModels.findIndex((sm) => modelsAreEqual(sm.model, currentModel));
-
-    if (currentIndex === -1) {
-      currentIndex = 0;
-    }
-    const len = scopedModels.length;
-    const nextIndex =
-      direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
-    const next = scopedModels.at(nextIndex);
-    if (!next) {
-      throw new Error("Scoped model cycle produced an invalid index");
-    }
-    const thinkingLevel = this.getThinkingLevelForModelSwitch(next.thinkingLevel);
-
-    // Apply thinking level.
-    // - Explicit scoped model thinking level overrides current session level
-    // - Undefined scoped model thinking level inherits the current session preference
-    // setThinkingLevel clamps to model capabilities.
-    await this.applyModelSwitch(next.model, thinkingLevel, "cycle");
-
-    return { model: next.model, thinkingLevel: this.thinkingLevel, isScoped: true };
-  }
-
-  private async cycleAvailableModel(
-    direction: "forward" | "backward",
-  ): Promise<ModelCycleResult | undefined> {
-    const availableModels = this.sessionModelRegistry.getAvailable();
-    if (availableModels.length <= 1) {
-      return undefined;
-    }
-
-    const currentModel = this.model;
-    let currentIndex = availableModels.findIndex((m) => modelsAreEqual(m, currentModel));
-
-    if (currentIndex === -1) {
-      currentIndex = 0;
-    }
-    const len = availableModels.length;
-    const nextIndex =
-      direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
-    const nextModel = availableModels.at(nextIndex);
-    if (!nextModel) {
-      throw new Error("Available model cycle produced an invalid index");
-    }
-
-    const thinkingLevel = this.getThinkingLevelForModelSwitch();
-    await this.applyModelSwitch(nextModel, thinkingLevel, "cycle");
-
-    return { model: nextModel, thinkingLevel: this.thinkingLevel, isScoped: false };
   }
 
   // =========================================================================
@@ -145,49 +125,131 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
    * Clamps to model capabilities based on available thinking levels.
    * Saves to session and settings only if the level actually changes.
    */
-  setThinkingLevel(level: ThinkingLevel): void {
-    const availableLevels = this.getAvailableThinkingLevels();
-    const effectiveLevel = availableLevels.includes(level) ? level : this.clampThinkingLevel(level);
-
-    // Only persist if actually changing
-    const previousLevel = this.agent.state.thinkingLevel;
-    const isChanging = effectiveLevel !== previousLevel;
-
-    this.agent.state.thinkingLevel = effectiveLevel;
-
-    if (isChanging) {
-      this.sessionManager.appendThinkingLevelChange(effectiveLevel);
-      if (this.supportsThinking() || effectiveLevel !== "off") {
-        this.settingsManager.setDefaultThinkingLevel(effectiveLevel);
-      }
-      this.emit({ type: "thinking_level_changed", level: effectiveLevel });
-      void this.currentExtensionRunner.emit({
-        type: "thinking_level_select",
-        level: effectiveLevel,
-        previousLevel,
-      });
+  async setThinkingLevel(level: ThinkingLevel): Promise<void> {
+    const owner = this.captureMetadataOwner();
+    const committedSelection = await owner.run(() =>
+      withSessionManagerWrite(owner.manager, async () => {
+        owner.assertCurrent();
+        const selection = this.planThinkingLevel(level, this.model);
+        if (!selection) {
+          return undefined;
+        }
+        const commit = await this.appendThinkingSelection(owner, selection);
+        return { event: selection.event, commit };
+      }),
+    );
+    try {
+      await this.emitThinkingLevelSelect(committedSelection?.event, owner.runner, owner.isCurrent);
+    } catch (cause) {
+      this.failAfterMetadataCommit(cause, committedSelection?.commit);
     }
   }
 
-  /**
-   * Cycle to next thinking level.
-   * @returns New level, or undefined if model doesn't support thinking
-   */
-  cycleThinkingLevel(): ThinkingLevel | undefined {
-    if (!this.supportsThinking()) {
+  private planThinkingLevel(
+    level: ThinkingLevel,
+    model: Model | undefined,
+  ): ThinkingSelection | undefined {
+    const availableLevels = model ? getSupportedThinkingLevels(model) : THINKING_LEVELS;
+    const effectiveLevel = availableLevels.includes(level)
+      ? level
+      : model
+        ? (clampThinkingLevel(model, level) as ThinkingLevel)
+        : "off";
+    const previousLevel = this.agent.state.thinkingLevel;
+    if (effectiveLevel === previousLevel) {
       return undefined;
     }
+    return {
+      event: { type: "thinking_level_select", level: effectiveLevel, previousLevel },
+      saveDefault: Boolean(model?.reasoning) || effectiveLevel !== "off",
+    };
+  }
 
-    const levels = this.getAvailableThinkingLevels();
-    const currentIndex = levels.indexOf(this.thinkingLevel);
-    const nextIndex = (currentIndex + 1) % levels.length;
-    const nextLevel = levels.at(nextIndex);
-    if (!nextLevel) {
-      return undefined;
+  private async appendThinkingSelection(
+    owner: ReturnType<AgentSessionModels["captureMetadataOwner"]>,
+    selection: ThinkingSelection,
+  ): Promise<SessionMetadataCommit | undefined> {
+    const publication: { commit?: SessionMetadataCommit } = {};
+    await withSessionMetadataPublication(
+      owner.manager,
+      { type: "thinking_level_change", thinkingLevel: selection.event.level },
+      (commit) => {
+        publication.commit = commit;
+        this.agent.state.thinkingLevel = selection.event.level;
+        if (selection.saveDefault) {
+          this.settingsManager.setDefaultThinkingLevel(selection.event.level);
+        }
+      },
+      () => owner.manager.appendThinkingLevelChange(selection.event.level),
+    );
+    return publication.commit;
+  }
+
+  private emitThinkingLevelSelect(
+    event: ThinkingLevelSelectEvent | undefined,
+    runner: ExtensionRunner,
+    isCurrent: () => boolean,
+  ): Promise<void> {
+    if (event && isCurrent()) {
+      this.emit({ type: "thinking_level_changed", level: event.level });
+      if (isCurrent()) {
+        return runner.emit(event);
+      }
     }
+    return Promise.resolve();
+  }
 
-    this.setThinkingLevel(nextLevel);
-    return nextLevel;
+  private failAfterMetadataCommit(
+    cause: unknown,
+    commit: SessionMetadataCommit | undefined,
+  ): never {
+    if (cause instanceof SessionMetadataCommittedError || !commit) {
+      throw cause;
+    }
+    throw new SessionMetadataCommittedError(commit.entry, commit.version, cause, commit.target);
+  }
+
+  private captureMetadataOwner() {
+    const manager = this.sessionManager;
+    const target = manager.getSessionTarget();
+    const sessionId = manager.getSessionId();
+    const runner = this.currentExtensionRunner;
+    const assertAmbient = target ? captureOwnedTranscriptWriteAssertion(target) : undefined;
+    const isBound = () => {
+      const current = manager.getSessionTarget();
+      return (
+        manager.getSessionId() === sessionId && sameSessionTranscriptTargetBinding(target, current)
+      );
+    };
+    const assertCurrent = () => {
+      if (!isBound()) {
+        throw new Error("Session manager identity changed before transcript write admission");
+      }
+      if (
+        this.currentExtensionRunner !== runner ||
+        runner.createContext().sessionManager !== manager
+      ) {
+        throw new Error("Session metadata source changed before publication");
+      }
+      assertAmbient?.();
+    };
+    return {
+      manager,
+      runner,
+      assertCurrent,
+      isCurrent: () => {
+        try {
+          assertCurrent();
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      run: <T>(operation: () => Promise<T>): Promise<T> =>
+        target
+          ? withSessionTranscriptWriteAssertion(target, assertCurrent, operation)
+          : operation(),
+    };
   }
 
   /**
@@ -208,18 +270,11 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
     return Boolean(this.model?.reasoning);
   }
 
-  private getThinkingLevelForModelSwitch(explicitLevel?: ThinkingLevel): ThinkingLevel {
-    if (explicitLevel !== undefined) {
-      return explicitLevel;
-    }
+  private getThinkingLevelForModelSwitch(): ThinkingLevel {
     if (!this.supportsThinking()) {
       return this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;
     }
     return this.thinkingLevel;
-  }
-
-  private clampThinkingLevel(level: ThinkingLevel): ThinkingLevel {
-    return this.model ? (clampThinkingLevel(this.model, level) as ThinkingLevel) : "off";
   }
 
   // =========================================================================

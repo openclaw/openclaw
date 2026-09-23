@@ -6,22 +6,14 @@ import {
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeSecretInputString, type SecretInput } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { NostrProfile } from "./config-schema.js";
+import type { z } from "zod";
+import type { NostrConfigSchema, NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import { getPublicKeyFromPrivate } from "./nostr-key-utils.js";
+import { hasConfiguredNostrPrivateKey, resolveNostrPrivateKey } from "./private-key.js";
 
-interface NostrAccountConfig {
-  enabled?: boolean;
-  name?: string;
-  defaultAccount?: string;
-  privateKey?: SecretInput;
-  relays?: string[];
-  dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
-  allowFrom?: Array<string | number>;
-  profile?: NostrProfile;
-}
+type NostrAccountConfig = z.input<typeof NostrConfigSchema>;
 
 export interface ResolvedNostrAccount {
   accountId: string;
@@ -42,7 +34,7 @@ const {
   fallbackAccountIdWhenEmpty: false,
   resolveImplicitAccountId: (cfg) => {
     const account = cfg.channels?.nostr as NostrAccountConfig | undefined;
-    return normalizeSecretInputString(account?.privateKey)
+    return hasConfiguredNostrPrivateKey(account?.privateKey)
       ? (normalizeOptionalAccountId(account?.defaultAccount) ?? DEFAULT_ACCOUNT_ID)
       : undefined;
   },
@@ -63,8 +55,8 @@ export function resolveNostrAccount(opts: {
     | undefined;
 
   const baseEnabled = nostrCfg?.enabled !== false;
-  const privateKey = normalizeSecretInputString(nostrCfg?.privateKey) ?? "";
-  const configured = Boolean(privateKey);
+  const privateKey = resolveNostrPrivateKey(nostrCfg?.privateKey);
+  const configured = hasConfiguredNostrPrivateKey(nostrCfg?.privateKey);
 
   let publicKey = "";
   if (privateKey) {

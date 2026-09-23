@@ -5,8 +5,9 @@ import path from "node:path";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { createGoogleChatIngressMonitor } from "./monitor-ingress.js";
 
 type GoogleChatIngressQueue = NonNullable<
@@ -64,7 +65,7 @@ function startIngress(queue: GoogleChatIngressQueue, dispatch: GoogleChatIngress
     accountId: "default",
     queue,
     dispatch,
-    runtime: { error: vi.fn(), log: vi.fn() },
+    runtime: createRuntimeSpies(),
     pollIntervalMs: 10,
     adoptionStallTimeoutMs: 5_000,
   });

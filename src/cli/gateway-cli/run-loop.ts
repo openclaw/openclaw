@@ -1,132 +1,92 @@
 // In-process gateway run loop, restart signaling, drain, and update respawn handling.
 import { randomUUID } from "node:crypto";
-import net from "node:net";
+import { performance } from "node:perf_hooks";
+import { MessageChannel } from "node:worker_threads";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   captureGatewayRestartTraceHandoff,
   createGatewayRestartTraceHandoffEnv,
-  measureGatewayRestartTrace,
   markGatewayRestartTrace,
   startGatewayRestartTrace,
 } from "../../gateway/restart-trace.js";
+import type { GatewayHostLifecycle, GatewayStartupOperation } from "../../gateway/server-public.js";
+import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import type { startGatewayServer } from "../../gateway/server.js";
+import {
+  registerGatewayInstallationReplacementHandler,
+  type GatewayInstallationReplacement,
+} from "../../gateway/stale-install.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import { consumeGatewaySuspendHandoff } from "../../infra/gateway-suspend-coordinator.js";
+import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
-import { flushLogger } from "../../logging/logger.js";
+import { cleanupSnapshotOperations } from "../../infra/sqlite-readonly-location-cleanup.js";
+import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
-  findOpenClawAgentDatabaseMediaMigrationRequiredError,
-  GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
-} from "../../state/openclaw-agent-db-migration-required.js";
-import { formatActiveTaskRestartBlocker } from "../../tasks/task-restart-blocker.js";
+  type GatewayDrainReason,
+  runOutsideGatewayRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
+import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { formatCliCommand } from "../command-format.js";
+import { createGatewayHostLifecycle } from "./host-lifecycle.js";
+import { drainGatewayActiveWork } from "./run-loop-drain.js";
+import * as loopLogs from "./run-loop-log-flush.js";
+import {
+  isUpdateProcessRestartReason,
+  resolveGatewayRunSignalRequestUpgrade,
+  sameManagedUpdateOwner,
+  type GatewayRunSignalAction,
+  type GatewayRunSignalRequest,
+} from "./run-loop-request.js";
+import {
+  resolveGatewayShutdownDrainBudget,
+  resolveGatewayShutdownBudget,
+} from "./run-loop-shutdown-budget.js";
+import { formatBootCompletionContext, formatShutdownReason } from "./run-loop-shutdown-format.js";
+import {
+  createGatewayStartupOperations,
+  prepareGatewayRestartIteration,
+} from "./run-loop-startup.js";
+import {
+  armShutdownHardExitWatchdog,
+  type ShutdownHardExitWatchdog,
+} from "./shutdown-hard-exit.js";
+import { GatewayUpdateSuccessor } from "./update-successor.js";
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
-const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
-const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
-const RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS = 10_000;
-const UPDATE_RESPAWN_HEALTH_TIMEOUT_MS = 10_000;
-const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
-const LOG_FLUSH_EXIT_TIMEOUT_MS = 4_000;
+const HARD_EXIT_WATCHDOG_GRACE_MS = 2_000;
 
-type GatewayRunSignalAction = "stop" | "restart";
-type RestartDrainTimeoutMs = number | undefined;
-type RestartIntentOptions = {
-  reason?: string;
-  force?: boolean;
-  waitMs?: number;
-};
-type GatewayRunSignalRequest = {
-  action: GatewayRunSignalAction;
-  signal: string;
-  restartReason?: string;
-  restartIntent?: RestartIntentOptions;
-};
+type ShutdownFailure = { step: string; error: unknown };
 
-type GatewayLifecycleRuntimeModule = typeof import("./lifecycle.runtime.js");
-
-function isUpdateProcessRestartReason(reason: string | undefined): boolean {
-  return reason === "update.run" || reason === "update.auto";
-}
-
-const gatewayLifecycleRuntimeLoader = createLazyImportLoader<GatewayLifecycleRuntimeModule>(
+const gatewayLifecycleRuntimeLoader = createLazyImportLoader(
   () => import("./lifecycle.runtime.js"),
 );
 
-const loadGatewayLifecycleRuntimeModule = () => gatewayLifecycleRuntimeLoader.load();
-
-function createRestartIterationHook(onRestart: () => Promise<void> | void): () => Promise<boolean> {
-  // The first loop starts fresh; subsequent iterations are in-process restarts.
-  let isFirstIteration = true;
-  return async () => {
-    if (isFirstIteration) {
-      isFirstIteration = false;
-      return false;
-    }
-    await onRestart();
-    return true;
-  };
-}
-
-async function waitForGatewayPortReady(host: string, port: number): Promise<boolean> {
-  return await new Promise<boolean>((resolve) => {
-    const socket = net.createConnection({ host, port });
-    let settled = false;
-    const finish = (value: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      socket.removeAllListeners();
-      socket.destroy();
-      resolve(value);
-    };
-    const timer = setTimeout(() => {
-      finish(false);
-    }, UPDATE_RESPAWN_HEALTH_POLL_MS);
-    socket.once("connect", () => finish(true));
-    socket.once("error", () => finish(false));
-  });
-}
-
-async function waitForHealthyGatewayChild(
-  port: number,
-  _pid?: number,
-  host = "127.0.0.1",
-  timeoutMs = UPDATE_RESPAWN_HEALTH_TIMEOUT_MS,
-): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await waitForGatewayPortReady(host, port)) {
-      return true;
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, UPDATE_RESPAWN_HEALTH_POLL_MS);
-    });
-  }
-  return false;
-}
-
 export async function runGatewayLoop(params: {
   start: (params?: {
+    processStartedAt?: number;
     startupStartedAt?: number;
     requestHotReloadRecovery?: GatewayRestartEmitter;
+    hostLifecycle?: GatewayHostLifecycle;
+    startupOperation?: GatewayStartupOperation;
   }) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: RuntimeEnv;
+  /** Grants this run loop authority over the process it exclusively owns. */
+  ownsProcessLifecycle?: boolean;
   lockPort?: number;
+  lifecycleLockDeadlineMs?: number;
   healthHost?: string;
-  waitForHealthyChild?: (port: number, pid?: number, host?: string) => Promise<boolean>;
   beginBoot?: (startedAtMs: number) => void | Promise<void>;
   completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
+  onRestartStartupFailure?: (error: unknown, signal: AbortSignal) => Promise<void>;
 }) {
   // macOS/BSD process inspection reports process.title instead of the original
   // argv. Give the long-running Gateway a verifiable identity for lock readers.
@@ -134,678 +94,868 @@ export async function runGatewayLoop(params: {
     process.title = "openclaw-gateway";
   }
   let startupStartedAt: number;
-  // Eagerly resolve the lifecycle runtime module before installing signal
-  // listeners. Without this, every subsequent lifecycle path (SIGUSR1,
-  // SIGTERM-with-intent, restart iteration hook, stability bundle writer)
-  // depends on a dynamic import() call. After an in-place package upgrade
-  // (e.g. `npm install -g openclaw@latest` triggered via update.run),
-  // dist/ chunk hashes rotate while the process is still running. The next
-  // SIGUSR1 — including the one update.run schedules for itself — would
-  // hit ERR_MODULE_NOT_FOUND from inside its async IIFE, reject silently,
-  // and leave restart.ts's emittedRestartToken permanently unconsumed.
-  // From that point every scheduleGatewaySigusr1Restart() returns
-  // { coalesced: true } and the gateway never restarts. Priming the loader
-  // here pulls the whole re-export graph (lifecycle.runtime.ts is a 36-line
-  // re-export hub) into memory, immune to later disk rotation.
-  const eagerLifecycleRuntime = await loadGatewayLifecycleRuntimeModule();
-  let lock = await acquireGatewayLock({ port: params.lockPort });
+  // Prime the lifecycle graph before signals can run. An in-place update rotates
+  // dist chunks; a late import can fail and leave the restart token unconsumed,
+  // coalescing every subsequent restart.
+  const eagerLifecycleRuntime = await gatewayLifecycleRuntimeLoader.load();
+  const supervisor = eagerLifecycleRuntime.detectGatewayRespawnSupervisorIdentity(
+    process.env,
+    process.platform,
+    { includeLinuxOpenClawGatewayServiceMarker: true },
+  );
+  const supervisorMode = supervisor?.kind ?? null;
+  const restartDecision = eagerLifecycleRuntime.resolveGatewayRestartDecision();
+  let lock = await acquireGatewayLock({
+    port: params.lockPort,
+    listenerMode: supervisorMode ? "supervised" : "foreground",
+    supervisor,
+    ...(params.lifecycleLockDeadlineMs !== undefined
+      ? { lifecycleDeadlineMs: params.lifecycleLockDeadlineMs }
+      : {}),
+  });
+  // Process-owned signal handling must survive gaps with no listening server.
+  // Node's signal listeners and pending promises do not retain the event loop.
+  const processLifetime = params.ownsProcessLifecycle ? new MessageChannel() : undefined;
+  processLifetime?.port1.ref();
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
+  let hostLifecycle: ReturnType<typeof createGatewayHostLifecycle> | undefined;
+  let startupOperations = createGatewayStartupOperations();
+  let terminalHostedStop: ReturnType<typeof createGatewayHostLifecycle> | undefined;
   let shuttingDown = false;
+  let forcedExitStarted = false;
   let restartResolver: (() => void) | null = null;
   // The HTTP server can report ready before params.start returns its close handle.
   // Defer lifecycle signals from that window until the loop can close and advance.
   let pendingStartupRequest: GatewayRunSignalRequest | null = null;
   let activeRestartRequest: GatewayRunSignalRequest | null = null;
+  const updateSuccessor = new GatewayUpdateSuccessor(gatewayLog, eagerLifecycleRuntime);
+  let foregroundUpdateClosed = false;
   let forceActiveRestartExit: (() => void) | null = null;
   let pendingStartupForceExitTimer: ReturnType<typeof setTimeout> | null = null;
+  let installationReplacement: GatewayInstallationReplacement | undefined;
+  let pendingRestartCompletion: GatewayBootLifecycleCompletion | undefined;
+  let restartDrainWarning: string | undefined;
+  const completeBoot = (completion: GatewayBootLifecycleCompletion) => {
+    pendingRestartCompletion = undefined;
+    params.completeBoot?.(
+      formatBootCompletionContext(completion, installationReplacement?.reason, restartDrainWarning),
+    );
+    restartDrainWarning = undefined;
+  };
   let restartDrainingMarked = false;
+  const observeSignal = loopLogs.createGatewaySignalObserver(gatewayLog);
   let startupFailedWithoutServerHandle = false;
+  let failureWork: { controller: AbortController; settled: Promise<void> } | undefined;
   const processInstanceId = randomUUID();
-  const waitForHealthyChild = params.waitForHealthyChild ?? waitForHealthyGatewayChild;
+  const getManagedUpdateOwner = () =>
+    (pendingStartupRequest ?? activeRestartRequest)?.restartIntent?.successorOwner;
 
   const cleanupSignals = () => {
+    releaseInstallationObserver();
     process.removeListener("SIGTERM", onSigterm);
     process.removeListener("SIGINT", onSigint);
-    process.removeListener("SIGUSR1", onSigusr1);
+    process.removeListener("SIGUSR2", onRestartSignal);
+    processLifetime?.port1.close();
+    processLifetime?.port2.close();
   };
   const exitProcess = (code: number) => {
+    if (pendingRestartCompletion) {
+      completeBoot(pendingRestartCompletion);
+    }
+    clearPendingStartupForceExitTimer();
+    void hostLifecycle?.retire();
     cleanupSignals();
     params.runtime.exit(code);
   };
-  const exitProcessAfterLogFlush = async (code: number) => {
+  const exitProcessAfterLogFlush = async (
+    code: number,
+    initialOwner?: GatewayRestartIntent["successorOwner"],
+    initialOutcome: "update" | "restore" = "update",
+    hostStopOwner?: ReturnType<typeof createGatewayHostLifecycle>,
+  ): Promise<void> => {
+    if (hostStopOwner && hostLifecycle !== hostStopOwner) {
+      return;
+    }
+    let ownerToCommit = initialOwner;
+    let commitOutcome = initialOutcome;
     // Graceful signal/restart paths call process.exit(), which skips beforeExit.
-    let flushTimer: ReturnType<typeof setTimeout> | undefined;
-    const flushed = await Promise.race([
-      flushLogger().then(() => true),
-      new Promise<false>((resolve) => {
-        flushTimer = setTimeout(() => resolve(false), LOG_FLUSH_EXIT_TIMEOUT_MS);
-      }),
-    ]);
-    if (flushTimer) {
-      clearTimeout(flushTimer);
+    if (!foregroundUpdateClosed) {
+      await eagerLifecycleRuntime
+        .stopGatewayManagedProviderLocalServices()
+        .catch((error: unknown) => {
+          gatewayLog.warn(`managed local service shutdown failed: ${formatErrorMessage(error)}`);
+        });
     }
-    if (!flushed) {
-      gatewayLog.warn(
-        `log flush did not settle within ${LOG_FLUSH_EXIT_TIMEOUT_MS}ms; continuing shutdown`,
-      );
+    await cleanupSnapshotOperations();
+    await loopLogs.flushGatewayLogsBeforeExit(gatewayLog);
+    for (;;) {
+      if (hostStopOwner && hostLifecycle !== hostStopOwner) {
+        return;
+      }
+      if (foregroundUpdateClosed) {
+        await updateSuccessor.exit(code, exitProcess);
+        return;
+      }
+      const owner = getManagedUpdateOwner();
+      if (!owner) {
+        if (!ownerToCommit) {
+          if (updateSuccessor.capturedStop) {
+            await updateSuccessor.exit(code, exitProcess);
+          } else {
+            exitProcess(code);
+          }
+        }
+        return;
+      }
+      if (
+        sameManagedUpdateOwner(owner, ownerToCommit) &&
+        eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner) &&
+        (await eagerLifecycleRuntime.commitManagedServiceUpdateHandoff(owner, commitOutcome)) &&
+        sameManagedUpdateOwner(getManagedUpdateOwner(), owner) &&
+        eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner)
+      ) {
+        // Keep exact request ownership live through the synchronous exit call.
+        exitProcess(code);
+        return;
+      }
+      await markRestartHandoffUnavailable();
+      const ownerToCancel = ownerToCommit ?? owner;
+      const restoration = await updateSuccessor.cancelHandoff(getManagedUpdateOwner, ownerToCancel);
+      if (!restoration) {
+        await updateSuccessor.cancel();
+        return;
+      }
+      if (restoration === "restart-after-exit") {
+        ownerToCommit = ownerToCancel;
+        commitOutcome = "restore";
+        const currentRequest = pendingStartupRequest ?? activeRestartRequest;
+        if (
+          currentRequest &&
+          !sameManagedUpdateOwner(currentRequest.restartIntent?.successorOwner, ownerToCancel)
+        ) {
+          currentRequest.restartIntent = {
+            ...currentRequest.restartIntent,
+            successorOwner: ownerToCancel,
+          };
+        }
+        continue;
+      }
+      // Restoring the helper does not make a failed generation reusable.
+      if (code === 0 && !forcedExitStarted && !updateSuccessor.committed && initialOwner) {
+        return reacquireAndResumeInProcessRestart(getManagedUpdateOwner() ?? owner);
+      }
+      exitProcess(code);
+      return;
     }
-    exitProcess(code);
   };
-  const completeForcedStop = (reason: string) => {
-    params.completeBoot?.({ outcome: "forced_stop", reason });
-  };
-  const writeStabilityBundle = async (reason: string, error?: unknown) => {
-    const { writeDiagnosticStabilityBundleForFailureSync } =
-      await loadGatewayLifecycleRuntimeModule();
-    const result = writeDiagnosticStabilityBundleForFailureSync(reason, error);
-    if ("message" in result) {
-      gatewayLog.warn(result.message);
-    }
-  };
-  const releaseLockIfHeld = async (): Promise<boolean> => {
-    if (!lock) {
-      return false;
-    }
-    await lock.release();
+  const writeStabilityBundle = loopLogs.createGatewayStabilityReporter(
+    eagerLifecycleRuntime,
+    gatewayLog,
+  );
+  const releaseLockIfHeld = async (): Promise<void> => {
+    await lock?.release();
     lock = null;
-    return true;
   };
-  const reacquireLockForInProcessRestart = async (): Promise<boolean> => {
+  const exitReplacedInstallation = async (replacement: GatewayInstallationReplacement) => {
+    shuttingDown = true;
+    gatewayLog.error(
+      `${replacement.message} Cannot continue in this process. Run: ${formatCliCommand(supervisorMode ? "openclaw gateway restart" : "openclaw gateway run")}`,
+    );
+    pendingRestartCompletion ??= {
+      outcome: "planned_restart",
+      reason: "gateway.installation_replaced",
+    };
+    await releaseLockIfHeld();
+    await exitProcessAfterLogFlush(1);
+  };
+  const forceExitAfterStabilityBundle = async (
+    reason: string,
+    exitCode = 1,
+    failure?: ShutdownFailure,
+  ) => {
+    if (
+      foregroundUpdateClosed ||
+      (updateSuccessor.waitingForStop && !getManagedUpdateOwner()) ||
+      forcedExitStarted
+    ) {
+      return;
+    }
+    forcedExitStarted = true;
+    void hostLifecycle?.retire();
+    let stabilityFailure: { error: unknown } | undefined;
     try {
-      lock = await acquireGatewayLock({ port: params.lockPort });
-      return true;
-    } catch (err) {
-      gatewayLog.error(`failed to reacquire gateway lock for in-process restart: ${String(err)}`);
-      exitProcess(1);
-      return false;
+      writeStabilityBundle(reason, failure?.error, failure?.step);
+    } catch (error) {
+      stabilityFailure = { error };
+    }
+    // Exit rescue cannot replay an issued file append; join it before final authority checks.
+    // Reserve half the hard-exit grace for final shutdown bookkeeping.
+    await loopLogs.flushGatewayLogsBeforeExit(gatewayLog, HARD_EXIT_WATCHDOG_GRACE_MS / 2);
+    if (foregroundUpdateClosed) {
+      return;
+    }
+    const owner = getManagedUpdateOwner();
+    if (owner) {
+      forceActiveRestartExit?.();
+    }
+    const restoration = await updateSuccessor.cancelHandoff(getManagedUpdateOwner, owner);
+    if (restoration) {
+      completeBoot({ outcome: "forced_stop", reason });
+      if (restoration === "restart-after-exit") {
+        await exitProcessAfterLogFlush(exitCode, owner, "restore");
+      } else {
+        exitProcess(exitCode);
+      }
+    } else if (updateSuccessor.capturedStop) {
+      await updateSuccessor.exit(exitCode, (code) => {
+        completeBoot({ outcome: "forced_stop", reason });
+        exitProcess(code);
+      });
+    }
+    if (stabilityFailure) {
+      throw stabilityFailure.error;
     }
   };
-  const confirmLaunchdHandoff = async (respawn: {
-    handoffSpawned?: Promise<boolean>;
-  }): Promise<boolean> => {
-    const delay = new Promise<void>((resolve) => {
-      setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
-    });
-    const spawned = respawn.handoffSpawned
-      ? await Promise.race([respawn.handoffSpawned, delay.then(() => true)])
-      : false;
-    // Preserve the crash-loop throttle window even when spawn settles early.
-    await delay;
-    return spawned;
+  const reacquireAndResumeInProcessRestart = async (
+    alreadyCancelledOwner?: GatewayRestartIntent["successorOwner"],
+  ): Promise<void> => {
+    if (foregroundUpdateClosed) {
+      return exitProcessAfterLogFlush(1);
+    }
+    for (;;) {
+      if (forcedExitStarted) {
+        return;
+      }
+      const restartRequest = activeRestartRequest;
+      const restartOwner = restartRequest?.restartIntent?.successorOwner;
+      const restoration = sameManagedUpdateOwner(restartOwner, alreadyCancelledOwner)
+        ? "restored-in-process"
+        : await updateSuccessor.cancelHandoff(getManagedUpdateOwner, restartOwner);
+      if (!restoration || forcedExitStarted) {
+        return;
+      }
+      if (restoration === "restart-after-exit") {
+        await releaseLockIfHeld();
+        return exitProcessAfterLogFlush(0, restartOwner, "restore");
+      }
+      if (activeRestartRequest !== restartRequest) {
+        continue;
+      }
+      if (installationReplacement) {
+        // The old module graph cannot recover after its package has been replaced.
+        return exitReplacedInstallation(installationReplacement);
+      }
+      if (!updateSuccessor.stopRequested) {
+        try {
+          lock = await acquireGatewayLock({
+            port: params.lockPort,
+            listenerMode: supervisorMode ? "supervised" : "foreground",
+            supervisor,
+          });
+        } catch (err) {
+          if (forcedExitStarted) {
+            return;
+          }
+          if (activeRestartRequest !== restartRequest) {
+            continue;
+          }
+          gatewayLog.error(
+            `failed to reacquire gateway lock for in-process restart: ${String(err)}`,
+          );
+          exitProcess(1);
+          return;
+        }
+      }
+      if (updateSuccessor.stopRequested) {
+        await releaseLockIfHeld();
+      }
+      if (installationReplacement) {
+        return exitReplacedInstallation(installationReplacement);
+      }
+      if (!forcedExitStarted && activeRestartRequest === restartRequest) {
+        activeRestartRequest = null;
+        if (updateSuccessor.stopRequested) {
+          return restartRequest?.hostedStop
+            ? handleHostedStopAfterServerClose(restartRequest.hostedStop, undefined)
+            : exitProcessAfterLogFlush(0);
+        }
+        shuttingDown = false;
+        restartResolver?.();
+        return;
+      }
+      await releaseLockIfHeld();
+    }
   };
-  const handleRestartAfterServerClose = async () => {
+  const markRestartHandoffUnavailable = (reason?: string) =>
+    updateSuccessor.markHandoffUnavailable(foregroundUpdateClosed, reason);
+  const handleRestartAfterServerClose = async (
+    expectedOwner?: GatewayRestartIntent["successorOwner"],
+    initiallyCancelled = false,
+    failure?: ShutdownFailure,
+  ): Promise<void> => {
+    let cancelled = initiallyCancelled;
+    const foregroundHandoff =
+      expectedOwner && !cancelled && eagerLifecycleRuntime.isForegroundUpdateHandoff(expectedOwner);
+    if (foregroundHandoff) {
+      // Finish lazy old-runtime cleanup while activation is still fenced by the helper.
+      try {
+        await eagerLifecycleRuntime.stopGatewayManagedProviderLocalServices();
+      } catch (error) {
+        gatewayLog.error(
+          `foreground update cancelled after provider cleanup failed: ${formatErrorMessage(error)}`,
+        );
+        await markRestartHandoffUnavailable("restart-local-service-stop-failed");
+        const restoration = await eagerLifecycleRuntime
+          .cancelManagedServiceUpdateHandoff(expectedOwner)
+          .catch(() => false);
+        if (!restoration) {
+          gatewayLog.error("foreground update cancellation unconfirmed; remaining draining");
+          return;
+        }
+        if (restoration === "restart-after-exit") {
+          await releaseLockIfHeld();
+          return exitProcessAfterLogFlush(1, expectedOwner, "restore");
+        }
+        // Cancellation joins the updater before lock release or reuse of unchanged code.
+        cancelled = true;
+      }
+    }
     await releaseLockIfHeld();
-    const {
-      detectGatewayRespawnSupervisor,
-      markUpdateRestartSentinelFailure,
-      respawnGatewayProcessForUpdate,
-      restartGatewayProcessWithFreshPid,
-      writeGatewayRestartHandoffSync,
-    } = await loadGatewayLifecycleRuntimeModule();
-    // Lock release and lazy lifecycle loading may yield while a managed update
-    // upgrades this restart. Keep the request live until a restart path commits.
+    if (forcedExitStarted) {
+      return;
+    }
+    // Lock release may yield while a managed update upgrades this restart.
     const restartReason = activeRestartRequest?.restartReason;
-    params.completeBoot?.({
-      outcome: "planned_restart",
-      reason: restartReason ?? "gateway.restart",
-    });
+    pendingRestartCompletion = failure
+      ? { outcome: "forced_stop", reason: "gateway.restart_close_failed" }
+      : {
+          outcome: "planned_restart",
+          reason: activeRestartRequest
+            ? formatShutdownReason(activeRestartRequest)
+            : "gateway.restart",
+        };
     const isUpdateRestart = isUpdateProcessRestartReason(restartReason);
 
-    if (isUpdateRestart) {
-      const restartTraceHandoff = captureGatewayRestartTraceHandoff();
-      const respawn = respawnGatewayProcessForUpdate({
-        env: createGatewayRestartTraceHandoffEnv(restartTraceHandoff),
-      });
-      if (respawn.mode === "spawned") {
-        const port = params.lockPort;
-        const healthy =
-          typeof port === "number"
-            ? await waitForHealthyChild(port, respawn.pid, params.healthHost ?? "127.0.0.1")
-            : false;
-        if (healthy) {
-          activeRestartRequest = null;
-          gatewayLog.info(
-            `restart mode: update process respawn (spawned pid ${respawn.pid ?? "unknown"})`,
-          );
-          await exitProcessAfterLogFlush(0);
-          return;
-        }
-        gatewayLog.warn(
-          `update respawn child did not become healthy (${respawn.pid ?? "unknown"}); falling back to in-process restart`,
-        );
-        try {
-          respawn.child?.kill();
-        } catch {
-          // Best-effort; parent fallback keeps the gateway reachable for recovery.
-        }
-        await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err: unknown) => {
-          gatewayLog.warn(`failed to mark update restart sentinel unhealthy: ${String(err)}`);
-        });
-        if (!(await reacquireLockForInProcessRestart())) {
-          return;
-        }
-        shuttingDown = false;
-        restartResolver?.();
-        return;
+    if (cancelled) {
+      return reacquireAndResumeInProcessRestart(expectedOwner);
+    }
+    if (activeRestartRequest?.restartIntent?.successorOwner) {
+      if (!expectedOwner) {
+        gatewayLog.error("managed update handoff arrived after successor parking closed");
+        await markRestartHandoffUnavailable();
+        return reacquireAndResumeInProcessRestart();
       }
-      if (respawn.mode === "supervised") {
-        const supervisorMode = detectGatewayRespawnSupervisor(process.env, process.platform);
-        markGatewayRestartTrace("restart.full-process-handoff", [
-          ["kind", "update-process"],
-          ["mode", respawn.mode],
-          ["supervisorMode", supervisorMode ?? "external"],
-        ]);
-        const handoff = writeGatewayRestartHandoffSync({
-          restartKind: "update-process",
-          reason: restartReason,
-          processInstanceId,
-          supervisorMode: supervisorMode ?? "external",
-          restartTrace: captureGatewayRestartTraceHandoff(),
-        });
-        if (supervisorMode === "external" && !handoff) {
-          gatewayLog.warn(
-            "external supervisor restart handoff could not be persisted; falling back to in-process restart",
+      if (foregroundHandoff) {
+        if (!sameManagedUpdateOwner(getManagedUpdateOwner(), expectedOwner)) {
+          const cancelledOwner = await updateSuccessor.cancelHandoff(
+            getManagedUpdateOwner,
+            expectedOwner,
           );
-          await markUpdateRestartSentinelFailure("restart-handoff-unavailable").catch(
-            (err: unknown) => {
-              gatewayLog.warn(`failed to mark update restart handoff unavailable: ${String(err)}`);
-            },
-          );
-          if (!(await reacquireLockForInProcessRestart())) {
-            return;
+          if (cancelledOwner === "restored-in-process") {
+            return reacquireAndResumeInProcessRestart(getManagedUpdateOwner());
           }
-          activeRestartRequest = null;
-          shuttingDown = false;
-          restartResolver?.();
           return;
         }
-        gatewayLog.info("restart mode: update process respawn (supervisor restart)");
-        if (supervisorMode === "launchd" && !(await confirmLaunchdHandoff(respawn))) {
-          gatewayLog.warn(
-            "launchd restart handoff failed to spawn; falling back to in-process restart",
-          );
-          await markUpdateRestartSentinelFailure("restart-handoff-unavailable").catch(
-            (err: unknown) => {
-              gatewayLog.warn(`failed to mark update restart handoff unavailable: ${String(err)}`);
-            },
-          );
-          if (!(await reacquireLockForInProcessRestart())) {
-            return;
-          }
-          activeRestartRequest = null;
-          shuttingDown = false;
-          restartResolver?.();
-          return;
+        foregroundUpdateClosed = true;
+        forceActiveRestartExit?.();
+        const completed = await updateSuccessor.completeForegroundHandoffAfterClose(expectedOwner);
+        if (updateSuccessor.stopRequested && activeRestartRequest.hostedStop) {
+          return handleHostedStopAfterServerClose(activeRestartRequest.hostedStop, undefined);
         }
-        activeRestartRequest = null;
-        await exitProcessAfterLogFlush(0);
-        return;
-      }
-      if (respawn.mode === "failed") {
-        gatewayLog.warn(
-          `update respawn failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
-        );
-        await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err: unknown) => {
-          gatewayLog.warn(`failed to mark update restart sentinel unhealthy: ${String(err)}`);
-        });
+        if (!completed.respawn) {
+          gatewayLog.error(
+            "foreground update did not authorize a fresh Gateway; leaving it stopped for recovery",
+          );
+          return exitProcessAfterLogFlush(1);
+        }
+        if (updateSuccessor.stopRequested) {
+          return exitProcessAfterLogFlush(0);
+        }
       } else {
-        gatewayLog.info(
-          `restart mode: in-process restart (${respawn.detail ?? "OPENCLAW_NO_RESPAWN"})`,
-        );
+        gatewayLog.info("restart mode: managed update handoff owns successor");
+        return exitProcessAfterLogFlush(0, expectedOwner);
       }
-      if (!(await reacquireLockForInProcessRestart())) {
-        return;
-      }
-      activeRestartRequest = null;
-      shuttingDown = false;
-      restartResolver?.();
-      return;
     }
 
-    // Release the lock BEFORE spawning so the child can acquire it immediately.
-    const restartTraceHandoff = captureGatewayRestartTraceHandoff();
-    const respawn = restartGatewayProcessWithFreshPid({
-      env: createGatewayRestartTraceHandoffEnv(restartTraceHandoff),
-    });
-    if (respawn.mode === "spawned" || respawn.mode === "supervised") {
-      const supervisorMode =
-        respawn.mode === "supervised"
-          ? detectGatewayRespawnSupervisor(process.env, process.platform)
-          : null;
-      const modeLabel =
-        respawn.mode === "spawned"
-          ? `spawned pid ${respawn.pid ?? "unknown"}`
-          : "supervisor restart";
+    const respawnOptions = {
+      decision: restartDecision,
+      env: createGatewayRestartTraceHandoffEnv(captureGatewayRestartTraceHandoff()),
+    };
+    const isStandaloneUpdate = Boolean(foregroundHandoff) || (isUpdateRestart && !supervisorMode);
+    const respawn = isStandaloneUpdate
+      ? eagerLifecycleRuntime.respawnGatewayProcessForUpdate(respawnOptions)
+      : eagerLifecycleRuntime.restartGatewayProcessWithFreshPid(respawnOptions);
+    if (respawn.mode === "spawned") {
+      const child = respawn.child;
+      if (foregroundUpdateClosed) {
+        updateSuccessor.commit(child);
+      }
+      const observedRestartRequest = activeRestartRequest;
+      const accepted = await updateSuccessor.observeReadiness(child, {
+        port: params.lockPort,
+        host: params.healthHost,
+        foreground: foregroundUpdateClosed,
+        // Old-server cleanup must not consume the replacement's readiness window.
+        beforeWait: () => forceActiveRestartExit?.(),
+        isCurrent: () => !foregroundUpdateClosed && activeRestartRequest === observedRestartRequest,
+      });
+      if (updateSuccessor.stopRequested) {
+        return exitProcessAfterLogFlush(0);
+      }
+      if (accepted) {
+        gatewayLog.info(
+          `restart mode: update process respawn (spawned pid ${respawn.pid ?? "unknown"})`,
+        );
+        return exitProcessAfterLogFlush(0);
+      }
+      gatewayLog.warn(
+        `update respawn child did not become healthy (${respawn.pid ?? "unknown"}); ${foregroundUpdateClosed ? "shutdown pending; retaining the replacement until it closes; inspect its startup logs" : installationReplacement ? "the replaced runtime cannot resume" : "falling back to in-process restart"}`,
+      );
+      try {
+        await (foregroundUpdateClosed ? updateSuccessor.cancel() : child.kill());
+      } catch (error) {
+        gatewayLog.warn(`update respawn child did not settle: ${formatErrorMessage(error)}`);
+      }
+      await markRestartHandoffUnavailable("restart-unhealthy");
+      return reacquireAndResumeInProcessRestart();
+    }
+    if (respawn.mode === "supervised") {
+      const restartKind = isUpdateRestart ? "update-process" : "full-process";
       markGatewayRestartTrace("restart.full-process-handoff", [
-        ["kind", "full-process"],
+        ["kind", restartKind],
         ["mode", respawn.mode],
-        ["pid", respawn.mode === "spawned" ? (respawn.pid ?? "unknown") : "none"],
+        ["pid", "none"],
         ["supervisorMode", supervisorMode ?? "none"],
       ]);
-      if (respawn.mode === "supervised") {
-        const handoff = writeGatewayRestartHandoffSync({
-          restartKind: "full-process",
-          reason: restartReason,
-          processInstanceId,
-          supervisorMode: supervisorMode ?? "external",
-          restartTrace: captureGatewayRestartTraceHandoff(),
-        });
-        if (supervisorMode === "external" && !handoff) {
-          gatewayLog.warn(
-            "external supervisor restart handoff could not be persisted; falling back to in-process restart",
-          );
-          if (!(await reacquireLockForInProcessRestart())) {
-            return;
-          }
-          activeRestartRequest = null;
-          shuttingDown = false;
-          restartResolver?.();
-          return;
-        }
-      }
-      gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
-      if (supervisorMode === "launchd" && !(await confirmLaunchdHandoff(respawn))) {
-        await writeStabilityBundle("gateway.restart_handoff_spawn_failed");
+      const handoff = eagerLifecycleRuntime.writeGatewayRestartHandoffSync({
+        restartKind,
+        reason: restartReason,
+        processInstanceId,
+        supervisorMode: supervisorMode ?? "external",
+        restartTrace: captureGatewayRestartTraceHandoff(),
+      });
+      if (supervisorMode === "external" && !handoff) {
         gatewayLog.warn(
-          "launchd restart handoff failed to spawn; falling back to in-process restart",
+          `external supervisor restart handoff could not be persisted; ${installationReplacement ? "the replaced runtime cannot resume" : "falling back to in-process restart"}`,
         );
-        if (!(await reacquireLockForInProcessRestart())) {
-          return;
+        if (isUpdateRestart) {
+          await markRestartHandoffUnavailable();
         }
-        activeRestartRequest = null;
-        shuttingDown = false;
-        restartResolver?.();
-        return;
+        return reacquireAndResumeInProcessRestart();
       }
-      activeRestartRequest = null;
-      await exitProcessAfterLogFlush(0);
-      return;
+      gatewayLog.info("restart mode: full process restart (supervisor restart)");
+      if (supervisorMode === "launchd") {
+        const delay = new Promise<void>((resolve) => {
+          setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
+        });
+        const spawned = respawn.handoffSpawned
+          ? await Promise.race([respawn.handoffSpawned, delay.then(() => true)])
+          : false;
+        // Preserve the crash-loop throttle window even when spawn settles early.
+        await delay;
+        if (!spawned) {
+          writeStabilityBundle("gateway.restart_handoff_spawn_failed");
+          gatewayLog.warn(
+            `launchd restart handoff failed to spawn; ${installationReplacement ? "the replaced runtime cannot resume" : "falling back to in-process restart"}`,
+          );
+          if (isUpdateRestart) {
+            await markRestartHandoffUnavailable();
+          }
+          return reacquireAndResumeInProcessRestart();
+        }
+      }
+      updateSuccessor.commit(true);
+      return exitProcessAfterLogFlush(respawn.exitCode ?? 0);
     }
     if (respawn.mode === "failed") {
-      await writeStabilityBundle("gateway.restart_respawn_failed");
+      if (!isStandaloneUpdate) {
+        writeStabilityBundle("gateway.restart_respawn_failed");
+      }
       gatewayLog.warn(
-        `full process restart failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
+        `${isStandaloneUpdate ? "update respawn" : "full process restart"} failed (${respawn.detail ?? "unknown error"}); ${foregroundUpdateClosed ? "leaving Gateway stopped for recovery" : installationReplacement ? "the replaced runtime cannot resume" : "falling back to in-process restart"}`,
       );
+      if (isUpdateRestart) {
+        await markRestartHandoffUnavailable("restart-unhealthy");
+      }
     } else {
       gatewayLog.info(
-        `restart mode: in-process restart (${respawn.detail ?? "OPENCLAW_NO_RESPAWN"})`,
+        `restart mode: ${foregroundUpdateClosed ? "fresh process unavailable; leaving Gateway stopped" : installationReplacement ? "replaced runtime must exit" : "in-process restart"} (${respawn.detail ?? "OPENCLAW_NO_RESPAWN"})`,
       );
     }
-    if (isUpdateProcessRestartReason(activeRestartRequest?.restartReason)) {
-      await handleRestartAfterServerClose();
-      return;
+    if (!isUpdateRestart && isUpdateProcessRestartReason(activeRestartRequest?.restartReason)) {
+      return handleRestartAfterServerClose();
     }
-    if (!(await reacquireLockForInProcessRestart())) {
-      return;
-    }
-    if (isUpdateProcessRestartReason(activeRestartRequest?.restartReason)) {
-      await handleRestartAfterServerClose();
-      return;
-    }
-    activeRestartRequest = null;
-    shuttingDown = false;
-    restartResolver?.();
+    return reacquireAndResumeInProcessRestart();
   };
-  const handleStopAfterServerClose = async () => {
-    params.completeBoot?.({ outcome: "clean_stop", reason: "gateway.stop" });
-    await releaseLockIfHeld();
-    await exitProcessAfterLogFlush(0);
-  };
-
-  const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
-  const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
+  const startupBudget = await resolveGatewayShutdownBudget(supervisorMode, gatewayLog);
+  let reportedBudget = startupBudget;
+  startupBudget.log("startup");
   const clearPendingStartupForceExitTimer = () => {
-    if (!pendingStartupForceExitTimer) {
-      return;
-    }
-    clearTimeout(pendingStartupForceExitTimer);
+    clearTimeout(pendingStartupForceExitTimer ?? undefined);
     pendingStartupForceExitTimer = null;
   };
-  const armPendingStartupForceExitTimer = () => {
-    if (pendingStartupForceExitTimer) {
-      return;
-    }
-    pendingStartupForceExitTimer = setTimeout(() => {
+  const armPendingStartupForceExitTimer = (pendingRequest: GatewayRunSignalRequest) => {
+    // Request admission already coalesces repeated signals before arming.
+    reportedBudget = startupBudget;
+    const expire = () => {
       pendingStartupForceExitTimer = null;
       gatewayLog.error(
         "startup restart request timed out before gateway returned a close handle; exiting for supervisor recovery",
       );
-      void (async () => {
-        try {
-          await writeStabilityBundle("gateway.restart_startup_request_timeout");
-        } finally {
-          completeForcedStop("gateway.restart_startup_request_timeout");
-          exitProcess(1);
-        }
-      })();
-    }, SHUTDOWN_TIMEOUT_MS);
-    pendingStartupForceExitTimer.unref?.();
+      void forceExitAfterStabilityBundle("gateway.restart_startup_request_timeout");
+    };
+    const arm = (timeoutMs: number) => {
+      const timer = setTimeout(expire, timeoutMs);
+      timer.unref?.();
+      pendingStartupForceExitTimer = timer;
+      return timer;
+    };
+    const timer = arm(startupBudget.timeoutMs);
+    if (process.platform === "linux") {
+      void resolveGatewayShutdownBudget(supervisorMode, gatewayLog, {
+        previous: startupBudget,
+        acceptedAtMs: pendingRequest.acceptedAtMs,
+      })
+        .then((budget) => {
+          // Update upgrades replace the request while retaining this watchdog.
+          if (!pendingStartupRequest || pendingStartupForceExitTimer !== timer) {
+            return;
+          }
+          reportedBudget = budget;
+          clearTimeout(timer);
+          arm(budget.timeoutMs);
+        })
+        .catch((error: unknown) =>
+          gatewayLog.warn(`Startup shutdown budget refresh failed: ${formatErrorMessage(error)}`),
+        );
+    }
   };
-  const resolveRestartDrainTimeoutMs = async (
-    restartIntent?: RestartIntentOptions,
-  ): Promise<RestartDrainTimeoutMs> => {
-    if (restartIntent?.force) {
-      return 0;
-    }
-    if (typeof restartIntent?.waitMs === "number" && Number.isFinite(restartIntent.waitMs)) {
-      return restartIntent.waitMs > 0 ? Math.floor(restartIntent.waitMs) : undefined;
-    }
-    try {
-      const { resolveGatewayRestartDeferralTimeoutMs } = await loadGatewayLifecycleRuntimeModule();
-      return resolveGatewayRestartDeferralTimeoutMs();
-    } catch {
-      return DEFAULT_RESTART_DRAIN_TIMEOUT_MS;
-    }
-  };
-  const markRestartDraining = () => {
+  const markRestartDraining = (reason: GatewayDrainReason) => {
     if (restartDrainingMarked) {
       return;
     }
     // The lifecycle module is primed before listeners are installed. Keep this
     // transition synchronous so an accepted signal cannot yield between token
     // handling and closing process-wide root admission.
-    eagerLifecycleRuntime.markGatewayDraining();
+    eagerLifecycleRuntime.markGatewayDraining(reason);
     restartDrainingMarked = true;
+  };
+
+  const handleHostedStopAfterServerClose = async (
+    owner: ReturnType<typeof createGatewayHostLifecycle>,
+    shutdownFailure: ShutdownFailure | undefined,
+  ) => {
+    await updateSuccessor.waitForStopSettlement();
+    if (hostLifecycle !== owner) {
+      return;
+    }
+    terminalHostedStop = owner;
+    try {
+      if (shutdownFailure) {
+        await forceExitAfterStabilityBundle("gateway.stop_close_failed", 1, shutdownFailure);
+        return;
+      }
+      // This continuation belongs to the run loop, not to the closed kernel or
+      // requesting lane. Native stop starts only after the existing joins.
+      const result = await owner.finishStop();
+      if (result.outcome === "retired" || hostLifecycle !== owner) {
+        return;
+      }
+      if (result.outcome !== "accepted" && result.outcome !== "exit") {
+        gatewayLog.error(`Scheduled Gateway stop failed: ${result.detail}`);
+        if (result.outcome === "refused") {
+          pendingRestartCompletion = { outcome: "planned_restart", reason: "gateway.stop_refused" };
+          await releaseLockIfHeld();
+          if (hostLifecycle === owner) {
+            await reacquireAndResumeInProcessRestart();
+          }
+        } else {
+          await forceExitAfterStabilityBundle("gateway.stop_native_unconfirmed");
+        }
+        return;
+      }
+      gatewayLog.info(
+        result.outcome === "accepted"
+          ? "Native service manager accepted Gateway stop"
+          : "Gateway host completed graceful stop",
+      );
+      completeBoot({ outcome: "clean_stop", reason: "stop (hosted Gateway stop)" });
+      await releaseLockIfHeld();
+      await exitProcessAfterLogFlush(0, undefined, "update", owner);
+    } catch (error) {
+      gatewayLog.error(`Scheduled Gateway stop failed: ${formatErrorMessage(error)}`);
+      if (hostLifecycle === owner) {
+        await forceExitAfterStabilityBundle("gateway.stop_native_unconfirmed", 1, {
+          step: "hosted-gateway-stop",
+          error,
+        });
+      }
+    } finally {
+      if (terminalHostedStop === owner) {
+        terminalHostedStop = undefined;
+      }
+    }
   };
 
   const runAcceptedRequest = (acceptedRequest: GatewayRunSignalRequest) => {
     const { action, restartIntent } = acceptedRequest;
-    const isRestart = action === "restart";
-    if (isRestart) {
+    let budget = startupBudget;
+    reportedBudget = budget;
+    const isRestart = action !== "stop";
+    const restartWithoutSupervisor = action === "restart" && restartDecision.mode === "disabled";
+    const acceptedStartupOperations = startupOperations;
+    if (acceptedRequest.action === "stop") {
+      // A queued restart still needs startup's close handle. Only an effective
+      // stop cancels preflight, including a stop overriding that queued restart.
+      acceptedStartupOperations.close();
+    }
+    if (action === "restart") {
       activeRestartRequest = acceptedRequest;
+    } else if (!isRestart) {
+      startGatewayRestartTrace("stop.signal.received", [["signal", acceptedRequest.signal]]);
     }
     let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
+    let shutdownDeadline: number | undefined;
+    let hardExitWatchdog: ShutdownHardExitWatchdog | null = null;
+    let lastDrainCounts = "not observed";
+    let shutdownFailure: ShutdownFailure | undefined;
     const armForceExitTimer = (forceExitMs: number) => {
-      if (forceExitTimer) {
+      if (forceExitTimer || (updateSuccessor.waitingForStop && !getManagedUpdateOwner())) {
         return;
       }
+      shutdownDeadline = performance.now() + forceExitMs;
       forceExitTimer = setTimeout(() => {
-        gatewayLog.error("shutdown timed out; exiting without full cleanup");
-        void (async () => {
-          try {
-            await writeStabilityBundle(
-              isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
-            );
-          } finally {
-            // Keep the in-process watchdog below the supervisor stop budget so this
-            // path wins before launchd/systemd escalates to a hard kill. Exit
-            // non-zero on any timeout so supervised installs restart cleanly.
-            completeForcedStop(
-              isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
-            );
-            exitProcess(1);
-          }
-        })();
+        const cleanExit = budget.nativeStopBudget && !restartWithoutSupervisor && !shutdownFailure;
+        gatewayLog.warn(
+          `shutdown deadline reached; abandoning unfinished cleanup and active work before ${action}; last observed: ${lastDrainCounts}; exiting ${cleanExit ? "cleanly" : "with incomplete cleanup"}`,
+        );
+        void forceExitAfterStabilityBundle(
+          isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
+          cleanExit ? 0 : 1,
+          shutdownFailure,
+        );
       }, forceExitMs);
+      if (params.ownsProcessLifecycle === true) {
+        hardExitWatchdog = armShutdownHardExitWatchdog({
+          delayMs: forceExitMs + HARD_EXIT_WATCHDOG_GRACE_MS,
+          onError: (error) => {
+            gatewayLog.warn(
+              `hard-exit watchdog failed; retaining main-thread shutdown timer: ${formatErrorMessage(error)}`,
+            );
+          },
+        });
+      }
     };
     const clearForceExitTimer = () => {
-      if (!forceExitTimer) {
-        return;
-      }
-      clearTimeout(forceExitTimer);
+      clearTimeout(forceExitTimer ?? undefined);
       forceExitTimer = null;
+      shutdownDeadline = undefined;
+      hardExitWatchdog?.cancel();
+      hardExitWatchdog = null;
     };
-    if (isRestart) {
+    if (action === "restart") {
       forceActiveRestartExit = () => {
         clearForceExitTimer();
-        armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
+        if (!getManagedUpdateOwner() && !updateSuccessor.waitingForStop) {
+          armForceExitTimer(budget.timeoutMs);
+        }
       };
     }
 
-    void (async () => {
-      const restartDrainTimeoutMs = isRestart
-        ? await resolveRestartDrainTimeoutMs(restartIntent)
-        : 0;
-      const restartDrainDeadlineAt =
-        isRestart && restartDrainTimeoutMs !== undefined
-          ? Date.now() + restartDrainTimeoutMs
-          : undefined;
-      if (!isRestart) {
-        armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
-      } else if (restartDrainTimeoutMs !== undefined) {
-        // Allow extra time for draining active turns on explicitly capped restarts.
-        armForceExitTimer(restartDrainTimeoutMs + SHUTDOWN_TIMEOUT_MS);
+    const completion = (async () => {
+      if (process.platform === "linux") {
+        if (budget.nativeStopBudget && !getManagedUpdateOwner()) {
+          armForceExitTimer(budget.timeoutMs);
+        }
+        budget = await resolveGatewayShutdownBudget(supervisorMode, gatewayLog, {
+          previous: startupBudget,
+          acceptedAtMs: acceptedRequest.acceptedAtMs,
+        });
+        if (forcedExitStarted) {
+          return;
+        }
+        reportedBudget = budget;
+        clearForceExitTimer();
       }
-
-      const formatRestartDrainBudget = () =>
-        restartDrainTimeoutMs === undefined
-          ? "without a timeout"
-          : `with timeout ${restartDrainTimeoutMs}ms`;
-      const armCloseForceExitTimerForIndefiniteRestart = () => {
-        if (isRestart && restartDrainTimeoutMs === undefined) {
-          armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
-        }
-      };
-      const resolveRestartCloseDrainTimeoutMs = () => {
-        if (!isRestart) {
-          return null;
-        }
-        if (restartDrainTimeoutMs === undefined) {
-          return Math.max(0, SHUTDOWN_TIMEOUT_MS - RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS);
-        }
-        return Math.max(0, (restartDrainDeadlineAt ?? Date.now()) - Date.now());
-      };
-
+      budget.log("shutdown");
+      let managedUpdateOwner: GatewayRestartIntent["successorOwner"];
+      let managedUpdateCancellation:
+        | false
+        | "restored-in-process"
+        | "restart-after-exit"
+        | undefined;
+      const drainBudget = resolveGatewayShutdownDrainBudget({
+        budget,
+        isRestart,
+        forceRestart: Boolean(restartIntent?.force || restartIntent?.drainBudgetExhausted),
+        restartWithoutSupervisor,
+        acceptedAtMs: acceptedRequest.acceptedAtMs,
+        requestedRestartDrainTimeoutMs: isRestart
+          ? eagerLifecycleRuntime.resolveGatewayRestartDrainTimeoutMs(restartIntent)
+          : 0,
+      });
+      // Managed helpers must reach native parking before either exit watchdog can arm.
+      if (drainBudget.forceExitMs !== undefined && (!isRestart || !getManagedUpdateOwner())) {
+        armForceExitTimer(drainBudget.forceExitMs);
+      }
+      let shutdownStep = "restart-failure-recovery";
       try {
-        // On restart, wait for in-flight agent turns to finish before
-        // tearing down the server so buffered messages are delivered.
-        if (isRestart) {
-          let activeTasksAtDrainStart = 0;
-          let activeRunsAtDrainStart = 0;
-          let drainTimedOut = false;
-          await measureGatewayRestartTrace(
-            "restart.drain",
-            async () => {
-              const {
-                abortEmbeddedAgentRun,
-                getRuntimeConfig,
-                getInspectableActiveTaskRestartBlockers,
-                getActiveEmbeddedRunCount,
-                getActiveTaskCount,
-                listActiveEmbeddedRunSessionIds,
-                listActiveEmbeddedRunSessionKeys,
-                markRestartAbortedMainSessions,
-                waitForActiveGatewayRootWork,
-                waitForActiveEmbeddedRuns,
-                waitForActiveTasks,
-              } = await loadGatewayLifecycleRuntimeModule();
-              const collectActiveRestartSessionKeys = () => {
-                return new Set<string>(listActiveEmbeddedRunSessionKeys());
-              };
-              const collectActiveRestartSessionIds = () => {
-                return new Set<string>(listActiveEmbeddedRunSessionIds());
-              };
-              let activeRestartSessionKeysAtDrainStart = new Set<string>();
-              let activeRestartSessionIdsAtDrainStart = new Set<string>();
-              let hasMarkedActiveMainSessionsForRestart = false;
-              const markActiveMainSessionsForRestart = async (reason: string) => {
-                // A second successful mark races recovery claims; failed or empty
-                // attempts must remain retryable at the forced-restart boundary.
-                if (hasMarkedActiveMainSessionsForRestart) {
-                  return;
-                }
-                const sessionKeys = new Set<string>([
-                  ...activeRestartSessionKeysAtDrainStart,
-                  ...collectActiveRestartSessionKeys(),
-                ]);
-                const sessionIds = new Set<string>([
-                  ...activeRestartSessionIdsAtDrainStart,
-                  ...collectActiveRestartSessionIds(),
-                ]);
-                if (sessionKeys.size === 0 && sessionIds.size === 0) {
-                  return;
-                }
-                try {
-                  const result = await markRestartAbortedMainSessions({
-                    cfg: getRuntimeConfig(),
-                    sessionKeys,
-                    sessionIds,
-                    reason,
-                  });
-                  if (result.marked > 0) {
-                    hasMarkedActiveMainSessionsForRestart = true;
-                  }
-                } catch (err) {
-                  gatewayLog.warn(
-                    `failed to mark interrupted main sessions for restart recovery: ${String(err)}`,
-                  );
-                }
-              };
-              const formatTaskBlockers = () => {
-                const blockers = getInspectableActiveTaskRestartBlockers();
-                if (blockers.length === 0) {
-                  return null;
-                }
-                const shown = blockers.slice(0, 8).map(formatActiveTaskRestartBlocker);
-                const omitted = blockers.length - shown.length;
-                return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
-              };
-              const createStillPendingDrainLogger = () =>
-                setInterval(() => {
-                  gatewayLog.warn(
-                    `still draining ${getActiveTaskCount()} active task(s) and ${getActiveEmbeddedRunCount()} active embedded run(s) before restart`,
-                  );
-                }, RESTART_DRAIN_STILL_PENDING_WARN_MS);
-
-              // Reject new enqueues immediately during the drain window so
-              // sessions get an explicit restart error instead of silent task loss.
-              markRestartDraining();
-              const rootDrainTimeoutMs =
-                restartDrainDeadlineAt === undefined
-                  ? undefined
-                  : Math.max(0, restartDrainDeadlineAt - Date.now());
-              const rootDrainPromise = restartIntent?.force
-                ? Promise.resolve({ drained: true, active: 0 })
-                : waitForActiveGatewayRootWork(rootDrainTimeoutMs);
-              const activeTasks = getActiveTaskCount();
-              const activeRuns = getActiveEmbeddedRunCount();
-              activeTasksAtDrainStart = activeTasks;
-              activeRunsAtDrainStart = activeRuns;
-              activeRestartSessionKeysAtDrainStart = collectActiveRestartSessionKeys();
-              activeRestartSessionIdsAtDrainStart = collectActiveRestartSessionIds();
-
-              // Best-effort abort for compacting runs so transcript settlement does
-              // not remain pending across restart boundaries.
-              if (activeRuns > 0) {
-                await markActiveMainSessionsForRestart("gateway restart drain");
-                abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" });
-              }
-
-              if (activeTasks > 0 || activeRuns > 0) {
-                const taskBlockers = formatTaskBlockers();
-                gatewayLog.info(
-                  `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart ${formatRestartDrainBudget()}`,
-                );
-                if (taskBlockers) {
-                  gatewayLog.warn(
-                    `restart blocked by active background task run(s): ${taskBlockers}`,
-                  );
-                }
-                if (restartIntent?.force) {
-                  gatewayLog.warn("forced restart requested; skipping active work drain");
-                  await markActiveMainSessionsForRestart(
-                    restartIntent.reason ?? "forced gateway restart",
-                  );
-                  abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" });
-                } else {
-                  const stillPendingDrainLogger = createStillPendingDrainLogger();
-                  let abortedAfterRunTimeout = false;
-                  let tasksDrain: { drained: boolean } = { drained: true };
-                  let runsDrain: { drained: boolean } = { drained: true };
-                  try {
-                    const tasksDrainPromise =
-                      activeTasks > 0
-                        ? waitForActiveTasks(restartDrainTimeoutMs)
-                        : Promise.resolve({ drained: true });
-                    runsDrain =
-                      activeRuns > 0
-                        ? await waitForActiveEmbeddedRuns(restartDrainTimeoutMs)
-                        : { drained: true };
-                    if (!runsDrain.drained && activeRuns > 0) {
-                      gatewayLog.warn(
-                        "active embedded run drain timeout reached; aborting active run(s) before restart",
-                      );
-                      abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" });
-                      abortedAfterRunTimeout = true;
-                    }
-                    tasksDrain = await tasksDrainPromise;
-                  } finally {
-                    clearInterval(stillPendingDrainLogger);
-                  }
-                  if (tasksDrain.drained && runsDrain.drained) {
-                    gatewayLog.info("all active work drained");
-                  } else {
-                    drainTimedOut = true;
-                    gatewayLog.warn("drain timeout reached; proceeding with restart");
-                    await markActiveMainSessionsForRestart("gateway restart drain timeout");
-                    // Final best-effort abort to avoid carrying active runs into the
-                    // next lifecycle when drain time budget is exhausted.
-                    if (!abortedAfterRunTimeout) {
-                      abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" });
-                    }
-                  }
-                }
-              }
-              const rootDrain = await rootDrainPromise;
-              if (!rootDrain.drained) {
-                drainTimedOut = true;
-                gatewayLog.warn(
-                  `gateway root transaction drain timeout reached with ${rootDrain.active} root(s) still active; proceeding with restart`,
-                );
-              }
-            },
-            () => [
-              ["activeTasks", activeTasksAtDrainStart],
-              ["activeRuns", activeRunsAtDrainStart],
-              ["timedOut", drainTimedOut],
-              ["force", restartIntent?.force === true],
-            ],
-          );
+        // A stop/restart cancels triage at admission and joins its existing cleanup
+        // before process exit can strand an external fixing agent.
+        if (failureWork) {
+          await failureWork.settled;
         }
+        shutdownStep = "active-work-drain";
+        await drainGatewayActiveWork({
+          request: acceptedRequest,
+          runtime: eagerLifecycleRuntime,
+          drainTimeoutMs: drainBudget.drainTimeoutMs,
+          restartDrainDeadlineAt: drainBudget.restartDrainDeadlineAt,
+          markDraining: markRestartDraining,
+          recordCounts: (counts) => {
+            lastDrainCounts = counts;
+          },
+          recordWarning: (warning) => {
+            restartDrainWarning = warning;
+          },
+          logger: gatewayLog,
+        });
 
-        if (!isRestart) {
-          // Keep reset-started finalizers alive without spending the shutdown
-          // reserve that server teardown and the supervisor watchdog need.
+        if (isRestart && activeRestartRequest?.restartIntent?.successorOwner) {
+          const owner = activeRestartRequest.restartIntent.successorOwner;
+          managedUpdateOwner = owner;
           try {
-            const rootDrain = await eagerLifecycleRuntime.waitForActiveGatewayRootWork(
-              Math.max(0, SHUTDOWN_TIMEOUT_MS - RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS),
-            );
-            if (!rootDrain.drained) {
-              gatewayLog.warn(
-                `gateway root transaction drain timeout reached with ${rootDrain.active} root(s) still active; proceeding with shutdown`,
-              );
+            if (
+              !sameManagedUpdateOwner(getManagedUpdateOwner(), owner) ||
+              !(await eagerLifecycleRuntime.requestManagedServiceUpdateHandoffPark(owner)) ||
+              !sameManagedUpdateOwner(getManagedUpdateOwner(), owner) ||
+              !eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner)
+            ) {
+              throw new Error("managed update helper lost exact ownership during service parking");
             }
           } catch (err) {
-            gatewayLog.warn(
-              `gateway root transaction drain failed; proceeding with shutdown: ${formatErrorMessage(err)}`,
+            clearForceExitTimer();
+            gatewayLog.error(
+              `managed update handoff could not park ${supervisorMode}: ${String(err)}`,
             );
+            await markRestartHandoffUnavailable();
+            managedUpdateCancellation = await updateSuccessor.cancelHandoff(
+              getManagedUpdateOwner,
+              owner,
+            );
+            if (!managedUpdateCancellation) {
+              return;
+            }
+            if (managedUpdateCancellation === "restart-after-exit") {
+              await releaseLockIfHeld();
+              await exitProcessAfterLogFlush(0, owner, "restore");
+              return;
+            }
           }
         }
 
-        armCloseForceExitTimerForIndefiniteRestart();
-        const closeDrainTimeoutMs = resolveRestartCloseDrainTimeoutMs();
-        await server?.close({
-          reason: isRestart ? "gateway restarting" : "gateway stopping",
-          restartExpectedMs: isRestart ? 1500 : null,
-          ...(closeDrainTimeoutMs !== null ? { drainTimeoutMs: closeDrainTimeoutMs } : {}),
-        });
-      } catch (err) {
-        gatewayLog.error(`shutdown error: ${String(err)}`);
-      } finally {
-        server = null;
-        if (isRestart) {
-          try {
-            await handleRestartAfterServerClose();
-          } finally {
-            clearForceExitTimer();
-            forceActiveRestartExit = null;
-          }
-        } else {
-          clearForceExitTimer();
-          await handleStopAfterServerClose();
+        if (isRestart && !forceExitTimer) {
+          armForceExitTimer(drainBudget.restartTimeoutMs());
         }
+        if (acceptedRequest.action === "stop") {
+          shutdownStep = "startup-operations";
+          await acceptedStartupOperations.drain();
+        }
+        shutdownStep = "gateway-server-close";
+        await runWithProcessCleanupBudget(
+          budget.cleanupBudget(shutdownDeadline, HARD_EXIT_WATCHDOG_GRACE_MS),
+          () =>
+            server?.close({
+              reason: isRestart ? "gateway restarting" : "gateway stopping",
+              restartExpectedMs: isRestart ? 1500 : null,
+              ...(isRestart ? { drainTimeoutMs: drainBudget.closeDrainTimeoutMs() } : {}),
+            }),
+        );
+      } catch (err) {
+        shutdownFailure = { step: shutdownStep, error: err };
+        gatewayLog.error(
+          `shutdown step failed (${shutdownStep.replaceAll("-", " ")}): ${formatErrorMessage(err)}`,
+        );
+      } finally {
+        const handoffClosed =
+          managedUpdateCancellation !== false && managedUpdateCancellation !== "restart-after-exit";
+        if (handoffClosed) {
+          server = null;
+        }
+        if (action === "restart") {
+          if (!acceptedRequest.hostedStop) {
+            await hostLifecycle?.retire();
+          }
+          if (shutdownFailure) {
+            if (installationReplacement && supervisorMode && !getManagedUpdateOwner()) {
+              writeStabilityBundle(
+                "gateway.restart_close_failed",
+                shutdownFailure.error,
+                shutdownFailure.step,
+              );
+              await handleRestartAfterServerClose(undefined, false, shutdownFailure);
+            } else {
+              await forceExitAfterStabilityBundle(
+                "gateway.restart_close_failed",
+                1,
+                shutdownFailure,
+              );
+            }
+          } else if (handoffClosed) {
+            await handleRestartAfterServerClose(
+              managedUpdateOwner,
+              managedUpdateCancellation === "restored-in-process",
+            );
+          }
+        } else if (acceptedRequest.hostedStop) {
+          await handleHostedStopAfterServerClose(acceptedRequest.hostedStop, shutdownFailure);
+        } else {
+          await hostLifecycle?.retire();
+          if (isRestart && shutdownFailure) {
+            await forceExitAfterStabilityBundle("gateway.restart_close_failed", 1, shutdownFailure);
+          } else {
+            if (shutdownFailure) {
+              writeStabilityBundle(
+                "gateway.stop_close_failed",
+                shutdownFailure.error,
+                shutdownFailure.step,
+              );
+            }
+            completeBoot(
+              isRestart
+                ? {
+                    outcome: "planned_restart",
+                    reason: formatShutdownReason(acceptedRequest),
+                  }
+                : {
+                    outcome: shutdownFailure ? "forced_stop" : "clean_stop",
+                    reason: shutdownFailure
+                      ? "gateway.stop_close_failed"
+                      : formatShutdownReason(acceptedRequest),
+                  },
+            );
+            await releaseLockIfHeld();
+            await exitProcessAfterLogFlush(shutdownFailure ? 1 : 0);
+          }
+        }
+        // Even process.exit() can throw from an exit listener. Keep both deadline
+        // owners armed until the complete handoff succeeds, not just server close.
+        clearForceExitTimer();
       }
-    })();
+    })().finally(() => {
+      // A settled restart cannot transfer its deadlines to a later request.
+      if (action === "restart") {
+        forceActiveRestartExit = null;
+      }
+    });
+    if (acceptedRequest.action === "stop") {
+      acceptedStartupOperations.stopCompletion = completion;
+    }
+    // Startup can still be awaiting unrelated work; observe shutdown immediately
+    // while retaining its rejecting promise for the cancelled startup's join.
+    void completion.catch((error: unknown) => {
+      gatewayLog.error(`gateway lifecycle completion failed: ${formatErrorMessage(error)}`);
+    });
   };
   const flushPendingStartupRequest = (opts: { allowMissingServer?: boolean } = {}) => {
     if (!pendingStartupRequest || !restartResolver) {
@@ -822,30 +972,50 @@ export async function runGatewayLoop(params: {
   };
   const request = (
     action: GatewayRunSignalAction,
-    signal: string,
+    signal: GatewayRunSignalRequest["signal"],
     restartReason?: string,
-    restartIntent?: RestartIntentOptions,
+    restartIntent?: GatewayRestartIntent,
+    hostedStop?: ReturnType<typeof createGatewayHostLifecycle>,
   ) => {
-    const acceptedRequest = { action, signal, restartReason, restartIntent };
+    if (
+      updateSuccessor.handleSignal(
+        { action, signal, restartIntent },
+        foregroundUpdateClosed || (pendingStartupRequest ?? activeRestartRequest)?.foregroundUpdate,
+        {
+          beforeWait: () => {
+            markRestartDraining(`stop (${signal})`);
+            clearPendingStartupForceExitTimer();
+            forceActiveRestartExit?.();
+          },
+          onPark: (successorOwner) =>
+            request("restart", signal, "update.run", { successorOwner }, hostedStop),
+          onSettled: () => request("stop", signal, undefined, undefined, hostedStop),
+        },
+      ) ||
+      foregroundUpdateClosed
+    ) {
+      return;
+    }
+    const acceptedRequest: GatewayRunSignalRequest = {
+      acceptedAtMs: performance.now(),
+      action,
+      signal,
+      restartReason,
+      restartIntent,
+      foregroundUpdate:
+        action === "restart" &&
+        restartIntent?.successorOwner !== undefined &&
+        eagerLifecycleRuntime.isForegroundUpdateHandoff(restartIntent.successorOwner),
+      hostedStop,
+    };
+    failureWork?.controller.abort();
     if (shuttingDown) {
       const currentRestartRequest = pendingStartupRequest ?? activeRestartRequest;
-      if (
-        action === "restart" &&
-        isUpdateProcessRestartReason(restartReason) &&
-        currentRestartRequest?.action === "restart" &&
-        !isUpdateProcessRestartReason(currentRestartRequest.restartReason)
-      ) {
-        const upgradedRequest = {
-          ...currentRestartRequest,
-          signal,
-          restartReason,
-          restartIntent: {
-            ...currentRestartRequest.restartIntent,
-            ...restartIntent,
-            force: true,
-            reason: restartReason,
-          },
-        };
+      const upgradedRequest = resolveGatewayRunSignalRequestUpgrade(
+        currentRestartRequest,
+        acceptedRequest,
+      );
+      if (upgradedRequest) {
         if (pendingStartupRequest) {
           pendingStartupRequest = upgradedRequest;
         } else {
@@ -866,17 +1036,31 @@ export async function runGatewayLoop(params: {
       gatewayLog.info(`received ${signal} during shutdown; ignoring`);
       return;
     }
-    const isRestart = action === "restart";
+    if (action === "stop" && signal === "SIGTERM") {
+      // Transfer the exact one-shot authority before host retirement and the
+      // one-way fence discard it; neither operation may precede consumption.
+      const handoff = consumeGatewaySuspendHandoff(hostLifecycle?.capability.externalRestart);
+      if (!handoff.ok) {
+        gatewayLog.warn(`external restart handoff refused: ${handoff.error}`);
+      } else if (handoff.value) {
+        acceptedRequest.action = "external-restart";
+        acceptedRequest.restartIntent = { force: true };
+      }
+    }
+    const isRestart = acceptedRequest.action !== "stop";
+    if (hostLifecycle !== hostedStop) {
+      void hostLifecycle?.retire();
+    }
     // Fence new roots synchronously for stops as well as restarts so admitted
     // detached finalizers can drain before the signal tears down the gateway.
-    markRestartDraining();
+    markRestartDraining(formatShutdownReason(acceptedRequest));
     shuttingDown = true;
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
     if (isRestart) {
       startGatewayRestartTrace("restart.signal.received", [
         ["signal", signal],
         ["reason", restartReason ?? signal],
-        ["force", restartIntent?.force === true],
+        ["force", acceptedRequest.restartIntent?.force === true],
         ["waitMs", restartIntent?.waitMs ?? "default"],
       ]);
     }
@@ -891,21 +1075,38 @@ export async function runGatewayLoop(params: {
     }
     if (!server || !restartResolver) {
       pendingStartupRequest = acceptedRequest;
-      armPendingStartupForceExitTimer();
+      armPendingStartupForceExitTimer(acceptedRequest);
       return;
     }
     runAcceptedRequest(acceptedRequest);
   };
 
   const onSigterm = () => {
+    observeSignal("SIGTERM");
     // Debug-level: every accepted signal is announced by request()'s
     // "received <signal>; ..." line, so an info pre-log would double up.
     gatewayLog.debug("signal SIGTERM received");
+    if (terminalHostedStop && terminalHostedStop === hostLifecycle) {
+      // Kernel cleanup is already joined. A native stop signal belongs to this
+      // terminal continuation, not to restart-intent storage in the closed kernel.
+      terminalHostedStop.notifyStopSignal();
+      return;
+    }
+    if (foregroundUpdateClosed) {
+      updateSuccessor.stop("SIGTERM");
+      return;
+    }
     void (async () => {
-      const { consumeGatewayRestartIntentPayloadSync } = await loadGatewayLifecycleRuntimeModule();
+      const { consumeGatewayRestartIntentPayloadSync } = await gatewayLifecycleRuntimeLoader.load();
+      if (foregroundUpdateClosed) {
+        updateSuccessor.stop("SIGTERM");
+        return;
+      }
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
+      // SIGTERM hands replacement to the caller (e.g. systemctl restart).
+      // Drain as a restart, then exit even when in-process respawn is configured.
       request(
-        restartIntent ? "restart" : "stop",
+        restartIntent ? "external-restart" : "stop",
         "SIGTERM",
         restartIntent?.reason,
         restartIntent ?? undefined,
@@ -916,78 +1117,105 @@ export async function runGatewayLoop(params: {
     });
   };
   const onSigint = () => {
+    observeSignal("SIGINT");
     gatewayLog.debug("signal SIGINT received");
     request("stop", "SIGINT");
   };
-  const onSigusr1 = () => {
-    gatewayLog.debug("signal SIGUSR1 received");
+  const onRestartSignal = () => {
+    observeSignal("SIGUSR2");
+    gatewayLog.debug("signal SIGUSR2 received");
+    if (foregroundUpdateClosed) {
+      return;
+    }
     void (async () => {
       const {
         abortPendingChannelReloads,
         consumeGatewayRestartIntentPayloadSync,
-        consumeGatewaySigusr1RestartIntent,
-        consumeGatewaySigusr1RestartAuthorization,
-        isGatewaySigusr1RestartExternallyAllowed,
-        markGatewaySigusr1RestartHandled,
-        peekGatewaySigusr1RestartReason,
-        scheduleGatewaySigusr1Restart,
-      } = await loadGatewayLifecycleRuntimeModule();
+        consumeGatewayRestartIntent,
+        consumeGatewayRestartAuthorization,
+        isGatewayRestartExternallyAllowed,
+        markGatewayRestartHandled,
+        peekGatewayRestartReason,
+        scheduleGatewayRestart,
+      } = await gatewayLifecycleRuntimeLoader.load();
+      if (foregroundUpdateClosed) {
+        return;
+      }
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
       if (restartIntent) {
         abortPendingChannelReloads();
-        const authorized = consumeGatewaySigusr1RestartAuthorization();
-        markRestartDraining();
-        if (authorized) {
-          markGatewaySigusr1RestartHandled();
+        const authorized = consumeGatewayRestartAuthorization();
+        const processLocalIntent = authorized ? consumeGatewayRestartIntent() : null;
+        if (processLocalIntent?.successorOwner) {
+          Object.assign(restartIntent, processLocalIntent);
         }
-        request("restart", "SIGUSR1", restartIntent.reason ?? "gateway.restart", restartIntent);
+        markRestartDraining(
+          formatShutdownReason({
+            action: "restart",
+            signal: "SIGUSR2",
+            restartReason: restartIntent.reason ?? "gateway.restart",
+          }),
+        );
+        if (authorized) {
+          markGatewayRestartHandled();
+        }
+        request("restart", "SIGUSR2", restartIntent.reason ?? "gateway.restart", restartIntent);
         return;
       }
-      const authorized = consumeGatewaySigusr1RestartAuthorization();
+      const authorized = consumeGatewayRestartAuthorization();
       if (!authorized) {
-        markGatewaySigusr1RestartHandled();
-        if (!isGatewaySigusr1RestartExternallyAllowed()) {
-          gatewayLog.warn("SIGUSR1 restart ignored (not authorized; commands.restart=false).");
+        markGatewayRestartHandled();
+        if (!isGatewayRestartExternallyAllowed()) {
+          gatewayLog.warn("SIGUSR2 restart ignored (not authorized; commands.restart=false).");
           gatewayLog.warn(
-            "An unauthorized SIGUSR1 restart signal was received and ignored. " +
+            "An unauthorized SIGUSR2 restart signal was received and ignored. " +
               "If a pending gateway restart needs to be applied, run `openclaw gateway restart` " +
               "or restart the gateway through your service manager.",
           );
           return;
         }
         if (shuttingDown) {
-          gatewayLog.info("received SIGUSR1 during shutdown; ignoring");
+          gatewayLog.info("received SIGUSR2 during shutdown; ignoring");
           return;
         }
-        // External SIGUSR1 requests should still reuse the in-process restart
+        // External SIGUSR2 requests should still reuse the in-process restart
         // scheduler so idle drain and restart coalescing stay consistent.
         abortPendingChannelReloads();
-        scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "SIGUSR1" });
+        scheduleGatewayRestart({ delayMs: 0, reason: "SIGUSR2" });
         return;
       }
       abortPendingChannelReloads();
-      const sigusr1RestartIntent = consumeGatewaySigusr1RestartIntent();
-      const restartReason = peekGatewaySigusr1RestartReason();
-      markRestartDraining();
-      markGatewaySigusr1RestartHandled();
+      const signalRestartIntent = consumeGatewayRestartIntent();
+      const restartReason = peekGatewayRestartReason();
+      markRestartDraining(
+        formatShutdownReason({
+          action: "restart",
+          signal: "SIGUSR2",
+          restartReason: signalRestartIntent?.reason ?? restartReason,
+        }),
+      );
+      markGatewayRestartHandled();
       request(
         "restart",
-        "SIGUSR1",
-        sigusr1RestartIntent?.reason ?? restartReason,
-        sigusr1RestartIntent ?? undefined,
+        "SIGUSR2",
+        signalRestartIntent?.reason ?? restartReason,
+        signalRestartIntent ?? undefined,
       );
     })().catch((err: unknown) => {
       // Defense in depth: if anything in the listener body rejects, the
-      // SIGUSR1 emit has already advanced emittedRestartToken but no one
-      // called markGatewaySigusr1RestartHandled. Without unsticking the
-      // token here, every subsequent scheduleGatewaySigusr1Restart() would
+      // SIGUSR2 emit has already advanced emittedRestartToken but no one
+      // called markGatewayRestartHandled. Without unsticking the
+      // token here, every subsequent scheduleGatewayRestart() would
       // silently coalesce into the dead in-flight signal and the gateway
       // would never restart again until manually kickstarted.
-      gatewayLog.error(`SIGUSR1 handler failed: ${formatErrorMessage(err)}`);
+      gatewayLog.error(`SIGUSR2 handler failed: ${formatErrorMessage(err)}`);
       try {
-        eagerLifecycleRuntime.markGatewaySigusr1RestartHandled();
+        eagerLifecycleRuntime.markGatewayRestartHandled();
       } catch {
         // Best-effort: the eager reference itself is the recovery path.
+      }
+      if (updateSuccessor.stopRequested) {
+        return;
       }
       try {
         eagerLifecycleRuntime.rollbackGatewayRestartSignalAdmission();
@@ -1002,97 +1230,130 @@ export async function runGatewayLoop(params: {
 
   process.on("SIGTERM", onSigterm);
   process.on("SIGINT", onSigint);
-  process.on("SIGUSR1", onSigusr1);
+  // SIGUSR1 belongs to Node's on-demand inspector; never register a listener for it.
+  process.on("SIGUSR2", onRestartSignal);
+  const releaseInstallationObserver = registerGatewayInstallationReplacementHandler((fact) => {
+    installationReplacement = fact;
+    gatewayLog.warn(fact.message);
+    if (!supervisorMode) {
+      gatewayLog.error(
+        `The foreground Gateway must stop after its installation was replaced. Restart it with: ${formatCliCommand("openclaw gateway run")}`,
+      );
+    }
+    request("restart", "SIGUSR2", fact.reason);
+  });
 
   try {
-    const onIteration = createRestartIterationHook(async () => {
-      // After an in-process restart (SIGUSR1), reset command-queue lane state.
-      // Interrupted tasks from the previous lifecycle may have left `active`
-      // counts elevated (their finally blocks never ran), permanently blocking
-      // new work from draining. The same boundary also discards stale restart
-      // deferral timers and reloads the task registry from durable state so
-      // cancelled/completed work is not kept alive by old in-memory maps.
-      const {
-        abortActiveCronTaskRuns,
-        advanceCronActiveJobGeneration,
-        reloadTaskRuntimeStateFromStore,
-        retireActiveCronTaskRunTracking,
-        resetCronActiveJobs,
-        resetAllLanes,
-        resetGatewayRestartStateForInProcessRestart,
-        resetGatewaySuspendCoordinatorForLifecycleRestart,
-        rotateAgentEventLifecycleGeneration,
-        waitForActiveCronJobs,
-        waitForActiveCronTaskRuns,
-      } = await loadGatewayLifecycleRuntimeModule();
-      // Rotate ownership before reset pumps preserved queue entries.
-      rotateAgentEventLifecycleGeneration();
-      advanceCronActiveJobGeneration();
-      abortActiveCronTaskRuns("Gateway restarting.");
-      const cronTaskDrain = await waitForActiveCronTaskRuns(1_000);
-      const cronDrain = await waitForActiveCronJobs(1_000);
-      if (!cronTaskDrain.drained || !cronDrain.drained) {
-        gatewayLog.warn(
-          `cron run drain timed out during restart lifecycle reset after retiring old cron admission; ${cronTaskDrain.active} task handle(s) and ${cronDrain.active} active marker(s) remain after aborting old cron runs`,
-        );
-      }
-      retireActiveCronTaskRunTracking();
-      resetCronActiveJobs();
-      // Resume the retired scheduler before resetAllLanes invalidates its
-      // suspension admission callback and discards the coordinator entry.
-      resetGatewaySuspendCoordinatorForLifecycleRestart();
-      resetAllLanes();
-      clearRuntimeConfigSnapshot();
-      resetGatewayRestartStateForInProcessRestart();
-      // Rent: a failed startup has no server close handle, and restart hooks can
-      // recreate shared slots after close. Reset the same lifecycle before boot.
-      try {
-        await drainGlobalSingletonLifecycleState("restart");
-      } catch (error) {
-        gatewayLog.warn(`failed to reset ambient runtime state: ${formatErrorMessage(error)}`);
-      }
-      reloadTaskRuntimeStateFromStore();
-      markGatewayRestartTrace("restart.next-start");
-    });
-
-    // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).
+    // Keep process alive; SIGUSR2 triggers an in-process restart (no supervisor required).
     // SIGTERM/SIGINT still exit after a graceful shutdown.
-    let isFirstStart = true;
+    let isFirstIteration = true;
     for (;;) {
-      // The restart hook reopens admission before reloading durable state. Clear
-      // its local mirror first so a failed reload cannot skip the next drain.
-      restartDrainingMarked = false;
+      const iterationStartupOperations = isFirstIteration
+        ? startupOperations
+        : createGatewayStartupOperations();
+      startupOperations = iterationStartupOperations;
+      await hostLifecycle?.retire();
+      const iterationHost = createGatewayHostLifecycle({
+        processOwner: {
+          ownsProcessLifecycle: params.ownsProcessLifecycle === true,
+          supervisor: supervisorMode,
+        },
+        isCurrent: () => hostLifecycle === iterationHost,
+        isServing: () => server !== null && restartResolver !== null && !shuttingDown,
+        getShutdownBudget: () => (shuttingDown ? reportedBudget : startupBudget),
+        acceptStop: () =>
+          runOutsideGatewayRootWorkAdmission(() =>
+            request("stop", "hosted Gateway stop", undefined, undefined, iterationHost),
+          ),
+      });
+      hostLifecycle = iterationHost;
       let startupFailedBeforeServerHandle = false;
+      const isRestartIteration = !isFirstIteration;
+      isFirstIteration = false;
       try {
-        await onIteration();
+        if (isRestartIteration) {
+          await prepareGatewayRestartIteration(
+            await gatewayLifecycleRuntimeLoader.load(),
+            gatewayLog,
+            () => {
+              restartDrainingMarked = false;
+            },
+          );
+        }
+        if (installationReplacement) {
+          await exitReplacedInstallation(installationReplacement);
+          return;
+        }
+        if (pendingRestartCompletion) {
+          completeBoot(pendingRestartCompletion);
+        }
         startupStartedAt = Date.now();
         await params.beginBoot?.(startupStartedAt);
-        server = await params.start({
+        if (installationReplacement) {
+          await exitReplacedInstallation(installationReplacement);
+          return;
+        }
+        const startedServer = await params.start({
+          ...(isRestartIteration ? {} : { processStartedAt: performance.timeOrigin }),
           startupStartedAt,
           requestHotReloadRecovery: eagerLifecycleRuntime.requestGatewayRestartWithSignalAdmission,
+          hostLifecycle: iterationHost.capability,
+          startupOperation: iterationStartupOperations.run,
         });
+        iterationStartupOperations.close();
+        server = startedServer;
         startupFailedWithoutServerHandle = false;
-        isFirstStart = false;
+        await new Promise<void>((resolve, reject) => {
+          restartResolver = () => {
+            restartResolver = null;
+            resolve();
+          };
+          void startedServer.startupSettled.then(undefined, reject);
+          flushPendingStartupRequest();
+        });
       } catch (err) {
-        const mediaMigrationRequired = findOpenClawAgentDatabaseMediaMigrationRequiredError(err);
-        params.completeBoot?.({
+        iterationStartupOperations.close();
+        if (
+          iterationStartupOperations.stopCompletion &&
+          (iterationStartupOperations.cancelledWith(err) ||
+            iterationStartupOperations.failedWith(err))
+        ) {
+          await iterationStartupOperations.stopCompletion;
+          if (iterationStartupOperations.cancelledWith(err)) {
+            return;
+          }
+          throw err;
+        }
+        await iterationHost.retire();
+        const failedServer = server;
+        server = null;
+        const maintenanceRequired = findStartupMaintenanceRequiredError(err);
+        completeBoot({
           outcome: "startup_failed",
           reason: truncateUtf16Safe(
             formatErrorMessage(err),
             GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
           ),
-          ...(mediaMigrationRequired
-            ? { startupReason: GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON }
-            : {}),
+          ...(maintenanceRequired ? { startupReason: maintenanceRequired.code } : {}),
         });
-        // On initial startup, let the error propagate so the outer handler
-        // can report "Gateway failed to start" and exit non-zero. Only
-        // swallow errors on subsequent in-process restarts to keep the
-        // process alive (a crash would lose macOS TCC permissions). (#35862)
-        if (isFirstStart) {
+        try {
+          await failedServer?.close({ reason: "gateway startup failed" });
+        } catch (closeError) {
+          throw new GatewayStartupCleanupError(err, closeError);
+        }
+        if (installationReplacement) {
+          await exitReplacedInstallation(installationReplacement);
+          return;
+        }
+        // Keep TCC recovery after clean restart failures (#35862), but never reuse a
+        // generation whose startup cleanup failed. The outer CLI exits nonzero.
+        if (
+          maintenanceRequired ||
+          !isRestartIteration ||
+          err instanceof GatewayStartupCleanupError
+        ) {
           throw err;
         }
-        server = null;
         startupFailedWithoutServerHandle = true;
         startupFailedBeforeServerHandle = true;
         if (!pendingStartupRequest) {
@@ -1104,21 +1365,37 @@ export async function runGatewayLoop(params: {
         }
         const errMsg = formatErrorMessage(err);
         const errStack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
-        await writeStabilityBundle("gateway.restart_startup_failed", err);
+        writeStabilityBundle("gateway.restart_startup_failed", err);
         gatewayLog.error(
           `gateway startup failed: ${errMsg}. ` +
             `Process will stay alive; fix the issue and restart.${errStack}`,
         );
+        const onRestartStartupFailure = params.onRestartStartupFailure;
+        if (!shuttingDown && onRestartStartupFailure) {
+          const controller = new AbortController();
+          failureWork = {
+            controller,
+            settled: Promise.resolve().then(() => onRestartStartupFailure(err, controller.signal)),
+          };
+          try {
+            await failureWork.settled;
+          } finally {
+            failureWork = undefined;
+          }
+        }
       }
-      await new Promise<void>((resolve) => {
-        restartResolver = () => {
-          restartResolver = null;
-          resolve();
-        };
-        flushPendingStartupRequest({ allowMissingServer: startupFailedBeforeServerHandle });
-      });
+      if (startupFailedBeforeServerHandle) {
+        await new Promise<void>((resolve) => {
+          restartResolver = () => {
+            restartResolver = null;
+            resolve();
+          };
+          flushPendingStartupRequest({ allowMissingServer: true });
+        });
+      }
     }
   } finally {
+    await hostLifecycle?.retire();
     await releaseLockIfHeld();
     cleanupSignals();
   }

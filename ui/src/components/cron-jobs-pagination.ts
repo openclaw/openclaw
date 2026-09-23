@@ -1,6 +1,9 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import "../styles/cron-jobs-pagination.css";
+import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
+
+registerCronEnglish();
 
 export function renderCronJobsPagination(params: {
   jobsShown: number;
@@ -18,17 +21,19 @@ export function renderCronJobsPagination(params: {
           total: String(Math.max(params.jobsTotal, params.jobsShown)),
         })}
       </span>
-      ${params.hasMore
-        ? html`
-            <button
-              class="btn btn--sm cron-load-more"
-              ?disabled=${params.loading || params.loadingMore}
-              @click=${params.onLoadMore}
-            >
-              ${params.loadingMore ? t("cron.list.loading") : t("cron.list.loadMore")}
-            </button>
-          `
-        : nothing}
+      ${
+        params.hasMore
+          ? html`
+              <button
+                class="btn btn--sm cron-load-more"
+                ?disabled=${params.loading || params.loadingMore}
+                @click=${params.onLoadMore}
+              >
+                ${params.loadingMore ? t("cron.list.loading") : t("cron.list.loadMore")}
+              </button>
+            `
+          : nothing
+      }
     </div>
   `;
 }

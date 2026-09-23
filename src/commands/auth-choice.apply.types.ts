@@ -12,6 +12,7 @@ export type ApplyAuthChoiceParams = {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   agentDir?: string;
+  workspaceDir?: string;
   setDefaultModel: boolean;
   preserveExistingDefaultModel?: boolean;
   agentId?: string;
@@ -21,6 +22,8 @@ export type ApplyAuthChoiceParams = {
 export type ApplyAuthChoiceResult = {
   config: OpenClawConfig;
   agentModelOverride?: string;
+  utilityModelOverride?: string;
+  modelTarget?: "utility";
   retrySelection?: boolean;
 };
 

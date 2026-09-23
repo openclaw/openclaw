@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { backupFleetCell, restoreFleetCell } from "./backup.runtime.js";
 import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
 import type { FleetContainerInspectResult, FleetContainerRuntime } from "./containers.runtime.js";
@@ -14,6 +16,7 @@ let root: string;
 let record: FleetCellRecord;
 
 const tempRoot = createSuiteTempRootTracker({ prefix: "openclaw-fleet-backup-test-" });
+let nativeModeEnv: ReturnType<typeof captureEnv>;
 
 function inspection(running = false): Extract<FleetContainerInspectResult, { kind: "ok" }> {
   return {
@@ -47,7 +50,7 @@ function inspection(running = false): Extract<FleetContainerInspectResult, { kin
 function containerMock(current: FleetContainerInspectResult = inspection()) {
   return {
     assertLocal: vi.fn(async () => undefined),
-    inspect: vi.fn(async () => current),
+    inspect: vi.fn<FleetContainerRuntime["inspect"]>(async () => current),
     inspectNetwork: vi.fn(async () => ({
       kind: "ok" as const,
       labels: {
@@ -64,10 +67,17 @@ function containerMock(current: FleetContainerInspectResult = inspection()) {
     removeNetwork: vi.fn(async () => undefined),
     logs: vi.fn(async () => undefined),
     start: vi.fn(async () => undefined),
-    stop: vi.fn(async () => undefined),
+    stop: vi.fn<FleetContainerRuntime["stop"]>(async () => undefined),
     restart: vi.fn(async () => undefined),
     remove: vi.fn(async () => undefined),
   } satisfies FleetContainerRuntime;
+}
+
+function stopInspection(current: ReturnType<typeof inspection>) {
+  return async () => {
+    current.running = false;
+    current.state = "exited";
+  };
 }
 
 async function createArchive(
@@ -97,6 +107,7 @@ async function createArchive(
 }
 
 beforeEach(async () => {
+  nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
   root = await tempRoot.setup();
   record = {
     tenantId: "acme",
@@ -114,25 +125,96 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  __setFsSafeTestHooksForTest(undefined);
+  nativeModeEnv.restore();
   vi.restoreAllMocks();
   await tempRoot.cleanup();
 });
 
 describe("fleet backup runtime", () => {
+  function backupParams(out: string) {
+    return {
+      record,
+      stateDir: root,
+      containers: containerMock(),
+      now: () => 0,
+      checkpoint: async () => {},
+      out,
+    };
+  }
+
+  it("settles one asynchronous lease probe at a time before returning a regular archive", async () => {
+    let nowMs = 0;
+    let active = 0;
+    let peak = 0;
+    let completed = 0;
+    const result = await backupFleetCell({
+      ...backupParams(path.join(root, "regular.tgz")),
+      now: () => (nowMs += 30_000),
+      checkpoint: async () => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        active -= 1;
+        completed += 1;
+      },
+    });
+
+    expect(peak).toBe(1);
+    expect(active).toBe(0);
+    expect(completed).toBeGreaterThanOrEqual(2);
+    expect(result.fileCount).toBe(3);
+    const entries: string[] = [];
+    await tar.t({ file: result.archivePath, onentry: (entry) => entries.push(entry.path) });
+    expect(entries).toEqual(
+      expect.arrayContaining(["manifest.json", "data/state.txt", "auth/secret.txt"]),
+    );
+  });
+
+  function forceJavaScriptCopyFallback() {
+    // These fixtures exercise publication without native or filesystem hard-link support.
+    setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
+    vi.spyOn(fs, "link").mockRejectedValue(
+      Object.assign(new Error("unsupported"), { code: "ENOTSUP" }),
+    );
+  }
+
+  function interruptCopy(archivePath: string, mutate: (targetPath: string) => Promise<void>) {
+    forceJavaScriptCopyFallback();
+    const error = Object.assign(new Error("archive copy interrupted"), { code: "EIO" });
+    __setFsSafeTestHooksForTest({
+      afterPublishTargetCreated: async (method, targetPath) => {
+        if (method === "exclusive-copy" && targetPath === archivePath) {
+          await mutate(targetPath);
+          throw error;
+        }
+      },
+    });
+  }
+
   it("writes a private archive with manifest, data, and auth while skipping symlinks", async () => {
     const outside = path.join(root, "outside-secret");
     await fs.writeFile(outside, "must-not-archive");
     await fs.symlink(outside, path.join(record.dataDir, "outside-link"));
     const containers = containerMock();
+    const publicationMethods: string[] = [];
+    __setFsSafeTestHooksForTest({
+      afterPublishTargetCreated: (method) => {
+        publicationMethods.push(method);
+      },
+    });
     const result = await backupFleetCell({
       record,
       stateDir: root,
       containers,
       now: () => 0,
-      checkpoint: () => {},
+      checkpoint: async () => {},
       out: path.join(root, "backup.tgz"),
     });
     expect((await fs.stat(result.archivePath)).mode & 0o777).toBe(0o600);
+    expect(publicationMethods).toEqual(["hardlink"]);
     expect(result.skippedSymlinks).toBe(1);
     const entries: string[] = [];
     const contents: string[] = [];
@@ -154,6 +236,103 @@ describe("fleet backup runtime", () => {
     expect(leftovers).toEqual([]);
   });
 
+  it("publishes a complete archive through the JavaScript copy fallback", async () => {
+    const archivePath = path.join(root, "copy.tgz");
+    forceJavaScriptCopyFallback();
+    const methods: string[] = [];
+    __setFsSafeTestHooksForTest({
+      afterPublishTargetCreated: (method) => {
+        methods.push(method);
+      },
+    });
+
+    expect((await backupFleetCell(backupParams(archivePath))).archivePath).toBe(archivePath);
+    expect(methods).toEqual(["exclusive-copy"]);
+    await expect(tar.t({ file: archivePath })).resolves.toBeUndefined();
+  });
+
+  it("removes an interrupted owned copy and allows a backup retry", async () => {
+    const archivePath = path.join(root, "interrupted.tgz");
+    interruptCopy(archivePath, (targetPath) => fs.writeFile(targetPath, "partial archive"));
+
+    await expect(backupFleetCell(backupParams(archivePath))).rejects.toThrow(
+      /archive copy interrupted/iu,
+    );
+    await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+    __setFsSafeTestHooksForTest(undefined);
+    await expect(backupFleetCell(backupParams(archivePath))).resolves.toMatchObject({
+      archivePath,
+    });
+  });
+
+  it("reports the original failure when an interrupted archive cannot be removed", async () => {
+    const archivePath = path.join(root, "cleanup-unknown.tgz");
+    interruptCopy(archivePath, (targetPath) => fs.writeFile(targetPath, "partial archive"));
+    const remove = fs.rm.bind(fs);
+    vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (path.resolve(String(target)) === archivePath) {
+        throw Object.assign(new Error("archive cleanup busy"), { code: "EBUSY" });
+      }
+      return await remove(target, options);
+    });
+
+    const error = await backupFleetCell(backupParams(archivePath)).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toMatchObject({
+      message: expect.stringMatching(
+        /archive copy interrupted.*partial archive may remain.*inspect.*retry/iu,
+      ),
+      cause: expect.any(Error),
+    });
+    expect((error as Error).message).toContain(archivePath);
+    await expect(fs.readFile(archivePath, "utf8")).resolves.toBe("partial archive");
+  });
+
+  it("preserves a foreign archive that replaces the interrupted publication", async () => {
+    const archivePath = path.join(root, "raced.tgz");
+    interruptCopy(archivePath, async (targetPath) => {
+      await fs.rename(targetPath, `${targetPath}.displaced`);
+      await fs.writeFile(targetPath, "foreign archive");
+    });
+
+    await expect(backupFleetCell(backupParams(archivePath))).rejects.toThrow(
+      /archive copy interrupted/iu,
+    );
+    await expect(fs.readFile(archivePath, "utf8")).resolves.toBe("foreign archive");
+  });
+
+  it("fails and removes its archive when publication directory synchronization fails", async () => {
+    const archivePath = path.join(root, "sync-failure.tgz");
+    __setFsSafeTestHooksForTest({
+      beforePublishDirectorySync: async (_method, targetPath) => {
+        if (targetPath === archivePath) {
+          throw Object.assign(new Error("archive directory sync failed"), { code: "EIO" });
+        }
+      },
+    });
+
+    await expect(backupFleetCell(backupParams(archivePath))).rejects.toThrow(
+      /directory sync failed/iu,
+    );
+    await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects and removes a copy that fails publication content verification", async () => {
+    const archivePath = path.join(root, "integrity-failure.tgz");
+    forceJavaScriptCopyFallback();
+    __setFsSafeTestHooksForTest({
+      afterPublishTargetCreated: async (method, targetPath) => {
+        if (method === "exclusive-copy" && targetPath === archivePath) {
+          await fs.writeFile(targetPath, Buffer.alloc(64 * 1024, 1));
+        }
+      },
+    });
+
+    await expect(backupFleetCell(backupParams(archivePath))).rejects.toThrow(/content fencing/iu);
+    await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("refuses unsafe or unavailable backup inputs", async () => {
     await expect(
       backupFleetCell({
@@ -161,7 +340,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers: containerMock(inspection(true)),
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
       }),
     ).rejects.toThrow(/stop it first/iu);
     await fs.rm(cellAuthSecretDir(root, "acme"), { recursive: true });
@@ -171,7 +350,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers: containerMock(),
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
       }),
     ).rejects.toThrow(/no auth-secret directory/iu);
     await fs.rm(record.dataDir, { recursive: true });
@@ -181,7 +360,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers: containerMock(),
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
       }),
     ).rejects.toThrow(/no cell data/iu);
   });
@@ -194,7 +373,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers,
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
         maxBytes: 1,
         out: path.join(root, "capped.tgz"),
       }),
@@ -207,17 +386,18 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers,
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
         out: existing,
       }),
     ).rejects.toThrow(/overwrite/iu);
+    await expect(fs.readFile(existing, "utf8")).resolves.toBe("exists");
     await expect(
       backupFleetCell({
         record,
         stateDir: root,
         containers,
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
         out: path.join(record.dataDir, "bad.tgz"),
       }),
     ).rejects.toThrow(/inside/iu);
@@ -231,7 +411,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers: containerMock(),
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
         out: path.join(root, "unrestorable.tgz"),
       }),
     ).rejects.toThrow(/restore path rules would reject/iu);
@@ -247,7 +427,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers: containerMock(),
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
         maxEntries: 2,
         out: path.join(root, "entry-capped.tgz"),
       }),
@@ -267,7 +447,7 @@ describe("fleet backup runtime", () => {
         containers: containerMock(),
         // Each filter probe advances well past the lease-probe interval.
         now: () => (clock += 60_000),
-        checkpoint: () => {
+        checkpoint: async () => {
           throw new Error("Fleet operation lease was lost for acme.");
         },
         out: archivePath,
@@ -286,7 +466,7 @@ describe("fleet restore runtime", () => {
       fetchImpl: vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
       now: () => 0,
       sleep: async () => {},
-      checkpoint: () => {},
+      checkpoint: async () => {},
       generateToken: () => "new-token",
       generateAttemptId: () => NEXT_ATTEMPT,
       hostIdentity: undefined,
@@ -441,9 +621,31 @@ describe("fleet restore runtime", () => {
     );
   });
 
-  it("swaps state, repins config, and rotates the token", async () => {
+  it.each([
+    {
+      name: "generated previous default",
+      cache: "/home/node/.cache",
+      keys: [],
+      expectedCache: "/home/node/.openclaw/cache",
+    },
+    {
+      name: "explicit matching default",
+      cache: "/home/node/.openclaw/cache",
+      keys: ["XDG_CACHE_HOME"],
+      expectedCache: "/home/node/.openclaw/cache",
+    },
+    {
+      name: "explicit previous default",
+      cache: "/home/node/.cache",
+      keys: ["XDG_CACHE_HOME"],
+      expectedCache: "/home/node/.cache",
+    },
+  ])("restores state and token with $name", async ({ cache, keys, expectedCache }) => {
     const archive = await createArchive();
-    const containers = containerMock();
+    const current = inspection();
+    current.labels["openclaw.fleet.env-keys"] = keys.join(",");
+    current.environment.XDG_CACHE_HOME = cache;
+    const containers = containerMock(current);
     const result = await restoreFleetCell(restoreParams(containers, archive));
     await expect(fs.readFile(path.join(record.dataDir, "restored.txt"), "utf8")).resolves.toBe(
       "new-data",
@@ -456,6 +658,8 @@ describe("fleet restore runtime", () => {
     ) as { gateway?: { controlUi?: { allowedOrigins?: string[] } } };
     expect(config.gateway?.controlUi?.allowedOrigins).toContain("http://127.0.0.1:19100");
     expect(containers.run.mock.calls[0]?.[0].environment.OPENCLAW_GATEWAY_TOKEN).toBe("new-token");
+    expect(containers.run.mock.calls[0]?.[0].environment.XDG_CACHE_HOME).toBe(expectedCache);
+    expect(containers.run.mock.calls[0]?.[0].userEnvironmentKeys).toEqual(keys);
     // The disk limit must survive restore via the fleet label even on Podman,
     // whose inspect schema has no HostConfig.StorageOpt.
     expect(containers.run.mock.calls[0]?.[0].diskSize).toBe("10g");
@@ -467,19 +671,50 @@ describe("fleet restore runtime", () => {
     await expect(fs.readdir(path.join(root, "fleet", "restore-tmp"))).resolves.toEqual([]);
   });
 
+  it.each([true, false])(
+    "removes the inspected generation, not a replacement that took the name (wasRunning: %s)",
+    async (wasRunning) => {
+      const archive = await createArchive();
+      const running = inspection(wasRunning);
+      const containers = containerMock(running);
+      // Restore's first lookup finds the real cell. Immediately afterwards a
+      // replacement claims the cell name; it carries valid fleet ownership
+      // labels and would pass the guard, so only pinning the inspected identity
+      // keeps stop and remove on the generation restore decided to displace.
+      const replacement = {
+        ...inspection(true),
+        containerId: "replacement-id",
+        labels: { ...inspection(true).labels, "openclaw.fleet.attempt": NEXT_ATTEMPT },
+      };
+      containers.inspect.mockImplementationOnce(async () => {
+        containers.inspect.mockImplementation(async (_runtime, reference) =>
+          reference === "container-id" ? running : replacement,
+        );
+        return running;
+      });
+      containers.stop.mockImplementation(stopInspection(running));
+
+      await restoreFleetCell({ ...restoreParams(containers, archive), force: true });
+
+      if (wasRunning) {
+        expect(containers.stop).toHaveBeenCalledWith("docker", "container-id");
+        expect(containers.stop).not.toHaveBeenCalledWith("docker", "replacement-id");
+      }
+      expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", false);
+      expect(containers.remove).not.toHaveBeenCalledWith("docker", "replacement-id", false);
+    },
+  );
+
   it("restarts a force-stopped cell when restore fails before removal", async () => {
     const archive = await createArchive();
     const running = inspection(true);
     const containers = containerMock(running);
-    containers.stop.mockImplementation(async () => {
-      running.running = false;
-      running.state = "exited";
-    });
+    containers.stop.mockImplementation(stopInspection(running));
     containers.remove.mockRejectedValue(new Error("transient removal failure"));
     await expect(
       restoreFleetCell({ ...restoreParams(containers, archive), force: true }),
     ).rejects.toThrow(/transient removal failure/iu);
-    expect(containers.start).toHaveBeenCalledWith("docker", "openclaw-cell-acme");
+    expect(containers.start).toHaveBeenCalledWith("docker", "container-id");
     await expect(fs.readFile(path.join(record.dataDir, "state.txt"), "utf8")).resolves.toBe(
       "state",
     );
@@ -489,10 +724,7 @@ describe("fleet restore runtime", () => {
     const archive = await createArchive();
     const running = inspection(true);
     const containers = containerMock(running);
-    containers.stop.mockImplementation(async () => {
-      running.running = false;
-      running.state = "exited";
-    });
+    containers.stop.mockImplementation(stopInspection(running));
     containers.run.mockImplementation(async () => {
       running.running = true;
       running.state = "running";

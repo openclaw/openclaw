@@ -1,27 +1,26 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-// Control UI view renders usage render details screen content.
 import { html, svg, nothing } from "lit";
-import {
-  renderPanelRefreshStatus,
-  type PanelRefreshStatus,
-} from "../../components/panel-refresh-status.ts";
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { formatDurationCompact } from "../../lib/format.ts";
 import "../../components/tooltip.ts";
-import { formatDateTimeMs, formatMs, formatTimeMs } from "../../lib/format.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { formatDurationCompact } from "../../lib/format-duration.ts";
+import { createMsFormatter, formatMs, formatTimeMs } from "../../lib/format.ts";
 import { parseToolSummary } from "./helpers.ts";
-import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
+import { charsToTokens, formatIsoDate, formatUsageCost, formatUsageTokens } from "./metrics.ts";
+import { renderUsageRefreshStatus } from "./page-shell.ts";
 import type {
   SessionLogEntry,
   SessionLogRole,
   TimeSeriesPoint,
+  UsageContextDetail,
   UsageSessionEntry,
 } from "./types.ts";
-import { renderInsightList, renderUsageToggle, USAGE_TOKEN_CATEGORIES } from "./view-overview.ts";
+import { USAGE_TOKEN_CATEGORIES } from "./view-chart.ts";
+import { renderInsightList } from "./view-overview.ts";
 
-// Chart constants
 const CHART_BAR_WIDTH_RATIO = 0.75; // Fraction of slot used for bar (rest is gap)
 const CHART_MAX_BAR_WIDTH = 8; // Max bar width in SVG viewBox units
 const CHART_SELECTION_OPACITY = 0.06; // Opacity of range selection overlay
@@ -46,54 +45,19 @@ function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 
   return timeZone === "utc" ? Date.UTC(year, month, day) : new Date(year, month, day).getTime();
 }
 
-export function usageDateKey(timestamp: number, timeZone: "local" | "utc"): string {
-  const value = new Date(timestamp);
-  const year = timeZone === "utc" ? value.getUTCFullYear() : value.getFullYear();
-  const month = (timeZone === "utc" ? value.getUTCMonth() : value.getMonth()) + 1;
-  const day = timeZone === "utc" ? value.getUTCDate() : value.getDate();
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-}
-
-/** Filter session logs by a timestamp range. */
-function filterLogsByRange(
-  logs: SessionLogEntry[],
-  rangeStart: number,
-  rangeEnd: number,
-): SessionLogEntry[] {
-  const lo = Math.min(rangeStart, rangeEnd);
-  const hi = Math.max(rangeStart, rangeEnd);
-  return logs.filter((log) => {
-    if (log.timestamp <= 0) {
-      return true;
-    }
-    const ts = normalizeLogTimestamp(log.timestamp);
-    return ts >= lo && ts <= hi;
-  });
-}
-
-function renderUsageRefreshStatus(
-  status: PanelRefreshStatus,
-  onRetry: () => void,
-  detailKey: string,
-  kind: "timeline" | "conversation",
-) {
-  return renderPanelRefreshStatus({
-    status,
-    errorMessage: status.error
-      ? t("usage.details.loadFailed", {
-          detail: normalizeLowercaseStringOrEmpty(t(detailKey)),
-          error: status.error,
-        })
-      : undefined,
-    onRetry,
-    className: `usage-callout usage-detail-error--${kind}`,
-  });
+function isLogInRange(log: SessionLogEntry, rangeStart: number, rangeEnd: number): boolean {
+  // Keep undated entries visible; interval totals count dated entries separately.
+  if (!(log.timestamp > 0)) {
+    return true;
+  }
+  const ts = normalizeLogTimestamp(log.timestamp);
+  return ts >= Math.min(rangeStart, rangeEnd) && ts <= Math.max(rangeStart, rangeEnd);
 }
 
 function renderSessionSummary(
   session: UsageSessionEntry,
   filteredUsage?: UsageSessionEntry["usage"],
-  filteredLogs?: SessionLogEntry[],
+  filteredLogs?: SessionLogEntry[] | null,
 ) {
   const usage = filteredUsage || session.usage;
   if (!usage) {
@@ -101,6 +65,22 @@ function renderSessionSummary(
   }
 
   const formatTs = (ts?: number): string => (ts ? formatMs(ts) : t("usage.common.emptyValue"));
+  const hasInterval = filteredLogs !== undefined;
+  const datedLogs = filteredLogs?.filter((log) => log.timestamp > 0);
+  const messageCounts = !hasInterval
+    ? usage.messageCounts
+    : datedLogs?.length
+      ? datedLogs.reduce(
+          (counts, { role }) => {
+            if (role === "user" || role === "assistant") {
+              counts[role] += 1;
+              counts.total += 1;
+            }
+            return counts;
+          },
+          { total: 0, user: 0, assistant: 0 },
+        )
+      : undefined;
 
   const badges = [
     session.channel && `channel:${session.channel}`,
@@ -113,24 +93,30 @@ function renderSessionSummary(
   // Always use the full tool list for stable layout; update counts when filtering
   const baseTools = usage.toolUsage?.tools.slice(0, 6) ?? [];
   let toolCounts: Map<string, number> | undefined;
-  if (filteredLogs) {
+  if (datedLogs?.length) {
     toolCounts = new Map();
-    for (const log of filteredLogs) {
-      const { tools } = parseToolSummary(log.content);
-      for (const [name] of tools) {
-        toolCounts.set(name, (toolCounts.get(name) || 0) + 1);
+    // Result rows carry tool names for filtering, but only assistant rows record calls.
+    for (const log of datedLogs.filter(({ role }) => role === "assistant")) {
+      for (const [name, count] of parseToolSummary(log.content).tools) {
+        toolCounts.set(name, (toolCounts.get(name) ?? 0) + count);
       }
     }
   }
   const toolItems = baseTools.map((tool) => ({
     label: tool.name,
-    value: `${toolCounts ? (toolCounts.get(tool.name) ?? 0) : tool.count}`,
+    value: `${toolCounts ? (toolCounts.get(tool.name) ?? 0) : hasInterval ? t("usage.common.emptyValue") : tool.count}`,
     sub: t("usage.overview.calls"),
   }));
   const toolCallCount = toolCounts
     ? [...toolCounts.values()].reduce((sum, count) => sum + count, 0)
-    : (usage.toolUsage?.totalCalls ?? 0);
-  const uniqueToolCount = toolCounts ? toolCounts.size : (usage.toolUsage?.uniqueTools ?? 0);
+    : hasInterval
+      ? t("usage.common.emptyValue")
+      : (usage.toolUsage?.totalCalls ?? 0);
+  const uniqueToolCount = toolCounts
+    ? toolCounts.size
+    : hasInterval
+      ? t("usage.common.emptyValue")
+      : (usage.toolUsage?.uniqueTools ?? 0);
   const modelItems =
     usage.modelUsage?.slice(0, 6).map((entry) => ({
       label: entry.model ?? t("usage.common.unknown"),
@@ -140,11 +126,15 @@ function renderSessionSummary(
   const cards = [
     {
       labelKey: "usage.overview.messages",
-      value: usage.messageCounts?.total ?? 0,
-      meta: html`${usage.messageCounts?.user ?? 0}
-      ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} ·
-      ${usage.messageCounts?.assistant ?? 0}
-      ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`,
+      value: messageCounts?.total ?? (hasInterval ? t("usage.common.emptyValue") : 0),
+      meta: html`${
+        hasInterval && !messageCounts
+          ? t("usage.common.emptyValue")
+          : html`${messageCounts?.user ?? 0}
+            ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} ·
+            ${messageCounts?.assistant ?? 0}
+            ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`
+      }${hasInterval ? html`<br />${t("usage.details.loadedIntervalMessages")}` : nothing}`,
     },
     {
       labelKey: "usage.overview.toolCalls",
@@ -153,23 +143,25 @@ function renderSessionSummary(
     },
     {
       labelKey: "usage.overview.errors",
-      value: usage.messageCounts?.errors ?? 0,
-      meta: html`${usage.messageCounts?.toolResults ?? 0} ${t("usage.overview.toolResults")}`,
+      value: hasInterval ? t("usage.common.emptyValue") : (usage.messageCounts?.errors ?? 0),
+      meta: html`${hasInterval ? t("usage.common.emptyValue") : (usage.messageCounts?.toolResults ?? 0)}
+      ${t("usage.overview.toolResults")}`,
     },
     {
       labelKey: "usage.details.duration",
-      value:
-        formatDurationCompact(usage.durationMs, { spaced: true }) ?? t("usage.common.emptyValue"),
+      value: formatDurationCompact(usage.durationMs) ?? t("usage.common.emptyValue"),
       meta: html`${formatTs(usage.firstActivity)} → ${formatTs(usage.lastActivity)}`,
     },
   ];
 
   return html`
-    ${badges.length > 0
-      ? html`<div class="usage-badges">
-          ${badges.map((b) => html`<span class="settings-row__value">${b}</span>`)}
-        </div>`
-      : nothing}
+    ${
+      badges.length > 0
+        ? html`<div class="usage-badges">
+            ${badges.map((b) => html`<span class="settings-row__value">${b}</span>`)}
+          </div>`
+        : nothing
+    }
     <div class="session-summary-grid">
       ${cards.map(
         ({ labelKey, value, meta }) => html`
@@ -204,8 +196,6 @@ function computeFilteredUsage(
 
   let totalTokens = 0;
   let totalCost = 0;
-  let userMessages = 0;
-  let assistantMessages = 0;
   const tokenTotals = { output: 0, input: 0, cacheWrite: 0, cacheRead: 0 };
 
   for (const p of filtered) {
@@ -214,8 +204,6 @@ function computeFilteredUsage(
     for (const { key } of USAGE_TOKEN_CATEGORIES) {
       tokenTotals[key] += p[key] || 0;
     }
-    assistantMessages += p.output > 0 ? 1 : 0;
-    userMessages += p.input > 0 ? 1 : 0;
   }
   const first = expectDefined(filtered[0], "filtered usage first point");
   const last = expectDefined(filtered.at(-1), "filtered usage last point");
@@ -228,14 +216,7 @@ function computeFilteredUsage(
     durationMs: last.timestamp - first.timestamp,
     firstActivity: first.timestamp,
     lastActivity: last.timestamp,
-    messageCounts: {
-      total: filtered.length,
-      user: userMessages,
-      assistant: assistantMessages,
-      toolCalls: 0,
-      toolResults: 0,
-      errors: 0,
-    },
+    messageCounts: undefined,
   };
 }
 
@@ -244,7 +225,6 @@ function renderSessionDetailPanel(
   timeSeries: { points: TimeSeriesPoint[] } | null,
   timeSeriesLoading: boolean,
   timeSeriesStatus: PanelRefreshStatus,
-  onRetryTimeSeries: () => void,
   timeSeriesMode: "cumulative" | "per-turn",
   onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void,
   timeSeriesBreakdownMode: "total" | "by-type",
@@ -259,7 +239,6 @@ function renderSessionDetailPanel(
   sessionLogs: SessionLogEntry[] | null,
   sessionLogsLoading: boolean,
   sessionLogsStatus: PanelRefreshStatus,
-  onRetrySessionLogs: () => void,
   sessionLogsExpanded: boolean,
   onToggleSessionLogsExpanded: () => void,
   logFilters: {
@@ -273,6 +252,7 @@ function renderSessionDetailPanel(
   onLogFilterHasToolsChange: (next: boolean) => void,
   onLogFilterQueryChange: (next: string) => void,
   onLogFilterClear: () => void,
+  context: UsageContextDetail,
   contextExpanded: boolean,
   onToggleContextExpanded: () => void,
   onClose: () => void,
@@ -297,26 +277,30 @@ function renderSessionDetailPanel(
         <div class="session-detail-header-left">
           <div class="session-detail-title">
             ${displayLabel}
-            ${cursorIndicator
-              ? html`<span class="session-detail-indicator">${cursorIndicator}</span>`
-              : nothing}
+            ${
+              cursorIndicator
+                ? html`<span class="session-detail-indicator">${cursorIndicator}</span>`
+                : nothing
+            }
           </div>
         </div>
         <div class="session-detail-stats">
-          ${usage
-            ? html`
-                <span
-                  ><strong>${formatUsageTokens(headerStats.totalTokens)}</strong>
-                  ${normalizeLowercaseStringOrEmpty(
-                    t("usage.metrics.tokens"),
-                  )}${cursorIndicator}</span
-                >
-                <span
-                  ><strong>${formatUsageCost(headerStats.totalCost)}</strong
-                  >${cursorIndicator}</span
-                >
-              `
-            : nothing}
+          ${
+            usage
+              ? html`
+                  <span
+                    ><strong>${formatUsageTokens(headerStats.totalTokens)}</strong>
+                    ${normalizeLowercaseStringOrEmpty(
+                      t("usage.metrics.tokens"),
+                    )}${cursorIndicator}</span
+                  >
+                  <span
+                    ><strong>${formatUsageCost(headerStats.totalCost)}</strong
+                    >${cursorIndicator}</span
+                  >
+                `
+              : nothing
+          }
         </div>
         <openclaw-tooltip .content=${t("usage.details.close")}>
           <button
@@ -328,21 +312,27 @@ function renderSessionDetailPanel(
           </button>
         </openclaw-tooltip>
       </div>
-      ${session.scope === "family" && session.includedSessionIds?.length
-        ? html`
-            <div class="usage-lineage-note">
-              ${t("usage.scope.familyIncluded", {
-                count: String(session.includedSessionIds.length),
-              })}
-            </div>
-          `
-        : nothing}
+      ${
+        session.scope === "family" && session.includedSessionIds?.length
+          ? html`
+              <div class="usage-lineage-note">
+                ${t("usage.scope.familyIncluded", {
+                  count: String(session.includedSessionIds.length),
+                })}
+              </div>
+            `
+          : nothing
+      }
       <div class="session-detail-content">
         ${renderSessionSummary(
           session,
           filteredUsage,
-          timeSeriesCursorStart != null && timeSeriesCursorEnd != null && sessionLogs
-            ? filterLogsByRange(sessionLogs, timeSeriesCursorStart, timeSeriesCursorEnd)
+          hasRange
+            ? sessionLogsStatus.hasLoaded && sessionLogs
+              ? sessionLogs.filter((log) =>
+                  isLogInRange(log, timeSeriesCursorStart, timeSeriesCursorEnd),
+                )
+              : null
             : undefined,
         )}
         <div class="session-detail-row">
@@ -350,7 +340,6 @@ function renderSessionDetailPanel(
             timeSeries,
             timeSeriesLoading,
             timeSeriesStatus,
-            onRetryTimeSeries,
             timeSeriesMode,
             onTimeSeriesModeChange,
             timeSeriesBreakdownMode,
@@ -369,7 +358,6 @@ function renderSessionDetailPanel(
             sessionLogs,
             sessionLogsLoading,
             sessionLogsStatus,
-            onRetrySessionLogs,
             sessionLogsExpanded,
             onToggleSessionLogsExpanded,
             logFilters,
@@ -381,12 +369,7 @@ function renderSessionDetailPanel(
             hasRange ? timeSeriesCursorStart : null,
             hasRange ? timeSeriesCursorEnd : null,
           )}
-          ${renderContextPanel(
-            session.contextWeight,
-            usage,
-            contextExpanded,
-            onToggleContextExpanded,
-          )}
+          ${renderContextPanel(context, usage, contextExpanded, onToggleContextExpanded)}
         </div>
       </div>
     </div>
@@ -397,7 +380,6 @@ function renderTimeSeriesCompact(
   timeSeries: { points: TimeSeriesPoint[] } | null,
   loading: boolean,
   status: PanelRefreshStatus,
-  onRetry: () => void,
   mode: "cumulative" | "per-turn",
   onModeChange: (mode: "cumulative" | "per-turn") => void,
   breakdownMode: "total" | "by-type",
@@ -410,19 +392,14 @@ function renderTimeSeriesCompact(
   cursorEnd?: number | null,
   onCursorRangeChange?: (start: number | null, end: number | null) => void,
 ) {
-  if (loading && !status.hasLoaded) {
+  if ((loading || status.awaitingGateway) && !status.hasLoaded) {
     return html`
       <div class="session-timeseries-compact">
         <div class="usage-empty-block">${t("usage.loading.badge")}</div>
       </div>
     `;
   }
-  const refreshStatus = renderUsageRefreshStatus(
-    status,
-    onRetry,
-    "usage.details.usageOverTime",
-    "timeline",
-  );
+  const refreshStatus = renderUsageRefreshStatus(status, "usage.details.usageOverTime", "timeline");
   if (status.error && !status.hasLoaded) {
     return html`
       <div class="session-timeseries-compact">
@@ -440,7 +417,6 @@ function renderTimeSeriesCompact(
     `;
   }
 
-  // Filter and recalculate (same logic as main function)
   let points = timeSeries.points;
   if (startDate || endDate || (selectedDays && selectedDays.length > 0)) {
     const startTs = startDate ? dateBoundaryMs(startDate, timeZone, 0) : 0;
@@ -451,7 +427,7 @@ function renderTimeSeriesCompact(
         return false;
       }
       if (selectedDaySet) {
-        return selectedDaySet.has(usageDateKey(p.timestamp, timeZone));
+        return selectedDaySet.has(formatIsoDate(new Date(p.timestamp), timeZone));
       }
       return true;
     });
@@ -472,7 +448,6 @@ function renderTimeSeriesCompact(
     return { ...p, cumulativeTokens: cumTokens, cumulativeCost: cumCost };
   });
 
-  // Compute range-filtered sums for "Tokens by Type"
   const hasSelection = cursorStart != null && cursorEnd != null;
   const rangeStartTs = hasSelection ? Math.min(cursorStart, cursorEnd) : 0;
   const rangeEndTs = hasSelection ? Math.max(cursorStart, cursorEnd) : Infinity;
@@ -505,6 +480,10 @@ function renderTimeSeriesCompact(
   const isCumulative = mode === "cumulative";
   const breakdownByType = mode === "per-turn" && breakdownMode === "by-type";
   const timeZoneOptions: Intl.DateTimeFormatOptions = timeZone === "utc" ? { timeZone: "UTC" } : {};
+  const formatTooltipTimestamp = createMsFormatter(
+    { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", ...timeZoneOptions },
+    "",
+  );
 
   const totalTypeTokens = Object.values(filteredTokens).reduce(
     (total, tokens) => total + tokens,
@@ -523,7 +502,6 @@ function renderTimeSeriesCompact(
   const barWidth = Math.min(CHART_MAX_BAR_WIDTH, Math.max(1, slotWidth * CHART_BAR_WIDTH_RATIO));
   const barGap = slotWidth - barWidth;
 
-  // Pre-compute handle X positions in SVG viewBox coordinates
   const leftHandleX = padding.left + rangeStartIdx * (barWidth + barGap);
   const rightHandleX =
     rangeEndIdx >= points.length
@@ -535,28 +513,50 @@ function renderTimeSeriesCompact(
       <div class="timeseries-header-row">
         <div class="card-title usage-section-title">${t("usage.details.usageOverTime")}</div>
         <div class="timeseries-controls">
-          ${hasSelection
-            ? html`
-                <div class="chart-toggle small">
-                  <button
-                    class="btn btn--sm toggle-btn active"
-                    @click=${() => onCursorRangeChange?.(null, null)}
-                  >
-                    ${t("usage.details.reset")}
-                  </button>
-                </div>
-              `
-            : nothing}
-          ${renderUsageToggle(mode, onModeChange, [
-            { value: "per-turn", labelKey: "usage.details.perTurn" },
-            { value: "cumulative", labelKey: "usage.details.cumulative" },
-          ])}
-          ${!isCumulative
-            ? renderUsageToggle(breakdownMode, onBreakdownChange, [
-                { value: "total", labelKey: "usage.daily.total" },
-                { value: "by-type", labelKey: "usage.daily.byType" },
-              ])
-            : nothing}
+          ${
+            hasSelection
+              ? html`
+                  <div class="settings-segmented settings-segmented--accent small">
+                    <button
+                      class="btn btn--sm settings-segmented__btn settings-segmented__btn--active"
+                      @click=${() => onCursorRangeChange?.(null, null)}
+                    >
+                      ${t("usage.details.reset")}
+                    </button>
+                  </div>
+                `
+              : nothing
+          }
+          ${renderSettingsSegmented({
+            mode: "buttons",
+            variant: "accent",
+            ariaPressed: false,
+            className: "small",
+            value: mode,
+            onChange: onModeChange,
+            onReselect: onModeChange,
+            options: [
+              { value: "per-turn", label: t("usage.details.perTurn") },
+              { value: "cumulative", label: t("usage.details.cumulative") },
+            ],
+          })}
+          ${
+            !isCumulative
+              ? renderSettingsSegmented({
+                  mode: "buttons",
+                  variant: "accent",
+                  ariaPressed: false,
+                  className: "small",
+                  value: breakdownMode,
+                  onChange: onBreakdownChange,
+                  onReselect: onBreakdownChange,
+                  options: [
+                    { value: "total", label: t("usage.daily.total") },
+                    { value: "by-type", label: t("usage.daily.byType") },
+                  ],
+                })
+              : nothing
+          }
         </div>
       </div>
       ${refreshStatus}
@@ -582,12 +582,10 @@ function renderTimeSeriesCompact(
               svg`<text x="${padding.left - 4}" y="${y}" text-anchor="end" class="ts-axis-label">${text}</text>`,
           )}
           <!-- X axis labels (first and last) -->
-          ${points.length > 0
-            ? svg`
+          ${svg`
             <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${formatTimeMs(expectDefined(points[0], "time series first point").timestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
             <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(expectDefined(points.at(-1), "time series last point").timestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
-          `
-            : nothing}
+          `}
           <!-- Bars -->
           ${points.map((p, i) => {
             const val = expectDefined(barTotals[i], "time series bar total");
@@ -595,17 +593,7 @@ function renderTimeSeriesCompact(
             const bh = (val / maxValue) * chartHeight;
             const y = padding.top + chartHeight - bh;
             const tooltipLines = [
-              formatDateTimeMs(
-                p.timestamp,
-                {
-                  month: "short",
-                  day: "numeric",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  ...timeZoneOptions,
-                },
-                "",
-              ),
+              formatTooltipTimestamp(p.timestamp),
               `${formatUsageTokens(val)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`,
             ];
             if (breakdownByType) {
@@ -619,7 +607,7 @@ function renderTimeSeriesCompact(
             const isOutside = hasSelection && (i < rangeStartIdx || i >= rangeEndIdx);
 
             if (!breakdownByType) {
-              return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${bh}" class="ts-bar${isOutside ? " dimmed" : ""}" rx="1"><title>${tooltip}</title></rect>`;
+              return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${bh}" class="ts-bar${isOutside ? " dimmed" : ""}" rx="1" data-tooltip=${tooltip} aria-label=${tooltip}></rect>`;
             }
             let yC = padding.top + chartHeight;
             const dim = isOutside ? " dimmed" : "";
@@ -631,7 +619,7 @@ function renderTimeSeriesCompact(
                 }
                 const sh = bh * (value / val);
                 yC -= sh;
-                return svg`<rect x="${x}" y="${yC}" width="${barWidth}" height="${sh}" class="ts-bar ${className}${dim}" rx="1"><title>${tooltip}</title></rect>`;
+                return svg`<rect x="${x}" y="${yC}" width="${barWidth}" height="${sh}" class="ts-bar ${className}${dim}" rx="1" data-tooltip=${tooltip} aria-label=${tooltip}></rect>`;
               })}
             `;
           })}
@@ -666,9 +654,8 @@ function renderTimeSeriesCompact(
             }
             e.preventDefault();
             e.stopPropagation();
-            // Find the wrapper, then the SVG inside it
             const wrapper = (e.currentTarget as HTMLElement).closest(".timeseries-chart-wrapper");
-            const svgEl = wrapper?.querySelector("svg") as SVGSVGElement;
+            const svgEl = wrapper?.querySelector("svg");
             if (!svgEl) {
               return;
             }
@@ -734,75 +721,93 @@ function renderTimeSeriesCompact(
         })()}
       </div>
       <div class="timeseries-summary">
-        ${hasSelection
-          ? html`
-              <span class="timeseries-summary__range">
-                ${t("usage.details.turnRange", {
-                  start: String(rangeStartIdx + 1),
-                  end: String(rangeEndIdx),
-                  total: String(points.length),
-                })}
-              </span>
-              ·
-              ${formatTimeMs(
-                rangeStartTs,
-                { hour: "2-digit", minute: "2-digit", ...timeZoneOptions },
-                "",
-              )}–${formatTimeMs(
-                rangeEndTs,
-                { hour: "2-digit", minute: "2-digit", ...timeZoneOptions },
-                "",
-              )}
-              · ${formatUsageTokens(totalTypeTokens)} ·
-              ${formatUsageCost(filteredPoints.reduce((s, p) => s + (p.cost || 0), 0))}
-            `
-          : html`${points.length} ${t("usage.overview.messagesAbbrev")} ·
-            ${formatUsageTokens(cumTokens)} · ${formatUsageCost(cumCost)}`}
+        ${
+          hasSelection
+            ? html`
+                <span class="timeseries-summary__range">
+                  ${t("usage.details.turnRange", {
+                    start: String(rangeStartIdx + 1),
+                    end: String(rangeEndIdx),
+                    total: String(points.length),
+                  })}
+                </span>
+                ·
+                ${formatTimeMs(
+                  rangeStartTs,
+                  { hour: "2-digit", minute: "2-digit", ...timeZoneOptions },
+                  "",
+                )}–${formatTimeMs(
+                  rangeEndTs,
+                  { hour: "2-digit", minute: "2-digit", ...timeZoneOptions },
+                  "",
+                )}
+                · ${formatUsageTokens(totalTypeTokens)} ·
+                ${formatUsageCost(filteredPoints.reduce((s, p) => s + (p.cost || 0), 0))}
+              `
+            : html`${points.length} ${t("usage.overview.messagesAbbrev")} ·
+              ${formatUsageTokens(cumTokens)} · ${formatUsageCost(cumCost)}`
+        }
       </div>
-      ${breakdownByType
-        ? html`
-            <div class="timeseries-breakdown">
-              <div class="card-title usage-section-title">${t("usage.breakdown.tokensByType")}</div>
-              <div class="cost-breakdown-bar cost-breakdown-bar--compact">
-                ${USAGE_TOKEN_CATEGORIES.map(
-                  ({ key, className }) => html`
-                    <div
-                      class="cost-segment ${className}"
-                      style="width: ${pct(filteredTokens[key], totalTypeTokens).toFixed(1)}%"
-                    ></div>
-                  `,
-                )}
+      ${
+        breakdownByType
+          ? html`
+              <div class="timeseries-breakdown">
+                <div class="card-title usage-section-title">
+                  ${t("usage.breakdown.tokensByType")}
+                </div>
+                <div class="cost-breakdown-bar cost-breakdown-bar--compact">
+                  ${USAGE_TOKEN_CATEGORIES.map(
+                    ({ key, className }) => html`
+                      <div
+                        class="cost-segment ${className}"
+                        style="width: ${pct(filteredTokens[key], totalTypeTokens).toFixed(1)}%"
+                      ></div>
+                    `,
+                  )}
+                </div>
+                <div class="cost-breakdown-legend">
+                  ${USAGE_TOKEN_CATEGORIES.map(
+                    ({ key, className, labelKey, hintKey }) => html`
+                      <div class="legend-item" title=${t(hintKey)}>
+                        <span class="legend-dot ${className}"></span>${t(labelKey)}
+                        ${formatUsageTokens(filteredTokens[key])}
+                      </div>
+                    `,
+                  )}
+                </div>
+                <div class="cost-breakdown-total">
+                  ${t("usage.breakdown.total")}: ${formatUsageTokens(totalTypeTokens)}
+                </div>
               </div>
-              <div class="cost-breakdown-legend">
-                ${USAGE_TOKEN_CATEGORIES.map(
-                  ({ key, className, labelKey, hintKey }) => html`
-                    <div class="legend-item" title=${t(hintKey)}>
-                      <span class="legend-dot ${className}"></span>${t(labelKey)}
-                      ${formatUsageTokens(filteredTokens[key])}
-                    </div>
-                  `,
-                )}
-              </div>
-              <div class="cost-breakdown-total">
-                ${t("usage.breakdown.total")}: ${formatUsageTokens(totalTypeTokens)}
-              </div>
-            </div>
-          `
-        : nothing}
+            `
+          : nothing
+      }
     </div>
   `;
 }
 
 function renderContextPanel(
-  contextWeight: UsageSessionEntry["contextWeight"],
+  { weight: contextWeight, loading, status }: UsageContextDetail,
   usage: UsageSessionEntry["usage"],
   expanded: boolean,
   onToggleExpanded: () => void,
 ) {
+  const refreshStatus = renderUsageRefreshStatus(
+    status,
+    "usage.details.systemPromptBreakdown",
+    "context",
+  );
   if (!contextWeight) {
     return html`
       <div class="context-details-panel">
-        <div class="usage-empty-block">${t("usage.details.noContextData")}</div>
+        ${refreshStatus}
+        ${
+          status.error
+            ? nothing
+            : html`<div class="usage-empty-block">
+                ${t(loading || status.awaitingGateway ? "usage.loading.badge" : "usage.details.noContextData")}
+              </div>`
+        }
       </div>
     `;
   }
@@ -829,7 +834,11 @@ function renderContextPanel(
       className: "files",
       labelKey: "usage.details.files",
       tokens: charsToTokens(
-        contextWeight.injectedWorkspaceFiles.reduce((sum, file) => sum + file.injectedChars, 0),
+        contextWeight.injectedWorkspaceFiles.reduce(
+          (sum, file) =>
+            file.injectionStatus === "native_unverified" ? sum : sum + file.injectedChars,
+          0,
+        ),
       ),
       entries: contextWeight.injectedWorkspaceFiles.map(({ name, injectedChars }) => ({
         name,
@@ -840,7 +849,12 @@ function renderContextPanel(
     className,
     labelKey,
     tokens,
-    entries: entries.toSorted((left, right) => right.chars - left.chars),
+    entries: entries.toSorted((left, right) => {
+      if (left.chars === null) {
+        return right.chars === null ? 0 : 1;
+      }
+      return right.chars === null ? -1 : right.chars - left.chars;
+    }),
   }));
   const categories = [
     {
@@ -861,15 +875,18 @@ function renderContextPanel(
 
   return html`
     <div class="context-details-panel">
+      ${refreshStatus}
       <div class="context-breakdown-header">
         <div class="card-title usage-section-title">
           ${t("usage.details.systemPromptBreakdown")}
         </div>
-        ${hasMore
-          ? html`<button class="btn btn--sm" @click=${onToggleExpanded}>
-              ${expanded ? t("usage.details.collapse") : t("usage.details.expandAll")}
-            </button>`
-          : nothing}
+        ${
+          hasMore
+            ? html`<button class="btn btn--sm" @click=${onToggleExpanded}>
+                ${expanded ? t("usage.details.collapse") : t("usage.details.expandAll")}
+              </button>`
+            : nothing
+        }
       </div>
       <p class="context-weight-desc">${contextDescription}</p>
       <div class="context-stacked-bar">
@@ -912,18 +929,26 @@ function renderContextPanel(
                     ({ name, chars }) => html`
                       <div class="context-breakdown-item">
                         <span class="mono" title=${name}>${name}</span>
-                        <span class="muted">~${formatUsageTokens(charsToTokens(chars))}</span>
+                        <span class="muted"
+                          >${
+                            chars === null
+                              ? t("usage.common.unknown")
+                              : `~${formatUsageTokens(charsToTokens(chars))}`
+                          }</span
+                        >
                       </div>
                     `,
                   )}
                 </div>
-                ${more > 0
-                  ? html`
-                      <div class="context-breakdown-more">
-                        ${t("usage.sessions.more", { count: String(more) })}
-                      </div>
-                    `
-                  : nothing}
+                ${
+                  more > 0
+                    ? html`
+                        <div class="context-breakdown-more">
+                          ${t("usage.sessions.more", { count: String(more) })}
+                        </div>
+                      `
+                    : nothing
+                }
               </div>
             `;
           })}
@@ -936,7 +961,6 @@ function renderSessionLogsCompact(
   logs: SessionLogEntry[] | null,
   loading: boolean,
   status: PanelRefreshStatus,
-  onRetry: () => void,
   expandedAll: boolean,
   onToggleExpandedAll: () => void,
   filters: {
@@ -953,7 +977,7 @@ function renderSessionLogsCompact(
   cursorStart?: number | null,
   cursorEnd?: number | null,
 ) {
-  if (loading && !status.hasLoaded) {
+  if ((loading || status.awaitingGateway) && !status.hasLoaded) {
     return html`
       <div class="session-logs-compact">
         <div class="session-logs-header">${t("usage.details.conversation")}</div>
@@ -963,7 +987,6 @@ function renderSessionLogsCompact(
   }
   const refreshStatus = renderUsageRefreshStatus(
     status,
-    onRetry,
     "usage.details.conversation",
     "conversation",
   );
@@ -985,6 +1008,7 @@ function renderSessionLogsCompact(
     `;
   }
 
+  const formatLogTimestamp = createMsFormatter();
   const normalizedQuery = normalizeLowercaseStringOrEmpty(filters.query);
   const entries = logs.map((log) => {
     const toolInfo = parseToolSummary(log.content);
@@ -995,25 +1019,16 @@ function renderSessionLogsCompact(
     new Set(entries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name))),
   ).toSorted((a, b) => a.localeCompare(b));
   const hasCursorFilter = cursorStart != null && cursorEnd != null;
-  const cursorMin = hasCursorFilter ? Math.min(cursorStart, cursorEnd) : 0;
-  const cursorMax = hasCursorFilter ? Math.max(cursorStart, cursorEnd) : Infinity;
-  const filteredEntries = entries.filter((entry) => {
-    // Filter by cursor timeline range (only if logs cover the range)
-    if (hasCursorFilter && entry.log.timestamp > 0) {
-      const timestamp = normalizeLogTimestamp(entry.log.timestamp);
-      if (timestamp < cursorMin || timestamp > cursorMax) {
-        return false;
-      }
-    }
-    return (
+  const filteredEntries = entries.filter(
+    (entry) =>
+      (!hasCursorFilter || isLogInRange(entry.log, cursorStart, cursorEnd)) &&
       (filters.roles.length === 0 || filters.roles.includes(entry.log.role)) &&
       (!filters.hasTools || entry.toolInfo.tools.length > 0) &&
       (filters.tools.length === 0 ||
         entry.toolInfo.tools.some(([name]) => filters.tools.includes(name))) &&
       (!normalizedQuery ||
-        normalizeLowercaseStringOrEmpty(entry.cleanContent).includes(normalizedQuery))
-    );
-  });
+        normalizeLowercaseStringOrEmpty(entry.cleanContent).includes(normalizedQuery)),
+  );
   const hasActiveFilters =
     filters.roles.length > 0 || filters.tools.length > 0 || filters.hasTools || normalizedQuery;
   const displayedCount =
@@ -1112,34 +1127,38 @@ function renderSessionLogsCompact(
             <div class="session-log-entry ${roleClass}">
               <div class="session-log-meta">
                 <span class="session-log-role">${roleLabel}</span>
-                <span>${formatMs(log.timestamp)}</span>
+                <span>${formatLogTimestamp(log.timestamp)}</span>
                 ${log.tokens ? html`<span>${formatUsageTokens(log.tokens)}</span>` : nothing}
               </div>
               <div class="session-log-content">${cleanContent}</div>
-              ${toolInfo.tools.length > 0
-                ? html`
-                    <details class="session-log-tools" ?open=${expandedAll}>
-                      <summary>${toolInfo.summary}</summary>
-                      <div class="session-log-tools-list">
-                        ${toolInfo.tools.map(
-                          ([name, count]) => html`
-                            <span class="session-log-tools-pill">${name} × ${count}</span>
-                          `,
-                        )}
-                      </div>
-                    </details>
-                  `
-                : nothing}
+              ${
+                toolInfo.tools.length > 0
+                  ? html`
+                      <details class="session-log-tools" ?open=${expandedAll}>
+                        <summary>${toolInfo.summary}</summary>
+                        <div class="session-log-tools-list">
+                          ${toolInfo.tools.map(
+                            ([name, count]) => html`
+                              <span class="session-log-tools-pill">${name} × ${count}</span>
+                            `,
+                          )}
+                        </div>
+                      </details>
+                    `
+                  : nothing
+              }
             </div>
           `;
         })}
-        ${filteredEntries.length === 0
-          ? html`
-              <div class="usage-empty-block usage-empty-block--compact">
-                ${t("usage.details.noMessagesMatch")}
-              </div>
-            `
-          : nothing}
+        ${
+          filteredEntries.length === 0
+            ? html`
+                <div class="usage-empty-block usage-empty-block--compact">
+                  ${t("usage.details.noMessagesMatch")}
+                </div>
+              `
+            : nothing
+        }
       </div>
     </div>
   `;

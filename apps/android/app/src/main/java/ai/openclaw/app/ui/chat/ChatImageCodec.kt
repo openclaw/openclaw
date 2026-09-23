@@ -17,6 +17,7 @@ import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.LruCache
 import androidx.core.graphics.scale
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -43,7 +44,7 @@ internal fun loadPickedMediaOrDocumentAttachment(
   val mimeType = normalizeSharedAttachmentMimeType(resolver.getType(uri))
   if (!isStageableSharedAttachmentMimeType(mimeType)) throw IllegalStateException("unsupported attachment")
   val kind = sharedAttachmentKindForMimeType(mimeType)
-  if (kind == null || kind == SharedAttachmentKind.Image) throw IllegalStateException("unsupported attachment")
+  if (kind == null) throw IllegalStateException("unsupported attachment")
   return loadSharedAttachment(resolver, SharedAttachment(uri = uri, kind = kind, mimeType = requireNotNull(mimeType)))
 }
 
@@ -170,7 +171,7 @@ internal fun loadSizedImageAttachment(
   resolver: ContentResolver,
   uri: Uri,
 ): PendingAttachment {
-  val fileName = normalizeAttachmentFileName((uri.lastPathSegment ?: "image").substringAfterLast('/'))
+  val fileName = normalizeAttachmentFileName(sharedAttachmentFileName(resolver, uri))
   val bitmap = decodeScaledBitmap(resolver, uri, maxDimension = CHAT_ATTACHMENT_MAX_WIDTH)
   if (bitmap == null) {
     throw IllegalStateException("unsupported attachment")
@@ -214,12 +215,21 @@ internal fun loadSizedImageAttachment(
   )
 }
 
+/** Incoming inline data and locally admitted composer images have different byte contracts. */
+internal enum class Base64ImageSource(
+  val maxBase64Chars: Long,
+) {
+  Inline(CHAT_IMAGE_MAX_BASE64_CHARS.toLong()),
+  Composer(((CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES + 2) / 3) * 4),
+}
+
 /** Decodes chat image payloads into display-sized bitmaps with an LRU cache. */
 internal fun decodeBase64Bitmap(
   base64: String,
   maxDimension: Int = CHAT_DECODE_MAX_DIMENSION,
+  source: Base64ImageSource = Base64ImageSource.Inline,
 ): Bitmap? {
-  if (base64.length > CHAT_IMAGE_MAX_BASE64_CHARS) return null
+  if (base64.length > source.maxBase64Chars) return null
   val bytes = Base64.decode(base64, Base64.DEFAULT)
   return decodeImageBytes(bytes, maxDimension)
 }
@@ -248,8 +258,9 @@ internal fun decodeImageBytes(
       },
     ) ?: return null
 
-  decodedBitmapCache.put(cacheKey, bitmap)
-  return bitmap
+  val oriented = JpegSizeLimiter.normalizeOrientation(bitmap, JpegSizeLimiter.readOrientation { ByteArrayInputStream(bytes) })
+  decodedBitmapCache.put(cacheKey, oriented)
+  return oriented
 }
 
 /** Computes Android's power-of-two bitmap sampling size for bounded decode. */
@@ -302,15 +313,16 @@ private fun decodeScaledBitmap(
       )
     } ?: return null
 
-  val longestEdge = max(decoded.width, decoded.height)
-  if (longestEdge <= maxDimension) return decoded
+  val oriented = JpegSizeLimiter.normalizeOrientation(decoded, JpegSizeLimiter.readOrientation { resolver.openInputStream(uri) })
+  val longestEdge = max(oriented.width, oriented.height)
+  if (longestEdge <= maxDimension) return oriented
 
   val scale = maxDimension.toDouble() / longestEdge.toDouble()
-  val targetWidth = max(1, (decoded.width * scale).roundToInt())
-  val targetHeight = max(1, (decoded.height * scale).roundToInt())
-  val scaled = decoded.scale(targetWidth, targetHeight, true)
-  if (scaled !== decoded) {
-    decoded.recycle()
+  val targetWidth = max(1, (oriented.width * scale).roundToInt())
+  val targetHeight = max(1, (oriented.height * scale).roundToInt())
+  val scaled = oriented.scale(targetWidth, targetHeight, true)
+  if (scaled !== oriented) {
+    oriented.recycle()
   }
   return scaled
 }

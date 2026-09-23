@@ -1,8 +1,11 @@
 import type { Message } from "grammy/types";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { dispatchReplyWithBufferedBlockDispatcher as dispatchThroughSharedOwner } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
   appendAssistantMirrorMessageByIdentity,
+  createBot,
   createContext,
   createDraftStream,
   createTelegramDraftStream,
@@ -10,7 +13,6 @@ import {
   deliverReplies,
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
-  editMessageTelegram,
   emitTelegramMessageSentHooks,
   expectDraftStreamParams,
   expectRecordFields,
@@ -26,6 +28,7 @@ import type {
   TelegramBotDeps,
   TelegramMessageContext,
 } from "./bot-message-dispatch.test-harness.js";
+import type * as TelegramDelivery from "./bot/delivery.replies.js";
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import { buildTelegramConversationContext, createTelegramMessageCache } from "./message-cache.js";
 import { recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual } from "./outbound-message-context.js";
@@ -51,63 +54,6 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
     });
 
     expectDraftStreamParams({ maxChars: 4000 });
-  });
-
-  it("streams text-only finals into the answer message", async () => {
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    const transcriptTimestamp = Date.now() + 1_000;
-    const context = createContext({
-      primaryCtx: {
-        me: {
-          id: 999,
-          is_bot: true,
-          first_name: "Telegram Bot Name",
-          username: "openclaw_bot",
-        },
-      } as TelegramMessageContext["primaryCtx"],
-    });
-    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
-    mockDefaultSessionEntry();
-    readLatestAssistantTextByIdentity.mockResolvedValue({
-      id: "assistant-stream-1",
-      text: "Final answer",
-      timestamp: transcriptTimestamp,
-    });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
-      return { queuedFinal: true };
-    });
-
-    await dispatchWithContext({ context });
-
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Final answer");
-    expect(answerDraftStream.stop).toHaveBeenCalled();
-    expect(deliverReplies).not.toHaveBeenCalled();
-    expect(editMessageTelegram).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
-      content: "Final answer",
-      messageId: 2001,
-    });
-    expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
-      account: {
-        accountId: "default",
-        bot: {
-          id: 999,
-          is_bot: true,
-          first_name: "Telegram Bot Name",
-          username: "openclaw_bot",
-        },
-      },
-      chatId: "123",
-      messageId: 2001,
-      text: "Final answer",
-      messageThreadId: 777,
-      promptContextProjection: {
-        transcriptMessageId: "assistant-stream-1",
-        partIndex: 0,
-        finalPart: true,
-      },
-    });
   });
 
   it("projects retained draft pages and the active tail as one complete sequence", async () => {
@@ -145,47 +91,23 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     expect(answerDraftStream.update).toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
-    const effectiveByMessageId = new Map<
-      number,
-      {
-        text?: string;
-        projection: { transcriptMessageId: string; partIndex: number; finalPart: boolean };
-      }
-    >();
-    for (const [rawRecord] of recordOutboundMessageForPromptContext.mock.calls) {
-      const record = rawRecord as {
-        messageId: number;
-        text?: string;
-        promptContextProjection?: {
-          transcriptMessageId: string;
-          partIndex: number;
-          finalPart: boolean;
-        };
-      };
-      if (record.promptContextProjection) {
-        effectiveByMessageId.set(record.messageId, {
-          text: record.text,
-          projection: record.promptContextProjection,
-        });
-      }
-    }
-    const records = Array.from(effectiveByMessageId.values()).toSorted(
-      (left, right) => left.projection.partIndex - right.projection.partIndex,
-    );
-    expect(records.map((record) => record.text)).toEqual(["page 0", "page 1", "page 2"]);
-    const projections = records.map((record) => record.projection);
-    expect(projections.map((projection) => projection.partIndex)).toEqual(
-      projections.map((_, index) => index),
-    );
-    expect(projections.map((projection) => projection.finalPart)).toEqual([
-      ...Array.from({ length: projections.length - 1 }, () => false),
-      true,
-    ]);
     expect(
-      projections.every(
-        (projection) => projection.transcriptMessageId === "assistant-stream-multipart",
-      ),
-    ).toBe(true);
+      recordOutboundMessageForPromptContext.mock.calls.map(([record]) => ({
+        messageId: record.messageId,
+        text: record.text,
+        projection: record.promptContextProjection,
+      })),
+    ).toEqual(
+      ["page 0", "page 1", "page 2"].map((text, partIndex) => ({
+        messageId: 2098 + partIndex,
+        text,
+        projection: {
+          transcriptMessageId: "assistant-stream-multipart",
+          partIndex,
+          finalPart: partIndex === 2,
+        },
+      })),
+    );
   });
 
   it("records streamed final replies into the prompt context cache", async () => {
@@ -208,7 +130,6 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
       text: "Done already: timeoutSeconds is now 7200s.",
       timestamp: transcriptTimestamp,
     });
-    const recordResults: boolean[] = [];
     setupDraftStreams({ answerMessageId: 1497 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       const streamParams = mockCallArg(createTelegramDraftStream) as Parameters<
@@ -237,16 +158,11 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
       telegramCfg: { name: "Configured Agent" },
       telegramDeps: {
         ...telegramDepsForTest,
-        recordOutboundMessageForPromptContext: async (params) => {
-          const recorded = await recordOutboundMessageForPromptContextActual(params);
-          recordResults.push(recorded);
-          return recorded;
-        },
+        recordOutboundMessageForPromptContext: recordOutboundMessageForPromptContextActual,
       },
     });
 
-    expect(recordResults).toEqual([true, true]);
-    expect(wasSentByBot("123", 1497, { session: { store: storePath } })).toBe(true);
+    expect(await wasSentByBot("123", 1497, { session: { store: storePath } })).toBe(true);
 
     const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(storePath),
@@ -304,6 +220,146 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
     });
   });
 
+  it.each([
+    { label: "single message", chunks: ["Final answer"], textLimit: 4096, failLastSend: false },
+    {
+      label: "multiple chunks",
+      chunks: ["chunk-one", "chunk-two"],
+      textLimit: 12,
+      failLastSend: false,
+    },
+    {
+      label: "failed send and failed cleanup",
+      chunks: ["chunk-one", "chunk-two"],
+      textLimit: 12,
+      failLastSend: true,
+    },
+  ])(
+    "preserves accepted native quote receipts when history finalization fails: $label",
+    async ({ chunks, textLimit, failLastSend }) => {
+      const actualDelivery = await vi.importActual<typeof TelegramDelivery>(
+        "./bot/delivery.replies.js",
+      );
+      const finalText = chunks.join("\n\n");
+      const historyFailure = new Error("retained Telegram history write failed");
+      const sendFailure = new Error("synthetic terminal send failure");
+      const bot = createBot();
+      let nextMessageId = 2801;
+      const sendMessage = vi
+        .spyOn(bot.api, "sendMessage")
+        .mockImplementation(async (_chatId, text) => {
+          const messageId = nextMessageId++;
+          if (failLastSend && messageId === 2800 + chunks.length) {
+            throw sendFailure;
+          }
+          return {
+            message_id: messageId,
+            message_thread_id: 777,
+            date: 1_779_425_461,
+            chat: { id: 123, type: "private", first_name: "Test user" },
+            text,
+          };
+        });
+      const context = createContext({
+        ctxPayload: {
+          SessionKey: "agent:default:telegram:direct:123",
+          RawBody: "Explain this quote",
+          BodyForAgent: "Explain this quote",
+          ReplyToId: "9001",
+          ReplyToBody: "quoted slice",
+          ReplyToQuoteText: "quoted slice",
+          ReplyToIsQuote: true,
+        } as TelegramMessageContext["ctxPayload"],
+      });
+      mockDefaultSessionEntry();
+      readLatestAssistantTextByIdentity.mockResolvedValue({
+        id: "assistant-native-quote",
+        text: finalText,
+        timestamp: Date.now() + 1_000,
+      });
+      let observedError: unknown;
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) =>
+        dispatchThroughSharedOwner({
+          ...params,
+          replyResolver: async () => ({ text: finalText, replyToId: "9001" }),
+          dispatcherOptions: {
+            ...params.dispatcherOptions,
+            onError: async (error, info) => {
+              observedError = error;
+              await params.dispatcherOptions.onError?.(error, info);
+            },
+          },
+        }),
+      );
+      const finalHistoryWrites: number[] = [];
+
+      await expect(
+        dispatchWithContext({
+          bot,
+          context,
+          replyToMode: "all",
+          textLimit,
+          telegramDeps: {
+            ...telegramDepsForTest,
+            deliverReplies: actualDelivery.deliverReplies,
+            deliverStructuredReplies: actualDelivery.deliverStructuredReplies,
+            recordOutboundMessageForPromptContext: async (params) => {
+              if (params.promptContextProjection?.finalPart === !failLastSend) {
+                finalHistoryWrites.push(params.messageId);
+                throw historyFailure;
+              }
+              return await recordOutboundMessageForPromptContextActual(params);
+            },
+          },
+        }),
+      ).resolves.toEqual({ kind: "completed" });
+
+      const acceptedCount = chunks.length - Number(failLastSend);
+      expect(finalHistoryWrites).toEqual([2800 + acceptedCount]);
+      expect(sendMessage).toHaveBeenCalledTimes(chunks.length);
+      expect(sendMessage.mock.calls.map(([, text]) => text).join("")).toBe(finalText);
+      for (const call of sendMessage.mock.calls) {
+        expect(call[2]?.reply_parameters).toMatchObject({
+          message_id: 9001,
+          quote: "quoted slice",
+        });
+      }
+      expect(isChannelPartialDeliveryError(observedError)).toBe(true);
+      if (!isChannelPartialDeliveryError(observedError)) {
+        throw observedError;
+      }
+      const messageIds = Array.from({ length: acceptedCount }, (_, index) => String(2801 + index));
+      if (failLastSend) {
+        const cleanupFailure = observedError.cause;
+        expect(cleanupFailure).toBeInstanceOf(AggregateError);
+        if (!(cleanupFailure instanceof AggregateError)) {
+          throw cleanupFailure;
+        }
+        expect(cleanupFailure.errors).toContain(historyFailure);
+        let acceptedFailure: unknown = cleanupFailure.errors[0];
+        while (isChannelPartialDeliveryError(acceptedFailure)) {
+          acceptedFailure = acceptedFailure.cause;
+        }
+        expect(acceptedFailure).toBe(sendFailure);
+      } else {
+        expect(observedError.cause).toBe(historyFailure);
+      }
+      expect(observedError.deliveryResult).toMatchObject({
+        visibleReplySent: true,
+        messageIds,
+        receipt: {
+          primaryPlatformMessageId: "2801",
+          platformMessageIds: messageIds,
+          threadId: "777",
+          parts: messageIds.map((platformMessageId) => ({
+            platformMessageId,
+            threadId: "777",
+          })),
+        },
+      });
+    },
+  );
+
   it("suppresses text-only tool payloads delivered after the final answer", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -318,7 +374,10 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Final answer");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Final answer",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -351,6 +410,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(
       "FY25 outlook\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
@@ -385,6 +445,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(
       "FY25 outlook\n\nPipeline (table)\n- Account: Acme; Stage: Won; ARR: 125000\n- Account: Globex; Stage: Review; ARR: 82000",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
@@ -419,6 +480,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(
       "Quarterly results\n\nFY25 outlook\n\nDo not duplicate this block\n\nRevenue (bar chart)\n- USD: Q1: 12; Q2: 18",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();

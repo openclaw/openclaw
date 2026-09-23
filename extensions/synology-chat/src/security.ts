@@ -2,7 +2,7 @@
  * Security module: token validation, rate limiting, input sanitization, user allowlist.
  */
 
-import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -10,6 +10,7 @@ import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { getSynologyRuntime } from "./runtime.js";
 
 /**
  * Validate webhook token using constant-time comparison.
@@ -27,8 +28,9 @@ export async function authorizeUserForDmWithIngress(params: {
   userId: string;
   dmPolicy: "open" | "allowlist" | "disabled";
   allowedUserIds: string[];
+  contextBinding?: ChannelIngressContextBinding;
 }) {
-  return await resolveStableChannelMessageIngress({
+  return await getSynologyRuntime().channel.inbound.ingress.resolveStable({
     channelId: "synology-chat",
     accountId: params.accountId,
     identity: {
@@ -38,8 +40,9 @@ export async function authorizeUserForDmWithIngress(params: {
     subject: { stableId: params.userId },
     conversation: {
       kind: "direct",
-      id: "direct",
+      id: params.userId,
     },
+    contextBinding: params.contextBinding,
     event: { mayPair: false },
     dmPolicy: params.dmPolicy,
     allowFrom: params.allowedUserIds,

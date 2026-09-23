@@ -1,6 +1,7 @@
 // Shutdown drain tests protect bounded session_end hook emission for tracked
 // active sessions during gateway shutdown and restart.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearInternalHooks, registerInternalHook } from "../hooks/internal-hooks.js";
 
@@ -48,11 +49,9 @@ vi.mock("../auto-reply/reply/session-hooks.js", () => ({
   buildSessionStartHookPayload: vi.fn(() => ({ event: {}, context: {} })),
 }));
 
-const {
-  drainActiveSessionsForShutdown,
-  emitGatewaySessionEndPluginHook,
-  emitGatewaySessionStartPluginHook,
-} = await import("./session-reset-service.js");
+const { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook } =
+  await import("./session-reset-service.js");
+const { drainActiveSessionsForShutdown } = await import("./active-sessions-shutdown-drain.js");
 const { forgetActiveSessionForShutdown, listActiveSessionsForShutdown } =
   await import("./active-sessions-shutdown-tracker.js");
 
@@ -72,6 +71,7 @@ function trackSessionForShutdown(params: { sessionId: string; sessionKey?: strin
     sessionKey: params.sessionKey ?? "agent:main:main",
     sessionId: params.sessionId,
     storePath: "/tmp/store.json",
+    agentId: "main",
   });
 }
 
@@ -141,6 +141,7 @@ describe("drainActiveSessionsForShutdown", () => {
       sessionKey: "agent:main:main",
       sessionId: "sess-A",
       storePath: "/tmp/store.json",
+      agentId: "main",
       reason: "reset",
     });
     runSessionEndMock.mockClear();
@@ -152,10 +153,7 @@ describe("drainActiveSessionsForShutdown", () => {
   });
 
   it("awaits each session_end handler so the bounded timeout actually races real plugin work", async () => {
-    let resolveHandler: (() => void) | undefined;
-    const handlerLatch = new Promise<void>((resolve) => {
-      resolveHandler = resolve;
-    });
+    const { promise: handlerLatch, resolve: resolveHandler } = createDeferred();
     runSessionEndMock.mockImplementationOnce(async () => {
       await handlerLatch;
     });
@@ -214,6 +212,7 @@ describe("drainActiveSessionsForShutdown", () => {
       sessionKey: "agent:main:main",
       sessionId: "sess-A",
       storePath: "/tmp/store.json",
+      agentId: "main",
       reason: "deleted",
     });
 
@@ -233,6 +232,7 @@ describe("drainActiveSessionsForShutdown", () => {
       sessionKey: "agent:main:main",
       sessionId: "sess-A",
       storePath: "/tmp/store.json",
+      agentId: "main",
       reason: "idle",
       nextSessionId: "sess-B",
     });

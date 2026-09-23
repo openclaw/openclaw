@@ -1,4 +1,7 @@
 import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
+import { fnv1aUtf16 } from "../lib/fnv1a.ts";
+import { isSessionRunActive } from "../lib/session-run-state.ts";
 
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
@@ -52,7 +55,14 @@ export type LobsterPetPaletteId =
 
 // Pass-through ledge visitors. Strangers are other lobsters; everyone else
 // is, at best, lobster-adjacent. None of them count for the Lobsterdex.
-export type LobsterPasserKind = "stranger" | "crab" | "snail" | "duck" | "jellyfish";
+export type LobsterPasserKind =
+  | "stranger"
+  | "crab"
+  | "snail"
+  | "duck"
+  | "jellyfish"
+  | ThemeCritterId
+  | (string & {});
 
 // How an arriving pet gets onto the ledge. Rolled per arrival from its own
 // seeded stream; "walk" is the classic pop-up from behind the ledge.
@@ -77,8 +87,6 @@ export type LobsterPetAccessory =
 
 export type LobsterPetAntennae = "perky" | "droopy";
 
-export type LobsterPetBuild = "round" | "squat" | "slender";
-
 export type LobsterPetClawSize = "dainty" | "regular" | "mighty";
 
 export type LobsterPetLook = {
@@ -91,7 +99,6 @@ export type LobsterPetLook = {
   facing: 1 | -1;
   personality: LobsterPetPersonalityId;
   blinkDelayS: number;
-  build: LobsterPetBuild;
   clawSize: LobsterPetClawSize;
   tailFan: boolean;
   // Pokemon-style shiny roll (~1 in 512): sparkles plus a saturated sheen,
@@ -158,11 +165,10 @@ export function resolveLobsterRunOutcome(
 
 export function resolveLobsterPetMode(
   connected: boolean,
-  sessions: ReadonlyArray<{ hasActiveRun?: boolean | null }> | null | undefined,
+  sessions: ReadonlyArray<{ hasActiveRun?: boolean; status?: SessionRunStatus }> | null | undefined,
 ): LobsterPetMode {
   if (!connected) {
     return "offline";
   }
-  return sessions?.some((row) => row.hasActiveRun === true) ? "busy" : "idle";
+  return sessions?.some(isSessionRunActive) ? "busy" : "idle";
 }
-import { fnv1aUtf16 } from "../lib/fnv1a.ts";

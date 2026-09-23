@@ -1,6 +1,7 @@
 /** Polls watched adopted sessions for direct upstream human activity. */
 import { createHash } from "node:crypto";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
+import { allowsProcessHomeSessionScan } from "../config/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { readRecentUserAssistantTextForSession } from "../config/sessions/transcript.js";
@@ -187,7 +188,10 @@ async function runSessionUpstreamMonitorTick(
     return;
   }
   const dbOptions = databaseOptions(options);
-  const linksByCatalog = listWatchedSessionUpstreamLinks(dbOptions);
+  const linksByCatalog = await listWatchedSessionUpstreamLinks(dbOptions);
+  if (options.signal?.aborted) {
+    return;
+  }
   const watchedLinkKeys = new Set(
     [...linksByCatalog.values()].flatMap((links) => links.map(upstreamMonitorLinkKey)),
   );
@@ -245,7 +249,9 @@ async function runSessionUpstreamMonitorTick(
       links.map((link) => [link.sessionKey, link.updatedAt]),
     );
     try {
-      const outcomes = await provider.checkUpstreamActivity(probes);
+      const outcomes = await provider.checkUpstreamActivity(probes, {
+        allowProcessHomeFallback: allowsProcessHomeSessionScan(options.env ?? process.env),
+      });
       if (options.signal?.aborted) {
         return;
       }

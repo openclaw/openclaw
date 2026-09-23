@@ -7,6 +7,7 @@ import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onbo
 import { expectProviderOnboardPreservesPrimary } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
+  ZAI_CN_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
   ZAI_GLOBAL_BASE_URL,
@@ -31,13 +32,13 @@ describe("zai onboard", () => {
     const ids = defaultCfg.models?.providers?.zai?.models?.map((m) => m.id);
     expect(ids).toEqual(manifest.modelCatalog.providers.zai.models.map((model) => model.id));
     expect(
-      defaultCfg.models?.providers?.zai?.models?.find((model) => model.id === "glm-5.2"),
+      defaultCfg.models?.providers?.zai?.models?.find((model) => model.id === "glm-5.3"),
     ).toMatchObject({
-      contextWindow: 1_000_000,
+      contextWindow: 1_048_576,
       maxTokens: 131_072,
     });
     expect(
-      defaultCfg.models?.providers?.zai?.models?.find((model) => model.id === "glm-5.2"),
+      defaultCfg.models?.providers?.zai?.models?.find((model) => model.id === "glm-5.3"),
     ).not.toHaveProperty("baseUrl");
   });
 
@@ -48,7 +49,7 @@ describe("zai onboard", () => {
     });
   });
 
-  it("resolves GLM-5.2 through the selected Coding Plan or custom endpoint", async () => {
+  it("resolves GLM-5.3 models through the selected Coding Plan or custom endpoint", async () => {
     for (const [name, cfg, expectedBaseUrl] of [
       ["coding-cn", applyZaiConfig({}, { endpoint: "coding-cn" }), ZAI_CODING_CN_BASE_URL],
       [
@@ -82,7 +83,9 @@ describe("zai onboard", () => {
         );
         const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
         expect(registry.getError()).toBeUndefined();
-        expect(registry.find("zai", "glm-5.2")?.baseUrl).toBe(expectedBaseUrl);
+        for (const modelId of ["glm-5.3", "glm-5.3-flash"]) {
+          expect(registry.find("zai", modelId)?.baseUrl).toBe(expectedBaseUrl);
+        }
       } finally {
         await fs.rm(dir, { recursive: true, force: true });
       }
@@ -99,7 +102,7 @@ describe("zai onboard", () => {
     }
   });
 
-  it("defaults general and Coding Plan endpoints to GLM-5.2", () => {
+  it("defaults general endpoints to GLM-5.2 and Coding Plan endpoints to GLM-5.3", () => {
     const codingCfg = applyZaiConfig({}, { endpoint: "coding-global" });
     const existingCodingCfg = applyZaiConfig({
       models: {
@@ -115,9 +118,9 @@ describe("zai onboard", () => {
 
     expect(resolveAgentModelPrimaryValue(defaultCfg.agents?.defaults?.model)).toBe("zai/glm-5.2");
     expect(codingCfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_GLOBAL_BASE_URL);
-    expect(resolveAgentModelPrimaryValue(codingCfg.agents?.defaults?.model)).toBe("zai/glm-5.2");
+    expect(resolveAgentModelPrimaryValue(codingCfg.agents?.defaults?.model)).toBe("zai/glm-5.3");
     expect(resolveAgentModelPrimaryValue(existingCodingCfg.agents?.defaults?.model)).toBe(
-      "zai/glm-5.2",
+      "zai/glm-5.3",
     );
   });
 
@@ -126,5 +129,20 @@ describe("zai onboard", () => {
       applyProviderConfig: applyZaiProviderConfig,
       primaryModelRef: "anthropic/claude-opus-4-5",
     });
+  });
+
+  it("declares every endpoint the onboarding can select so the catalog stays eligible", () => {
+    const declaredHosts = new Set(manifest.providerEndpoints.flatMap((entry) => entry.hosts));
+    for (const baseUrl of [
+      ZAI_GLOBAL_BASE_URL,
+      ZAI_CODING_GLOBAL_BASE_URL,
+      ZAI_CN_BASE_URL,
+      ZAI_CODING_CN_BASE_URL,
+    ]) {
+      expect(
+        declaredHosts.has(new URL(baseUrl).hostname),
+        `${baseUrl} must stay declared in providerEndpoints, otherwise the manifest catalog is excluded for that endpoint`,
+      ).toBe(true);
+    }
   });
 });

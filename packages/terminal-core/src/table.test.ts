@@ -1,9 +1,14 @@
-// Terminal Core tests cover table behavior.
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { note as clackNote } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { visibleWidth } from "./ansi.js";
-import { resolveNoteColumns, resolveNoteOutputColumns, wrapNoteMessage } from "./note.js";
+import { sanitizeForLog, stripAnsi, visibleWidth } from "./ansi.js";
+import {
+  noteToStream,
+  resolveNoteColumns,
+  resolveNoteOutputColumns,
+  wrapNoteMessage,
+} from "./note.js";
 import { renderTable } from "./table.js";
 
 function mockProcessPlatform(platform: NodeJS.Platform): void {
@@ -22,27 +27,171 @@ function expectIntroducersToStartCompleteSequences(
   }
 }
 
+function createKeyValueColumns() {
+  return [
+    { key: "K", header: "K", minWidth: 3 },
+    { key: "V", header: "V", flex: true, minWidth: 10 },
+  ];
+}
+
+const pluginListColumns = [
+  { key: "Name", header: "Name", minWidth: 14, flex: true },
+  { key: "ID", header: "ID", minWidth: 10, flex: true },
+  { key: "Format", header: "Format", minWidth: 9 },
+  { key: "Status", header: "Status", minWidth: 10 },
+  { key: "Source", header: "Source", minWidth: 26, flex: true },
+  { key: "Version", header: "Version", minWidth: 8 },
+];
+
+const pluginListRows = [
+  {
+    Name: "Amazon Bedrock",
+    ID: "amazon-bedrock",
+    Format: "openclaw",
+    Status: "enabled",
+    Source: "~/Projects/openclaw/extensions/amazon-bedrock/index.ts",
+    Version: "2026.8.1",
+  },
+  {
+    Name: "N".repeat(40),
+    ID: "i".repeat(22),
+    Format: "openclaw",
+    Status: "disabled",
+    Source: `/${"s".repeat(80)}`,
+    Version: "2026.8.1",
+  },
+];
+
+function renderPluginListTable(width: number): string {
+  return renderTable({
+    width,
+    border: "unicode",
+    columns: pluginListColumns,
+    rows: pluginListRows,
+  });
+}
+
 describe("renderTable", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
-  it.each(["$&", "$`", "$'", "$$"])(
-    "displays a literal %s home path in terminal tables",
-    (pattern) => {
-      const home = path.resolve("test-home", `${pattern}user`);
-      vi.stubEnv("HOME", home);
-      vi.stubEnv("USERPROFILE", "");
-      vi.stubEnv("OPENCLAW_HOME", "~/state");
+  it("renders fitting ASCII cells without grapheme segmentation", () => {
+    const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
 
-      expect(
-        renderTable({
-          columns: [{ key: "location", header: "Location" }],
-          rows: [{ location: `${home}/state/project` }],
-          border: "none",
-        }),
-      ).toBe("Location\n$OPENCLAW_HOME/project\n");
+    const out = renderTable({
+      border: "ascii",
+      columns: [{ key: "Name", header: "Name" }],
+      rows: [{ Name: "alpha" }, { Name: "beta" }],
+    });
+
+    expect(out).toBe(
+      ["+-------+", "| Name  |", "+-------+", "| alpha |", "| beta  |", "+-------+", ""].join("\n"),
+    );
+    expect(segment).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["plain", "a\tb", "| a b     |"],
+    ["styled", "\x1b[31ma\tb\x1b[39m", "| \x1b[31ma b\x1b[39m     |"],
+    ["wide", "表\t文", "| 表 文   |"],
+    ["ESC CSI", "a\x1b[31\tmb\x1b[0m", "| a\x1b[\x18 \x1b[31mb\x1b[0m     |"],
+    ["C1 CSI", "a\x9b31\tmb\x9b0m", "| a\x9b\x18 \x9b31mb\x9b0m     |"],
+    ["CSI control order", "a\x1b[31\t\x07\tmb\x1b[0m", "| a\x1b[\x18 \x07 \x1b[31mb\x1b[0m    |"],
+    ["cancelled CSI", "a\x1b[31\t\x18b", "| a\x1b[\x18 \x1b[31\x18b     |"],
+    ["CSI without text", "\x1b[31\tm", "|         |"],
+    [
+      "OSC payload",
+      "a\x1b]8;id=keep\tpayload;https://example.com/\x07b\x1b]8;;\x07",
+      "| a\x1b]8;id=keep\tpayload;https://example.com/\x07b\x1b]8;;\x07      |",
+    ],
+  ])("materializes executable tabs as table spacing in %s cells", (_label, value, expectedRow) => {
+    const out = renderTable({
+      border: "ascii",
+      columns: [{ key: "V", header: "V", minWidth: 9, maxWidth: 9 }],
+      rows: [{ V: value }],
+    });
+
+    expect(out).toBe(
+      ["+---------+", "| V       |", "+---------+", expectedRow, "+---------+", ""].join("\n"),
+    );
+  });
+
+  it.each([
+    ["ESC", "a\x1b[31\x1b[0\tmb", "| a b     |"],
+    ["C1", "a\x9b31\x9b0\tmb", "| a b     |"],
+    ["mixed chain", "a\x1b[31\x9b1\x1b[0\tmb", "| a b     |"],
+    ["C0 before restart", "a\x1b[31\t\x07\x9b0\tmb", "| a  b    |"],
+  ])("keeps materialized tabs visible after %s CSI restarts", (_label, value, expectedRow) => {
+    const out = renderTable({
+      border: "ascii",
+      columns: [{ key: "V", header: "V", minWidth: 9, maxWidth: 9 }],
+      rows: [{ V: value }],
+    });
+
+    expect(sanitizeForLog(out.split("\n")[3] ?? "")).toBe(expectedRow);
+    expect(stripAnsi(out)).not.toContain("\x18");
+  });
+
+  it.each([0, 3])("renders all %i rows without an argument-count limit", (count) => {
+    const out = renderTable({
+      border: "ascii",
+      columns: [{ key: "Key", header: "Key" }],
+      rows: Array.from({ length: count }, () => ({ Key: "session" })),
+    });
+
+    const lines = out.trimEnd().split("\n");
+    expect(lines).toHaveLength(count + 4);
+    expect(lines.filter((line) => line === "| session |")).toHaveLength(count);
+    expect(lines[1]).toMatch(/^\| Key +\|$/u);
+    expect(lines.at(-1)).toBe(lines[0]);
+  });
+
+  it.each(["rows", "wrapped lines", "soft-wrap suffix"])(
+    "renders large %s with the CLI process stack",
+    (shape) => {
+      // Worker threads have a larger stack than the CLI process. Neither many
+      // rows nor one heavily wrapped cell may depend on V8's argument-count limit.
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          new URL("../../../scripts/tsx.mjs", import.meta.url).href,
+          "--input-type=module",
+          "-e",
+          `import { renderTable } from ${JSON.stringify(new URL("./table.ts", import.meta.url).href)};
+const shape = ${JSON.stringify(shape)};
+const output = renderTable({
+  border: "ascii",
+  columns: [{ key: "Key", header: "Key", maxWidth: 5 }],
+  rows: shape === "rows"
+    ? Array.from({ length: 150_000 }, () => ({ Key: "row" }))
+    : [{ Key: shape === "wrapped lines" ? "row".repeat(150_000) : "a  " + "\\u200b".repeat(150_000) + "b" }],
+});
+const lines = output.trimEnd().split("\\n");
+console.log(JSON.stringify({
+  lineCount: lines.length,
+  rows: lines.filter(line => line === "| row |").length,
+  header: lines[1],
+  firstLine: lines[0],
+  lastLine: lines.at(-1),
+  softWrapRowsMatch: lines[3] === "| a   |" && lines[4] === "| " + "\\u200b".repeat(150_000) + "b   |",
+}));`,
+        ],
+        { encoding: "utf8", timeout: 30_000 },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      const rendered = JSON.parse(result.stdout);
+      expect(rendered.lineCount).toBe(shape === "soft-wrap suffix" ? 6 : 150_004);
+      expect(rendered.rows).toBe(shape === "soft-wrap suffix" ? 0 : 150_000);
+      if (shape === "soft-wrap suffix") {
+        expect(rendered.softWrapRowsMatch).toBe(true);
+      }
+      expect(rendered.header).toMatch(/^\| Key +\|$/u);
+      expect(rendered.lastLine).toBe(rendered.firstLine);
     },
   );
 
@@ -60,6 +209,30 @@ describe("renderTable", () => {
     expect(out).toMatch(/[│|] Dashboard\s+[│|]/);
   });
 
+  it("keeps identifier columns intact when wider flex columns can absorb the shrink", () => {
+    const out = renderPluginListTable(120);
+
+    expect(out).toMatch(/│ Amazon Bedrock\s+│ amazon-bedrock\s+│/);
+  });
+
+  it.each([60, 80, 120, 160, 200])(
+    "keeps the plugin-list shape deterministic and within %i columns",
+    (width) => {
+      const out = renderPluginListTable(width);
+      const lines = out.trimEnd().split("\n");
+      const headerCells = (lines[1] ?? "").split("│").slice(1, -1);
+
+      expect(out).toBe(renderPluginListTable(width));
+      expect(Math.max(...lines.map(visibleWidth))).toBeLessThanOrEqual(width);
+      expect(headerCells).toHaveLength(pluginListColumns.length);
+      for (const [index, column] of pluginListColumns.entries()) {
+        expect(visibleWidth(headerCells[index] ?? "")).toBeGreaterThanOrEqual(
+          visibleWidth(column.header) + 2,
+        );
+      }
+    },
+  );
+
   it("expands flex columns to fill available width", () => {
     const width = 60;
     const out = renderTable({
@@ -75,13 +248,22 @@ describe("renderTable", () => {
     expect(visibleWidth(firstLine)).toBe(width);
   });
 
+  it("stops flex growth at the cap when a fractional width rounds up", () => {
+    const out = renderTable({
+      width: 20,
+      border: "ascii",
+      padding: 0,
+      columns: [{ key: "V", header: "V", minWidth: 7.999999999999999, maxWidth: 9, flex: true }],
+      rows: [{ V: "x" }],
+    });
+
+    expect(out).toBe("+---------+\n|V        |\n+---------+\n|x        |\n+---------+\n");
+  });
+
   it("wraps ANSI-colored cells without corrupting escape sequences", () => {
     const out = renderTable({
       width: 36,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [
         {
           K: "X",
@@ -105,10 +287,7 @@ describe("renderTable", () => {
     const foregroundReset = "\x1b[39m";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [
         {
           K: "X",
@@ -198,10 +377,7 @@ describe("renderTable", () => {
     const reset = "\x1b[0m";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `prefix ${bold}${red}${"a".repeat(80)}${reset}` }],
     });
 
@@ -221,10 +397,7 @@ describe("renderTable", () => {
     const globalReset = "\x1b[0m";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `${combined}${"u".repeat(80)}${globalReset}` }],
     });
 
@@ -247,10 +420,7 @@ describe("renderTable", () => {
     const reset = "\x1b[0m";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [
         {
           K: "X",
@@ -274,10 +444,7 @@ describe("renderTable", () => {
     const foregroundReset = "\x1b[39m";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `${red}${"a".repeat(80)}${globalReset}` }],
     });
 
@@ -294,10 +461,7 @@ describe("renderTable", () => {
     const close = "\x1b]8;;\x07";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `${open}OpenClaw${close}` }],
     });
 
@@ -310,10 +474,7 @@ describe("renderTable", () => {
     const foregroundReset = "\x9b39m";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `${red}${"a".repeat(80)}${globalReset}` }],
     });
 
@@ -334,10 +495,7 @@ describe("renderTable", () => {
     const canonicalClose = "\x1b]8;;\x07";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `${open}OpenClaw${close}` }],
     });
 
@@ -350,10 +508,7 @@ describe("renderTable", () => {
     const close = "\x1b]8;;\x07";
     const out = renderTable({
       width: 20,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `${open}${"OpenClaw".repeat(5)}${close} after` }],
     });
 
@@ -385,33 +540,20 @@ describe("renderTable", () => {
       const link = `${openSeq}OpenClaw${closeSeq}`;
       const out = renderTable({
         width: 20,
-        columns: [
-          { key: "K", header: "K", minWidth: 3 },
-          { key: "V", header: "V", flex: true, minWidth: 10 },
-        ],
+        border: "unicode",
+        columns: createKeyValueColumns(),
         rows: [{ K: "X", V: `before ${link} after` }],
       });
 
-      const lines = out
-        .split("\n")
-        .filter((line) => line.includes("before") || line.includes("after"));
-      // Every line that contains visible text should close any active link before
-      // the table border and reopen it at the start of the continuation.
-      for (const line of lines) {
-        const contentStart = Math.max(line.lastIndexOf("│"), line.lastIndexOf("|")) + 1;
-        const content = line.slice(contentStart);
-        // "after" must not be part of the hyperlink: it should appear after a
-        // close sequence on its line, or the line has no open sequence at all.
-        if (content.includes("after")) {
-          const afterIndex = content.indexOf("after");
-          const openIndex = content.indexOf(openSeq);
-          const closeIndex = content.indexOf(closeSeq);
-          expect(closeIndex).toBeGreaterThan(-1);
-          expect(closeIndex).toBeLessThan(afterIndex);
-          if (openIndex >= 0 && openIndex < afterIndex) {
-            expect(closeIndex).toBeGreaterThan(openIndex);
-          }
-        }
+      const afterLines = out.split("\n").filter((line) => line.includes("after"));
+      expect(afterLines.length).toBeGreaterThan(0);
+      for (const line of afterLines) {
+        const content = line.split("│")[2] ?? "";
+        expect(content).toContain("after");
+        // The link may have closed on a previous line. Any opener before the
+        // suffix on this line must also have closed before the suffix starts.
+        const prefix = content.slice(0, content.indexOf("after"));
+        expect(prefix.lastIndexOf(openSeq)).toBeLessThanOrEqual(prefix.lastIndexOf(closeSeq));
       }
     },
   );
@@ -426,10 +568,7 @@ describe("renderTable", () => {
       const link = `${openSeq}OpenClaw${closeSeq}`;
       const out = renderTable({
         width: 20,
-        columns: [
-          { key: "K", header: "K", minWidth: 3 },
-          { key: "V", header: "V", flex: true, minWidth: 10 },
-        ],
+        columns: createKeyValueColumns(),
         rows: [{ K: "X", V: `${link} after` }],
       });
 
@@ -450,28 +589,129 @@ describe("renderTable", () => {
     },
   );
 
-  it("respects explicit newlines in cell values", () => {
-    const out = renderTable({
-      width: 48,
-      columns: [
-        { key: "A", header: "A", minWidth: 6 },
-        { key: "B", header: "B", minWidth: 10, flex: true },
-      ],
-      rows: [{ A: "row", B: "line1\nline2" }],
-    });
+  it.each([
+    ["LF", "\n", "", ""],
+    ["CR", "\r", "", ""],
+    ["CRLF", "\r\n", "", ""],
+    ["colored CRLF", "\r\n", "\x1b[31m", "\x1b[39m"],
+    ["linked LF", "\n", "\x1b]8;;https://example.com/\x07", "\x1b]8;;\x07"],
+  ])(
+    "preserves blank %s lines without adding rows after wrapped spacing",
+    (_label, separator, open, close) => {
+      const out = renderTable({
+        border: "ascii",
+        width: 15,
+        columns: [
+          { key: "A", header: "A", minWidth: 6, maxWidth: 6 },
+          { key: "B", header: "B", minWidth: 6, maxWidth: 6 },
+        ],
+        rows: [
+          {
+            A: `${open}${["", "Read ", "", "Next", "", ""].join(separator)}${close}`,
+            B: "0\n1\n2\n3\n4",
+          },
+        ],
+      });
 
-    const lines = out.trimEnd().split("\n");
-    const line1Index = lines.findIndex((line) => line.includes("line1"));
-    const line2Index = lines.findIndex((line) => line.includes("line2"));
-    expect(line1Index).toBeGreaterThan(-1);
-    expect(line2Index).toBe(line1Index + 1);
-  });
+      const dataLines = out.trimEnd().split("\n").slice(3, -1);
+      expect(
+        dataLines.map((line) =>
+          stripAnsi(line)
+            .split("|")
+            .slice(1, -1)
+            .map((cell) => cell.trim()),
+        ),
+      ).toEqual([
+        ["", "0"],
+        ["Read", "1"],
+        ["", "2"],
+        ["Next", "3"],
+        ["", "4"],
+      ]);
+      if (open) {
+        for (const line of dataLines) {
+          const cell = line.split("|")[1] ?? "";
+          expect(cell).toContain(open);
+          expect(cell).toContain(close);
+        }
+      }
+    },
+  );
 
-  it("shortens only exact home paths and child paths in table cells", () => {
-    const home = path.resolve("test-home", "alice");
-    vi.stubEnv("HOME", home);
+  it.each([
+    ["LF", "line1\n東京 line2", "", "", 0],
+    ["CR", "line1\r東京 line2", "", "", 0],
+    ["CRLF", "line1\r\n東京 line2", "", "", 0],
+    ["colored CRLF", "\x1b[31mline1\r\n東京 line2\x1b[39m", "\x1b[31m", "\x1b[39m", 0],
+    [
+      "linked CRLF",
+      "\x1b]8;;https://openclaw.ai\x07line1\r\n東京 line2\x1b]8;;\x07",
+      "\x1b]8;;https://openclaw.ai\x07",
+      "\x1b]8;;\x07",
+      0,
+    ],
+    ["CR/SGR/LF", "line1\r\x1b[31m\n東京 line2\x1b[39m", "\x1b[31m", "\x1b[39m", 1],
+    [
+      "CR/OSC-8/LF",
+      "line1\r\x1b]8;;https://openclaw.ai\x07\n東京 line2\x1b]8;;\x07",
+      "\x1b]8;;https://openclaw.ai\x07",
+      "\x1b]8;;\x07",
+      1,
+    ],
+    ["CR/CSI-HT/LF", "line1\r\x1b[31\tm\n東京 line2\x1b[39m", "\x1b[31m", "\x1b[39m", 1],
+    ["CR/CSI-BEL/LF", "line1\r\x1b[31\x07m\n東京 line2\x1b[39m", "\x1b[31\x07m", "\x1b[39m", 1],
+  ] as const)(
+    "respects explicit %s newlines in cell values",
+    (_name, value, open, close, styledStart) => {
+      const out = renderTable({
+        width: 48,
+        border: "unicode",
+        columns: [
+          { key: "A", header: "A", minWidth: 6 },
+          { key: "B", header: "B", minWidth: 10, flex: true },
+        ],
+        rows: [{ A: "row", B: value }],
+      });
+
+      const lines = out.trimEnd().split("\n");
+      expect(lines).toHaveLength(6);
+      for (const line of lines) {
+        expect(visibleWidth(line)).toBe(48);
+      }
+      const dataLines = lines.slice(3, -1);
+      expect(
+        dataLines.map((line) =>
+          sanitizeForLog(line)
+            .split("│")
+            .slice(1, -1)
+            .map((cell) => cell.trim()),
+        ),
+      ).toEqual([
+        ["row", "line1"],
+        ["", "東京 line2"],
+      ]);
+      if (open) {
+        for (const line of dataLines.slice(styledStart)) {
+          expect(line).toContain(open);
+          expect(line).toContain(close);
+          expect(line.lastIndexOf(close)).toBeLessThan(line.lastIndexOf("│"));
+        }
+      }
+    },
+  );
+
+  it.each([
+    ["", path.resolve("/home/other"), "~"],
+    ["undefined", path.resolve("/home/other"), "~"],
+    ["null", path.resolve("/home/other"), "~"],
+    [" undefined ", path.resolve("/home/other"), "~"],
+    ["\tnull\t", path.resolve("/home/other"), "~"],
+    ["/srv/openclaw-home", path.resolve("/srv/openclaw-home"), "$OPENCLAW_HOME"],
+    [" /srv/openclaw-home ", path.resolve("/srv/openclaw-home"), "$OPENCLAW_HOME"],
+  ])("shortens home paths in table cells for OPENCLAW_HOME=%j", (override, home, prefix) => {
+    vi.stubEnv("HOME", "/home/other");
     vi.stubEnv("USERPROFILE", "");
-    vi.stubEnv("OPENCLAW_HOME", "");
+    vi.stubEnv("OPENCLAW_HOME", override);
 
     const out = renderTable({
       border: "none",
@@ -484,11 +724,11 @@ describe("renderTable", () => {
       ],
     });
 
-    expect(out).toContain("~\n");
-    expect(out).toContain("~/project");
+    expect(out).toContain(`${prefix}\n`);
+    expect(out).toContain(`${prefix}/project`);
     expect(out).toContain(`${home}2/project`);
-    expect(out).toContain("Workspace: ~/project");
-    expect(out).not.toContain("~2/project");
+    expect(out).toContain(`Workspace: ${prefix}/project`);
+    expect(out).not.toContain(`${prefix}2/project`);
   });
 
   it("keeps table borders aligned when cells contain wide emoji graphemes", () => {
@@ -516,6 +756,23 @@ describe("renderTable", () => {
     }
   });
 
+  it("preserves mixed-width graphemes after a soft wrap", () => {
+    const out = renderTable({
+      border: "ascii",
+      padding: 0,
+      columns: [{ key: "V", header: "V", minWidth: 4, maxWidth: 4 }],
+      rows: [{ V: "a 表👩‍💻e\u0301काﾊﾞ後 xyz" }],
+    });
+
+    expect(out.trimEnd().split("\n").slice(3, -1)).toEqual([
+      "|a   |",
+      "|表👩‍💻|",
+      "|e\u0301का |",
+      "|ﾊﾞ後|",
+      "|xyz |",
+    ]);
+  });
+
   it("keeps borders aligned when a wide grapheme lands in a narrow cell", () => {
     // A width-2 CJK/emoji glyph in a column whose content width is 1 cannot be
     // wrapped, so padCell must clamp it instead of overflowing the cell and
@@ -532,18 +789,19 @@ describe("renderTable", () => {
     }
   });
 
-  it("keeps borders aligned when a narrow flex column receives wide content", () => {
+  it("terminates with aligned borders when a flex column starts at its floor", () => {
     const out = renderTable({
       width: 10,
       border: "ascii",
       columns: [
         { key: "A", header: "long header here" },
-        { key: "B", header: "", flex: true },
+        { key: "B", header: "", flex: true, maxWidth: 3 },
       ],
       rows: [{ A: "data", B: "📸" }],
     });
     const lines = out.trimEnd().split("\n");
     const headerWidth = visibleWidth(lines[0] ?? "");
+    expect(headerWidth).toBeGreaterThan(10);
     for (const line of lines) {
       expect(visibleWidth(line)).toBe(headerWidth);
     }
@@ -570,8 +828,6 @@ describe("renderTable", () => {
   it.each([
     ["ESC CSI with BEL", "\x1b[31\x07m"],
     ["C1 CSI with BEL", "\x9b31\x07m"],
-    ["ESC CSI with HT", "\x1b[31\tm"],
-    ["C1 CSI with HT", "\x9b31\tm"],
   ])("keeps %s sequences with executable C0 controls atomic", (_label, sequence) => {
     const out = renderTable({
       width: 5,
@@ -587,7 +843,7 @@ describe("renderTable", () => {
     }
   });
 
-  it("rechecks atomic control width after wrapping at an earlier break", () => {
+  it("wraps separately executed CSI tabs with the surrounding text", () => {
     const sequence = "\x1b[31\t\t\tm";
     const out = renderTable({
       width: 7,
@@ -597,20 +853,25 @@ describe("renderTable", () => {
       rows: [{ V: `a bbb${sequence}d\x1b[0m` }],
     });
 
-    expect(out).toContain(sequence);
-    for (const line of out.trimEnd().split("\n")) {
-      expect(visibleWidth(line)).toBe(7);
-    }
+    expect(out).toBe(
+      [
+        "+-----+",
+        "|V    |",
+        "+-----+",
+        "|a    |",
+        "|bbb\x1b[\x18  |",
+        "|\x1b[31md\x1b[0m    |",
+        "+-----+",
+        "",
+      ].join("\n"),
+    );
   });
 
   it("does not interpret CSI intermediates as SGR state", () => {
     const sequence = "\x1b[31 m";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `${sequence}${"a".repeat(80)}` }],
     });
 
@@ -659,6 +920,31 @@ describe("renderTable", () => {
 });
 
 describe("wrapNoteMessage", () => {
+  it.each([
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+    ["CR", "\r"],
+    ["Unicode line separator", "\u2028"],
+    ["Unicode paragraph separator", "\u2029"],
+  ])("preserves note text across %s line endings", (_label, separator) => {
+    const input = ["First paragraph.", "", "- Second paragraph."].join(separator);
+    const writes: string[] = [];
+    const output = {
+      columns: 80,
+      write(chunk: string) {
+        writes.push(chunk);
+        return true;
+      },
+    } as unknown as NodeJS.WriteStream;
+
+    noteToStream(input, "Note", output);
+
+    const rendered = stripAnsi(writes.join(""));
+    expect(rendered).toContain("First paragraph.");
+    expect(rendered).toContain("- Second paragraph.");
+    expect(wrapNoteMessage(input, { columns: 80 })).toBe("First paragraph.\n\n- Second paragraph.");
+  });
+
   it("preserves long filesystem paths without inserting spaces/newlines", () => {
     const input =
       "/Users/user/Documents/Github/impact-signals-pipeline/with/really/long/segments/file.txt";
@@ -682,12 +968,25 @@ describe("wrapNoteMessage", () => {
     expect(wrapped).toBe(input);
   });
 
-  it("still chunks generic long opaque tokens to avoid pathological line width", () => {
-    const input = "x".repeat(70);
-    const wrapped = wrapNoteMessage(input, { maxWidth: 20, columns: 80 });
-
-    expect(wrapped).toContain("\n");
-    expect(wrapped.replace(/\n/g, "")).toBe(input);
+  const word = "abcdefghijklmnopqrstuvwxyz";
+  it.each<[name: string, input: string, maxWidth: number, expected: string]>([
+    [
+      "opaque token",
+      "x".repeat(70),
+      20,
+      ["x".repeat(20), "x".repeat(20), "x".repeat(20), "x".repeat(10)].join("\n"),
+    ],
+    ["token followed by another word", `${word} tail`, 14, "abcdefghijklmn\nopqrstuvwxyz\ntail"],
+    ["token after a short word", `ok ${word} tail`, 14, "ok\nabcdefghijklmn\nopqrstuvwxyz\ntail"],
+    ["bullet token", `- ${word} tail`, 14, "- abcdefghijkl\n  mnopqrstuvwx\n  yz\n  tail"],
+    [
+      "bullet with wide spacing",
+      `-\u3000${word} tail`,
+      14,
+      "-\u3000abcdefghijk\n  lmnopqrstuv\n  wxyz\n  tail",
+    ],
+  ])("chunks a %s with exact note spacing", (_name, input, maxWidth, expected) => {
+    expect(wrapNoteMessage(input, { maxWidth, columns: 80 })).toBe(expected);
   });
 
   it("wraps bullet lines while preserving bullet indentation", () => {
@@ -748,6 +1047,24 @@ describe("wrapNoteMessage", () => {
     );
   });
 
+  it("routes notes and wrapping through the selected output", () => {
+    const writes: string[] = [];
+    const output = {
+      columns: 120,
+      write(chunk: string) {
+        writes.push(chunk);
+        return true;
+      },
+    } as unknown as NodeJS.WriteStream;
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    noteToStream("word ".repeat(18).trim(), "Wide note", output);
+
+    const rendered = stripAnsi(writes.join(""));
+    expect(rendered).toContain("word ".repeat(17).trim());
+    expect(stdoutWrite).not.toHaveBeenCalled();
+  });
+
   it("coerces nullish and non-string note messages before wrapping", () => {
     expect(wrapNoteMessage(undefined, { maxWidth: 20, columns: 80 })).toBe("");
     expect(wrapNoteMessage(null, { maxWidth: 20, columns: 80 })).toBe("");
@@ -757,7 +1074,7 @@ describe("wrapNoteMessage", () => {
   });
 
   it("keeps wrapped lines within the visible-column budget for wide (CJK) words", () => {
-    // A long CJK run with no separators reaches splitLongWord; each fullwidth char is 2 columns,
+    // A long CJK run with no separators reaches word-fragment wrapping; each fullwidth char is 2 columns,
     // so splitting by code-point count would emit lines up to 2x the budget.
     const input = "東京特許許可局長今日休暇許可局長今日休暇東京特許";
     const lines = wrapNoteMessage(input, { maxWidth: 20, columns: 80 }).split("\n");

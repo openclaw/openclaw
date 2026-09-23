@@ -10,6 +10,7 @@ import {
   normalizeAttachments,
   resolveAttachmentKind,
 } from "./attachments.normalize.js";
+import { selectAttachments } from "./attachments.select.js";
 
 describe("normalizeAttachmentPath", () => {
   it("allows localhost file URLs", () => {
@@ -147,6 +148,78 @@ describe("normalizeAttachments", () => {
       alreadyTranscribed: false,
     });
   });
+
+  it.each([
+    { fileName: "photo.png", capability: "image", contentType: "application/octet-stream" },
+    { fileName: "voice.ogg", capability: "audio", contentType: undefined },
+    { fileName: "clip.mp4", capability: "video", contentType: "application/octet-stream" },
+    { fileName: "scan.TIFF", capability: "image", contentType: "binary/octet-stream" },
+  ] as const)(
+    "selects opaque-source $fileName for its $capability provider",
+    ({ fileName, capability, contentType }) => {
+      const attachments = normalizeAttachments({
+        media: [
+          {
+            url: "https://cdn.example.test/download/opaque",
+            fileName,
+            contentType,
+          },
+        ],
+      });
+
+      expect(attachments.map(resolveAttachmentKind)).toEqual([capability]);
+      expect(selectAttachments({ capability, attachments }).selected).toEqual(attachments);
+    },
+  );
+
+  it.each([
+    {
+      name: "filename-only SVG",
+      fact: { fileName: "diagram.svg", contentType: "application/octet-stream" },
+    },
+    {
+      name: "SVG source before a raster display filename",
+      fact: { path: "/tmp/diagram.svg", fileName: "photo.png" },
+    },
+    {
+      name: "authoritative document kind",
+      fact: { fileName: "photo.png", kind: "document" as const },
+    },
+    {
+      name: "authoritative document MIME",
+      fact: { fileName: "photo.png", contentType: "application/pdf" },
+    },
+  ])("does not select $name for image understanding", ({ fact }) => {
+    const attachments = normalizeAttachments({
+      media: [{ url: "https://cdn.example.test/download/opaque", ...fact }],
+    });
+
+    expect(selectAttachments({ capability: "image", attachments }).selected).toEqual([]);
+  });
+
+  it.each([
+    ["audio", "ogg", undefined],
+    ["audio", "ogg", "photo.png"],
+    ["video", "mp4", undefined],
+    ["video", "mp4", "photo.png"],
+  ] as const)(
+    "selects the %s .%s URL with display filename %s",
+    (capability, extension, fileName) => {
+      const attachments = normalizeAttachments({
+        media: [
+          {
+            path: "/tmp/opaque",
+            url: `https://cdn.example.test/download/media.${extension}`,
+            fileName,
+            contentType: "application/octet-stream",
+          },
+        ],
+      });
+
+      expect(selectAttachments({ capability, attachments }).selected).toEqual(attachments);
+      expect(selectAttachments({ capability: "image", attachments }).selected).toEqual([]);
+    },
+  );
 });
 
 describe("resolveAttachmentKind", () => {
@@ -156,6 +229,8 @@ describe("resolveAttachmentKind", () => {
     { source: "/tmp/photo.heif", expected: "image" },
     { source: "/tmp/scan.tif", expected: "image" },
     { source: "/tmp/scan.TIFF", expected: "image" },
+    { source: " /tmp/photo.png ", expected: "image" },
+    { source: " /tmp/scan.TIFF ", expected: "image" },
     { source: "/tmp/clip.flv", expected: "video" },
     { source: "/tmp/clip.m4v", expected: "video" },
     { source: "/tmp/clip.wmv", expected: "video" },

@@ -1,59 +1,61 @@
-import type {
-  AgentMessage,
-  ToolResultContentSource,
-} from "../../../packages/agent-core/src/types.js";
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { ToolResultContentSource } from "../../../packages/agent-core/src/types.js";
 /**
  * Shared types for preparing and executing CLI-backed agent runs.
  */
-import type {
-  SourceReplyDeliveryMode,
-  TaskSuggestionDeliveryMode,
-} from "../../auto-reply/get-reply-options.types.js";
-import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { FastMode } from "../../auto-reply/thinking.shared.js";
-import type { ChatType } from "../../channels/chat-type.js";
-import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import type {
-  CliSessionBinding,
-  SessionEntry,
-  SessionToolOverrides,
-} from "../../config/sessions.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import type { ImageContent } from "../../llm/types.js";
-import type { MediaFact } from "../../media/media-facts.js";
-import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
-import type { CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
-import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
+import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
+import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
+import type {
+  CliBackendExecute,
+  CliBackendExecutionMode,
+  CliBackendPromptContext,
+} from "../../plugins/cli-backend.types.js";
+import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types.js";
 import type { SpawnSecretInput } from "../../process/supervisor/types.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
-import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import type { SkillSnapshot } from "../../skills/types.js";
+import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
+import type { AdmittedRunContext } from "../admitted-run-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
-import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { CliSessionReuseResult } from "../cli-session.js";
+import type {
+  AgentRunClientContext,
+  AgentRunMessageContext,
+  AgentRunChannelContext,
+  AgentRunModelOptions,
+  AgentRunInputContext,
+  AgentRunTranscriptContext,
+  AgentRunLifecycle,
+} from "../command/shared-types.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type {
   CurrentInboundPromptContext,
-  EmbeddedRunTrigger,
   ResolvedToolPromptFinalizer,
 } from "../embedded-agent-runner/run/params.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
-import type { FastModeAutoProgressState } from "../fast-mode.js";
-import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
-import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
-import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
-import type { SessionManager } from "../sessions/index.js";
+import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
+import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
+import type { ReplyExpectation } from "../reply-completion.js";
+import type { RootedExecutionRequest } from "../rooted-run-params.js";
+import type { EmbeddedRunTrigger } from "../run-trigger.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
+import type { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+
+export type NodeClaudePlacement = { nodeId: string; cwd?: string };
+
+export type CliExecutionTarget =
+  | { kind: "node"; placement: NodeClaudePlacement }
+  | { kind: "plugin"; execute: CliBackendExecute }
+  | { kind: "process" };
 
 type CliSessionRetryParams = {
   provider: string;
@@ -63,29 +65,18 @@ type CliSessionRetryParams = {
 
 /** Input contract for one CLI-backed agent run. */
 export type RunCliAgentParams = {
-  /** Caller-owned in-memory transcript for ephemeral helper runs. */
-  sessionManager?: SessionManager;
-  sessionId: string;
-  sessionKey?: string;
-  chatType?: ChatType;
+  /** Core lifecycle owner; never forwarded to the plugin execution context. */
+  diagnosticOwner?: DiagnosticEmbeddedRunOwner;
   sessionTarget?: SessionTranscriptRuntimeTarget;
   /** Session identity used only for sandbox and tool-policy resolution. */
   runtimePolicySessionKey?: string;
   sessionEntry?: SessionEntry;
-  agentId?: string;
   trigger?: EmbeddedRunTrigger;
   sessionFile: string;
-  workspaceDir: string;
-  /** Trusted model/auth owner directory. Defaults to the session agent directory. */
-  agentDir?: string;
-  /** Task working directory for CLI execution. Defaults to workspaceDir. */
-  cwd?: string;
+  /** Host-owned task root; preparation must mediate all tools through its filesystem policy. */
+  rootedExecution?: RootedExecutionRequest;
   /** Start a fresh CLI process so per-turn MCP authority is reloaded from this run. */
   disableCliLiveSession?: boolean;
-  config?: OpenClawConfig;
-  toolOverrides?: SessionToolOverrides;
-  prompt: string;
-  transcriptPrompt?: string;
   /** Finalizes caller-owned guidance after backend tool projection is known. */
   finalizePromptForResolvedTools?: ResolvedToolPromptFinalizer;
   /** Undecorated current-turn prompt used to merge inline and offloaded images. */
@@ -97,6 +88,9 @@ export type RunCliAgentParams = {
   executionMode?: CliBackendExecutionMode;
   /** Internal one-shot inference path: suppress transcript, hook, context-engine, and delivery work. */
   isolatedCompletion?: true;
+  outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
+  /** Internal backend control command: reuse the native session without recording a conversation turn. */
+  controlOperation?: "compact";
   /** Persist the successful CLI assistant reply into the OpenClaw session transcript. */
   persistAssistantTranscript?: boolean;
   /** Session store path used when assistant transcript persistence is enabled. */
@@ -105,55 +99,23 @@ export type RunCliAgentParams = {
   expectedLifecycleRevision?: string;
   /** Exact admitted run allowed to append to the durable transcript. */
   expectedWriterRunId?: string;
-  /** Canonical user-turn recorder shared with gateway/queue dispatch. */
-  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
-  /** Context engine resolved once by the outer logical-turn owner. */
-  contextEngineLogicalTurnLease?: ContextEngineLogicalTurnLease;
-  /** Attempt-local facts accepted or discarded by the outer logical-turn owner. */
-  onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
-  /** Skip current-turn user persistence when a retry/fallback already wrote it. */
-  suppressNextUserMessagePersistence?: boolean;
-  /** Notification fired after the current user turn has been accepted into the transcript. */
-  onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
-  currentInboundEventKind?: InboundEventKind;
   currentInboundContext?: CurrentInboundPromptContext;
-  inputProvenance?: InputProvenance;
   /** Selected model provider used for tool policy; distinct from a CLI runtime id. */
   modelProvider?: string;
+  /** Resolved logical model selected by this run's owner, before CLI transport mapping. */
+  requesterModel?: ProviderModelRef;
+  /** Native context window resolved by the run owner from its prepared model catalog. */
+  modelContextWindow?: number;
+  /** Effective context cap resolved by the run owner from its prepared model catalog. */
+  modelContextTokens?: number;
   provider: string;
-  model?: string;
-  thinkLevel?: ThinkLevel;
-  fastMode?: FastMode;
-  /** Stable outer-run start time for auto fast-mode cutoff across retries/fallbacks. */
-  fastModeStartedAtMs?: number;
-  /** Effective auto fast-mode cutoff for this run, in seconds. */
-  fastModeAutoOnSeconds?: number;
-  /** Shared notification state for nested harnesses that can observe the same tool boundary. */
-  fastModeAutoProgressState?: FastModeAutoProgressState;
-  /** True when the outer model fallback loop has reached its final candidate. */
-  isFinalFallbackAttempt?: boolean;
-  timeoutMs: number;
-  /**
-   * Explicit run timeout, in milliseconds, when the caller can distinguish a
-   * deliberate timeout override from the inherited agent default.
-   */
-  runTimeoutOverrideMs?: number;
-  runId: string;
-  /** Immutable lifecycle ownership captured when this execution was admitted. */
-  lifecycleGeneration?: string;
-  lane?: string;
-  jobId?: string;
-  extraSystemPrompt?: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
-  requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
   allowEmptyAssistantReplyAsSilent?: boolean;
+  terminalReplyExpectation?: ReplyExpectation;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
   cliSessionBindingFacts?: CliSessionBindingFacts;
   streamParams?: import("../command/shared-types.js").AgentStreamParams;
-  ownerNumbers?: string[];
   cliSessionId?: string;
   cliSessionBinding?: CliSessionBinding;
   /** Consume the backend fork argument on this resume invocation only. */
@@ -168,7 +130,6 @@ export type RunCliAgentParams = {
   persistCliSessionForkSuccessor?: (sessionId: string) => Promise<void>;
   /** Atomically arm a cache-preserving fork before retrying a stalled resumed session. */
   onBeforeForkedCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
-  authProfileId?: string;
   /** Private seam: report the credential/runtime owner only after a successful real turn. */
   onSuccessfulAuthBinding?: (binding: {
     authProfileId?: string;
@@ -181,58 +142,27 @@ export type RunCliAgentParams = {
     skipLocalCredential?: true;
   }) => void;
   onBeforeFreshCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
-  bootstrapPromptWarningSignaturesSeen?: string[];
-  bootstrapPromptWarningSignature?: string;
   bootstrapContextMode?: BootstrapContextMode;
-  bootstrapContextRunKind?: BootstrapContextRunKind;
-  images?: ImageContent[];
-  imageOrder?: PromptImageOrderEntry[];
-  /** Ordered facts represented by attachment text in the current prompt. */
-  media?: MediaFact[];
-  skillsSnapshot?: SkillSnapshot;
-  messageChannel?: string;
-  messageProvider?: string;
-  /** Capabilities declared by the gateway client that originated this run. */
-  clientCaps?: string[];
-  currentChannelId?: string;
   chatId?: string;
-  channelContext?: PluginHookChannelContext;
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  currentInboundAudio?: boolean;
-  agentAccountId?: string;
-  /** Sender identity for channel-originated runs when available. */
-  senderId?: string | null;
-  /** Trusted sender identity bit for channel action auth. */
-  senderIsOwner?: boolean;
-  /** Additional trusted sender identities used by toolsBySender policy. */
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
-  /** Group policy context captured from the originating run. */
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  /** Parent session provenance used to validate inherited group policy. */
-  spawnedBy?: string | null;
   /** Effective turn-local exec policy resolved before entering the CLI runtime. */
   execOverrides?: ExecPolicyOverrides;
   /** Effective elevated-exec defaults resolved before entering the CLI runtime. */
   bashElevated?: ExecElevatedDefaults;
-  /** Device-scoped operator session allowed to review approvals initiated by this run. */
-  approvalReviewerDeviceId?: string;
   /** Runtime tool allow-list. CLI harnesses need a backend-owned exact translation. */
   toolsAllow?: string[];
-  /** Trusted server-stamped authority for an explicitly capped scheduled run. */
-  scheduledToolPolicy?: ScheduledToolPolicyContext;
+  /** Exact Skill Workshop proposal revision bound by the Gateway for this turn. */
+  skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
+  skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
+  /** Server-authored origin for fresh automation mutations from this CLI run. */
+  cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
   /** Exact native plus canonical OpenClaw surface for a selectable CLI backend. */
   cliToolAvailability?: {
     native: string[];
     openClaw: string[];
   };
-  disableTools?: boolean;
-  abortSignal?: AbortSignal;
-  onExecutionStarted?: () => void;
+  /** Caller-owned authority for credential use; cancellation alone is not authorization. */
+  assertCurrent?: () => void;
+  onExecutionStarted?: () => unknown;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;
@@ -241,7 +171,6 @@ export type RunCliAgentParams = {
     source?: string;
     firstModelCallStarted?: boolean;
   }) => void;
-  replyOperation?: ReplyOperation;
   emitCommentaryText?: boolean;
   /**
    * Close any long-lived CLI live session created for this run after the run
@@ -249,15 +178,13 @@ export type RunCliAgentParams = {
    * handles alive after returning.
    */
   cleanupCliLiveSessionOnRunEnd?: boolean;
-  /**
-   * Close process-wide bundle MCP resources after this run. Intended for
-   * one-shot local CLI calls where the loopback server should not keep Node
-   * alive after the JSON response is emitted.
-   */
-  cleanupBundleMcpOnRunEnd?: boolean;
-  /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
-  oneShotCliRun?: boolean;
-};
+} & AgentRunClientContext &
+  AgentRunMessageContext &
+  AgentRunChannelContext &
+  AgentRunModelOptions &
+  AgentRunInputContext &
+  AgentRunTranscriptContext &
+  AgentRunLifecycle;
 
 /** Backend config after MCP, skill, env, and cleanup preparation. */
 export type CliSecretInput = SpawnSecretInput & {
@@ -265,20 +192,27 @@ export type CliSecretInput = SpawnSecretInput & {
   fingerprint: string;
 };
 
-type CliPreparedBackend = {
-  backend: CliBackendConfig;
-  beforeExecution?: () => Promise<void>;
-  cleanup?: () => Promise<void>;
+type CliPreparedBackend = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> & {
+  /** Exact process cleanup retained across attempt copies and natural registry removal. */
+  closeLiveSession?: (
+    reason: import("../../plugins/cli-backend.types.js").CliBackendLiveSessionCloseReason,
+  ) => Promise<void>;
+  /** Transfer process-owned native skill artifacts without claiming turn-scoped MCP/auth state. */
+  claimLiveSessionResources?: () => (() => Promise<void>) | undefined;
   /** Private child-only credential transport; never serialized into env or public plugin state. */
   secretInput?: CliSecretInput;
   /** Gateway-owned capture fence for this prepared bundle-MCP client. */
   mcpClientGrantCapture?: {
-    activate: (captureKey: string) => void;
+    /** Fresh bearer minted for this prepared turn. */
+    transportToken: string;
+    /** Move this turn's authority onto the bearer held by an existing child. */
+    adoptProcessToken: (processToken: string) => void;
+    /** Revoke the bearer when the child process that holds it exits. */
+    revokeProcessToken: () => void;
+    activate: (captureKey: string, assertCurrent: () => void) => void;
     deactivate: (captureKey: string) => void;
+    captureNativeTools?: (tools: unknown) => void;
   };
-  mcpConfigHash?: string;
-  mcpResumeHash?: string;
-  env?: Record<string, string>;
 };
 
 /** Reusable CLI session id, soft content drift, or hard invalidation. */
@@ -295,35 +229,53 @@ export type CliSessionBindingFacts = {
   requireExplicitMessageTarget?: boolean;
 };
 
+export function captureCliRunStartTime() {
+  return { started: Date.now(), startedMonotonicMs: performance.now() };
+}
+
 /** Fully prepared execution context consumed by the CLI runner executor. */
 export type PreparedCliRunContext = {
-  params: RunCliAgentParams;
+  params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
+  /** Core-only original caller policy, bound to each native request's exact lifetime. */
+  bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   effectiveAuthProfileId?: string;
   /** Selected profile snapshot used only for terminal health settlement. */
   authProfileStore?: AuthProfileStore;
   agentDir?: string;
   started: number;
+  /** Monotonic anchor for elapsed-budget measurements, immune to wall-clock steps. */
+  startedMonotonicMs: number;
   workspaceDir: string;
   cwd?: string;
   backendResolved: ResolvedCliBackend;
   preparedBackend: CliPreparedBackend;
+  /** Enforced timeout of this run's managed Claude MCP server, when present. */
+  managedMcpToolTimeoutMs?: number;
+  executionTarget: CliExecutionTarget;
+  /** Keeps a plugin-owned turn admitted on its backend instance across a plugin hot reload. */
+  pluginExecutionConsumer?: PluginInstanceConsumer;
   reusableCliSession: CliReusableSession;
   /** Resume is safe only while the exact managed Claude stdio child still exists. */
   requiredClaudeLiveSessionGeneration?: string;
   hadSessionFile: boolean;
   contextEngineConfig: OpenClawConfig;
   contextEngine?: ContextEngine;
+  deferContextEngineDisposalUntil?: (promise: Promise<void>) => void;
   contextEngineTurnPrompt?: string;
-  contextEngineDeferredTurnMaintenance?: Promise<void>;
+  promptContext?: CliBackendPromptContext;
+  /** Logical model input retained for policy/observation hooks when transport context is separate. */
+  promptForHooks?: string;
   modelId: string;
   normalizedModel: string;
   contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
-  claudeSkillsPluginArgs?: string[] | undefined;
-  bootstrapPromptWarningLines: string[];
+  claudeSkillsPluginArgs: string[];
+  /** Host-held, policy-selected personal Workshop tool for the paired-node adapter. */
+  nodeSkillWorkshop?: import("../tools/common.js").AnyAgentTool;
   openClawHistoryPrompt?: string;
-  heartbeatPrompt?: string;
+  /** Live owner of the transcript account-coverage checkpoint, independent of native continuity. */
+  cliHistoryWriter?: import("../../config/sessions/cli-history-boundary.js").CliHistoryWriter;
   authEpoch?: string;
   /** Strict owner fingerprint captured for live inference verification only. */
   authBindingFingerprint?: string;

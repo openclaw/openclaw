@@ -265,7 +265,8 @@ describe("TTS runtime voice model and streaming behavior", () => {
     expect(result.outputFormat).toBe("pcm");
     expect(result.fileExtension).toBe(".pcm");
     expect(result.target).toBe("audio-file");
-    expect(result.release).toBe(release);
+    await result.release?.();
+    expect(release).toHaveBeenCalledOnce();
     const skippedAttempt = requireAttempt(result.attempts, 0);
     expect(skippedAttempt).toMatchObject({
       provider: "buffered",
@@ -283,10 +284,12 @@ describe("TTS runtime voice model and streaming behavior", () => {
     expect(streamSynthesize).toHaveBeenCalledOnce();
   });
 
-  it("classifies streaming timeouts before falling back with raw text", async () => {
+  it("classifies streaming timeouts before falling back with normalized speech text", async () => {
+    // Real transport timeouts arrive as "TimeoutError" (fetch-timeout.ts), not
+    // AbortError; the classifier must catch the shape providers actually throw.
     const timeoutStreamSynthesize = vi.fn(async () => {
-      const error = new Error("stalled");
-      error.name = "AbortError";
+      const error = new Error("request timed out");
+      error.name = "TimeoutError";
       throw error;
     });
     const fallbackStreamSynthesize = vi.fn(async () => ({
@@ -336,6 +339,9 @@ describe("TTS runtime voice model and streaming behavior", () => {
       outcome: "success",
       reasonCode: "success",
     });
-    expect(fallbackStreamSynthesize).toHaveBeenCalledWith(expect.objectContaining({ text }));
+    expect(fallbackStreamSynthesize).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Keep streaming Markdown raw!" }),
+    );
+    await result.release?.();
   });
 });

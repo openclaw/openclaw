@@ -43,7 +43,7 @@ openclaw plugins install @openclaw/zalouser
 }
 ```
 
-4. Restart the Gateway (or finish setup).
+4. Check `openclaw channels status --probe`; start the Gateway if it is offline. Config changes follow [hot reload](/gateway/configuration/hot-reload).
 5. DM access defaults to pairing; approve the pairing code on first contact.
 
 ## What it is
@@ -68,8 +68,16 @@ openclaw directory groups list --channel zalouser --query "work"
 ## Limits
 
 - Outbound text is chunked to 2000 characters (Zalo client limit).
+- Canceling or replacing a send stops its later requests after preparation. Messages already submitted may still arrive, and previously reported message IDs remain recorded when a later chunk or audio step fails.
+- `channels.zalouser.mediaMaxMb` limits each outbound attachment in MiB. The selected channel account's `mediaMaxMb` overrides the root, then `agents.defaults.mediaMaxMb` supplies the fallback. Images may be optimized; omitted limits preserve the shared loader defaults.
 - Streaming is not supported.
 - Completed inbound message ids are retained for 30 days, bounded to the 1000 most recent entries per account.
+
+The optional `zalouser` tool selects a credential profile, not a channel account.
+Its image action uses the current delivery account's cap only when that account
+uses the selected profile. Otherwise it uses the channel root and agent fallback;
+it does not search other accounts that happen to share the profile. Profile
+selection and the tool's literal `default` profile remain unchanged.
 
 ## Inbound durability
 
@@ -215,5 +223,5 @@ For multi-account setups, prefer setting `profile` on each account in config so 
 - [Channels Overview](/channels) - all supported channels
 - [Pairing](/channels/pairing) - DM authentication and pairing flow
 - [Groups](/channels/groups) - group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Channel routing](/channels/channel-routing) - session routing for messages
 - [Security](/gateway/security) - access model and hardening

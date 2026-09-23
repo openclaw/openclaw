@@ -277,6 +277,195 @@ describe("handleFileWrite — symlink protection", () => {
     await expectAccessMissing(path.join(realDir, "new"));
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects a retargeted parent before writing bytes",
+    async () => {
+      const first = path.join(tmpRoot, "first");
+      const second = path.join(tmpRoot, "second");
+      const link = path.join(tmpRoot, "current");
+      await fs.mkdir(first);
+      await fs.mkdir(second);
+      await fs.symlink(first, link);
+      const requestedPath = path.join(link, "out.txt");
+
+      const preflight = await handleFileWrite({
+        path: requestedPath,
+        contentBase64: b64("approved"),
+        followSymlinks: true,
+        preflightOnly: true,
+      });
+      if (!preflight.ok) {
+        throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+      }
+      await fs.unlink(link);
+      await fs.symlink(second, link);
+
+      const result = await handleFileWrite({
+        path: requestedPath,
+        contentBase64: b64("not approved"),
+        followSymlinks: true,
+        expectedCanonicalPath: preflight.path,
+      });
+
+      expectFailure(result, "CANONICAL_PATH_CHANGED");
+      await expectAccessMissing(path.join(first, "out.txt"));
+      await expectAccessMissing(path.join(second, "out.txt"));
+    },
+  );
+
+  it("rejects an existing-file replacement at the same canonical pathname", async () => {
+    const target = path.join(tmpRoot, "target.txt");
+    const moved = path.join(tmpRoot, "moved.txt");
+    await fs.writeFile(target, "approved");
+    const preflight = await handleFileWrite({
+      path: target,
+      contentBase64: b64("next"),
+      overwrite: true,
+      preflightOnly: true,
+    });
+    if (!preflight.ok) {
+      throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+    }
+    await fs.rename(target, moved);
+    await fs.writeFile(target, "replacement");
+
+    const result = await handleFileWrite({
+      path: target,
+      contentBase64: b64("next"),
+      overwrite: true,
+      expectedCanonicalPath: preflight.path,
+      expectedBinding: preflight.binding,
+    });
+
+    expectFailure(result, "CANONICAL_PATH_CHANGED");
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("replacement");
+    await expect(fs.readFile(moved, "utf8")).resolves.toBe("approved");
+  });
+
+  it("checks hard links on the bound write handle after path validation", async () => {
+    const target = path.join(tmpRoot, "target.txt");
+    const alias = path.join(tmpRoot, "outside-alias.txt");
+    await fs.writeFile(target, "before");
+    const params = {
+      path: target,
+      contentBase64: b64("after"),
+      overwrite: true,
+      rejectHardlinks: true,
+    };
+    const preflight = await handleFileWrite({ ...params, preflightOnly: true });
+    if (!preflight.ok) {
+      throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+    }
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      if (args[0] === target && args[1] === "r+") {
+        await fs.link(target, alias);
+      }
+      return handle;
+    });
+    try {
+      const result = await handleFileWrite({
+        ...params,
+        expectedCanonicalPath: preflight.path,
+        expectedBinding: preflight.binding,
+      });
+      expectFailure(result, "HARDLINK_TARGET_DENIED");
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("before");
+      await expect(fs.readFile(alias, "utf8")).resolves.toBe("before");
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it.each(["", "after", "after!", "a longer replacement"])(
+    "preserves the preflight-bound inode and hardlinks for payload %j",
+    async (content) => {
+      const target = path.join(tmpRoot, "target.txt");
+      const alias = path.join(tmpRoot, "alias.txt");
+      await fs.writeFile(target, "before");
+      await fs.link(target, alias);
+      const identity = await fs.stat(target, { bigint: true });
+      const preflight = await handleFileWrite({
+        path: target,
+        contentBase64: b64(content),
+        overwrite: true,
+        preflightOnly: true,
+      });
+      if (!preflight.ok) {
+        throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+      }
+
+      const result = await handleFileWrite({
+        path: target,
+        contentBase64: b64(content),
+        overwrite: true,
+        expectedCanonicalPath: preflight.path,
+        expectedBinding: preflight.binding,
+      });
+
+      expectSuccessFields(result, { path: target, size: Buffer.byteLength(content) });
+      await expect(fs.readFile(target, "utf8")).resolves.toBe(content);
+      await expect(fs.readFile(alias, "utf8")).resolves.toBe(content);
+      await expect(fs.stat(target, { bigint: true })).resolves.toMatchObject({
+        dev: identity.dev,
+        ino: identity.ino,
+      });
+    },
+  );
+
+  it("rejects a parent replacement before creating a new file", async () => {
+    const parent = path.join(tmpRoot, "parent");
+    const moved = path.join(tmpRoot, "moved");
+    const target = path.join(parent, "new.txt");
+    await fs.mkdir(parent);
+    const preflight = await handleFileWrite({
+      path: target,
+      contentBase64: b64("next"),
+      preflightOnly: true,
+    });
+    if (!preflight.ok) {
+      throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+    }
+    await fs.rename(parent, moved);
+    await fs.mkdir(parent);
+
+    const result = await handleFileWrite({
+      path: target,
+      contentBase64: b64("next"),
+      expectedCanonicalPath: preflight.path,
+      expectedBinding: preflight.binding,
+    });
+
+    expectFailure(result, "CANONICAL_PATH_CHANGED");
+    await expectAccessMissing(target);
+    await expectAccessMissing(path.join(moved, "new.txt"));
+  });
+
+  it("creates through the preflight anchor when the parent is unchanged", async () => {
+    const parent = path.join(tmpRoot, "parent");
+    const target = path.join(parent, "new.txt");
+    await fs.mkdir(parent);
+    const preflight = await handleFileWrite({
+      path: target,
+      contentBase64: b64("next"),
+      preflightOnly: true,
+    });
+    if (!preflight.ok) {
+      throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+    }
+
+    const result = await handleFileWrite({
+      path: target,
+      contentBase64: b64("next"),
+      expectedCanonicalPath: preflight.path,
+      expectedBinding: preflight.binding,
+    });
+
+    expectSuccessFields(result, { path: target, size: 4 });
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("next");
+  });
+
   it("refuses to overwrite a directory", async () => {
     const target = path.join(tmpRoot, "is-a-dir");
     await fs.mkdir(target);
@@ -403,5 +592,104 @@ describe("handleFileWrite — size cap", () => {
       contentBase64: big.toString("base64"),
     });
     expectFailure(r, "FILE_TOO_LARGE");
+  });
+});
+
+describe("handleFileWrite — bound overwrite rollback", () => {
+  function failBoundWrites(
+    filePath: string,
+    shouldFail: (position: number) => { fail: boolean; partial?: boolean },
+  ) {
+    const realOpen = fs.open.bind(fs);
+    return vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
+      const handle = await realOpen(target, flags as never, mode as never);
+      if (String(target) === filePath && flags === "r+") {
+        const realWrite = handle.write.bind(handle);
+        handle.write = (async (
+          buffer: Buffer,
+          offset: number,
+          length: number,
+          position: number,
+        ) => {
+          const decision = shouldFail(position);
+          if (decision.fail) {
+            if (decision.partial) {
+              await realWrite(buffer, offset, Math.max(1, Math.floor(length / 2)), position);
+            }
+            throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+          }
+          return realWrite(buffer, offset, length, position);
+        }) as typeof handle.write;
+      }
+      return handle;
+    });
+  }
+
+  async function preflightBinding(target: string, payload: Buffer) {
+    const preflight = await handleFileWrite({
+      path: target,
+      contentBase64: payload.toString("base64"),
+      overwrite: true,
+      preflightOnly: true,
+    });
+    if (!preflight.ok) {
+      throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+    }
+    return preflight;
+  }
+
+  it("restores the original file when the tail extension runs out of space", async () => {
+    const target = path.join(tmpRoot, "victim.bin");
+    const original = Buffer.alloc(4096, 0x61);
+    await fs.writeFile(target, original);
+    const payload = Buffer.alloc(8192, 0x62);
+    const preflight = await preflightBinding(target, payload);
+
+    // The overwrite must extend beyond the original size first; fail there.
+    const spy = failBoundWrites(target, (position) => ({
+      fail: position >= original.length,
+    }));
+    await expect(
+      handleFileWrite({
+        path: target,
+        contentBase64: payload.toString("base64"),
+        overwrite: true,
+        expectedCanonicalPath: preflight.path,
+        expectedBinding: preflight.binding,
+      }),
+    ).rejects.toMatchObject({ code: "ENOSPC" });
+    spy.mockRestore();
+
+    expect(await fs.readFile(target)).toEqual(original);
+  });
+
+  it("restores the original prefix when a shrinking overwrite fails mid-write", async () => {
+    const target = path.join(tmpRoot, "victim.bin");
+    const original = Buffer.alloc(8192, 0x61);
+    await fs.writeFile(target, original);
+    const payload = Buffer.alloc(4096, 0x62);
+    const preflight = await preflightBinding(target, payload);
+
+    // Fail the prefix overwrite after half of it landed on disk.
+    let failed = false;
+    const spy = failBoundWrites(target, (position) => {
+      if (failed || position >= payload.length) {
+        return { fail: false };
+      }
+      failed = true;
+      return { fail: true, partial: true };
+    });
+    await expect(
+      handleFileWrite({
+        path: target,
+        contentBase64: payload.toString("base64"),
+        overwrite: true,
+        expectedCanonicalPath: preflight.path,
+        expectedBinding: preflight.binding,
+      }),
+    ).rejects.toMatchObject({ code: "ENOSPC" });
+    spy.mockRestore();
+
+    expect(await fs.readFile(target)).toEqual(original);
   });
 });

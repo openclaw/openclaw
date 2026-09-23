@@ -1,24 +1,17 @@
 // Combines task and task-flow audit findings for CLI output.
 // The combined shape lets list/json commands filter and sort both registries together.
 
-import type {
-  TaskFlowAuditCode,
-  TaskFlowAuditFinding,
-  TaskFlowAuditSeverity,
-} from "../tasks/task-flow-registry.audit.js";
+import type { TaskFlowAuditFinding } from "../tasks/task-flow-registry.audit.js";
 import { summarizeTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
-import type {
-  TaskAuditCode,
-  TaskAuditFinding,
-  TaskAuditSeverity,
-} from "../tasks/task-registry.audit.js";
+import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
 import { summarizeTaskAuditFindings } from "../tasks/task-registry.audit.js";
 import { compareTaskAuditFindingSortKeys } from "../tasks/task-registry.audit.shared.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
-
-export type TaskSystemAuditCode = TaskAuditCode | TaskFlowAuditCode;
-export type TaskSystemAuditSeverity = TaskAuditSeverity | TaskFlowAuditSeverity;
+import type {
+  TaskSystemAuditCode,
+  TaskSystemAuditSeverity,
+} from "../tasks/task-system-audit.types.js";
 
 export type TaskSystemAuditFinding = {
   kind: "task" | "task_flow";
@@ -87,17 +80,13 @@ export function buildTaskSystemAuditFindings(params: {
       return true;
     })
     .toSorted(compareSystemAuditFindings);
-  // Keep summary counts based on the full sorted set; filters only affect displayed findings.
-  const sortedAllFindings = [...allFindings].toSorted(compareSystemAuditFindings);
+  // Filters only affect displayed findings; summary counts cover the full set.
   return {
-    allFindings: sortedAllFindings,
     filteredFindings,
-    taskFindings: params.taskFindings,
-    flowFindings: params.flowFindings,
     summary: {
-      total: sortedAllFindings.length,
-      errors: sortedAllFindings.filter((finding) => finding.severity === "error").length,
-      warnings: sortedAllFindings.filter((finding) => finding.severity !== "error").length,
+      total: allFindings.length,
+      errors: allFindings.filter((finding) => finding.severity === "error").length,
+      warnings: allFindings.filter((finding) => finding.severity !== "error").length,
       tasks: summarizeTaskAuditFindings(params.taskFindings),
       taskFlows: summarizeTaskFlowAuditFindings(params.flowFindings),
     },
@@ -114,13 +103,12 @@ export function buildTaskSystemAuditJsonPayload(
     limit?: number;
   },
 ) {
-  const { allFindings, filteredFindings, taskFindings, summary } = result;
+  const { filteredFindings, summary } = result;
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
   const displayed = limit ? filteredFindings.slice(0, limit) : filteredFindings;
   // Preserve the legacy task-only summary while adding combined task-flow counts.
-  const legacySummary = summarizeTaskAuditFindings(taskFindings);
   return {
-    count: allFindings.length,
+    count: summary.total,
     filteredCount: filteredFindings.length,
     displayed: displayed.length,
     filters: {
@@ -129,7 +117,7 @@ export function buildTaskSystemAuditJsonPayload(
       limit: limit ?? null,
     },
     summary: {
-      ...legacySummary,
+      ...summary.tasks,
       taskFlows: summary.taskFlows,
       combined: {
         total: summary.total,

@@ -1,15 +1,14 @@
 import {
   readClosedTranscriptTurn,
+  resolveSessionTranscriptDatabasePath,
   type TranscriptTurnBoundary,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
-import type {
-  ContextEngineRuntimeContext,
-  ContextEngineRuntimeSettings,
-  ContextEngineSessionTarget,
-} from "../../context-engine/types.js";
+import { supportsContextEngineDurableTurnAdvancement } from "../../context-engine/host-compat.js";
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import {
   acceptContextEngineTurnIntent,
@@ -20,6 +19,7 @@ import {
   enqueueContextEngineTurnIntent,
   isRetryableContextEngineTurnReadFailure,
   recoverContextEngineTurnOutbox,
+  type ContextEngineTurnRuntimeContext,
 } from "./context-engine-turn-outbox.js";
 
 const ACCEPTED_TURN_MAX_EVENTS = 20_000;
@@ -30,52 +30,54 @@ export type ContextEngineTurnAttemptFacts = {
   sessionIdUsed: string;
   sessionKey?: string;
   sessionTarget?: ContextEngineSessionTarget;
-  sessionFile: string;
   promptError: boolean;
   aborted: boolean;
   yieldAborted: boolean;
-  tokenBudget?: number;
-  runtimeContext?: ContextEngineRuntimeContext;
-  runtimeSettings?: ContextEngineRuntimeSettings;
-  contextEngineHostSupport?: ContextEngineHostSupport;
-  harnessId?: string | null;
-  runtimeId?: string | null;
-  providerId?: string | null;
-  requestedModelId?: string | null;
-  modelId?: string | null;
-  maxOutputTokens?: number | null;
-  fallbackReason?: string | null;
-  degradedReason?: string | null;
-  config?: OpenClawConfig;
   isHeartbeat?: boolean;
+  runtimeContext?: ContextEngineTurnRuntimeContext;
 };
 
 export async function drainPendingContextEngineTurnsBeforeRun(params: {
   admission: TranscriptTurnBoundary["admission"] | undefined;
   isHeartbeat?: boolean;
   lease: ContextEngineLogicalTurnLease;
+  recorder?: UserTurnTranscriptRecorder;
+  sessionTarget?: ContextEngineSessionTarget;
   warn?: (message: string) => void;
 }): Promise<void> {
   if (
-    !params.admission ||
+    (!params.admission && !params.recorder) ||
     params.lease.degraded ||
-    params.lease.engine.info.transcriptSemantics?.turnAdvancementIdempotency !==
-      "atomic-idempotent-v1" ||
-    typeof params.lease.engine.commitTurn !== "function"
+    !supportsContextEngineDurableTurnAdvancement(params.lease.engine)
   ) {
     return;
   }
   const warn = params.warn ?? console.warn;
   try {
+    const target = params.admission ?? params.sessionTarget;
+    if (!target?.agentId || !target.sessionId || !target.sessionKey || !target.storePath) {
+      params.lease.degradeBeforeStart(
+        "durable transcript target is unavailable before context assembly",
+      );
+      return;
+    }
+    const databasePath = params.admission
+      ? params.admission.storePath
+      : resolveSessionTranscriptDatabasePath({
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          storePath: target.storePath,
+        });
     const database = openOpenClawAgentDatabase({
-      agentId: params.admission.agentId,
-      path: params.admission.storePath,
+      agentId: target.agentId,
+      path: databasePath,
     });
     recoverContextEngineTurnOutbox({
-      currentAdmission: params.admission,
       database,
       engineId: params.lease.effectiveEngineId,
       ownerPluginId: params.lease.effectiveEnginePluginId,
+      sessionId: target.sessionId,
       warn,
     });
     const result = await drainContextEngineTurnOutbox({
@@ -83,7 +85,7 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
       engine: params.lease.engine,
       engineId: params.lease.effectiveEngineId,
       ownerPluginId: params.lease.effectiveEnginePluginId,
-      sessionId: params.admission.sessionId,
+      sessionId: target.sessionId,
       warn,
     });
     if (result.pending) {
@@ -92,15 +94,34 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
       );
       return;
     }
-    // Persist the admission before provider dispatch. A later run can recover an accepted
-    // transcript if this process dies before finalization updates the row.
-    enqueueContextEngineTurnIntent({
-      admission: params.admission,
-      database,
-      engineId: params.lease.effectiveEngineId,
-      isHeartbeat: params.isHeartbeat === true,
-      ownerPluginId: params.lease.effectiveEnginePluginId,
-    });
+    const enqueueAdmission = (admission: TranscriptTurnBoundary["admission"]) => {
+      if (
+        admission.agentId !== target.agentId ||
+        admission.sessionId !== target.sessionId ||
+        admission.sessionKey !== target.sessionKey ||
+        admission.storePath !== databasePath
+      ) {
+        throw new Error("context-engine transcript target changed before provider dispatch");
+      }
+      enqueueContextEngineTurnIntent({
+        admission,
+        database,
+        engineId: params.lease.effectiveEngineId,
+        isHeartbeat: params.isHeartbeat === true,
+        ownerPluginId: params.lease.effectiveEnginePluginId,
+      });
+    };
+    if (params.admission) {
+      enqueueAdmission(params.admission);
+      return;
+    }
+    if (!params.recorder?.setAdmissionHandler) {
+      params.lease.degradeBeforeStart(
+        "current-turn transcript admission cannot be recorded for durable advancement",
+      );
+      return;
+    }
+    params.recorder.setAdmissionHandler(enqueueAdmission);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     warn(`[context-engine] failed to retry pending turn advancement: ${message}`);
@@ -154,15 +175,18 @@ function assertAcceptedTranscriptTarget(facts: ContextEngineTurnAttemptFacts): v
   }
 }
 
+/** Commit the accepted transcript range and offer acknowledged turns to host-owned maintenance. */
 export async function finalizeAcceptedContextEngineTurn(params: {
+  config?: OpenClawConfig;
   facts: ContextEngineTurnAttemptFacts;
   lease: ContextEngineLogicalTurnLease;
   warn?: (message: string) => void;
 }): Promise<void> {
   const declaresDurableAdvancement =
-    params.lease.engine.info.transcriptSemantics?.turnAdvancementIdempotency ===
-    "atomic-idempotent-v1";
-  const implementsDurableAdvancement = typeof params.lease.engine.commitTurn === "function";
+    params.lease.engine.info.transcriptSemantics?.turnAdvancementIdempotency !== undefined;
+  const implementsDurableAdvancement = supportsContextEngineDurableTurnAdvancement(
+    params.lease.engine,
+  );
   // Legacy leaves persistence to SessionManager and owns neither side of this contract.
   // Partial durable declarations remain invariant failures in the guarded path below.
   if (!declaresDurableAdvancement && !implementsDurableAdvancement) {
@@ -189,6 +213,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
       engineId: params.lease.effectiveEngineId,
       isHeartbeat: params.facts.isHeartbeat === true,
       ownerPluginId: params.lease.effectiveEnginePluginId,
+      runtimeContext: params.facts.runtimeContext,
     });
     const closedTurn = readClosedTranscriptTurn({
       boundary: params.facts.boundary,
@@ -216,16 +241,39 @@ export async function finalizeAcceptedContextEngineTurn(params: {
         boundary: params.facts.boundary,
         isHeartbeat: params.facts.isHeartbeat === true,
         messages: closedTurn.messages,
-        prePromptMessageCount: closedTurn.prePromptMessageCount,
+        runtimeContext: params.facts.runtimeContext,
       },
     });
+    const maintenanceBySession = new Map<
+      string,
+      Parameters<typeof runContextEngineMaintenance>[0]
+    >();
     await drainContextEngineTurnOutbox({
       database,
       engine: params.lease.engine,
       engineId: params.lease.effectiveEngineId,
       ownerPluginId: params.lease.effectiveEnginePluginId,
+      onCommitted: (turn) => {
+        // Retain only maintenance inputs, not the committed transcript batches.
+        maintenanceBySession.set(turn.sessionId, {
+          contextEngine: params.lease.engine,
+          sessionId: turn.sessionId,
+          sessionKey: turn.sessionKey,
+          sessionTarget: turn.sessionTarget,
+          sessionFile: turn.admission.sessionKey,
+          reason: "turn",
+          runtimeContext: turn.runtimeContext,
+          config: params.config,
+          onDeferredMaintenance: (promise) => params.lease.deferDisposalUntil(promise),
+        });
+      },
       warn,
     });
+    // Finish draining before maintenance can read engine state. Replayed rows use their own
+    // target and latest model facts; one offer per session lets the scheduler own coalescing.
+    for (const maintenance of maintenanceBySession.values()) {
+      await runContextEngineMaintenance(maintenance);
+    }
   } catch (error) {
     warn(
       `[context-engine] skipped accepted turn advancement: ${error instanceof Error ? error.message : String(error)}`,

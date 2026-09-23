@@ -1,34 +1,31 @@
 /** Tests inbound envelope formatting, timestamps, and sender labels. */
-import { describe, expect, it } from "vitest";
-import { withEnv } from "../test-utils/env.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   formatAgentEnvelope,
-  formatEnvelopeTimestamp,
+  formatAgentEnvelopeTimestamp,
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
 } from "./envelope.js";
 
 describe("formatAgentEnvelope", () => {
   it("includes channel, from, ip, host, and timestamp", () => {
-    withEnv({ TZ: "UTC" }, () => {
-      const ts = Date.UTC(2025, 0, 2, 3, 4, 5); // 2025-01-02T03:04:05Z
-      const body = formatAgentEnvelope({
-        channel: "WebChat",
-        from: "user1",
-        host: "mac-mini",
-        ip: "10.0.0.5",
-        timestamp: ts,
-        envelope: { timezone: "utc" },
-        body: "hello",
-      });
-
-      expect(body).toBe("[WebChat user1 mac-mini 10.0.0.5 Thu 2025-01-02T03:04:05Z] hello");
+    const ts = Date.UTC(2025, 0, 2, 3, 4, 5); // 2025-01-02T03:04:05Z
+    const body = formatAgentEnvelope({
+      channel: "WebChat",
+      from: "user1",
+      host: "mac-mini",
+      ip: "10.0.0.5",
+      timestamp: ts,
+      envelope: { timezone: "utc" },
+      body: "hello",
     });
+
+    expect(body).toBe("[WebChat user1 mac-mini 10.0.0.5 Thu 2025-01-02T03:04:05Z] hello");
   });
 
   it("formats timestamps in local timezone by default", () => {
     const ts = Date.UTC(2025, 0, 2, 3, 4);
-    const expectedTimestamp = formatEnvelopeTimestamp(ts, { timezone: "local" });
+    const expectedTimestamp = formatAgentEnvelopeTimestamp(ts, { timezone: "local" });
     const body = formatAgentEnvelope({
       channel: "WebChat",
       timestamp: ts,
@@ -38,18 +35,76 @@ describe("formatAgentEnvelope", () => {
     expect(body).toBe(`[WebChat ${expectedTimestamp}] hello`);
   });
 
-  it("formats timestamps in UTC when configured", () => {
-    withEnv({ TZ: "America/Los_Angeles" }, () => {
-      const ts = Date.UTC(2025, 0, 2, 3, 4, 5); // 2025-01-02T03:04:05Z (19:04:05 PST)
-      const body = formatAgentEnvelope({
+  it("formats timestamps in UTC across date boundaries", () => {
+    for (const [timestamp, timezone, expected] of [
+      ["2025-01-02T03:04:05Z", "utc", "Thu 2025-01-02T03:04:05Z"],
+      ["2024-12-31T23:59:59Z", "utc", "Tue 2024-12-31T23:59:59Z"],
+      ["2025-01-01T00:00:00Z", "gmt", "Wed 2025-01-01T00:00:00Z"],
+      ["2025-01-03T00:00:00Z", "utc", "Fri 2025-01-03T00:00:00Z"],
+    ] as const) {
+      expect(
+        formatAgentEnvelope({
+          channel: "WebChat",
+          timestamp: new Date(timestamp),
+          envelope: { timezone },
+          body: "hello",
+        }),
+      ).toBe(`[WebChat ${expected}] hello`);
+    }
+  });
+
+  it("preserves UTC fallback and recovery when Intl is replaced or fails", () => {
+    const render = (timestamp: string) =>
+      formatAgentEnvelope({
         channel: "WebChat",
-        timestamp: ts,
+        timestamp: new Date(timestamp),
         envelope: { timezone: "utc" },
         body: "hello",
       });
+    expect(render("2025-01-02T03:04:05Z")).toBe("[WebChat Thu 2025-01-02T03:04:05Z] hello");
 
-      expect(body).toBe("[WebChat Thu 2025-01-02T03:04:05Z] hello");
-    });
+    const OriginalDateTimeFormat = Intl.DateTimeFormat;
+    let constructorFails = true;
+    let newFormatterFails = true;
+    let formatFails = false;
+    const replacement = vi
+      .spyOn(Intl, "DateTimeFormat")
+      .mockImplementation(function (locales, options) {
+        if (constructorFails) {
+          throw new Error("weekday constructor unavailable");
+        }
+        const formatter = new OriginalDateTimeFormat(locales, options);
+        const nativeFormat = formatter.format.bind(formatter);
+        const failedAtCreation = newFormatterFails;
+        Object.defineProperty(formatter, "format", {
+          value: (date?: Date | number) => {
+            if (failedAtCreation || formatFails) {
+              throw new Error("weekday formatting unavailable");
+            }
+            return `replacement-${nativeFormat(date)}`;
+          },
+        });
+        return formatter;
+      });
+    try {
+      expect(render("2025-01-02T03:04:05Z")).toBe("[WebChat 2025-01-02T03:04:05Z] hello");
+      constructorFails = false;
+      expect(render("2025-01-02T03:04:05Z")).toBe("[WebChat 2025-01-02T03:04:05Z] hello");
+
+      newFormatterFails = false;
+      expect(render("2025-01-03T00:00:00Z")).toBe(
+        "[WebChat replacement-Fri 2025-01-03T00:00:00Z] hello",
+      );
+      formatFails = true;
+      expect(render("2025-01-03T00:00:00Z")).toBe("[WebChat 2025-01-03T00:00:00Z] hello");
+      formatFails = false;
+      expect(render("2025-01-01T00:00:00Z")).toBe(
+        "[WebChat replacement-Wed 2025-01-01T00:00:00Z] hello",
+      );
+    } finally {
+      replacement.mockRestore();
+    }
+    expect(render("2025-01-01T00:00:00Z")).toBe("[WebChat Wed 2025-01-01T00:00:00Z] hello");
   });
 
   it("formats timestamps in user timezone when configured", () => {
@@ -70,15 +125,15 @@ describe("formatAgentEnvelope", () => {
       agents: { defaults: { userTimezone: "Not/A_Timezone" } },
     });
     expect(options.timezone).toBe("local");
-    expect(formatEnvelopeTimestamp(ts, options)).toBe(
-      formatEnvelopeTimestamp(ts, { timezone: "local" }),
+    expect(formatAgentEnvelopeTimestamp(ts, options)).toBe(
+      formatAgentEnvelopeTimestamp(ts, { timezone: "local" }),
     );
   });
 
   it("keeps the UTC fallback for an invalid explicit timezone option", () => {
     const ts = Date.UTC(2025, 0, 2, 3, 4, 5);
-    expect(formatEnvelopeTimestamp(ts, { timezone: "Not/A_Timezone" })).toBe(
-      formatEnvelopeTimestamp(ts, { timezone: "utc" }),
+    expect(formatAgentEnvelopeTimestamp(ts, { timezone: "Not/A_Timezone" })).toBe(
+      formatAgentEnvelopeTimestamp(ts, { timezone: "utc" }),
     );
   });
 

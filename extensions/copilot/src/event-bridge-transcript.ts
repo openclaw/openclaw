@@ -1,10 +1,27 @@
 import type { Attachment, SessionEvent } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sanitizeToolResult } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asNonArrayRecord,
+  readNonEmptyStringPreservingWhitespace as readNonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildCopilotAssistantUsage, type CopilotUsageSnapshot } from "./usage-bridge.js";
 
 export type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 export type AssistantUsageSnapshot = CopilotUsageSnapshot;
+
+export type AssistantProjectionChunk = {
+  assistantTexts: string[];
+  event: Extract<SessionEvent, { type: "assistant.message" }>;
+  reasoningText?: string;
+  transcriptAssistantTexts: string[];
+  transcriptReasoningText?: string;
+};
+export type AssistantProjectionGroup = {
+  apiCallId?: string;
+  chunks: AssistantProjectionChunk[];
+};
 
 export interface AttemptTranscriptJournalProjection {
   markReplayIncomplete(): void;
@@ -52,7 +69,7 @@ export function buildAssistantMessage(params: {
   }
   for (const request of toolRequests) {
     content.push({
-      arguments: request.arguments ?? {},
+      arguments: asNonArrayRecord(request.arguments),
       id: request.toolCallId,
       name: request.name,
       type: "toolCall",
@@ -73,18 +90,113 @@ export function buildAssistantMessage(params: {
   };
 }
 
+export function buildAssistantProjectionGroup(
+  group: AssistantProjectionGroup,
+  modelRef: { api?: string; id: string; provider: string },
+  resolveTimestamp: (event: Extract<SessionEvent, { type: "assistant.message" }>) => number,
+  usageByApiCallId: Map<string, AssistantUsageSnapshot>,
+  latestUsage: AssistantUsageSnapshot | undefined,
+  forTranscript: boolean,
+): {
+  message: AssistantMessage | undefined;
+  replayIncomplete: boolean;
+  toolCallIds: string[];
+} {
+  const messages = group.chunks.flatMap((chunk) => {
+    const message = buildAssistantMessage({
+      event: chunk.event,
+      modelRef,
+      now: () => resolveTimestamp(chunk.event),
+      reasoningText: forTranscript ? chunk.transcriptReasoningText : chunk.reasoningText,
+      // Usage is keyed to the complete API call, so every chunk resolves to the
+      // same snapshot and the merged message keeps the terminal copy.
+      usage: resolveAssistantUsage(chunk.event, latestUsage, usageByApiCallId),
+      assistantTexts: forTranscript ? chunk.transcriptAssistantTexts : chunk.assistantTexts,
+    });
+    return message ? [message] : [];
+  });
+  const replayIncomplete = group.chunks.some(({ event }) =>
+    hasUnprojectedAssistantReplayState(event),
+  );
+  const last = messages.at(-1);
+  if (!last) {
+    return { message: undefined, replayIncomplete, toolCallIds: [] };
+  }
+  const narrative: AssistantMessage["content"] = [];
+  let terminalThinking:
+    | Extract<AssistantMessage["content"][number], { type: "thinking" }>
+    | undefined;
+  const toolCallOrder: string[] = [];
+  const toolCallsById = new Map<
+    string,
+    Extract<AssistantMessage["content"][number], { type: "toolCall" }>
+  >();
+  for (const message of messages) {
+    for (const part of message.content) {
+      if (part.type === "toolCall") {
+        if (!toolCallsById.has(part.id)) {
+          toolCallOrder.push(part.id);
+        }
+        toolCallsById.set(part.id, part);
+        continue;
+      }
+      if (part.type === "thinking") {
+        // Reasoning is an accumulated snapshot, not a per-message delta. Keep
+        // only the terminal snapshot when one API call emits phased chunks.
+        terminalThinking = part;
+        continue;
+      }
+      const previous = narrative.at(-1);
+      if (part.type === "text" && previous?.type === "text") {
+        narrative[narrative.length - 1] = { ...previous, text: previous.text + part.text };
+      } else {
+        narrative.push(part);
+      }
+    }
+  }
+  const toolCalls = toolCallOrder.flatMap((id) => {
+    const toolCall = toolCallsById.get(id);
+    return toolCall ? [toolCall] : [];
+  });
+  const content = [...(terminalThinking ? [terminalThinking] : []), ...narrative, ...toolCalls];
+  const toolCallIds = [...toolCallOrder];
+  return {
+    message: {
+      ...last,
+      content,
+      stopReason: toolCallIds.length > 0 ? "toolUse" : "stop",
+    },
+    replayIncomplete,
+    toolCallIds,
+  };
+}
+
+function hasUnprojectedAssistantReplayState(
+  event: Extract<SessionEvent, { type: "assistant.message" }>,
+): boolean {
+  // The SDK contract marks these as provider/session-bound state or custom
+  // call shape. AgentMessage cannot represent them, so native replay must stay.
+  return (
+    event.data.citations !== undefined ||
+    event.data.serverTools !== undefined ||
+    event.data.reasoningWireField !== undefined ||
+    event.data.reasoningOpaque !== undefined ||
+    event.data.encryptedContent !== undefined ||
+    event.data.toolRequests?.some((request) => request.type === "custom") === true
+  );
+}
+
 export function resolveAssistantUsage(
   event: Extract<SessionEvent, { type: "assistant.message" }> | undefined,
   latest: AssistantUsageSnapshot | undefined,
   byApiCallId: Map<string, AssistantUsageSnapshot>,
 ): AssistantUsageSnapshot | undefined {
-  const apiCallId = readString(event?.data.apiCallId);
+  const apiCallId = readNonEmptyString(event?.data.apiCallId);
   return apiCallId ? (byApiCallId.get(apiCallId) ?? latest) : latest;
 }
 
 export function resolveEventTimestamp(timestamp: string, now: () => number): number {
-  const parsed = Date.parse(timestamp);
-  return Number.isFinite(parsed) ? parsed : now();
+  return parseDateStringTimestampMs(timestamp) ?? now();
 }
 
 export function hasOwnKeys(value: unknown): value is Record<string, unknown> {
@@ -160,8 +272,4 @@ export function sanitizeToolDetailText(text: string): string {
   };
   const value = sanitized.content?.[0]?.text;
   return typeof value === "string" ? value : "";
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }

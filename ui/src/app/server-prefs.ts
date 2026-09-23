@@ -2,14 +2,31 @@
 // the approval gate and other devices pick them up. The localStorage mirror gives instant boot and
 // stays authoritative when this client cannot write config (viewer scope, offline). Pending local
 // intent shadows server snapshots until the hash-free LWW ack; failed pushes degrade device-local.
-import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { RuntimeConfigCapability } from "../lib/config/index.ts";
+import type { ConfigPatchAck } from "../lib/config/config-gateway-operations.ts";
+import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
+import type { ApplicationGatewaySnapshot } from "./gateway.ts";
+import { hasOperatorWriteAccess } from "./operator-access.ts";
+import {
+  requestServerUiPrefReset,
+  resetServerUiPrefIntent,
+  selectThemeSettings,
+} from "./server-prefs-intent.ts";
+import {
+  loadProfileAppearancePrefs,
+  rememberProfileAppearanceIdentity,
+  resetProfileAppearancePrefs,
+  resolveProfileAppearanceProfileId,
+  resolveProfileAppearancePrefs,
+  resolveProfilePreferenceScope,
+} from "./server-prefs-profile.ts";
 import {
   extractServerUiPrefs,
+  isAppearancePref,
   prefValuesEqual,
   resolveServerUiPrefStateFromSnapshot,
   serverPrefsLocalPatch,
+  serverUiPrefsSnapshotDelta,
   SYNCED_PREF_KEYS,
   SYNCED_PREFS,
   type ResettableServerUiPrefKey,
@@ -18,18 +35,36 @@ import {
   type SyncedPrefKey,
   type SyncedPrefValue,
 } from "./server-prefs-state.ts";
+import {
+  LAST_SEEN_KEY,
+  PENDING_KEY,
+  parseStoredPrefs,
+  readRetainedLocalKeys,
+  readStorage,
+  readStoredPrefs,
+  writeRetainedLocalKeys,
+  writeStorage,
+} from "./server-prefs-storage.ts";
 import { loadSettings, patchSettings, type UiSettings } from "./settings.ts";
 import type { ThemeName } from "./theme.ts";
+import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 type ServerUiPrefsWriter = Pick<RuntimeConfigCapability, "canPatch" | "runExternalMutation"> & {
   readonly state: {
     readonly client: GatewayBrowserClient | null;
     readonly connected: boolean;
+    readonly configSnapshot?: { readonly config?: unknown } | null;
   };
 };
 type ServerUiPrefsCommit = {
   needsRefresh: boolean;
   retainedLocal?: boolean;
+};
+type ServerUiPrefsPushHooks = {
+  afterCommit?: (commit: ServerUiPrefsCommit) => void;
+  profileId?: string | null;
+  canWrite?: boolean;
+  profile?: Pick<ApplicationGatewaySnapshot, "selfUser" | "hello"> | null;
 };
 export type { ServerUiPrefProvenance, ServerUiPrefState } from "./server-prefs-state.ts";
 
@@ -37,67 +72,47 @@ export function resolveServerUiPrefState<K extends SyncedPrefKey>(
   configObject: unknown,
   key: K,
   scope = "",
-  settings = loadSettings(),
-  options: { canSync?: boolean | null } = {},
+  settings = loadSettings(scope || undefined),
+  options: { canSync?: boolean | null; profileId?: string | null } = {},
 ): ServerUiPrefState<SyncedPrefValue<K>> {
+  const disconnectedProfile =
+    !options.profileId && isAppearancePref(key) && options.canSync === null;
+  const profileId =
+    options.profileId ?? (disconnectedProfile ? resolveProfileAppearanceProfileId(scope) : null);
+  const effectiveScope = resolveProfilePreferenceScope(scope, profileId);
   const shadowPrefs =
-    scope === pendingScope ? pendingPrefs : parseStoredPrefs(readStorage(PENDING_KEY, scope));
-  return resolveServerUiPrefStateFromSnapshot(
+    effectiveScope === pendingScope
+      ? pendingPrefs
+      : parseStoredPrefs(readStorage(PENDING_KEY, effectiveScope));
+  const profilePrefs = resolveProfileAppearancePrefs(scope, profileId);
+  const pendingAppearance = profileId && isAppearancePref(key) && profilePrefs === null;
+  // The boot mirror is still compared with its last server appearance while
+  // loading. This merged baseline does not identify which values came from the profile.
+  const appearanceSnapshot = pendingAppearance
+    ? (parseStoredPrefs(readStorage(LAST_SEEN_KEY, effectiveScope)) ?? {})
+    : profilePrefs;
+  const state = resolveServerUiPrefStateFromSnapshot(
     configObject,
     key,
     shadowPrefs,
     settings,
     options.canSync,
+    appearanceSnapshot,
   );
+  return pendingAppearance && state.provenance === "profile"
+    ? { ...state, provenance: "synced" }
+    : state;
 }
-/** Synced-key delta between two local settings snapshots, for the push path. */
-export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): ServerUiPrefs | null {
-  const prefs: ServerUiPrefs = {};
-  for (const key of SYNCED_PREF_KEYS) {
-    if (requestedDeviceLocalPrefResets.delete(key)) {
-      continue;
-    }
-    if (requestedServerUiPrefResets.delete(key)) {
-      (prefs as Record<string, unknown>)[key] = null;
-      continue;
-    }
-    const specification = SYNCED_PREFS[key];
-    const previousValue = specification.local(previous);
-    const nextValue = specification.local(next);
-    if (prefValuesEqual(previousValue, nextValue)) {
-      continue;
-    }
-    if (nextValue === undefined) {
-      // JSON merge patch removes keys via explicit null.
-      if (specification.clearable) {
-        (prefs as Record<string, unknown>)[key] = null;
-      }
-      continue;
-    }
-    (prefs as Record<string, unknown>)[key] = nextValue;
-  }
-  return Object.keys(prefs).length > 0 ? prefs : null;
-}
-// Last server value this client reconciled against, persisted per gateway scope. Applying only on
-// a server delta keeps an unpushable local edit (viewer scope) from being reverted by every later
-// snapshot, including the first snapshot after reload or reconnect carrying the same old value.
-const LAST_SEEN_KEY = "openclaw.control.serverPrefs.v1";
-// Pending keys are local edits not yet acknowledged by the gateway. They shadow reconciliation so
-// snapshots cannot revert unacked edits, and persist so offline edits replay after reload/reconnect.
-const PENDING_KEY = "openclaw.control.serverPrefs.pending.v1";
-// Connected read-only edits never enter the replay outbox. Retain only their keys until the next
-// snapshot establishes a LAST_SEEN baseline, then normal server-delta reconciliation resumes.
-const RETAINED_LOCAL_KEY = "openclaw.control.serverPrefs.retained-local.v1";
 const CONFLICT_REDRAIN_DELAY_MS = 1_000;
 const MAX_CONFLICT_REDRAINS = 5;
-const requestedServerUiPrefResets = new Set<SyncedPrefKey>();
-const requestedDeviceLocalPrefResets = new Set<SyncedPrefKey>();
 let applyingServerPrefs = false;
 let pendingScope = "";
 let pendingPrefs: ServerUiPrefs | null = null;
 let pendingPersistedKeys = new Set<SyncedPrefKey>();
 let pushWriter: ServerUiPrefsWriter | null = null;
 let pushScope = "";
+let pushProfileId: string | null = null;
+let pushCanWrite = false;
 let pushAfterCommit: ((commit: ServerUiPrefsCommit) => void) | undefined;
 let pushDraining = false;
 let drainRequested = false;
@@ -115,74 +130,6 @@ function clearConflictRedrain(): void {
     conflictRedrainTimer = null;
   }
   consecutiveConflictRedrains = 0;
-}
-function readStorageState(
-  root: string,
-  scope: string,
-): { available: boolean; value: string | null } {
-  try {
-    const storage = globalThis.localStorage;
-    if (!storage) {
-      return { available: false, value: null };
-    }
-    return { available: true, value: storage.getItem(`${root}:${scope}`) };
-  } catch {
-    return { available: false, value: null };
-  }
-}
-function readStorage(root: string, scope: string): string | null {
-  return readStorageState(root, scope).value;
-}
-function writeStorage(root: string, scope: string, value: string | null): boolean {
-  try {
-    const storage = globalThis.localStorage;
-    if (!storage) {
-      return false;
-    }
-    const key = `${root}:${scope}`;
-    if (value === null) {
-      storage.removeItem(key);
-    } else {
-      storage.setItem(key, value);
-    }
-    return true;
-  } catch {
-    // Quota/security failures degrade to in-memory tracking for this session.
-    return false;
-  }
-}
-function parseStoredPrefs(raw: string | null): ServerUiPrefs | null {
-  try {
-    const prefs = asRecord(JSON.parse(raw ?? "null"));
-    return prefs && Object.keys(prefs).length ? (prefs as ServerUiPrefs) : null;
-  } catch {
-    return null;
-  }
-}
-function readStoredPrefs(
-  root: string,
-  scope: string,
-): { available: boolean; prefs: ServerUiPrefs | null } {
-  const stored = readStorageState(root, scope);
-  return {
-    available: stored.available,
-    prefs: parseStoredPrefs(stored.value),
-  };
-}
-function readRetainedLocalKeys(scope: string): Set<SyncedPrefKey> {
-  const stored = parseStoredPrefs(readStorage(RETAINED_LOCAL_KEY, scope));
-  return new Set(
-    stored
-      ? (Object.keys(stored).filter((key) => Object.hasOwn(SYNCED_PREFS, key)) as SyncedPrefKey[])
-      : [],
-  );
-}
-function writeRetainedLocalKeys(scope: string, keys: ReadonlySet<SyncedPrefKey>): void {
-  writeStorage(
-    RETAINED_LOCAL_KEY,
-    scope,
-    keys.size ? JSON.stringify(Object.fromEntries([...keys].map((key) => [key, true]))) : null,
-  );
 }
 function updateRetainedLocalKeys(
   scope: string,
@@ -303,18 +250,30 @@ export function resetServerUiPrefsSync() {
   pendingPrefs = pushWriter = null;
   pendingPersistedKeys.clear();
   pushScope = "";
+  pushProfileId = null;
+  pushCanWrite = false;
   lastReconciledScope = "";
   lastReconciledConfigObject = null;
-  requestedServerUiPrefResets.clear();
-  requestedDeviceLocalPrefResets.clear();
+  resetProfileAppearancePrefs();
+  resetServerUiPrefIntent();
 }
 
 export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
   key: K,
   state?: ServerUiPrefState<SyncedPrefValue<K>>,
   scope = pendingScope,
+  profileId?: string | null,
 ): UiSettings {
   const specification = SYNCED_PREFS[key];
+  const applyReset = (patch: Partial<UiSettings>) =>
+    key === "theme" && patch.theme !== undefined
+      ? selectThemeSettings(patch.theme)
+      : patchSettings(patch);
+  // Disconnected clients retain their last known profile for local cancellation.
+  const activeProfile = isAppearancePref(key)
+    ? (profileId ?? resolveProfileAppearanceProfileId(scope))
+    : null;
+  const effectiveScope = resolveProfilePreferenceScope(scope, activeProfile);
   const reset = specification.reset;
   if (!reset) {
     throw new Error(`Server UI preference is not resettable: ${key}`);
@@ -326,26 +285,59 @@ export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
     if (!write) {
       throw new Error(`Server UI preference cannot restore a retained local value: ${key}`);
     }
-    cancelPendingKeys(scope, [key]);
-    updateRetainedLocalKeys(scope, [key], false);
-    requestedDeviceLocalPrefResets.add(key);
-    return patchSettings(write(state.resetValue));
+    const patch = write(state.resetValue);
+    const keys: SyncedPrefKey[] =
+      key === "theme" && patch.theme !== loadSettings().theme
+        ? [key, "accent", "fontUi", "fontChat"]
+        : [key];
+    cancelPendingKeys(effectiveScope, keys);
+    // Edits made after disconnect lose the profile and queue in the Gateway scope.
+    if (effectiveScope !== scope) {
+      cancelPendingKeys(scope, keys);
+    }
+    updateRetainedLocalKeys(effectiveScope, keys, false);
+    for (const resetKey of keys) {
+      requestServerUiPrefReset(resetKey, "device-local");
+    }
+    return applyReset(patch);
   }
-  requestedServerUiPrefResets.add(key);
-  return patchSettings(reset(loadSettings()));
+  requestServerUiPrefReset(key, "server");
+  // The resolved state owns the reset target, including the Gateway fallback
+  // while the profile is still loading. Config preferences use product defaults.
+  if (state) {
+    // SAFETY: SYNCED_PREFS pairs each key's write() with that key's own value type.
+    const write = specification.write as
+      | ((value: SyncedPrefValue<K> | undefined) => Partial<UiSettings>)
+      | undefined;
+    if (write) {
+      return applyReset(write(state.resetValue));
+    }
+  }
+  return applyReset(reset(loadSettings()));
 }
 export function applyServerUiPrefs(
   configObject: unknown,
   hooks: {
     scope?: string;
+    profileId?: string | null;
     onApplied: (patch: Partial<UiSettings>) => void;
     onThemeChanged?: (theme: ThemeName | null) => void;
   },
 ): boolean {
-  const scope = hooks.scope ?? "";
+  const gatewayScope = hooks.scope ?? "";
+  const scope = resolveProfilePreferenceScope(gatewayScope, hooks.profileId);
   if (scope === lastReconciledScope && configObject === lastReconciledConfigObject) {
     return false;
   }
+  // Last-seen state is per profile scope but the rendered settings are a
+  // singleton: after an identity switch (A→B→A) an unchanged last-seen does not
+  // mean the DOM shows this profile's values, so a switch between two known
+  // scopes forces a full reconcile. Boot keeps the shortcut (mirror is current).
+  const scopeChanged = lastReconciledScope !== "" && scope !== lastReconciledScope;
+  const profilePrefs = resolveProfileAppearancePrefs(gatewayScope, hooks.profileId);
+  // A known identity switch keeps the existing full reset; its mirror belongs
+  // to the previous identity. Only defer a pending profile within the same scope.
+  const appearanceReady = !hooks.profileId || profilePrefs !== null || scopeChanged;
   const recordReconciledObject = () => {
     lastReconciledScope = scope;
     lastReconciledConfigObject = configObject;
@@ -353,48 +345,48 @@ export function applyServerUiPrefs(
   const shadowPrefs =
     scope === pendingScope ? pendingPrefs : parseStoredPrefs(readStorage(PENDING_KEY, scope));
   const retainedLocalKeys = readRetainedLocalKeys(scope);
-  const prefs = extractServerUiPrefs(configObject);
-  const key = JSON.stringify(prefs);
+  const reconciledRetainedKeys = [...retainedLocalKeys].filter(
+    (key) => appearanceReady || !isAppearancePref(key),
+  );
+  const prefs = { ...extractServerUiPrefs(configObject), ...profilePrefs };
   const lastSeenRaw = readStorage(LAST_SEEN_KEY, scope);
-  if (key === lastSeenRaw) {
-    if (retainedLocalKeys.size) {
-      updateRetainedLocalKeys(scope, [...retainedLocalKeys], false);
+  const lastSeen = parseStoredPrefs(lastSeenRaw) ?? {};
+  if (!appearanceReady) {
+    // A pending profile is not an empty profile. Keep its mirror and last-seen
+    // appearance until the profile can confirm overrides or Gateway fallbacks.
+    for (const key of SYNCED_PREF_KEYS) {
+      if (isAppearancePref(key)) {
+        delete prefs[key];
+        if (Object.hasOwn(lastSeen, key)) {
+          Object.assign(prefs, { [key]: lastSeen[key] });
+        }
+      }
+    }
+  }
+  const key = JSON.stringify(prefs);
+  if (!scopeChanged && key === lastSeenRaw) {
+    if (reconciledRetainedKeys.length) {
+      updateRetainedLocalKeys(scope, reconciledRetainedKeys, false);
     }
     recordReconciledObject();
     return false;
   }
-  const lastSeen = parseStoredPrefs(lastSeenRaw) ?? {};
-  const changed: ServerUiPrefs = {};
-  // Apply per field: only keys whose server value changed since last seen. Reapplying unchanged
-  // fields would revert unpushable local edits whenever any other server field moves.
-  for (const prefKey of Object.keys(prefs) as Array<keyof ServerUiPrefs>) {
-    if (
-      !(shadowPrefs && prefKey in shadowPrefs) &&
-      !retainedLocalKeys.has(prefKey) &&
-      (lastSeenRaw === null || !prefValuesEqual(prefs[prefKey], lastSeen[prefKey]))
-    ) {
-      (changed as Record<string, unknown>)[prefKey] = prefs[prefKey];
-    }
-  }
-  for (const prefKey of Object.keys(lastSeen) as Array<keyof ServerUiPrefs>) {
-    if (
-      !(prefKey in prefs) &&
-      !(shadowPrefs && prefKey in shadowPrefs) &&
-      !retainedLocalKeys.has(prefKey) &&
-      SYNCED_PREFS[prefKey]?.clearable
-    ) {
-      (changed as Record<string, unknown>)[prefKey] = null;
-    }
-  }
+  const changed = serverUiPrefsSnapshotDelta(prefs, lastSeen, {
+    appearanceReady,
+    scopeChanged,
+    firstSnapshot: lastSeenRaw === null,
+    shadowPrefs,
+    retainedLocalKeys,
+  });
   writeStorage(LAST_SEEN_KEY, scope, key);
-  if (retainedLocalKeys.size) {
-    updateRetainedLocalKeys(scope, [...retainedLocalKeys], false);
+  if (reconciledRetainedKeys.length) {
+    updateRetainedLocalKeys(scope, reconciledRetainedKeys, false);
   }
   recordReconciledObject();
   if (Object.hasOwn(changed, "theme")) {
     hooks.onThemeChanged?.(changed.theme ?? null);
   }
-  const patch = serverPrefsLocalPatch(changed, loadSettings());
+  const patch = serverPrefsLocalPatch(changed, loadSettings(gatewayScope || undefined));
   if (!patch) {
     return false;
   }
@@ -407,12 +399,34 @@ export function applyServerUiPrefs(
   hooks.onApplied(patch);
   return true;
 }
+
+export async function refreshProfileAppearancePrefs(options: {
+  client: GatewayBrowserClient;
+  profileId: string;
+  configObject: unknown;
+  scope?: string;
+  onApplied: (patch: Partial<UiSettings>) => void;
+  onThemeChanged?: (theme: ThemeName | null) => void;
+}): Promise<boolean> {
+  const scope = options.scope ?? options.client.gatewayUrl;
+  if (!(await loadProfileAppearancePrefs(options.client, options.profileId, scope))) {
+    return false;
+  }
+  lastReconciledConfigObject = null;
+  return applyServerUiPrefs(options.configObject, { ...options, scope });
+}
 export function isApplyingServerUiPrefs(): boolean {
   return applyingServerPrefs;
 }
-function adoptPushWriter(writer: ServerUiPrefsWriter): void {
-  const scope = writer.state.client?.gatewayUrl ?? "";
-  if (pushWriter === writer && pushScope === scope) {
+function adoptPushWriter(writer: ServerUiPrefsWriter, hooks: ServerUiPrefsPushHooks): void {
+  const profileId = hooks.profileId ?? hooks.profile?.selfUser?.id ?? null;
+  const gatewayScope = writer.state.client?.gatewayUrl ?? "";
+  if (profileId) {
+    rememberProfileAppearanceIdentity(gatewayScope, profileId);
+  }
+  const scope = resolveProfilePreferenceScope(gatewayScope, profileId);
+  pushCanWrite = hooks.canWrite ?? hasOperatorWriteAccess(hooks.profile?.hello?.auth ?? null);
+  if (pushWriter === writer && pushScope === scope && pushProfileId === profileId) {
     return;
   }
   // Reconcile the scope being left before moving pre-connection intent forward.
@@ -429,6 +443,7 @@ function adoptPushWriter(writer: ServerUiPrefsWriter): void {
   pushEpoch += 1;
   pushWriter = writer;
   pushScope = scope;
+  pushProfileId = profileId;
   pushDraining = false;
   adoptPendingScope(scope, true);
   if (scope && unscopedPending && Object.keys(unscopedPending).length) {
@@ -468,6 +483,7 @@ function scheduleConflictRedrain(writer: ServerUiPrefsWriter, epoch: number): vo
     }
   }, CONFLICT_REDRAIN_DELAY_MS);
 }
+
 async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Promise<void> {
   while (pendingPrefs) {
     if (pushWriter !== writer || pushEpoch !== epoch) {
@@ -477,47 +493,124 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
     if (!pendingPrefs) {
       return;
     }
-    const batch = { ...pendingPrefs };
+    const localOnlyKeys = SYNCED_PREF_KEYS.filter(
+      (key) =>
+        pendingPrefs?.[key] !== undefined &&
+        (SYNCED_PREFS[key].configSync === false ||
+          (key === "theme" &&
+            typeof pendingPrefs.theme === "string" &&
+            pendingPrefs.theme.includes("/"))) &&
+        !(pushProfileId && pushCanWrite),
+    );
+    if (localOnlyKeys.length) {
+      if (!writer.state.connected) {
+        return;
+      }
+      // Profile-only preferences must never fall through to config.patch,
+      // including intent queued before this connection's identity was known.
+      cancelPendingKeys(pendingScope, localOnlyKeys);
+      updateRetainedLocalKeys(pendingScope, localOnlyKeys, true);
+      pushAfterCommit?.({ needsRefresh: false, retainedLocal: true });
+      continue;
+    }
+    if (pushProfileId && pendingPrefs.theme === "custom") {
+      // Offline-queued custom theme reaching a profile connection: browser-local
+      // by contract, so retain it here instead of syncing it to the profile.
+      cancelPendingKeys(pendingScope, ["theme"]);
+      updateRetainedLocalKeys(pendingScope, ["theme"], true);
+      continue;
+    }
+    const profileBatch: ServerUiPrefs = {};
+    if (pushProfileId && pushCanWrite) {
+      for (const key of SYNCED_PREF_KEYS) {
+        if (isAppearancePref(key) && Object.hasOwn(pendingPrefs, key)) {
+          Object.assign(profileBatch, { [key]: pendingPrefs[key] });
+        }
+      }
+    }
+    const useProfile = Boolean(profileBatch && Object.keys(profileBatch).length);
+    const batch = useProfile ? profileBatch : { ...pendingPrefs };
     const afterCommit = pushAfterCommit;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (pushWriter !== writer || pushEpoch !== epoch) {
         return;
       }
-      const result = await writer.runExternalMutation(
-        (client) =>
-          // ui.prefs is a deliberately narrow hashless LWW surface enforced by
-          // hasHashlessPatchLwwStructure in the gateway. Serialization still
-          // matters: a pending whole-config save must commit before this merge.
-          client.request("config.patch", {
-            raw: JSON.stringify({ ui: { prefs: batch } }),
-            ...(batch.sidebarEntries !== undefined
-              ? { replacePaths: ["ui.prefs.sidebarEntries"] }
-              : {}),
-            note: "control-ui prefs sync",
-          }),
-        {
-          waitForWritesResumed: true,
-          canDispatch: () => {
-            if (writer.canPatch === false) {
-              return false;
-            }
-            reconcilePersistedPendingPrefs();
-            if (batchIsCurrent(batch)) {
-              return true;
-            }
-            drainRequested = Boolean(pendingPrefs);
-            return false;
-          },
-          dispatchError: "Access changed before preferences could sync.",
-        },
-      );
+      if (useProfile && writer.state.client) {
+        invalidateUserPreferences(writer.state.client);
+      }
+      const result = useProfile
+        ? await import("./server-prefs-profile-runtime.ts").then(
+            ({ writeProfileAppearancePrefs }) =>
+              writeProfileAppearancePrefs(
+                writer.state.client,
+                batch,
+                pushWriter === writer &&
+                  pushEpoch === epoch &&
+                  writer.state.connected &&
+                  pushCanWrite &&
+                  batchIsCurrent(batch),
+              ),
+          )
+        : await writer.runExternalMutation(
+            (client) =>
+              // ui.prefs is a deliberately narrow hashless LWW surface enforced by
+              // hasHashlessPatchLwwStructure in the gateway. Serialization still
+              // matters: a pending whole-config save must commit before this merge.
+              client.request<ConfigPatchAck>("config.patch", {
+                raw: JSON.stringify({ ui: { prefs: batch } }),
+                ...(batch.sidebarEntries !== undefined
+                  ? { replacePaths: ["ui.prefs.sidebarEntries"] }
+                  : {}),
+                note: "control-ui prefs sync",
+              }),
+            {
+              waitForWritesResumed: true,
+              configWriteAck: (ack) => ack,
+              canDispatch: () => {
+                if (writer.canPatch === false) {
+                  return false;
+                }
+                reconcilePersistedPendingPrefs();
+                if (batchIsCurrent(batch)) {
+                  return true;
+                }
+                drainRequested = Boolean(pendingPrefs);
+                return false;
+              },
+              dispatchError: "Access changed before preferences could sync.",
+            },
+          );
       if (pushWriter !== writer || pushEpoch !== epoch) {
         return;
       }
       if (result.ok) {
         removeBatch(batch);
         const lastSeen = parseStoredPrefs(readStorage(LAST_SEEN_KEY, pendingScope)) ?? {};
-        writeStorage(LAST_SEEN_KEY, pendingScope, JSON.stringify({ ...lastSeen, ...batch }));
+        const nextLastSeen = { ...lastSeen, ...batch };
+        const profilePrefs = resolveProfileAppearancePrefs(
+          writer.state.client?.gatewayUrl ?? "",
+          pushProfileId,
+        );
+        if (useProfile && profilePrefs) {
+          const configPrefs = extractServerUiPrefs(writer.state.configSnapshot?.config);
+          for (const key of SYNCED_PREF_KEYS) {
+            if (!Object.hasOwn(batch, key)) {
+              continue;
+            }
+            if (batch[key] === null) {
+              delete profilePrefs[key];
+              if (configPrefs[key] === undefined) {
+                delete nextLastSeen[key];
+              } else {
+                Object.assign(nextLastSeen, { [key]: configPrefs[key] });
+              }
+            } else {
+              Object.assign(profilePrefs, { [key]: batch[key] });
+            }
+          }
+          lastReconciledConfigObject = null;
+        }
+        writeStorage(LAST_SEEN_KEY, pendingScope, JSON.stringify(nextLastSeen));
         settlePendingStorage(batch);
         clearConflictRedrain();
         if (pushWriter !== writer || pushEpoch !== epoch) {
@@ -570,7 +663,11 @@ function startPendingDrain(writer: ServerUiPrefsWriter): void {
   if (!pendingPrefs) {
     return;
   }
-  if (writer.state.connected && writer.canPatch === false) {
+  if (
+    writer.state.connected &&
+    writer.canPatch === false &&
+    !(pushProfileId && pushCanWrite && Object.keys(pendingPrefs).some(isAppearancePref))
+  ) {
     return;
   }
   pushDraining = true;
@@ -590,30 +687,52 @@ function startPendingDrain(writer: ServerUiPrefsWriter): void {
 export function pushServerUiPrefs(
   writer: ServerUiPrefsWriter,
   prefs: ServerUiPrefs,
-  hooks: { afterCommit?: (commit: ServerUiPrefsCommit) => void } = {},
+  hooks: ServerUiPrefsPushHooks = {},
 ): void {
-  adoptPushWriter(writer);
+  adoptPushWriter(writer, hooks);
   clearConflictRedrain();
   pushAfterCommit = hooks.afterCommit;
-  if (writer.state.connected && writer.canPatch === false) {
+  const keys = SYNCED_PREF_KEYS.filter((key) => Object.hasOwn(prefs, key));
+  const blockedKeys = writer.state.connected
+    ? keys.filter((key) => {
+        if (SYNCED_PREFS[key].configSync === false && !pushProfileId) {
+          return true;
+        }
+        if (pushProfileId && isAppearancePref(key)) {
+          // Imported custom palettes are browser-local by contract; a profile
+          // must never carry a theme another browser cannot render.
+          return !pushCanWrite || (key === "theme" && prefs.theme === "custom");
+        }
+        return writer.canPatch === false;
+      })
+    : [];
+  if (blockedKeys.length) {
     // A connected read-only edit is intentionally browser-local. Supersede only
     // same-key offline intent so a later authorization cannot replay stale input.
-    const keys = Object.keys(prefs) as SyncedPrefKey[];
-    cancelPendingKeys(pendingScope, keys);
-    updateRetainedLocalKeys(pendingScope, keys, true);
+    cancelPendingKeys(pendingScope, blockedKeys);
+    updateRetainedLocalKeys(pendingScope, blockedKeys, true);
     hooks.afterCommit?.({ needsRefresh: false, retainedLocal: true });
-    return;
+    if (blockedKeys.length === keys.length) {
+      return;
+    }
   }
+  const writablePrefs = blockedKeys.length
+    ? Object.fromEntries(
+        Object.entries(prefs).filter(
+          ([key]) => !blockedKeys.some((blockedKey) => blockedKey === key),
+        ),
+      )
+    : prefs;
   reconcilePersistedPendingPrefs();
-  pendingPrefs = { ...pendingPrefs, ...prefs };
+  pendingPrefs = { ...pendingPrefs, ...writablePrefs };
   mergePendingIntoStorage();
   startPendingDrain(writer);
 }
 export function flushServerUiPrefs(
   writer: ServerUiPrefsWriter,
-  hooks: { afterCommit?: (commit: ServerUiPrefsCommit) => void } = {},
+  hooks: ServerUiPrefsPushHooks = {},
 ): void {
-  adoptPushWriter(writer);
+  adoptPushWriter(writer, hooks);
   clearConflictRedrain();
   pushEpoch += 1;
   pushDraining = drainRequested = false;

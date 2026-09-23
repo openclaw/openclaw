@@ -1,7 +1,7 @@
 // Proves when a new state root cannot contain legacy state migration work.
 import fs from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   resolveConfigPath,
   resolveLegacyStateDirs,
@@ -15,7 +15,7 @@ import {
   inspectPluginStartupMetadata,
 } from "../../../plugins/bundled-plugin-startup-metadata.js";
 import { discoverConfiguredPluginLoadPaths } from "../../../plugins/discovery.js";
-import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { configMayRequireStartupPluginConvergence } from "./startup-plugin-convergence-plan.js";
 
 const STATEFUL_CONFIG_KEYS = new Set([
@@ -29,7 +29,6 @@ const STATEFUL_CONFIG_KEYS = new Set([
   "cloudWorkers",
   "commitments",
   "cron",
-  "discovery",
   "env",
   "marketplaces",
   "mcp",
@@ -46,6 +45,27 @@ const STATEFUL_CONFIG_KEYS = new Set([
   "transcripts",
   "web",
 ]);
+
+// mDNS modes have no legacy state inputs; other discovery shapes retain migration work.
+function hasOnlyMigrationSafeDiscovery(config: Record<string, unknown>): boolean {
+  const discovery = config.discovery;
+  if (discovery === undefined) {
+    return true;
+  }
+  if (!isRecord(discovery) || Object.keys(discovery).some((key) => key !== "mdns")) {
+    return false;
+  }
+  const mdns = discovery.mdns;
+  return (
+    mdns === undefined ||
+    (isRecord(mdns) &&
+      Object.keys(mdns).every((key) => key === "mode") &&
+      (mdns.mode === undefined ||
+        mdns.mode === "off" ||
+        mdns.mode === "minimal" ||
+        mdns.mode === "full"))
+  );
+}
 
 // Canonical internal entries have no legacy machine state to import. Keep every
 // older or external hook shape on Doctor's full migration path.
@@ -86,9 +106,7 @@ function hasOnlyMigrationSafeInternalHooks(config: Record<string, unknown>): boo
     if (entry.env === undefined) {
       return true;
     }
-    return (
-      isRecord(entry.env) && Object.values(entry.env).every((value) => typeof value === "string")
-    );
+    return isStringRecord(entry.env);
   });
 }
 
@@ -140,7 +158,7 @@ function hasOnlyMigrationSafePluginEntries(
       }
       // Discovery alone cannot prove host compatibility or rule out a fallback
       // doctor owner; use the same candidate acceptance as normal plugin startup.
-      const registry = loadPluginManifestRegistry({
+      const registry = loadPluginManifestRegistryCore({
         config: config as OpenClawConfig,
         discovery,
         env,
@@ -186,7 +204,7 @@ function configIsPristineCoreStateSafe(config: Record<string, unknown>): boolean
   if ([...STATEFUL_CONFIG_KEYS].some((key) => Object.hasOwn(config, key))) {
     return false;
   }
-  if (!hasOnlyMigrationSafeInternalHooks(config)) {
+  if (!hasOnlyMigrationSafeDiscovery(config) || !hasOnlyMigrationSafeInternalHooks(config)) {
     return false;
   }
   if (containsObjectKey(config.agents, "memorySearch")) {
@@ -210,25 +228,12 @@ export function planPristineStartupConfigMigrations(
   }
   const skipCoreStateMigrations = configIsPristineCoreStateSafe(config);
   return {
-    skipAllStateMigrations: skipCoreStateMigrations && configIsPristineStateSafe(config, env),
+    skipAllStateMigrations:
+      skipCoreStateMigrations &&
+      hasOnlyMigrationSafePluginEntries(config, env) &&
+      !configMayRequireStartupPluginConvergence({ config: config as OpenClawConfig, env }),
     skipCoreStateMigrations,
   };
-}
-
-function configIsPristineStateSafe(
-  config: Record<string, unknown>,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  if (!configIsPristineCoreStateSafe(config)) {
-    return false;
-  }
-  if (!hasOnlyMigrationSafePluginEntries(config, env)) {
-    return false;
-  }
-  return !configMayRequireStartupPluginConvergence({
-    config: config as OpenClawConfig,
-    env,
-  });
 }
 
 function stateDirHasOnlyConfig(stateDir: string, configPath: string): boolean {
@@ -243,16 +248,9 @@ function stateDirHasOnlyConfig(stateDir: string, configPath: string): boolean {
 }
 
 /**
- * A missing/empty state root plus migration-free bundled config has no legacy data to migrate.
+ * A missing/empty state root can skip core migrations; plugin config may still require work.
  * Keep ambiguity on the full migration path; this shortcut only accepts a proven new install.
  */
-export function canSkipPristineStartupStateMigrations(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return planPristineStartupStateMigrations(env).skipAllStateMigrations;
-}
-
-/** Separates provably absent core state from plugin-owned migration work. */
 export function planPristineStartupStateMigrations(
   env: NodeJS.ProcessEnv = process.env,
 ): PristineStartupMigrationPlan {
@@ -265,18 +263,18 @@ export function planPristineStartupStateMigrations(
   if (!homeDir) {
     return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
   }
-  const legacyStateAbsent = resolveLegacyStateDirs(() => homeDir).every((legacyDir) => {
-    if (path.resolve(legacyDir) === path.resolve(stateDir)) {
-      return false;
-    }
-    return !fs.existsSync(legacyDir);
-  });
+  const explicitStateDir = env.OPENCLAW_STATE_DIR?.trim();
+  const legacyStateAbsent =
+    Boolean(explicitStateDir) ||
+    resolveLegacyStateDirs(() => homeDir).every((legacyDir) => {
+      if (path.resolve(legacyDir) === path.resolve(stateDir)) {
+        return false;
+      }
+      return !fs.existsSync(legacyDir);
+    });
   if (!legacyStateAbsent) {
     return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
   }
-  const configPlan = planPristineStartupConfigMigrations(tryReadJsonSync(configPath), env);
-  return {
-    skipAllStateMigrations: configPlan.skipAllStateMigrations,
-    skipCoreStateMigrations: configPlan.skipCoreStateMigrations,
-  };
+  const config = fs.existsSync(configPath) ? tryReadJsonSync(configPath) : {};
+  return planPristineStartupConfigMigrations(config, env);
 }

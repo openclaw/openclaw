@@ -39,19 +39,7 @@ export type RunMediaUnderstandingFileResult = {
   decision?: MediaUnderstandingDecision;
 };
 
-export type DescribeImageFileParams = {
-  filePath: string;
-  mediaUrl?: string;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  mime?: string;
-  activeModel?: ActiveMediaModel;
-  prompt?: string;
-  timeoutMs?: number;
-  scopeContext?: MediaUnderstandingScopeContext;
-};
+export type DescribeImageFileParams = Omit<RunMediaUnderstandingFileParams, "capability">;
 
 export type DescribeImageFileWithModelParams = {
   filePath: string;
@@ -111,27 +99,20 @@ type ExtractStructuredWithModelResult = Awaited<
   ReturnType<NonNullable<MediaUnderstandingProvider["extractStructured"]>>
 >;
 
-export type DescribeVideoFileParams = {
-  filePath: string;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  mime?: string;
-  activeModel?: ActiveMediaModel;
-};
+export type DescribeVideoFileParams = Omit<
+  DescribeImageFileParams,
+  "mediaUrl" | "prompt" | "timeoutMs" | "scopeContext"
+>;
 
-export type TranscribeAudioFileParams = {
-  filePath: string;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  mime?: string;
-  activeModel?: ActiveMediaModel;
+export type TranscribeAudioFileParams = DescribeVideoFileParams & {
   language?: string;
   prompt?: string;
 };
 
 export type MediaUnderstandingRuntime = {
+  resolveAudioInputBudget: (params: {
+    cfg: OpenClawConfig;
+  }) => Promise<{ enabled: false } | { enabled: true; maxBytes: number }>;
   runMediaUnderstandingFile: (
     params: RunMediaUnderstandingFileParams,
   ) => Promise<RunMediaUnderstandingFileResult>;

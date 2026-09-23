@@ -1,7 +1,10 @@
 // Gateway question manager.
 // Tracks transient operator questions and short-lived terminal records in memory.
 import { randomUUID } from "node:crypto";
-import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type {
   Question,
   QuestionAnswers,
@@ -10,7 +13,13 @@ import type {
   QuestionResolveResult,
   QuestionWaitAnswerResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import {
+  retainGatewayRootWorkAdmissionContinuationScope,
+  type GatewayRootWorkAdmissionContinuationScope,
+} from "../process/gateway-work-admission.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import type { QuestionSessionAccess } from "./question-session-access.types.js";
 
 /** Grace period for late question.waitAnswer and question.get calls. */
 const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -20,6 +29,7 @@ export const QuestionManagerErrorCodes = {
   ALREADY_TERMINAL: "QUESTION_ALREADY_TERMINAL",
   ID_IN_USE: "QUESTION_ID_IN_USE",
   INVALID_ANSWER: "QUESTION_INVALID_ANSWER",
+  REQUESTER_INACTIVE: "QUESTION_REQUESTER_INACTIVE",
 } as const;
 
 type QuestionManagerErrorCode =
@@ -42,33 +52,57 @@ type QuestionManagerRequest = {
   sessionKey?: string;
   runId?: string;
   timeoutMs: number;
-  onResolved?: (event: QuestionResolvedEvent) => void;
+  onResolved?: (event: QuestionResolvedEvent, observation: QuestionObservation) => void;
+  sessionAccess?: QuestionSessionAccess;
+  isRequesterActive?: () => boolean;
+  requesterRun?: OperationalRunInstanceRef;
+  /** Trusted handler binds the run; the manager owns expiry and terminal release. */
+  registerHumanInputWait?: (isPending: () => boolean) => ((resolved: boolean) => void) | undefined;
 };
 
-type Waiter = {
-  resolve: (result: QuestionWaitAnswerResult) => void;
-  timer: ReturnType<typeof setTimeout> | null;
-};
+type Waiter = () => void;
 
 type QuestionEntry = {
   record: QuestionRecord;
+  ordinary: boolean;
+  resolutionId?: string;
   expiryTimer: ReturnType<typeof setTimeout>;
   cleanupTimer: ReturnType<typeof setTimeout> | null;
   waiters: Set<Waiter>;
-  onResolved?: (event: QuestionResolvedEvent) => void;
+  onResolved?: QuestionManagerRequest["onResolved"];
+  sessionAccess?: QuestionSessionAccess;
+  isRequesterActive?: () => boolean;
+  requesterRun?: OperationalRunInstanceRef;
+  admissionContinuation: GatewayRootWorkAdmissionContinuationScope | null;
+  releaseHumanInputWait?: (resolved: boolean) => void;
+};
+
+/** Private entry identity. Never reselect a successor by its public question id. */
+export type QuestionObservation = {
+  readonly record: QuestionRecord;
+  readonly ordinary: boolean;
+  readonly sessionAccess?: QuestionSessionAccess;
+  isCurrent: () => boolean;
+  refreshRequester: () => void;
 };
 
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
   timer.unref?.();
 }
 
-function waitResult(record: QuestionRecord): QuestionWaitAnswerResult {
+function waitResult(entry: QuestionEntry, includeResolutionId: boolean): QuestionWaitAnswerResult {
+  const { record, resolutionId } = entry;
   switch (record.status) {
     case "pending":
       return { status: "pending" };
     case "answered":
-      // The manager only sets status "answered" together with validated answers.
-      return { status: "answered", answers: record.answers ?? { answers: {} } };
+      // Legacy native decoders reject extra fields. Correlation is opt-in per
+      // waiter, never exposed on records/events or used as resolution authority.
+      return {
+        status: "answered",
+        answers: record.answers ?? { answers: {} },
+        ...(includeResolutionId && resolutionId ? { resolutionId } : {}),
+      };
     case "cancelled":
       return { status: "cancelled" };
     case "expired":
@@ -89,8 +123,32 @@ function resolvedEvent(record: QuestionRecord): QuestionResolvedEvent | null {
 /** Process-local lifecycle owner for pending questions. */
 export class QuestionManager {
   private readonly entries = new Map<string, QuestionEntry>();
+  private closed = false;
+  private readonly publications = new AsyncWorkScope();
+
+  constructor(private readonly onPublicationError?: () => void) {}
+
+  async drain(): Promise<void> {
+    if (this.closed) {
+      await this.publications.drain();
+    } else {
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [this.publications],
+        () => {},
+      );
+    }
+  }
 
   request(params: QuestionManagerRequest): QuestionRecord {
+    if (this.closed) {
+      throw new Error("Question manager is closed");
+    }
+    if (params.isRequesterActive && !params.isRequesterActive()) {
+      throw new QuestionManagerError(
+        QuestionManagerErrorCodes.REQUESTER_INACTIVE,
+        "the agent run that requested this question is no longer active",
+      );
+    }
     const createdAtMs = Date.now();
     const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
     const expiresAtMs = resolveExpiresAtMsFromDurationMs(timeoutMs, { nowMs: createdAtMs });
@@ -114,15 +172,23 @@ export class QuestionManager {
       expiresAtMs,
       status: "pending",
     };
+    const expiryTimer = setTimeout(() => this.expire(record.id), timeoutMs);
     const entry: QuestionEntry = {
       record,
-      expiryTimer: null as unknown as ReturnType<typeof setTimeout>,
+      ordinary: !params.questions.some((question) => question.isSecret || question.secretStore),
+      expiryTimer,
       cleanupTimer: null,
       waiters: new Set(),
       onResolved: params.onResolved,
+      sessionAccess: params.sessionAccess,
+      isRequesterActive: params.isRequesterActive,
+      requesterRun: params.requesterRun,
+      admissionContinuation: retainGatewayRootWorkAdmissionContinuationScope(),
     };
     this.entries.set(record.id, entry);
-    entry.expiryTimer = setTimeout(() => this.expire(record.id), timeoutMs);
+    entry.releaseHumanInputWait = params.registerHumanInputWait?.(
+      () => this.get(id)?.status === "pending" && this.entries.get(id) === entry,
+    );
     unrefTimer(entry.expiryTimer);
     return record;
   }
@@ -135,12 +201,69 @@ export class QuestionManager {
     if (entry.record.status === "pending" && entry.record.expiresAtMs <= Date.now()) {
       this.expire(id);
     }
-    return this.entries.get(id)?.record ?? null;
+    this.refreshRequester(entry);
+    return this.entries.get(id) === entry ? entry.record : null;
   }
 
-  list(): QuestionRecord[] {
+  /** Observation only: unlike get(), this cannot expire or cancel and recursively broadcast. */
+  observe(id: string, expectedRecord?: QuestionRecord): QuestionObservation | null {
+    const entry = this.entries.get(id);
+    if (!entry || (expectedRecord && entry.record !== expectedRecord)) {
+      return null;
+    }
+    return this.observeEntry(entry);
+  }
+
+  private observeEntry(entry: QuestionEntry): QuestionObservation {
+    return {
+      get record() {
+        return entry.record;
+      },
+      ordinary: entry.ordinary,
+      sessionAccess: entry.sessionAccess,
+      isCurrent: () => this.entries.get(entry.record.id) === entry,
+      refreshRequester: () => this.refreshRequester(entry),
+    };
+  }
+
+  private refreshRequester(entry: QuestionEntry): void {
+    if (this.entries.get(entry.record.id) !== entry || entry.record.status !== "pending") {
+      return;
+    }
+    const active = entry.isRequesterActive?.();
+    // Liveness can reset/reuse the public id or settle the captured entry reentrantly.
+    // A worker-confirmed source loss must retire only this still-pending observation.
+    if (
+      active === false &&
+      this.entries.get(entry.record.id) === entry &&
+      entry.record.status === "pending"
+    ) {
+      this.cancelEntry(entry, "requester-inactive");
+    }
+  }
+
+  /** Called by the Gateway's existing authority-close observer. */
+  cancelClosedAuthorities(closedRun?: { runId: string; instanceId?: string }): void {
+    for (const [id, entry] of this.entries) {
+      if (
+        closedRun &&
+        entry.requesterRun &&
+        (entry.requesterRun.runId !== closedRun.runId ||
+          (closedRun.instanceId !== undefined &&
+            entry.requesterRun.instanceId !== closedRun.instanceId))
+      ) {
+        continue;
+      }
+      this.get(id);
+    }
+  }
+
+  list(include?: (record: QuestionRecord) => boolean): QuestionRecord[] {
     const records: QuestionRecord[] = [];
-    for (const id of this.entries.keys()) {
+    for (const [id, entry] of this.entries) {
+      if (include && !include(entry.record)) {
+        continue;
+      }
       const record = this.get(id);
       if (record?.status === "pending") {
         records.push(record);
@@ -151,34 +274,68 @@ export class QuestionManager {
     );
   }
 
-  waitAnswer(id: string, timeoutMs?: number): Promise<QuestionWaitAnswerResult> {
-    const record = this.requireRecord(id);
-    if (record.status !== "pending") {
-      return Promise.resolve(waitResult(record));
-    }
+  /** Re-enters only the still-pending question's original admitted root. */
+  runPendingContinuation<T>(id: string, run: () => Promise<T>): Promise<T> | null {
+    const record = this.get(id);
     const entry = this.entries.get(id);
-    if (!entry) {
-      throw this.notFound(id);
+    if (
+      !entry?.admissionContinuation ||
+      entry.record !== record ||
+      entry.record.status !== "pending" ||
+      entry.record.expiresAtMs <= Date.now()
+    ) {
+      return null;
     }
+    return entry.admissionContinuation.run(run);
+  }
+
+  waitAnswer(
+    id: string,
+    timeoutMs?: number,
+    includeResolutionId = false,
+  ): Promise<QuestionWaitAnswerResult> {
+    const entry = this.requireEntry(id);
+    if (entry.record.status !== "pending") {
+      return Promise.resolve(waitResult(entry, includeResolutionId));
+    }
+    const signal = getAsyncWorkSignal();
     return new Promise<QuestionWaitAnswerResult>((resolve) => {
-      const waiter: Waiter = { resolve, timer: null };
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const waiter: Waiter = () => {
+        if (!entry.waiters.delete(waiter)) {
+          return;
+        }
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", waiter);
+        // finish() may close this observer after recording an answer. Read that
+        // fact directly; get() could expire/cancel the question during retirement.
+        resolve(waitResult(entry, includeResolutionId));
+      };
       entry.waiters.add(waiter);
+      if (signal?.aborted) {
+        waiter();
+        return;
+      }
+      signal?.addEventListener("abort", waiter, { once: true });
       if (timeoutMs !== undefined) {
-        waiter.timer = setTimeout(
-          () => {
-            entry.waiters.delete(waiter);
-            resolve({ status: "pending" });
-          },
-          resolveTimerTimeoutMs(timeoutMs, 1),
-        );
-        unrefTimer(waiter.timer);
+        timer = setTimeout(waiter, resolveTimerTimeoutMs(timeoutMs, 1));
+        unrefTimer(timer);
       }
     });
   }
 
-  resolve(id: string, answers: QuestionAnswers, resolvedBy?: string): QuestionResolveResult {
+  resolve(
+    id: string,
+    answers: QuestionAnswers,
+    resolvedBy?: string,
+    options?: { commit?: () => void; resolutionId?: string },
+  ): QuestionResolveResult {
     const entry = this.requirePendingEntry(id);
     const canonical = this.validateAnswers(entry.record.questions, answers);
+    // The commit, receipt, and answered transition are synchronous. Failed
+    // validation/writes must not publish a receipt; lost ACKs must not erase it.
+    options?.commit?.();
+    entry.resolutionId = options?.resolutionId;
     entry.record = {
       ...entry.record,
       status: "answered",
@@ -191,6 +348,10 @@ export class QuestionManager {
 
   cancel(id: string, resolvedBy?: string): QuestionResolveResult {
     const entry = this.requirePendingEntry(id);
+    return this.cancelEntry(entry, resolvedBy);
+  }
+
+  private cancelEntry(entry: QuestionEntry, resolvedBy?: string): QuestionResolveResult {
     entry.record = {
       ...entry.record,
       status: "cancelled",
@@ -200,43 +361,54 @@ export class QuestionManager {
     return { status: "cancelled" };
   }
 
-  /** Clears all manager-owned timers and releases waiters. */
+  /** Retires this Gateway's owner only after received mutations have joined. */
+  close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.publications.beginClose();
+    this.reset();
+  }
+
+  /** Reusable on open owners (v2026.8.1 SDK context); never reopens a closed owner. */
   reset(): void {
-    for (const entry of this.entries.values()) {
+    const entries = [...this.entries.values()];
+    this.entries.clear();
+    for (const entry of entries) {
+      entry.sessionAccess?.release();
       clearTimeout(entry.expiryTimer);
+      const releaseHumanInputWait = entry.releaseHumanInputWait;
+      entry.releaseHumanInputWait = undefined;
+      releaseHumanInputWait?.(false);
+      entry.admissionContinuation?.release();
+      entry.admissionContinuation = null;
       if (entry.cleanupTimer) {
         clearTimeout(entry.cleanupTimer);
       }
       for (const waiter of entry.waiters) {
-        if (waiter.timer) {
-          clearTimeout(waiter.timer);
-        }
-        waiter.resolve(waitResult(entry.record));
+        waiter();
       }
-      entry.waiters.clear();
     }
-    this.entries.clear();
   }
 
-  private requireRecord(id: string): QuestionRecord {
+  private requireEntry(id: string): QuestionEntry {
+    // get() settles expiry/requester loss; its callbacks can replace the entry.
     const record = this.get(id);
-    if (!record) {
+    const entry = this.entries.get(id);
+    if (!record || !entry || entry.record !== record) {
       throw this.notFound(id);
     }
-    return record;
+    return entry;
   }
 
   private requirePendingEntry(id: string): QuestionEntry {
-    const record = this.requireRecord(id);
-    if (record.status !== "pending") {
+    const entry = this.requireEntry(id);
+    if (entry.record.status !== "pending") {
       throw new QuestionManagerError(
         QuestionManagerErrorCodes.ALREADY_TERMINAL,
-        `question '${id}' is already ${record.status}`,
+        `question '${id}' is already ${entry.record.status}`,
       );
-    }
-    const entry = this.entries.get(id);
-    if (!entry) {
-      throw this.notFound(id);
     }
     return entry;
   }
@@ -261,7 +433,7 @@ export class QuestionManager {
       if (!values || values.length === 0) {
         throw this.invalidAnswer(question.questionId, "requires an answer");
       }
-      if (values.some((value) => !value.trim())) {
+      if (values.some((value) => (question.isSecret ? value.length === 0 : !value.trim()))) {
         throw this.invalidAnswer(question.questionId, "contains an empty answer");
       }
       if (!question.multiSelect && values.length > 1) {
@@ -270,6 +442,10 @@ export class QuestionManager {
       // Store the declared option label when a value matches trim-insensitively;
       // downstream renderers compare answers to option labels exactly.
       const canonicalValues = values.map((value) => {
+        // Masked free-text answers preserve exact bytes, including whitespace.
+        if (question.isSecret) {
+          return value;
+        }
         const matched = question.options.find((option) => option.label.trim() === value.trim());
         return matched ? matched.label : value.trim();
       });
@@ -310,28 +486,72 @@ export class QuestionManager {
 
   private finish(entry: QuestionEntry): void {
     clearTimeout(entry.expiryTimer);
-    const result = waitResult(entry.record);
-    for (const waiter of entry.waiters) {
-      if (waiter.timer) {
-        clearTimeout(waiter.timer);
+    const continuation = entry.admissionContinuation;
+    entry.admissionContinuation = null;
+    let settled = false;
+    const settle = () => {
+      if (settled) {
+        return;
       }
-      waiter.resolve(result);
-    }
-    entry.waiters.clear();
-    const event = resolvedEvent(entry.record);
-    if (event) {
+      settled = true;
+      const releaseHumanInputWait = entry.releaseHumanInputWait;
+      entry.releaseHumanInputWait = undefined;
       try {
-        entry.onResolved?.(event);
-      } catch {
-        // Broadcast fanout is observational and must not change question truth.
+        releaseHumanInputWait?.(entry.isRequesterActive?.() !== false);
+      } finally {
+        entry.isRequesterActive = undefined;
+        for (const waiter of entry.waiters) {
+          waiter();
+        }
       }
-    }
-    const cleanupTimer = setTimeout(() => {
-      if (entry.cleanupTimer === cleanupTimer && this.entries.get(entry.record.id) === entry) {
-        this.entries.delete(entry.record.id);
+    };
+    const publish = async () => {
+      try {
+        // Enter the original continuation before these callbacks can release its last parked root.
+        settle();
+        const event = resolvedEvent(entry.record);
+        if (event && this.entries.get(entry.record.id) === entry) {
+          await Promise.resolve(entry.onResolved?.(event, this.observeEntry(entry)));
+        }
+      } finally {
+        continuation?.release();
       }
-    }, QUESTION_RESOLVED_ENTRY_GRACE_MS);
-    entry.cleanupTimer = cleanupTimer;
-    unrefTimer(cleanupTimer);
+    };
+    // Track before invoking: synchronous truth and callbacks retain their ordering,
+    // while worker preparation and rejected publication are joined by Gateway shutdown.
+    void this.publications
+      .track(async () => {
+        try {
+          let publication: Promise<void>;
+          try {
+            publication = continuation ? continuation.run(publish) : publish();
+          } finally {
+            // Root reset can refuse entry before publish starts. Local waiters still
+            // observe the committed terminal fact without admitting another root.
+            settle();
+          }
+          await publication;
+        } finally {
+          // Worker preparation still needs this entry. Start grace only after
+          // publication settles, and never resurrect an entry retired by a callback.
+          if (this.entries.get(entry.record.id) === entry) {
+            const cleanupTimer = setTimeout(() => {
+              if (
+                entry.cleanupTimer === cleanupTimer &&
+                this.entries.get(entry.record.id) === entry
+              ) {
+                this.entries.delete(entry.record.id);
+                entry.sessionAccess?.release();
+              }
+            }, QUESTION_RESOLVED_ENTRY_GRACE_MS);
+            entry.cleanupTimer = cleanupTimer;
+            unrefTimer(cleanupTimer);
+          }
+        }
+      })
+      .catch(() => {
+        continuation?.release();
+        this.onPublicationError?.();
+      });
   }
 }

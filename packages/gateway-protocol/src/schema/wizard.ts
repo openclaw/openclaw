@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { SetupInferenceActivationRejectionSchema } from "./setup-inference.js";
 
 /** Runtime state reported for gateway-driven setup wizard sessions. */
 const WizardRunStatusSchema = Type.Union([
@@ -24,6 +25,11 @@ export const WizardStartParamsSchema = closedObject({
   channel: Type.Optional(NonEmptyString),
 });
 
+export const McpAuthLoginParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+  serverName: NonEmptyString,
+});
+
 /** Client answer payload for the current wizard step. */
 export const WizardAnswerSchema = closedObject({
   stepId: NonEmptyString,
@@ -36,13 +42,16 @@ export const WizardNextParamsSchema = closedObject({
   answer: Type.Optional(WizardAnswerSchema),
 });
 
-/** Shared session-id-only params for cancel and status requests. */
+/** Session-id-only params for status requests. */
 const WizardSessionIdParamsSchema = closedObject({
   sessionId: NonEmptyString,
 });
 
-/** Cancels an active wizard session. */
-export const WizardCancelParamsSchema = WizardSessionIdParamsSchema;
+/** Cancels a wizard or closes input when its client view is discarded. */
+export const WizardCancelParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+  closeInput: Type.Optional(Type.Boolean()),
+});
 
 /** Reads status for an active or recently completed wizard session. */
 export const WizardStatusParamsSchema = WizardSessionIdParamsSchema;
@@ -105,6 +114,18 @@ const WizardResultFields = {
   // Exact model prepared by provider-owned setup. Clients must still run the
   // live activation step before presenting the route as ready.
   preparedModelRef: Type.Optional(NonEmptyString),
+  // Successful terminal auth flows report the exact live-verified activation;
+  // provider sign-in or model preparation alone does not establish readiness.
+  modelActivation: Type.Optional(
+    closedObject({
+      modelRef: NonEmptyString,
+      modelTarget: Type.Optional(Type.Literal("utility")),
+      gatewayRestartRequired: Type.Optional(Type.Literal(true)),
+    }),
+  ),
+  // Only a finalized activation rejection may release recovery. Generic terminal
+  // errors can follow committed writes; the top-level error retains their detail.
+  activationRejection: Type.Optional(SetupInferenceActivationRejectionSchema),
 };
 
 /** Result after advancing a wizard session. */
@@ -125,6 +146,7 @@ export const WizardStatusResultSchema = closedObject({
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type WizardStartParams = Static<typeof WizardStartParamsSchema>;
+export type McpAuthLoginParams = Static<typeof McpAuthLoginParamsSchema>;
 export type WizardAnswer = Static<typeof WizardAnswerSchema>;
 export type WizardNextParams = Static<typeof WizardNextParamsSchema>;
 export type WizardCancelParams = Static<typeof WizardCancelParamsSchema>;

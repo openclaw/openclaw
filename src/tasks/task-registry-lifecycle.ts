@@ -1,126 +1,142 @@
-import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agents/agent-run-terminal-outcome.js";
-import { onAgentEvent } from "../infra/agent-events.js";
-import { isTerminalTaskStatus } from "./task-executor-policy.js";
+import { isDeepStrictEqual } from "node:util";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { onSubagentRegistryPersisted } from "../agents/subagents/registry/subagent-registry-state.js";
 import {
-  appendTaskEvent,
-  mapAgentRunTerminalOutcomeToTaskStatus,
-  resolveTaskLifecycleTerminalError,
-} from "./task-registry-common.js";
+  onAgentEvent,
+  registerAgentEventLifecycleRotationHandler,
+  type AgentEventPayload,
+} from "../infra/agent-events.js";
+import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import { hasResidentTaskBacking, readTaskBackingInstance } from "./task-backing-authority.js";
+import { recordTaskActivityEvent } from "./task-registry-activity.js";
 import {
-  maybeDeliverTaskStateChangeUpdate,
-  maybeDeliverTaskTerminalUpdate,
-} from "./task-registry-delivery.js";
-import { updateTask } from "./task-registry-mutation.js";
+  captureTaskAgentEventTarget,
+  type TaskAgentEventTarget,
+} from "./task-registry-agent-event-target.js";
+import { enqueueTaskAgentEvent, taskAgentEventMutations } from "./task-registry-agent-events.js";
 import {
   claimTaskRegistryListenerStart,
-  getTasksByRunScope,
-  restoreTaskRegistryOnce,
   setTaskRegistryListenerStarter,
   setTaskRegistryListenerStop,
-} from "./task-registry-state.js";
-import type { TaskRecord } from "./task-registry.types.js";
+} from "./task-registry-listener-state.js";
+import {
+  reconcileTaskProgressBatches,
+  retireTaskProgressForSession,
+  scheduleYieldedSubagentTaskProgress,
+} from "./task-registry-progress.js";
+import { filterTasksByRunScope, matchesTaskPersistenceReceipt } from "./task-registry-records.js";
+import { getTasksByRunScope, tasks } from "./task-registry-state.js";
+import {
+  clearTaskProgressBatches,
+  getTaskRegistryProcessState,
+} from "./task-registry.process-state.js";
+import { onTaskRegistryChange } from "./task-registry.store.js";
+import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 
-function ensureListener() {
-  if (!claimTaskRegistryListenerStart()) {
-    return;
+type TaskEventSelection = TaskAgentEventTarget & { record?: TaskRecord };
+
+function selectEventTargets(evt: AgentEventPayload): TaskEventSelection[] {
+  const candidates = getTasksByRunScope({ runId: evt.runId, sessionKey: evt.sessionKey });
+  const canonicalRunId = subagentRuns.get(evt.runId)?.taskRunId;
+  if (canonicalRunId && canonicalRunId !== evt.runId) {
+    candidates.push(
+      ...getTasksByRunScope({
+        runId: canonicalRunId,
+        runtime: "subagent",
+        sessionKey: evt.sessionKey,
+      }).filter((task) => readTaskBackingInstance(task.detail)?.runtime === "subagent"),
+    );
   }
-  const stop = onAgentEvent((evt) => {
-    restoreTaskRegistryOnce();
-    const scopedTasks = getTasksByRunScope({
-      runId: evt.runId,
-      sessionKey: evt.sessionKey,
-    });
-    if (scopedTasks.length === 0) {
-      return;
+  const selected = new Map<string, TaskEventSelection>(
+    candidates.map((record) => [record.taskId, { ...captureTaskAgentEventTarget(record), record }]),
+  );
+  for (const pending of getTaskRegistryProcessState().projection.pending) {
+    const physicalRun = pending.scope.runId === evt.runId;
+    if (!physicalRun && (!canonicalRunId || pending.scope.runId !== canonicalRunId)) {
+      continue;
     }
-    const now = evt.ts || Date.now();
-    for (const current of scopedTasks) {
-      if (isTerminalTaskStatus(current.status)) {
+    if (pending.readEventTarget) {
+      const committed = pending.readEventTarget();
+      if (
+        !committed ||
+        (!physicalRun &&
+          (committed.runtime !== "subagent" || committed.backing?.runtime !== "subagent")) ||
+        !filterTasksByRunScope([committed], { sessionKey: evt.sessionKey }).length
+      ) {
         continue;
       }
-      const patch: Partial<TaskRecord> = {
-        lastEventAt: now,
+      const record = tasks.get(committed.taskId);
+      selected.set(committed.taskId, {
+        ...committed,
+        ...(record &&
+        matchesTaskPersistenceReceipt(record, committed) &&
+        isDeepStrictEqual(readTaskBackingInstance(record.detail), committed.backing)
+          ? { record }
+          : {}),
+      });
+      continue;
+    }
+    if (!physicalRun) {
+      continue;
+    }
+    // Existing rebinds can precede projection, but never invent a newly created row.
+    const current = tasks.get(pending.scope.taskId);
+    if (current && !selected.has(current.taskId)) {
+      const rebound = {
+        ...current,
+        runId: pending.scope.runId,
+        childSessionKey: pending.scope.childSessionKey ?? current.childSessionKey,
       };
-      if (evt.stream === "lifecycle") {
-        const phase = typeof evt.data?.phase === "string" ? evt.data.phase : undefined;
-        const eventStartedAt = evt.data?.startedAt;
-        const startedAt =
-          typeof eventStartedAt === "number" && Number.isFinite(eventStartedAt)
-            ? eventStartedAt
-            : current.startedAt;
-        const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : undefined;
-        if (startedAt !== undefined) {
-          patch.startedAt = startedAt;
-        }
-        if (phase === "start") {
-          patch.status = "running";
-        } else if (phase === "end") {
-          const terminal = buildAgentRunTerminalOutcomeFromLifecycleEvent({
-            phase,
-            data: evt.data,
-            startedAt,
-            endedAt: endedAt ?? now,
-          });
-          patch.status = mapAgentRunTerminalOutcomeToTaskStatus(terminal);
-          patch.endedAt = terminal.endedAt ?? now;
-          const error = resolveTaskLifecycleTerminalError({
-            runtime: current.runtime,
-            status: patch.status,
-            terminalReason: terminal.reason,
-            error: terminal.error,
-          });
-          if (error) {
-            patch.error = error;
-          }
-        } else if (phase === "error") {
-          const terminal = buildAgentRunTerminalOutcomeFromLifecycleEvent({
-            phase,
-            data: evt.data,
-            startedAt,
-            endedAt: endedAt ?? now,
-          });
-          patch.status = mapAgentRunTerminalOutcomeToTaskStatus(terminal);
-          patch.endedAt = terminal.endedAt ?? now;
-          patch.error =
-            resolveTaskLifecycleTerminalError({
-              runtime: current.runtime,
-              status: patch.status,
-              terminalReason: terminal.reason,
-              error: terminal.error,
-            }) ?? current.error;
-        }
-      } else if (evt.stream === "error") {
-        patch.error = typeof evt.data?.error === "string" ? evt.data.error : current.error;
-      } else if (evt.stream === "tool" && evt.data?.phase === "start") {
-        // Tool starts are the activity signal surfaced in task summaries; ends
-        // and outputs only refresh lastEventAt.
-        const toolName = typeof evt.data.name === "string" ? evt.data.name.trim() : "";
-        if (toolName) {
-          patch.toolUseCount = (current.toolUseCount ?? 0) + 1;
-          patch.lastToolName = toolName;
-        }
+      if (filterTasksByRunScope([rebound], { sessionKey: evt.sessionKey }).length) {
+        selected.set(current.taskId, {
+          ...captureTaskAgentEventTarget(rebound),
+          record: rebound,
+        });
       }
-      const stateChangeEvent =
-        patch.status && patch.status !== current.status
-          ? appendTaskEvent({
-              at: now,
-              kind: patch.status,
-              summary:
-                patch.status === "failed"
-                  ? (patch.error ?? current.error)
-                  : patch.status === "succeeded"
-                    ? current.terminalSummary
-                    : undefined,
-            })
-          : undefined;
-      const updated = updateTask(current.taskId, patch);
-      if (updated) {
-        void maybeDeliverTaskStateChangeUpdate(current.taskId, stateChangeEvent);
-        void maybeDeliverTaskTerminalUpdate(current.taskId);
+    }
+  }
+  return [...selected.values()];
+}
+
+function ensureListener() {
+  if (!claimTaskRegistryListenerStart(taskAgentEventMutations)) {
+    return;
+  }
+  const stop = onAgentEvent((event) => {
+    if (event.stream === "lifecycle" && event.data.phase === "start") {
+      reconcileTaskProgressBatches();
+    }
+    for (const task of selectEventTargets(event)) {
+      const backing = task.backing;
+      const subagent = subagentRuns.get(event.runId);
+      if (
+        isTerminalTaskStatus(task.status) ||
+        (task.record && !hasResidentTaskBacking(task.record)) ||
+        (task.runtime === "subagent" &&
+          backing?.runtime === "subagent" &&
+          (subagent?.generation !== backing.generation ||
+            subagent?.childSessionKey !== task.childSessionKey))
+      ) {
+        continue;
+      }
+      if (enqueueTaskAgentEvent(task, event) && task.record) {
+        const prepared = recordTaskActivityEvent(task.record, event);
+        scheduleYieldedSubagentTaskProgress(task.record, event, prepared);
       }
     }
   });
-  setTaskRegistryListenerStop(stop);
+  const stopTasks = onTaskRegistryChange(reconcileTaskProgressBatches);
+  const stopRuns = onSubagentRegistryPersisted(() => reconcileTaskProgressBatches());
+  const stopIdentity = onSessionIdentityMutation(retireTaskProgressForSession);
+  setTaskRegistryListenerStop(() => {
+    stop();
+    stopTasks();
+    stopRuns();
+    stopIdentity();
+  });
+  // Initial task restoration can publish before these listeners attach.
+  reconcileTaskProgressBatches({ kind: "restored" });
 }
 
 setTaskRegistryListenerStarter(ensureListener);
+registerAgentEventLifecycleRotationHandler("tasks:progress", clearTaskProgressBatches);

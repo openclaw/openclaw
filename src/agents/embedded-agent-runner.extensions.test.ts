@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { wrapToolWithBeforeToolCallHook } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createTerminalPresentationContractTool,
@@ -25,7 +26,7 @@ import {
   recordAdjustedParamsForToolCall,
 } from "./agent-tools.before-tool-call.js";
 import { buildEmbeddedExtensionFactories } from "./embedded-agent-runner/extensions.js";
-import { consumeEmbeddedToolSendReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
+import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import { cleanupTempPluginTestEnvironment } from "./test-helpers/temp-plugin-extension-fixtures.js";
 import { jsonResult } from "./tools/common.js";
 
@@ -62,6 +63,7 @@ describe("buildEmbeddedExtensionFactories", () => {
         result: {
           content: [{ type: "text" as const, text: "middleware-observed" }],
           details: { observedTool: event.toolName },
+          terminate: true,
         },
       }),
     );
@@ -86,10 +88,7 @@ describe("buildEmbeddedExtensionFactories", () => {
       ...identity,
     });
     const factory = factories[0];
-    expect(factory).toBeDefined();
-    if (!factory) {
-      throw new Error("Expected embedded tool-result extension factory");
-    }
+    assert(factory, "Expected embedded tool-result extension factory");
 
     const runtime = createExtensionRuntime();
     const extension = await loadExtensionFromFactory(
@@ -127,6 +126,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(result).toMatchObject({
       content: [{ type: "text", text: "middleware-observed" }],
       details: { observedTool: "read" },
+      terminate: true,
     });
   });
 
@@ -447,7 +447,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
   });
 
-  it("stores provider send receipts without overriding middleware details", async () => {
+  it("stores private send receipts without overriding middleware details", async () => {
     const registry = createEmptyPluginRegistry();
     registry.agentToolResultMiddlewares.push({
       pluginId: "redactor",
@@ -489,6 +489,12 @@ describe("buildEmbeddedExtensionFactories", () => {
             to: "channel:resolved-id",
             threadId: "root-1",
           },
+          messageDelivery: {
+            status: "settled",
+            primaryPlatformMessageId: "message-1",
+            partialDelivery: false,
+            createdThreadIds: ["root-1"],
+          },
         },
       },
       { cwd: "/tmp" },
@@ -498,15 +504,21 @@ describe("buildEmbeddedExtensionFactories", () => {
       content: [{ type: "text", text: "Sent." }],
       details: { redacted: true },
     });
-    expect(consumeEmbeddedToolSendReceipt(sessionManager, "call-message")).toEqual({
+    expect(consumeEmbeddedToolReceipt(sessionManager, "call-message")).toEqual({
       details: {
         toolSend: {
           to: "channel:resolved-id",
           threadId: "root-1",
         },
+        messageDelivery: {
+          status: "settled",
+          primaryPlatformMessageId: "message-1",
+          partialDelivery: false,
+          createdThreadIds: ["root-1"],
+        },
       },
     });
-    expect(consumeEmbeddedToolSendReceipt(sessionManager, "call-message")).toBeUndefined();
+    expect(consumeEmbeddedToolReceipt(sessionManager, "call-message")).toBeUndefined();
   });
 
   it("keeps a confirmed send successful when result middleware fails", async () => {
@@ -548,6 +560,12 @@ describe("buildEmbeddedExtensionFactories", () => {
           ok: true,
           result: { messageId: "1700000000.000100", channelId: "C123" },
           toolSend: { to: "channel:C123" },
+          messageDelivery: {
+            status: "settled",
+            primaryPlatformMessageId: "1700000000.000100",
+            partialDelivery: false,
+            createdThreadIds: [],
+          },
         },
       },
       { cwd: "/tmp" },
@@ -561,8 +579,16 @@ describe("buildEmbeddedExtensionFactories", () => {
         middlewareWarning: "post-processing failed",
       },
     });
-    expect(consumeEmbeddedToolSendReceipt(sessionManager, "call-message")).toEqual({
-      details: { toolSend: { to: "channel:C123" } },
+    expect(consumeEmbeddedToolReceipt(sessionManager, "call-message")).toEqual({
+      details: {
+        toolSend: { to: "channel:C123" },
+        messageDelivery: {
+          status: "settled",
+          primaryPlatformMessageId: "1700000000.000100",
+          partialDelivery: false,
+          createdThreadIds: [],
+        },
+      },
     });
   });
 
@@ -615,10 +641,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
 
     const factory = factories[0];
-    expect(factory).toBeDefined();
-    if (!factory) {
-      throw new Error("Expected embedded tool-result extension factory");
-    }
+    assert(factory, "Expected embedded tool-result extension factory");
     const runtime = createExtensionRuntime();
     const extension = await loadExtensionFromFactory(
       factory,

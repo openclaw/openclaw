@@ -1,9 +1,15 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { DEFAULT_RESET_TRIGGERS } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isResetAuthorizedForContext } from "../command-auth.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext } from "../templating.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
-import { CURRENT_MESSAGE_MARKER, HISTORY_CONTEXT_MARKER } from "./history.js";
+import {
+  CURRENT_MESSAGE_MARKER,
+  HISTORY_CONTEXT_MARKER,
+  RECENT_HISTORY_CONTEXT_MARKER,
+} from "./history.js";
 import { stripMentions } from "./mentions.js";
 
 type ResolvedSessionResetCommand = {
@@ -33,6 +39,7 @@ function skipHorizontalWhitespace(source: string, start: number): number {
 function startsWithHistoryMarker(source: string, start: number): boolean {
   return (
     source.startsWith(HISTORY_CONTEXT_MARKER, start) ||
+    source.startsWith(RECENT_HISTORY_CONTEXT_MARKER, start) ||
     source.startsWith(CURRENT_MESSAGE_MARKER, start)
   );
 }
@@ -273,8 +280,12 @@ export function resolveSessionResetCommand(params: {
     const triggerLower = normalizeLowercaseStringOrEmpty(trigger);
     if (
       !triggerLower ||
-      (normalizedResetBodyLower !== triggerLower &&
-        !normalizedResetBodyLower.startsWith(`${triggerLower} `))
+      ![triggerLower, normalizeLowercaseStringOrEmpty(normalizeCommandBody(trigger))].some(
+        (candidate) =>
+          normalizedResetBodyLower === candidate ||
+          (normalizedResetBodyLower.startsWith(candidate) &&
+            /\s/.test(normalizedResetBodyLower.charAt(candidate.length))),
+      )
     ) {
       continue;
     }
@@ -298,4 +309,29 @@ export function resolveSessionResetCommand(params: {
   }
 
   return result;
+}
+
+export function resolveAuthorizedSessionResetCommand(params: {
+  agentId: string;
+  cfg: OpenClawConfig;
+  commandAuthorized: boolean;
+  ctx: MsgContext;
+  isGroup: boolean;
+}): { resetAuthorized: boolean; resetCommand: ResolvedSessionResetCommand } {
+  const resetAuthorized = isResetAuthorizedForContext(params);
+  return {
+    resetAuthorized,
+    resetCommand: resolveSessionResetCommand({
+      commandText: params.ctx.commandText ?? "",
+      rawText: params.ctx.rawText ?? "",
+      resetTriggers: params.cfg.session?.resetTriggers?.length
+        ? params.cfg.session.resetTriggers
+        : DEFAULT_RESET_TRIGGERS,
+      ctx: params.ctx,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      isGroup: params.isGroup,
+      resetAuthorized,
+    }),
+  };
 }

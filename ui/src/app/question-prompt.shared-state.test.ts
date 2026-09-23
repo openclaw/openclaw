@@ -93,6 +93,28 @@ afterEach(() => {
 });
 
 describe("Gateway-client question outcome ownership", () => {
+  it("shares connection hydration across sidebar, favicon, and later chat mounts", async () => {
+    vi.useFakeTimers();
+    const client: QuestionClient = { request: vi.fn(async () => ({ questions: [] })) };
+    const mount = () => {
+      const state = createQuestionPromptState(vi.fn());
+      states.push(state);
+      setQuestionPromptClient(state, client);
+      refreshPendingQuestionsWithRetry(state, client);
+      return state;
+    };
+    const sidebar = mount();
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    mount();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(client.request).toHaveBeenCalledTimes(1);
+    requestQuestion(sidebar);
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.request).toHaveBeenCalledTimes(2);
+  });
+
   it.each(resolutionCases)(
     "publishes an authoritative $action to every same-client pane and sidebar owner",
     async ({ resolve, status }) => {
@@ -375,6 +397,34 @@ describe("Gateway-client question outcome ownership", () => {
     expect(remounted.prompts.get("question-1")?.status).toBe("cancelled");
   });
 
+  it("notifies only at question deadlines and honors an earlier incoming expiry", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
+    const onChange = vi.fn();
+    const expiresAtMs = Date.now() + 10_000;
+    const state = connectQuestionState(createQuestionClient(), onChange, expiresAtMs);
+    onChange.mockClear();
+
+    vi.advanceTimersByTime(4_000);
+    expect(onChange).not.toHaveBeenCalled();
+    requestQuestion(state, "question-2", Date.now() + 1_250);
+    onChange.mockClear();
+
+    vi.advanceTimersByTime(1_249);
+    expect(onChange).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(state.prompts.get("question-2")?.status).toBe("expired");
+    expect(state.prompts.get("question-1")?.status).toBe("pending");
+    expect(onChange).toHaveBeenCalledOnce();
+    onChange.mockClear();
+
+    vi.advanceTimersByTime(expiresAtMs - Date.now() - 1);
+    expect(onChange).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(state.prompts.get("question-1")?.status).toBe("expired");
+    expect(onChange).toHaveBeenCalledOnce();
+  });
+
   it("publishes and expires a pending question recovered only from question.list", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
@@ -393,7 +443,7 @@ describe("Gateway-client question outcome ownership", () => {
 
     expect(onChange).toHaveBeenCalledOnce();
     expect(hydrated.prompts.get("question-1")?.status).toBe("pending");
-    expect(hydrated.tickTimer).not.toBeNull();
+    expect(hydrated.expiryTimer).not.toBeNull();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(hydrated.prompts.get("question-1")).toMatchObject({
       status: "expired",
@@ -414,7 +464,7 @@ describe("Gateway-client question outcome ownership", () => {
       setQuestionPromptClient(projection, client);
       refreshPendingQuestionsWithRetry(projection, client);
     }
-    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(client.request).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1_000);
 

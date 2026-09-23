@@ -1,17 +1,16 @@
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
 import {
-  CODEX_PLUGINS_MARKETPLACE_NAME,
-  CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+  CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN,
   type CodexAppServerCommandSource,
-  type CodexPluginConfig,
   type CodexPluginDestructiveApprovalMode,
   type CodexPluginDestructivePolicy,
   type CodexPluginMarketplaceName,
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
-} from "./config-contracts.js";
+} from "./config-contracts.shared.js";
 import { normalizeCodexServiceTier } from "./config-utils.js";
 import {
   codexDiscoveryConfigSchema,
@@ -31,10 +30,8 @@ const codexAppServerHomeScopeSchema = z.enum(["agent", "user"]);
 const SecretInputSchema = buildSecretInputSchema();
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
 const codexAppServerApprovalPolicySchema = z.preprocess(
-  // Preserve the rest of a shipped plugin config until doctor persists the
-  // canonical value. Rejecting this field would discard the whole config.
   (value) => (value === "on-failure" ? "on-request" : value),
-  z.enum(["never", "on-request", "untrusted"]),
+  z.enum(["never", "on-request"]),
 );
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
@@ -57,6 +54,13 @@ const codexAppServerServiceTierSchema = z
     z.string().trim().min(1).nullable().optional(),
   )
   .optional();
+const codexAppServerCyberFailoverSchema = z
+  .object({
+    mode: z.enum(["auto", "off"]).optional(),
+    model: z.string().trim().min(1).optional(),
+    cooloffMs: z.number().positive().optional(),
+  })
+  .strict();
 const codexAppServerExperimentalSchema = z
   .object({
     sandboxExecServer: z.boolean().optional(),
@@ -89,9 +93,7 @@ const codexAppServerNetworkProxySchema = z
 const codexPluginEntryConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
-    marketplaceName: z
-      .enum([CODEX_PLUGINS_MARKETPLACE_NAME, CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME])
-      .optional(),
+    marketplaceName: z.string().regex(CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN).optional(),
     pluginName: z.string().trim().min(1).optional(),
     allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
   })
@@ -180,13 +182,11 @@ const codexPluginConfigSchema = z
         codeModeOnly: z.boolean().optional(),
         loopDetectionPreToolUseRelay: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
-        turnCompletionIdleTimeoutMs: z.number().positive().optional(),
-        turnAssistantCompletionIdleTimeoutMs: z.number().positive().optional(),
-        postToolRawAssistantCompletionIdleTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
         serviceTier: codexAppServerServiceTierSchema,
+        cyberFailover: codexAppServerCyberFailoverSchema.optional(),
         networkProxy: codexAppServerNetworkProxySchema.optional(),
         defaultWorkspaceDir: z.string().optional(),
         experimental: codexAppServerExperimentalSchema.optional(),
@@ -196,7 +196,21 @@ const codexPluginConfigSchema = z
   })
   .strict();
 
-export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
+export type ParsedCodexSupervisionEndpoint = z.infer<typeof codexSupervisionEndpointSchema>;
+export type ParsedCodexPluginConfig = Omit<
+  z.infer<typeof codexPluginConfigSchema>,
+  "codexPlugins"
+> & {
+  codexPlugins?: z.infer<typeof codexPluginsConfigSchema>;
+};
+
+export function readCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
+  const appServer = asNullableRecord(asNullableRecord(value)?.appServer);
+  if (appServer?.approvalPolicy === "untrusted") {
+    throw new Error(
+      'plugins.entries.codex.config.appServer.approvalPolicy="untrusted" is retired; run "openclaw doctor --fix" to migrate it to "on-request".',
+    );
+  }
   const parsed = codexPluginConfigSchema.safeParse(value);
   if (!parsed.success) {
     return {};
@@ -209,8 +223,34 @@ export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
   return { ...config, ...(plugins.data ? { codexPlugins: plugins.data } : {}) };
 }
 
-export function isCodexSandboxExecServerEnabled(pluginConfig?: unknown): boolean {
-  return readCodexPluginConfig(pluginConfig).appServer?.experimental?.sandboxExecServer === true;
+export function isCodexSandboxExecServerEnabled(
+  pluginConfig?: unknown,
+  sandbox?: unknown,
+): boolean {
+  return (
+    isCodexRemoteExecPlacementSandbox(sandbox) ||
+    readCodexPluginConfig(pluginConfig).appServer?.experimental?.sandboxExecServer === true
+  );
+}
+
+export function isCodexRemoteExecPlacementSandbox(sandbox: unknown): boolean {
+  return (
+    typeof sandbox === "object" &&
+    sandbox !== null &&
+    "placementExecutionMode" in sandbox &&
+    sandbox.placementExecutionMode === "remote-exec"
+  );
+}
+
+export function isCodexPairedNodeRemoteExecPlacementSandbox(sandbox: unknown): boolean {
+  return (
+    isCodexRemoteExecPlacementSandbox(sandbox) &&
+    typeof sandbox === "object" &&
+    sandbox !== null &&
+    "placementNodeId" in sandbox &&
+    typeof sandbox.placementNodeId === "string" &&
+    sandbox.placementNodeId.length > 0
+  );
 }
 
 export function assertCodexAppServerCommandHasNoInlineArgs(params: {
@@ -274,9 +314,7 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
 function isCodexPluginMarketplaceName(
   value: string | undefined,
 ): value is CodexPluginMarketplaceName {
-  return (
-    value === CODEX_PLUGINS_MARKETPLACE_NAME || value === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
-  );
+  return typeof value === "string" && CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN.test(value);
 }
 
 function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolicy): {

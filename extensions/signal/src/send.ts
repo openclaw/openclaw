@@ -19,10 +19,6 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSignalAccount } from "./accounts.js";
-import {
-  appendSignalApprovalReactionHintForOutboundMessage,
-  registerSignalApprovalReactionTargetForOutboundMessage,
-} from "./approval-reactions.js";
 import { signalRpcRequest, type SignalTransportKind } from "./client-adapter.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
@@ -46,6 +42,8 @@ export type SignalSendOpts = {
   replyToId?: string | null;
   replyToAuthor?: string | null;
   replyToBody?: string | null;
+  /** Revalidate the originating request before every daemon mutation. */
+  assertDirectAdapterHandoff?: () => void;
 };
 
 export type SignalSendResult = {
@@ -303,14 +301,7 @@ export async function sendMessageSignal(
   const target = parseTarget(to);
   const targetAuthor = normalizeOptionalString(account);
   const targetAuthorUuid = normalizeOptionalString(accountInfo.config.accountUuid);
-  const outboundText = appendSignalApprovalReactionHintForOutboundMessage({
-    cfg,
-    accountId: accountInfo.accountId,
-    to,
-    text: text ?? "",
-    targetAuthor,
-    targetAuthorUuid,
-  });
+  const outboundText = text ?? "";
   let message = outboundText;
   let outboundMedia: MediaPlaceholderTextFact | undefined;
   let textStyles: SignalTextStyleRange[] = [];
@@ -390,6 +381,7 @@ export async function sendMessageSignal(
     timeoutMs: opts.timeoutMs,
     transportKind: opts.transportKind ?? accountInfo.transport.kind,
     maxAttachmentBytes: maxBytes,
+    assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
   };
   let nativeReplyStatus: "sent" | "fallback" | undefined;
   let result: SignalSendRpcResult | undefined;
@@ -426,15 +418,6 @@ export async function sendMessageSignal(
       sourceTimestamp: timestamp,
     });
   }
-  registerSignalApprovalReactionTargetForOutboundMessage({
-    cfg,
-    accountId: accountInfo.accountId,
-    to,
-    messageId,
-    text: outboundText,
-    targetAuthor,
-    targetAuthorUuid,
-  });
   return {
     messageId,
     timestamp,

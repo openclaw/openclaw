@@ -24,21 +24,23 @@ import type { TtsAudioPersistence } from "./tts-synthesis.js";
 type MockSpeechSynthesisResult = Awaited<ReturnType<SpeechProviderPlugin["synthesize"]>>;
 
 const synthesizeMock = vi.hoisted(() =>
-  vi.fn(
-    async (request: SpeechSynthesisRequest): Promise<MockSpeechSynthesisResult> => ({
-      audioBuffer: Buffer.from("voice"),
-      fileExtension: ".ogg",
-      outputFormat: "ogg",
-      voiceCompatible: request.target === "voice-note",
-    }),
-  ),
+  vi.fn(async (request: SpeechSynthesisRequest): Promise<MockSpeechSynthesisResult> => ({
+    audioBuffer: Buffer.from("voice"),
+    fileExtension: ".ogg",
+    outputFormat: "ogg",
+    voiceCompatible: request.target === "voice-note",
+  })),
 );
 const prepareSynthesisMock = vi.hoisted(() =>
   vi.fn(async (_ctx: SpeechProviderPrepareSynthesisContext) => undefined),
 );
 
-const listSpeechProvidersMock = vi.hoisted(() => vi.fn());
-const getSpeechProviderMock = vi.hoisted(() => vi.fn());
+const listSpeechProvidersMock = vi.hoisted(() =>
+  vi.fn<(cfg?: OpenClawConfig) => SpeechProviderPlugin[]>(),
+);
+const getSpeechProviderMock = vi.hoisted(() =>
+  vi.fn<(providerId: string, cfg?: OpenClawConfig) => SpeechProviderPlugin | null | undefined>(),
+);
 const transcodeAudioBufferMock = vi.hoisted(() =>
   // Default off: most tests rely on the synthesized buffer reaching the
   // channel unchanged. Tests that exercise the pre-transcode branch override
@@ -113,6 +115,29 @@ vi.mock("./provider-registry.js", async () => {
   };
 });
 
+vi.mock("../plugins/capability-provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/capability-provider-runtime.js")>(
+    "../plugins/capability-provider-runtime.js",
+  );
+  return {
+    ...actual,
+    preparePluginCapabilityProviderResolution: ({ cfg }: { cfg?: OpenClawConfig }) => ({
+      load: undefined,
+      resolve: () => listSpeechProvidersMock(cfg),
+    }),
+    preparePluginCapabilityProviderLookup: ({
+      providerId,
+      cfg,
+    }: {
+      providerId: string;
+      cfg?: OpenClawConfig;
+    }) => ({
+      load: undefined,
+      resolve: () => getSpeechProviderMock(providerId, cfg) ?? undefined,
+    }),
+  };
+});
+
 vi.mock("./tts-core.js", async () => {
   const actual = await vi.importActual<typeof import("./tts-core.js")>("./tts-core.js");
   return { ...actual, scheduleCleanup: vi.fn() };
@@ -135,9 +160,8 @@ export const {
   textToSpeechStream,
   textToSpeechTelephony,
 } = await import("./runtime-api.js");
-export const { maybeApplyTtsToPayload: maybeApplyTtsToPayloadCore } =
-  await import("./tts-payload.js");
-export const { textToSpeech: textToSpeechCore } = await import("./tts-synthesis.js");
+export const { maybeApplyTtsToPayloadCore } = await import("./tts-payload.js");
+export const { textToSpeechCore } = await import("./tts-synthesis.js");
 
 export const CODE_HEAVY_SPOKEN_FALLBACK = CODE_HEAVY_SPOKEN_FALLBACK_CORE;
 export const MAX_TIMER_TIMEOUT_MS = MAX_TIMER_TIMEOUT_MS_CORE;

@@ -1,20 +1,37 @@
+import { homedir as readHomeDir } from "node:os";
 import path from "node:path";
-import { resolveCodexAppServerUserHomeDir } from "./config-reviewer.js";
-import type { CodexAppServerStartOptions } from "./config.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexAppServerStartOptions } from "./config-contracts.js";
+import { normalizeCodexAppServerArgs } from "./launch-args.js";
 
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_EPHEMERAL_AUTH_STORE_OVERRIDE = 'cli_auth_credentials_store="ephemeral"';
 
-export function resolveCodexAppServerHomeDir(agentDir: string): string {
+export function resolveCodexAppServerHomeDir(agentDir: string | undefined): string {
+  if (!agentDir) {
+    throw new Error("Agent-scoped Codex requires an OpenClaw agent directory");
+  }
   return path.join(path.resolve(agentDir), CODEX_APP_SERVER_HOME_DIRNAME);
+}
+
+/** Resolves the native user Codex home used by Desktop and the CLI. */
+export function resolveCodexAppServerUserHomeDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = readHomeDir,
+): string {
+  const configured = normalizeOptionalString(env.CODEX_HOME);
+  return path.resolve(configured ?? path.join(homedir(), ".codex"));
 }
 
 /** Resolves the local CODEX_HOME used when starting one app-server connection. */
 export function resolveCodexAppServerLocalHomeDir(
   startOptions: CodexAppServerStartOptions,
-  agentDir: string,
+  agentDir: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
+  if (startOptions.codexHome) {
+    return startOptions.codexHome;
+  }
   const configured = startOptions.env?.CODEX_HOME;
   if (configured?.trim()) {
     return configured;
@@ -31,19 +48,24 @@ export function withEphemeralCodexAuthStore(params: {
   authProfileId?: string | null;
 }): CodexAppServerStartOptions {
   const { startOptions } = params;
-  const managedCodexCli =
-    startOptions.commandSource === "managed" || startOptions.commandSource === "resolved-managed";
-  if (!managedCodexCli || (!params.preparedAuth && params.authProfileId === null)) {
+  if (!params.preparedAuth && params.authProfileId === null) {
     return startOptions;
   }
-  if (
-    startOptions.args.at(-2) === "-c" &&
-    startOptions.args.at(-1) === CODEX_EPHEMERAL_AUTH_STORE_OVERRIDE
-  ) {
+  const args = normalizeCodexAppServerArgs(startOptions.args, CODEX_EPHEMERAL_AUTH_STORE_OVERRIDE);
+  return args === startOptions.args ? startOptions : { ...startOptions, args };
+}
+
+export function withClearedEnvironmentVariables(
+  startOptions: CodexAppServerStartOptions,
+  envVars: readonly string[],
+): CodexAppServerStartOptions {
+  const clearEnv = startOptions.clearEnv ?? [];
+  const missingEnvVars = envVars.filter((envVar) => !clearEnv.includes(envVar));
+  if (missingEnvVars.length === 0) {
     return startOptions;
   }
   return {
     ...startOptions,
-    args: [...startOptions.args, "-c", CODEX_EPHEMERAL_AUTH_STORE_OVERRIDE],
+    clearEnv: [...clearEnv, ...missingEnvVars],
   };
 }

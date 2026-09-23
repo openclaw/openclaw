@@ -1,97 +1,82 @@
-/** Worker-thread entrypoint for serialized audit writes and retention maintenance. */
-import { parentPort, workerData } from "node:worker_threads";
-import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { pruneExpiredAuditEvents, recordAuditEvent } from "./audit-event-store.js";
-import type { AuditEventInput } from "./audit-event-types.js";
+import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import {
-  processExecutionIdentityAdmissionWork,
-  pruneExpiredExecutionIdentityContexts,
+  runWithOpenClawStateBusyTimeout,
+  type OpenClawStateDatabase,
+  type OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db.js";
+import { isOpenClawStateWriteContentionError } from "../state/openclaw-state-ownership.js";
+import {
+  pruneExpiredAuditEventsInDatabase,
+  recordAuditEventInDatabase,
+} from "./audit-event-store.js";
+import { isOutboundMessageProgressInput } from "./audit-event-types.js";
+import {
+  formatAuditWriterError,
+  formatAuditWriterRequestError,
+} from "./audit-event-writer.errors.js";
+import type { AuditWriterOperations, AuditWriterResult } from "./audit-event-writer.types.js";
+import {
+  pruneExpiredExecutionDecisionFactsInDatabase,
+  recordExecutionDecisionFactInDatabase,
+} from "./execution-decision-facts.js";
+import { processExecutionDecisionWorkInDatabase } from "./execution-decision-work.js";
+import {
+  processExecutionIdentityAdmissionWorkInDatabase,
+  pruneExpiredExecutionIdentityContextsInDatabase,
 } from "./execution-identity-context.js";
+import {
+  pruneExpiredOutboundMessageProgressInDatabase,
+  recordOutboundMessageProgressInDatabase,
+} from "./message-delivery-progress-store.js";
 
-const AUDIT_MAINTENANCE_INTERVAL_MS = 60 * 60_000;
-
-type AuditWriterRequest =
-  | { type: "record-event"; input: AuditEventInput }
-  | { type: "record-execution-identity"; work: unknown }
-  | { type: "stop" };
-
-const stateDir =
-  workerData && typeof workerData === "object" && typeof workerData.stateDir === "string"
-    ? workerData.stateDir
-    : undefined;
-if (!parentPort || !stateDir) {
-  throw new Error("audit event writer requires a parent port and state directory");
-}
-const port = parentPort;
-const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-
-function executionIdentityFailureMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (
-    message.includes("audit identity key is missing") ||
-    message.includes("audit identity key is corrupt")
-  ) {
-    return "audit execution identity key unavailable";
-  }
-  if (message.includes("execution identity context conflict")) {
-    return "audit execution identity context conflict";
-  }
-  if (message.includes("execution identity recovery evidence unavailable")) {
-    return "audit execution identity recovery evidence unavailable";
-  }
-  if (
-    message.includes("admission envelope") ||
-    message.includes("admission work") ||
-    message.includes("admission token")
-  ) {
-    return "audit execution identity envelope rejected";
-  }
-  return "audit execution identity persistence failed";
-}
-
-function reportMaintenance(): void {
+/** Execute one FIFO attempt on the shared actor, including fail-fast first use. */
+export function executeAuditWriterCommand(
+  command: SqliteWorkerCommand<AuditWriterOperations>,
+  options: OpenClawStateDatabaseOptions,
+  retainDatabase: () => OpenClawStateDatabase,
+): AuditWriterResult {
   try {
-    pruneExpiredAuditEvents({ database });
+    return runWithOpenClawStateBusyTimeout(
+      () => {
+        const database = { ...options, database: retainDatabase() };
+        if (command.type === "audit.writer.prune") {
+          const maintenance = {
+            events: pruneExpiredAuditEventsInDatabase,
+            identity: pruneExpiredExecutionIdentityContextsInDatabase,
+            decisions: pruneExpiredExecutionDecisionFactsInDatabase,
+            progress: pruneExpiredOutboundMessageProgressInDatabase,
+          }[command.input];
+          return { status: "settled", deleted: maintenance({ database }) };
+        }
+        const request = command.input;
+        if (request.type === "record-event") {
+          if (isOutboundMessageProgressInput(request.input)) {
+            recordOutboundMessageProgressInDatabase(request.input, database);
+          } else {
+            recordAuditEventInDatabase(request.input, database);
+          }
+        } else if (request.type === "record-execution-identity") {
+          processExecutionIdentityAdmissionWorkInDatabase(request.work, database);
+        } else if (request.type === "record-execution-decision-work") {
+          processExecutionDecisionWorkInDatabase(request.work, database);
+        } else {
+          recordExecutionDecisionFactInDatabase(request.receipt, database);
+        }
+        return { status: "settled" };
+      },
+      options,
+      0,
+    );
   } catch (error) {
-    port.postMessage({ type: "maintenance-error", error: String(error) });
-  }
-  try {
-    pruneExpiredExecutionIdentityContexts({ database });
-  } catch (error) {
-    port.postMessage({ type: "maintenance-error", error: String(error) });
-  }
-}
-
-reportMaintenance();
-const maintenanceTimer = setInterval(reportMaintenance, AUDIT_MAINTENANCE_INTERVAL_MS);
-port.postMessage({ type: "ready" });
-
-port.on("message", (message: AuditWriterRequest) => {
-  if (message.type === "record-event") {
-    try {
-      recordAuditEvent(message.input, database);
-      port.postMessage({ type: "recorded" });
-    } catch (error) {
-      port.postMessage({ type: "record-error", error: String(error) });
+    if (isOpenClawStateWriteContentionError(error)) {
+      return { status: "retry" };
     }
-    return;
+    return {
+      status: "settled",
+      error:
+        command.type === "audit.writer.process"
+          ? formatAuditWriterRequestError(command.input, error)
+          : formatAuditWriterError(error),
+    };
   }
-  if (message.type === "record-execution-identity") {
-    try {
-      processExecutionIdentityAdmissionWork(message.work, database);
-      port.postMessage({ type: "recorded" });
-    } catch (error) {
-      port.postMessage({ type: "record-error", error: executionIdentityFailureMessage(error) });
-    }
-    return;
-  }
-  clearInterval(maintenanceTimer);
-  reportMaintenance();
-  try {
-    closeOpenClawStateDatabase();
-  } catch (error) {
-    port.postMessage({ type: "maintenance-error", error: String(error) });
-  }
-  port.postMessage({ type: "stopped" });
-  port.close();
-});
+}

@@ -13,6 +13,8 @@ function captureWriter(inputs: AuditEventInput[]): AuditEventWriter {
       return true;
     },
     recordExecutionIdentity: () => true,
+    recordExecutionDecision: () => true,
+    recordExecutionDecisionWork: () => true,
     stop: async () => {},
   };
 }
@@ -36,7 +38,7 @@ describe("message audit recorder", () => {
   it("keeps message events off by default policy", async () => {
     const inputs: AuditEventInput[] = [];
     const recorder = createAuditEventRecorder({
-      messageMode: "off",
+      getConfig: () => ({ logging: { audit: { messages: "off" } } }),
       writer: captureWriter(inputs),
     });
     const unsubscribe = onTrustedMessageAuditEvent(recorder.recordMessage);
@@ -51,7 +53,7 @@ describe("message audit recorder", () => {
   it("records only known direct conversations in direct mode", async () => {
     const inputs: AuditEventInput[] = [];
     const recorder = createAuditEventRecorder({
-      messageMode: "direct",
+      getConfig: () => ({ logging: { audit: { messages: "direct" } } }),
       writer: captureWriter(inputs),
     });
     const unsubscribe = onTrustedMessageAuditEvent(recorder.recordMessage);
@@ -73,7 +75,7 @@ describe("message audit recorder", () => {
   it("records group metadata only in all mode", async () => {
     const inputs: AuditEventInput[] = [];
     const recorder = createAuditEventRecorder({
-      messageMode: "all",
+      getConfig: () => ({ logging: { audit: { messages: "all" } } }),
       writer: captureWriter(inputs),
     });
     const unsubscribe = onTrustedMessageAuditEvent(recorder.recordMessage);

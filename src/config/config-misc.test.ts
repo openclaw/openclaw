@@ -1,5 +1,6 @@
 // Covers miscellaneous config schema defaults and validation cases.
 import { describe, expect, it } from "vitest";
+import { configAccentCases } from "./config-accent.test-support.js";
 import {
   getConfigValueAtPath,
   parseConfigPath,
@@ -13,6 +14,10 @@ import { validateConfigObject, validateConfigObjectRaw } from "./validation.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const nonBooleanConfigCases = [
+  {
+    name: "gateway.controlUi.communityInvite",
+    config: { gateway: { controlUi: { communityInvite: "yes" } } },
+  },
   {
     name: "gateway.controlUi.sessionObserver",
     config: {
@@ -518,6 +523,12 @@ describe("ui.seamColor", () => {
   });
 });
 
+describe("ui.prefs.accent", () => {
+  it.each(configAccentCases)("validates %s", (_label, accent, valid) => {
+    expect(validateConfigObject({ ui: { prefs: { accent } } }).ok).toBe(valid);
+  });
+});
+
 describe("ui.prefs.sidebarEntries", () => {
   it("accepts the route and session entries synchronized by the Control UI", () => {
     const result = validateConfigObject({
@@ -570,6 +581,42 @@ describe("gateway.controlUi.embedSandbox", () => {
   });
 });
 
+describe("gateway.controlUi.environment", () => {
+  it("accepts named environment colors and trims the label", () => {
+    for (const color of [
+      "teal",
+      "amber",
+      "purple",
+      "coral",
+      "pink",
+      "blue",
+      "green",
+      "red",
+      "gray",
+    ]) {
+      const result = OpenClawSchema.safeParse({
+        gateway: { controlUi: { environment: { label: " edge ", color } } },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.gateway?.controlUi?.environment?.label).toBe("edge");
+      }
+    }
+  });
+
+  it.each([
+    { label: "edge", color: "orange" },
+    { label: " ", color: "amber" },
+    { label: "a".repeat(25), color: "amber" },
+    { label: "edge" },
+    { color: "amber" },
+  ])("rejects invalid environment configuration %#", (environment) => {
+    expect(OpenClawSchema.safeParse({ gateway: { controlUi: { environment } } }).success).toBe(
+      false,
+    );
+  });
+});
+
 describe("gateway.controlUi.allowExternalEmbedUrls", () => {
   it("accepts boolean values", () => {
     for (const value of [true, false]) {
@@ -585,11 +632,11 @@ describe("gateway.controlUi.allowExternalEmbedUrls", () => {
   });
 });
 
-describe("gateway.controlUi.sessionObserver", () => {
+describe.each(["sessionObserver", "communityInvite"])("gateway.controlUi.%s", (key) => {
   it("accepts boolean values", () => {
     for (const value of [true, false]) {
       const result = OpenClawSchema.safeParse({
-        gateway: { controlUi: { sessionObserver: value } },
+        gateway: { controlUi: { [key]: value } },
       });
       expect(result.success).toBe(true);
     }
@@ -681,6 +728,19 @@ describe("plugins.entries.*.hooks", () => {
       expect(result.success).toBe(false);
     }
   });
+});
+
+describe("mcp.sessionIdleTtlMs", () => {
+  it.each([0, 1000.9, 7_200_000])("accepts the historical value %s", (sessionIdleTtlMs) => {
+    expect(OpenClawSchema.safeParse({ mcp: { sessionIdleTtlMs } }).success).toBe(true);
+  });
+
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, "1000"])(
+    "rejects invalid idle TTL %s",
+    (sessionIdleTtlMs) => {
+      expect(OpenClawSchema.safeParse({ mcp: { sessionIdleTtlMs } }).success).toBe(false);
+    },
+  );
 });
 
 describe("mcp.apps.enabled", () => {
@@ -880,6 +940,53 @@ describe("gateway.remote.transport", () => {
   });
 });
 
+describe("gateway.remote.edgeAuth", () => {
+  it("accepts valid header names with literal and SecretRef values", () => {
+    const res = validateConfigObjectRaw({
+      gateway: {
+        remote: {
+          edgeAuth: {
+            "X-Edge-Literal": "test-secret",
+            "X-Edge-Ref": { source: "env", provider: "default", id: "EDGE_AUTH_TOKEN" },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "empty map",
+      edgeAuth: {},
+      expected: "header map must not be empty",
+    },
+    {
+      name: "transport-owned header",
+      edgeAuth: { Host: "test-secret" },
+      expected: 'transport-owned header "Host"',
+    },
+    {
+      name: "invalid header name",
+      edgeAuth: { "Bad Header": "test-secret" },
+      expected: 'invalid gateway.remote.edgeAuth header name: "Bad Header"',
+    },
+    {
+      name: "case-duplicate headers",
+      edgeAuth: { "X-Edge-Auth": "one", "x-edge-auth": "two" },
+      expected: 'header names "X-Edge-Auth" and "x-edge-auth" differ only by case',
+    },
+  ])("rejects $name", ({ edgeAuth, expected }) => {
+    const res = validateConfigObjectRaw({ gateway: { remote: { edgeAuth } } });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.map((issue) => issue.message).join("\n")).toContain(expected);
+    }
+  });
+});
+
 describe("gateway.tools config", () => {
   it("accepts gateway.tools allow and deny lists", () => {
     const res = validateConfigObject({
@@ -1047,14 +1154,43 @@ describe("cron webhook schema", () => {
 });
 
 describe("broadcast", () => {
-  it("accepts a broadcast peer map with strategy", () => {
+  it.each([
+    { name: "legacy peer array", key: "120363403215116621@g.us", entry: ["alfred", "baerbel"] },
+    {
+      name: "legacy array without a new participant cap",
+      key: "+15551234567",
+      entry: Array.from({ length: 17 }, () => "alfred"),
+    },
+    { name: "qualified peer array", key: "telegram:-100123", entry: ["alfred", "baerbel"] },
+    {
+      name: "qualified object with runtime defaults",
+      key: "discord:123456789",
+      entry: { agents: ["alfred", "baerbel"] },
+    },
+    {
+      name: "qualified object at upper bounds",
+      key: "slack:C0123",
+      entry: {
+        agents: Array.from({ length: 16 }, () => "alfred"),
+        mentionGating: false,
+        maxRounds: 4,
+        maxTurns: 32,
+      },
+    },
+    {
+      name: "qualified object at lower bounds",
+      key: "whatsapp:1203@g.us",
+      entry: { agents: ["alfred"], mentionGating: true, maxRounds: 1, maxTurns: 1 },
+    },
+  ])("accepts $name", ({ key, entry }) => {
     const res = validateConfigObject({
       agents: {
+        ownership: "explicit",
         entries: { alfred: {}, baerbel: {} },
       },
       broadcast: {
         strategy: "parallel",
-        "120363403215116621@g.us": ["alfred", "baerbel"],
+        [key]: entry,
       },
     });
     expect(res.ok).toBe(true);
@@ -1067,11 +1203,68 @@ describe("broadcast", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("rejects non-array broadcast entries", () => {
+  it.each([
+    { name: "non-array entry", key: "1203@g.us", entry: 123 },
+    { name: "unqualified object", key: "1203@g.us", entry: { agents: ["alfred"] } },
+    {
+      name: "too many qualified array participants",
+      key: "telegram:-100123",
+      entry: Array.from({ length: 17 }, () => "alfred"),
+    },
+    {
+      name: "too many object participants",
+      key: "telegram:-100123",
+      entry: { agents: Array.from({ length: 17 }, () => "alfred") },
+    },
+    {
+      name: "unknown object option",
+      key: "telegram:-100123",
+      entry: { agents: ["alfred"], extra: true },
+    },
+    ...[0, 5, 1.5].map((maxRounds) => ({
+      name: `invalid rounds ${maxRounds}`,
+      key: "telegram:-100123",
+      entry: { agents: ["alfred"], maxRounds },
+    })),
+    ...[0, 33, 1.5].map((maxTurns) => ({
+      name: `invalid turns ${maxTurns}`,
+      key: "telegram:-100123",
+      entry: { agents: ["alfred"], maxTurns },
+    })),
+  ])("rejects $name", ({ key, entry }) => {
     const res = validateConfigObject({
-      broadcast: { "120363403215116621@g.us": 123 },
+      agents: { entries: { alfred: {} } },
+      broadcast: { [key]: entry },
     });
     expect(res.ok).toBe(false);
+  });
+
+  it.each([
+    { entry: ["alfred", "missing"], path: "broadcast.telegram:-100123.1" },
+    { entry: { agents: ["alfred", "missing"] }, path: "broadcast.telegram:-100123.agents.1" },
+  ])("rejects unknown participant IDs at $path", ({ entry, path }) => {
+    const res = validateConfigObject({
+      agents: { entries: { alfred: {} } },
+      broadcast: { "telegram:-100123": entry },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues).toContainEqual({
+        path,
+        message: 'Unknown agent id "missing" (not in agents.entries).',
+      });
+    }
+  });
+
+  it.each([
+    { entry: ["missing"], path: "broadcast.telegram:-100123.0" },
+    { entry: { agents: ["missing"] }, path: "broadcast.telegram:-100123.agents.0" },
+  ])("validates qualified participants without a configured roster at $path", ({ entry, path }) => {
+    const res = validateConfigObjectRaw({ broadcast: { "telegram:-100123": entry } });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(issuePaths(res.issues)).toContain(path);
+    }
   });
 });
 

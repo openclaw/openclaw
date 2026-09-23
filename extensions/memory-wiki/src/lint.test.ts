@@ -1,7 +1,8 @@
 // Memory Wiki tests cover lint plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { describe, expect, it, vi } from "vitest";
 import { lintMemoryWikiVault } from "./lint.js";
 import {
   renderWikiMarkdown,
@@ -11,6 +12,14 @@ import {
 } from "./markdown.js";
 import { writeMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
+
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    replaceFileAtomic: vi.fn(actual.replaceFileAtomic),
+  };
+});
 
 const { createVault } = createMemoryWikiTestHarness();
 
@@ -25,6 +34,16 @@ function issueCodesForPath(
 }
 
 describe("lintMemoryWikiVault", () => {
+  it("renders the empty report without issue sections", async () => {
+    const { config } = await createVault();
+    const result = await lintMemoryWikiVault(config);
+
+    expect(result.issueCount).toBe(0);
+    await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain(
+      "<!-- openclaw:wiki:lint:start -->\nNo issues found.\n<!-- openclaw:wiki:lint:end -->",
+    );
+  });
+
   it("accepts native markdown links that include the relative .md target", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-native-links-",
@@ -211,7 +230,7 @@ describe("lintMemoryWikiVault", () => {
       "utf8",
     );
     await fs.writeFile(
-      path.join(rootDir, "sources", "unsafe-alpha.md"),
+      path.join(rootDir, "sources", "unsafe-local-source.md"),
       [
         "# Unsafe Local Import: alpha.md",
         "",
@@ -234,7 +253,7 @@ describe("lintMemoryWikiVault", () => {
     expect(issueCodesForPath(result, "sources/bridge-alpha.md")).toEqual(
       expect.arrayContaining(["missing-id", "missing-page-type"]),
     );
-    expect(issueCodesForPath(result, "sources/unsafe-alpha.md")).toEqual(
+    expect(issueCodesForPath(result, "sources/unsafe-local-source.md")).toEqual(
       expect.arrayContaining(["missing-id", "missing-page-type"]),
     );
   });
@@ -657,9 +676,76 @@ describe("lintMemoryWikiVault", () => {
     expect(result.issuesByCategory.provenance.map((issue) => issue.code)).toContain(
       "claim-missing-evidence",
     );
-    await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Errors");
-    await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Contradictions");
-    await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Open Questions");
+    const report = await fs.readFile(result.reportPath, "utf8");
+    expect(report).toContain(
+      [
+        "<!-- openclaw:wiki:lint:start -->",
+        "- Errors: 3",
+        "- Warnings: 25",
+        "",
+        "### Errors",
+        "- `concepts/alpha.md`: Expected pageType `concept`, found `entity`.",
+        "- `concepts/alpha.md`: Duplicate page id `entity.alpha`.",
+        "- `entities/alpha.md`: Duplicate page id `entity.alpha`.",
+        "",
+        "### Warnings",
+        "- `concepts/alpha.md`: Non-source page is missing `sourceIds` provenance.",
+        "- `concepts/alpha.md`: Page lists 1 contradiction to resolve.",
+        "- `concepts/alpha.md`: Page lists 1 open question.",
+        "- `concepts/alpha.md`: Page confidence is low (0.20).",
+        "- `concepts/alpha.md`: Page freshness needs review (missing updatedAt).",
+        "- `concepts/alpha.md`: Claim `claim.alpha.db` is missing structured evidence.",
+        "- `concepts/alpha.md`: Claim `claim.alpha.db` has low confidence (0.20).",
+        "- `concepts/alpha.md`: Claim `claim.alpha.db` freshness needs review (missing updatedAt).",
+        "- `concepts/alpha.md`: Claim cluster `claim.alpha.db` has competing variants across 3 pages.",
+        "- `concepts/alpha.md`: Broken wikilink target `missing-page`.",
+        "- `entities/alpha.md`: Non-source page is missing `sourceIds` provenance.",
+        "- `entities/alpha.md`: Page lists 1 contradiction to resolve.",
+        "- `entities/alpha.md`: Page lists 1 open question.",
+        "- `entities/alpha.md`: Page confidence is low (0.20).",
+        "- `entities/alpha.md`: Page freshness needs review (missing updatedAt).",
+        "- `entities/alpha.md`: Claim `claim.alpha.db` is missing structured evidence.",
+        "- `entities/alpha.md`: Claim `claim.alpha.db` has low confidence (0.20).",
+        "- `entities/alpha.md`: Claim `claim.alpha.db` freshness needs review (missing updatedAt).",
+        "- `entities/alpha.md`: Claim cluster `claim.alpha.db` has competing variants across 3 pages.",
+        "- `entities/alpha.md`: Broken wikilink target `missing-page`.",
+        "- `sources/bridge-alpha.md`: Bridge-imported source page is missing `sourcePath`, `bridgeRelativePath`, or `bridgeWorkspaceDir` provenance.",
+        "- `sources/bridge-alpha.md`: Page freshness needs review (missing updatedAt).",
+        "- `syntheses/alpha-db.md`: Page freshness needs review (last touched 2025-10-01T00:00:00.000Z).",
+        "- `syntheses/alpha-db.md`: Claim `claim.alpha.db` freshness needs review (last touched 2025-10-01T00:00:00.000Z).",
+        "- `syntheses/alpha-db.md`: Claim cluster `claim.alpha.db` has competing variants across 3 pages.",
+        "",
+        "### Contradictions",
+        "- `concepts/alpha.md`: Page lists 1 contradiction to resolve.",
+        "- `concepts/alpha.md`: Claim cluster `claim.alpha.db` has competing variants across 3 pages.",
+        "- `entities/alpha.md`: Page lists 1 contradiction to resolve.",
+        "- `entities/alpha.md`: Claim cluster `claim.alpha.db` has competing variants across 3 pages.",
+        "- `syntheses/alpha-db.md`: Claim cluster `claim.alpha.db` has competing variants across 3 pages.",
+        "",
+        "### Open Questions",
+        "- `concepts/alpha.md`: Page lists 1 open question.",
+        "- `entities/alpha.md`: Page lists 1 open question.",
+        "",
+        "### Quality Follow-Up",
+        "- `concepts/alpha.md`: Non-source page is missing `sourceIds` provenance.",
+        "- `concepts/alpha.md`: Claim `claim.alpha.db` is missing structured evidence.",
+        "- `entities/alpha.md`: Non-source page is missing `sourceIds` provenance.",
+        "- `entities/alpha.md`: Claim `claim.alpha.db` is missing structured evidence.",
+        "- `sources/bridge-alpha.md`: Bridge-imported source page is missing `sourcePath`, `bridgeRelativePath`, or `bridgeWorkspaceDir` provenance.",
+        "- `concepts/alpha.md`: Page confidence is low (0.20).",
+        "- `concepts/alpha.md`: Page freshness needs review (missing updatedAt).",
+        "- `concepts/alpha.md`: Claim `claim.alpha.db` has low confidence (0.20).",
+        "- `concepts/alpha.md`: Claim `claim.alpha.db` freshness needs review (missing updatedAt).",
+        "- `entities/alpha.md`: Page confidence is low (0.20).",
+        "- `entities/alpha.md`: Page freshness needs review (missing updatedAt).",
+        "- `entities/alpha.md`: Claim `claim.alpha.db` has low confidence (0.20).",
+        "- `entities/alpha.md`: Claim `claim.alpha.db` freshness needs review (missing updatedAt).",
+        "- `sources/bridge-alpha.md`: Page freshness needs review (missing updatedAt).",
+        "- `syntheses/alpha-db.md`: Page freshness needs review (last touched 2025-10-01T00:00:00.000Z).",
+        "- `syntheses/alpha-db.md`: Claim `claim.alpha.db` freshness needs review (last touched 2025-10-01T00:00:00.000Z).",
+        "<!-- openclaw:wiki:lint:end -->",
+      ].join("\n"),
+    );
   });
 
   it("reports unparsable frontmatter as a lint issue instead of failing the whole vault (#96125)", async () => {
@@ -704,6 +790,52 @@ describe("lintMemoryWikiVault", () => {
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain(
       "Frontmatter failed to parse: Unexpected scalar",
     );
+  });
+
+  it("keeps the previous lint report when atomic publication fails", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-atomic-report-",
+    });
+    const reportsDir = path.join(rootDir, "reports");
+    const reportPath = path.join(reportsDir, "lint.md");
+    await fs.mkdir(reportsDir, { recursive: true });
+    const previousReport = renderWikiMarkdown({
+      frontmatter: {
+        pageType: "report",
+        id: "report.lint",
+        title: "Lint Report",
+        status: "active",
+      },
+      body: "# Lint Report\n\nPrevious valid lint report.\n",
+    });
+    await fs.writeFile(reportPath, previousReport, "utf8");
+    await fs.chmod(reportPath, 0o640);
+    const previousBytes = await fs.readFile(reportPath);
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/security-runtime")>(
+      "openclaw/plugin-sdk/security-runtime",
+    );
+    const publicationError = Object.assign(new Error("injected lint report publication failure"), {
+      code: "EIO",
+    });
+    vi.mocked(replaceFileAtomic).mockImplementationOnce((options) =>
+      actual.replaceFileAtomic({
+        ...options,
+        beforeRename: async ({ tempPath }) => {
+          await fs.writeFile(tempPath, "partial lint report", "utf8");
+          throw publicationError;
+        },
+      }),
+    );
+
+    await expect(lintMemoryWikiVault(config)).rejects.toBe(publicationError);
+    await expect(fs.readFile(reportPath)).resolves.toEqual(previousBytes);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(reportPath)).mode & 0o777).toBe(0o640);
+    }
+    const lintPublicationFiles = (await fs.readdir(reportsDir)).filter(
+      (entry) => entry === "lint.md" || entry.startsWith("lint.md.lint-report."),
+    );
+    expect(lintPublicationFiles).toEqual(["lint.md"]);
   });
 
   it.each([

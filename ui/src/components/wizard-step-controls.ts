@@ -1,7 +1,11 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import type { WizardStep } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiExternalText } from "../lib/format-error.ts";
+import { renderChannelPicker } from "./channel-picker.ts";
 import { handleCopyButton } from "./copy-button.ts";
+import { renderPicker } from "./select-picker.ts";
 import { renderSensitiveInput } from "./sensitive-input.ts";
 import "../styles/wizard-step-controls.css";
 
@@ -19,12 +23,28 @@ type WizardStepControlsProps = {
   onValueChange: (value: unknown) => void;
   onAnswer: (value: unknown) => void;
   presentation?: "channels";
+  channelSelect?: boolean;
   answerLabel?: string;
+  busyLabel?: string;
   confirmAffirmativeLabel?: string;
   leadingAction?: TemplateResult;
+  externalAuthInput?: boolean;
   sensitiveRevealed?: boolean;
   onToggleSensitiveVisibility?: () => void;
 };
+
+export function renderWizardBusyButton(
+  statusLabel: string,
+  buttonLabel = t("modelSetup.wizard.continue"),
+) {
+  return html`
+    <button type="button" class="btn primary" disabled aria-busy="true" aria-label=${buttonLabel}>
+      <span class="btn__label">${buttonLabel}</span>
+      <span class="btn__spinner" aria-hidden="true"></span>
+      <span class="sr-only" role="status" aria-live="polite">${statusLabel}</span>
+    </button>
+  `;
+}
 
 function stepClass(props: WizardStepControlsProps, name: string): string {
   return `${props.presentation === "channels" ? "channels-wizard" : "wizard-step"}__${name}`;
@@ -32,7 +52,9 @@ function stepClass(props: WizardStepControlsProps, name: string): string {
 
 function renderMessage(props: WizardStepControlsProps) {
   return props.step.message
-    ? html`<div class=${stepClass(props, "message")}>${props.step.message}</div>`
+    ? html`<div class=${stepClass(props, "message")}>
+        ${formatUiExternalText(props.step.message)}
+      </div>`
     : nothing;
 }
 
@@ -42,9 +64,11 @@ function renderOptionBody(option: WizardStepOption, presentation?: "channels", s
       <span class="channels-wizard__option-label">
         ${selected === undefined ? nothing : selected ? "☑ " : "☐ "}${option.label}
       </span>
-      ${option.hint
-        ? html`<span class="channels-wizard__option-hint">${option.hint}</span>`
-        : nothing}
+      ${
+        option.hint
+          ? html`<span class="channels-wizard__option-hint">${option.hint}</span>`
+          : nothing
+      }
     `;
   }
   return html`
@@ -55,32 +79,51 @@ function renderOptionBody(option: WizardStepOption, presentation?: "channels", s
   `;
 }
 
-function renderDeviceCode(step: WizardStep) {
+function renderSignIn(step: WizardStep) {
+  // Authorization URLs are actions, not documents for inline readers or metadata fetches.
   const deviceCode = step.deviceCode;
-  if (!deviceCode) {
-    return nothing;
-  }
-  const copyLabel = t("modelSetup.wizard.copy");
+  const copyLabel = t(deviceCode ? "modelSetup.wizard.copyCode" : "modelSetup.wizard.copyLink");
+  const copyValue = deviceCode?.code ?? step.externalUrl;
   return html`
-    <div class="wizard-step__device-code">
-      ${deviceCode.message ? html`<div class="muted">${deviceCode.message}</div>` : nothing}
-      <code>${deviceCode.code}</code>
-      <button
-        type="button"
-        class="btn btn--sm"
-        @click=${(event: Event) => void handleCopyButton(event, deviceCode.code, copyLabel)}
-      >
-        <span data-copy-label>${copyLabel}</span>
-      </button>
-      ${deviceCode.expiresInMinutes
-        ? html`<div class="muted">
-            ${t("modelSetup.wizard.expires", {
-              count: String(deviceCode.expiresInMinutes),
-            })}
-          </div>`
-        : nothing}
+    <div class="wizard-step__sign-in">
+      <p class="muted">${deviceCode?.message ?? t("modelSetup.wizard.browserInstructions")}</p>
+      ${deviceCode ? html`<code class="wizard-step__sign-in-code">${deviceCode.code}</code>` : nothing}
+      <div class="wizard-step__actions">
+        ${step.externalUrl ? html`<a class="btn primary wizard-step__external-link" data-link-reader-external href=${step.externalUrl} target="_blank" rel="noreferrer">${t("modelSetup.wizard.openSignIn")}</a>` : nothing}
+        ${copyValue ? keyed(copyValue, html`<button type="button" class="btn" @click=${(event: Event) => void handleCopyButton(event, copyValue, copyLabel)}><span data-copy-label>${copyLabel}</span></button>`) : nothing}
+      </div>
+      <div class="muted" role="status" aria-live="polite">${t("modelSetup.wizard.waiting")}</div>
+      ${deviceCode?.expiresInMinutes ? html`<div class="muted">${t("modelSetup.wizard.expires", { count: String(deviceCode.expiresInMinutes) })}</div>` : nothing}
+      ${deviceCode ? html`<p class="muted">${t("modelSetup.wizard.deviceCodeWarning")}</p>` : nothing}
     </div>
   `;
+}
+
+export function renderWizardSingleChoice(props: {
+  options: WizardStepOption[];
+  busy: boolean;
+  label: string;
+  value?: unknown;
+  onAnswer: (value: unknown) => void;
+}) {
+  if (props.options.length <= 2) {
+    return html`<div class="wizard-step__actions">
+      ${props.options.map((option, index) => html`<button type="button" class=${index === 0 ? "btn primary" : "btn"} ?disabled=${props.busy} @click=${() => props.onAnswer(option.value)}>${renderOptionBody(option)}</button>`)}
+    </div>`;
+  }
+  const selectedIndex = props.options.findIndex((option) => Object.is(option.value, props.value));
+  return renderPicker({
+    label: props.label,
+    value: selectedIndex < 0 ? null : String(selectedIndex),
+    options: props.options.map((option, index) => ({
+      value: String(index),
+      label: option.label,
+      description: option.hint,
+      kind: "neutral",
+    })),
+    disabled: props.busy,
+    onChange: (value) => props.onAnswer(props.options[Number(value)]?.value),
+  });
 }
 
 function renderAnswerButton(
@@ -89,6 +132,12 @@ function renderAnswerButton(
   onClick?: () => void,
   disabled = props.busy,
 ) {
+  const buttonLabel = props.answerLabel ?? label;
+  if (props.presentation === "channels" && props.busy) {
+    return html`<div class="channels-wizard__footer">
+      ${renderWizardBusyButton(props.busyLabel ?? buttonLabel)}
+    </div>`;
+  }
   const button = html`
     <button
       type=${onClick ? "button" : "submit"}
@@ -96,7 +145,7 @@ function renderAnswerButton(
       ?disabled=${disabled}
       @click=${onClick}
     >
-      ${props.answerLabel ?? label}
+      ${buttonLabel}
     </button>
   `;
   if (props.presentation === "channels") {
@@ -112,43 +161,29 @@ function renderAnswerButton(
 function renderOption(
   props: WizardStepControlsProps,
   option: WizardStepOption,
-  index: number,
   selected: unknown[],
 ) {
   const checked = selected.some((value) => Object.is(value, option.value));
   if (props.presentation === "channels") {
-    return props.step.type === "select"
-      ? html`<wa-radio
-          class="channels-wizard__option"
-          appearance="button"
-          value=${String(index)}
-          .checked=${checked}
-        >
-          ${renderOptionBody(option, props.presentation)}
-        </wa-radio>`
-      : html`<button
-          type="button"
-          class="channels-wizard__option"
-          aria-pressed=${checked ? "true" : "false"}
-          ?disabled=${props.busy}
-          @click=${() => props.onValueChange(option.value)}
-        >
-          ${renderOptionBody(option, props.presentation, checked)}
-        </button>`;
+    return html`<button
+      type="button"
+      class="channels-wizard__option"
+      aria-pressed=${checked ? "true" : "false"}
+      ?disabled=${props.busy}
+      @click=${() => props.onValueChange(option.value)}
+    >
+      ${renderOptionBody(option, props.presentation, checked)}
+    </button>`;
   }
   return html`<label class="wizard-step__option">
     <input
-      type=${props.step.type === "select" ? "radio" : "checkbox"}
-      name=${props.step.type === "select" ? `${props.inputId}-option` : nothing}
+      type="checkbox"
       .checked=${checked}
       ?disabled=${props.busy}
       @change=${(event: Event) => {
-        const nextValue =
-          props.step.type === "select"
-            ? option.value
-            : (event.currentTarget as HTMLInputElement).checked
-              ? [...selected, option.value]
-              : selected.filter((value) => !Object.is(value, option.value));
+        const nextValue = (event.currentTarget as HTMLInputElement).checked
+          ? [...selected, option.value]
+          : selected.filter((value) => !Object.is(value, option.value));
         props.onValueChange(nextValue);
       }}
     />
@@ -156,31 +191,35 @@ function renderOption(
   </label>`;
 }
 
+function renderExternalStepInfo(step: WizardStep) {
+  return step.externalUrl || step.deviceCode ? renderSignIn(step) : nothing;
+}
+
 function renderContinueStep(props: WizardStepControlsProps) {
-  const step = props.step;
   return html`
-    ${renderMessage(props)}
-    ${step.externalUrl
-      ? html`<a class="btn btn--sm" href=${step.externalUrl} target="_blank" rel="noreferrer">
-          ${t("modelSetup.wizard.openSignIn")}
-        </a>`
-      : nothing}
-    ${renderDeviceCode(step)}
+    ${renderMessage(props)} ${renderExternalStepInfo(props.step)}
     ${renderAnswerButton(props, t("modelSetup.wizard.continue"), () => props.onAnswer(undefined))}
   `;
 }
 
 function renderProgressStep(props: WizardStepControlsProps) {
   return html`
-    <div class="wizard-step__progress" role="status" aria-live="polite">
-      <span class="wizard-step__spinner" aria-hidden="true"></span>
-      ${renderMessage(props)}
-    </div>
-    ${props.leadingAction
-      ? html`<div class="wizard-step__actions wizard-step__actions--split">
-          ${props.leadingAction}
-        </div>`
-      : nothing}
+    ${
+      props.step.externalUrl || props.step.deviceCode
+        ? nothing
+        : html`<div class="wizard-step__progress" role="status" aria-live="polite">
+            <span class="wizard-step__spinner" aria-hidden="true"></span>
+            ${renderMessage(props)}
+          </div>`
+    }
+    ${renderExternalStepInfo(props.step)}
+    ${
+      props.leadingAction
+        ? html`<div class="wizard-step__actions wizard-step__actions--split">
+            ${props.leadingAction}
+          </div>`
+        : nothing
+    }
   `;
 }
 
@@ -215,7 +254,7 @@ function renderTextStep(props: WizardStepControlsProps) {
             props.presentation !== "channels" &&
             props.onValueChange((event.currentTarget as HTMLInputElement).value)}
         />`;
-  return html`
+  const form = html`
     <form
       class="wizard-step__form"
       @submit=${(event: Event) => {
@@ -226,40 +265,74 @@ function renderTextStep(props: WizardStepControlsProps) {
         props.onAnswer(props.presentation === "channels" ? (formInput?.value ?? "") : value);
       }}
     >
-      ${step.message
-        ? html`<div class=${stepClass(props, "message")}>
-            <label for=${props.inputId}>${step.message}</label>
-          </div>`
-        : nothing}
-      ${input} ${renderAnswerButton(props, t("modelSetup.wizard.submit"))}
+      ${
+        step.message
+          ? html`<div class=${stepClass(props, "message")}>
+              <label for=${props.inputId}>${formatUiExternalText(step.message)}</label>
+            </div>`
+          : nothing
+      }
+      ${props.externalAuthInput ? nothing : renderExternalStepInfo(step)} ${input}
+      ${renderAnswerButton(
+        props.externalAuthInput ? { ...props, leadingAction: undefined } : props,
+        t("modelSetup.wizard.submit"),
+      )}
     </form>
   `;
+  return props.externalAuthInput
+    ? html`
+        ${renderExternalStepInfo(step)}
+        <details class="wizard-step__manual-entry">
+          <summary class="muted">${t("modelSetup.wizard.manualEntry")}</summary>
+          ${form}
+        </details>
+        <div class="wizard-step__actions wizard-step__actions--split">
+          ${props.leadingAction ?? nothing}
+        </div>
+      `
+    : form;
 }
 
 function renderOptionsStep(props: WizardStepControlsProps) {
   const options = props.step.options ?? [];
   const multiple = props.step.type === "multiselect";
   const selected = multiple ? (Array.isArray(props.value) ? props.value : []) : [props.value];
+  if (!multiple && props.presentation !== "channels") {
+    return html`
+      ${renderMessage(props)}
+      ${renderWizardSingleChoice({ options, busy: props.busy, label: props.step.message ?? "", value: props.value, onAnswer: props.onAnswer })}
+      ${props.leadingAction ?? nothing}
+    `;
+  }
   if (props.presentation === "channels" && !multiple) {
     const selectedIndex = options.findIndex((option) => Object.is(option.value, props.value));
+    const channels =
+      props.channelSelect && options.every((option) => typeof option.value === "string");
+    const picker = channels ? renderChannelPicker : renderPicker;
     return html`
-      <wa-radio-group
-        class="channels-wizard__options"
-        label=${props.step.message ?? ""}
-        orientation="vertical"
-        .value=${selectedIndex >= 0 ? String(selectedIndex) : null}
-        ?disabled=${props.busy}
-        @change=${(event: Event) => {
-          const index = (event.currentTarget as HTMLElement & { value?: string | number | null })
-            .value;
-          const option = options[Number(index)];
-          if (option) {
-            props.onAnswer(option.value);
-          }
-        }}
-      >
-        ${options.map((option, index) => renderOption(props, option, index, selected))}
-      </wa-radio-group>
+      ${renderMessage(props)}
+      ${picker({
+        label: props.step.message ?? "",
+        value:
+          selectedIndex < 0
+            ? null
+            : channels
+              ? String(options[selectedIndex]?.value)
+              : String(selectedIndex),
+        options: options.map((option, index) => ({
+          value: channels ? String(option.value) : String(index),
+          label: option.label,
+          description: option.hint,
+          kind: channels ? "channel" : "neutral",
+        })),
+        disabled: props.busy,
+        onChange: (value) => props.onAnswer(channels ? value : options[Number(value)]?.value),
+      })}
+      ${
+        props.busy
+          ? renderAnswerButton(props, t("modelSetup.wizard.continue"), undefined, true)
+          : nothing
+      }
     `;
   }
   const answer = multiple
@@ -270,7 +343,7 @@ function renderOptionsStep(props: WizardStepControlsProps) {
   return html`
     ${renderMessage(props)}
     <div class=${stepClass(props, "options")} role=${multiple ? nothing : "radiogroup"}>
-      ${options.map((option, index) => renderOption(props, option, index, selected))}
+      ${options.map((option) => renderOption(props, option, selected))}
     </div>
     ${renderAnswerButton(
       props,
@@ -286,21 +359,27 @@ function renderConfirmStep(props: WizardStepControlsProps) {
   return html`
     ${renderMessage(props)}
     <div
-      class=${props.presentation !== "channels" && props.leadingAction
-        ? `${actionClass} wizard-step__actions--split`
-        : actionClass}
+      class=${
+        props.presentation !== "channels" && props.leadingAction
+          ? `${actionClass} wizard-step__actions--split`
+          : actionClass
+      }
     >
       ${props.presentation === "channels" ? nothing : (props.leadingAction ?? nothing)}
-      ${[false, true].map(
-        (answer) => html`<button
-          type="button"
-          class=${answer ? "btn primary" : "btn"}
-          ?disabled=${props.busy}
-          @click=${() => props.onAnswer(answer)}
-        >
-          ${answer ? (props.confirmAffirmativeLabel ?? t("common.yes")) : t("common.no")}
-        </button>`,
-      )}
+      ${
+        props.presentation === "channels" && props.busy
+          ? renderWizardBusyButton(props.busyLabel ?? t("common.loading"))
+          : [false, true].map(
+              (answer) => html`<button
+                type="button"
+                class=${answer ? "btn primary" : "btn"}
+                ?disabled=${props.busy}
+                @click=${() => props.onAnswer(answer)}
+              >
+                ${answer ? (props.confirmAffirmativeLabel ?? t("common.yes")) : t("common.no")}
+              </button>`,
+            )
+      }
     </div>
   `;
 }

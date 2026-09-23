@@ -1,14 +1,20 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 import { resolveCliExecutableIdentity } from "./cli-executable-identity.js";
 
 const tempDirs: string[] = [];
 
 function makePackage(): { root: string; entrypoint: string; implementation: string } {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-artifact-"));
+  const root = fs.realpathSync.native(
+    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-artifact-")),
+  );
   tempDirs.push(root);
   const entrypoint = path.join(root, "bin", "cli.js");
   const implementation = path.join(root, "dist", "main.js");
@@ -32,6 +38,11 @@ const commandPackagePolicy: CliBackendRuntimeArtifactPolicy = {
   entrypoint: "command",
 };
 
+const packageCommandEnv = {
+  PATH: path.dirname(process.execPath),
+  PATHEXT: ".EXE;.CMD",
+};
+
 describe("CLI executable implementation identity", () => {
   afterEach(() => {
     for (const directory of tempDirs.splice(0)) {
@@ -39,36 +50,108 @@ describe("CLI executable implementation identity", () => {
     }
   });
 
-  it("changes when package implementation changes behind an unchanged launcher", async () => {
-    const fixture = makePackage();
-    const first = await resolveCliExecutableIdentity({
-      command: fixture.entrypoint,
-      runtimeArtifact: commandPackagePolicy,
-    });
-    fs.writeFileSync(fixture.implementation, 'export const revision = "replacement";\n');
-    const second = await resolveCliExecutableIdentity({
-      command: fixture.entrypoint,
-      runtimeArtifact: commandPackagePolicy,
-    });
+  it.each(
+    process.platform === "win32"
+      ? [
+          { commandForm: "absolute", pathExt: ".EXE;.CMD" },
+          { commandForm: "absolute", pathExt: ".EXE;.CMD;.JS" },
+          { commandForm: "home", pathExt: ".EXE;.CMD" },
+        ]
+      : [{ commandForm: "absolute", pathExt: ".EXE;.CMD" }],
+  )(
+    "changes package implementation identity behind an unchanged $commandForm launcher with PATHEXT=$pathExt",
+    async ({ commandForm, pathExt }) => {
+      const fixture = makePackage();
+      const params = {
+        command: commandForm === "home" ? "~/bin/cli.js" : fixture.entrypoint,
+        cwd: path.join(fixture.root, "dist"),
+        env: { ...packageCommandEnv, HOME: fixture.root, PATHEXT: pathExt },
+        runtimeArtifact: commandPackagePolicy,
+      };
+      const first = await resolveCliExecutableIdentity(params);
+      fs.writeFileSync(fixture.implementation, 'export const revision = "replacement";\n');
+      const second = await resolveCliExecutableIdentity(params);
 
-    expect(first?.runtimeArtifact.kind).toBe("package-tree");
-    expect(first?.runtimeArtifact).toMatchObject({ packageVersion: "1.0.0" });
-    expect(second?.runtimeArtifact.kind).toBe("package-tree");
-    expect(second?.runtimeArtifact).not.toEqual(first?.runtimeArtifact);
-    expect(second?.files.find((file) => file.path === fixture.entrypoint)).toEqual(
-      first?.files.find((file) => file.path === fixture.entrypoint),
-    );
-  });
+      assert.ok(first?.runtimeArtifact.kind === "package-tree");
+      assert.ok(second?.runtimeArtifact.kind === "package-tree");
+      expect(first.runtimeArtifact).toMatchObject({ packageVersion: "1.0.0" });
+      expect(second.runtimeArtifact.treeSha256).not.toBe(first.runtimeArtifact.treeSha256);
+      expect(first.resolvedPath).toBe(fixture.entrypoint);
+      const nodePath = fs.realpathSync.native(process.execPath);
+      expect(first.invocation).toEqual({
+        command: nodePath,
+        leadingArgv: [fixture.entrypoint],
+        resolution: process.platform === "win32" ? "node-entrypoint" : "direct",
+      });
+      expect(first.files.map((file) => file.path)).toEqual([fixture.entrypoint, nodePath]);
+      expect(second.invocation).toEqual(first.invocation);
+      expect(second.files).toEqual(first.files);
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "keeps PATHEXT admission for bare script commands",
+    async () => {
+      const fixture = makePackage();
+      const params = {
+        command: "cli.js",
+        env: {
+          PATH: `${path.dirname(fixture.entrypoint)};${path.dirname(process.execPath)}`,
+          PATHEXT: ".EXE;.CMD",
+        },
+        runtimeArtifact: commandPackagePolicy,
+      };
+      await expect(resolveCliExecutableIdentity(params)).resolves.toBeUndefined();
+      const identity = await resolveCliExecutableIdentity({
+        ...params,
+        env: { ...params.env, PATHEXT: ".EXE;.CMD;.JS" },
+      });
+      expect(identity?.runtimeArtifact.kind).toBe("package-tree");
+      expect(identity?.invocation).toEqual({
+        command: fs.realpathSync.native(process.execPath),
+        leadingArgv: [fixture.entrypoint],
+        resolution: "node-entrypoint",
+      });
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "rejects missing, relative, and unsupported script commands",
+    async () => {
+      const fixture = makePackage();
+      const unknownScript = path.join(fixture.root, "bin", "cli.py");
+      fs.copyFileSync(fixture.entrypoint, unknownScript);
+
+      for (const command of [
+        path.join(fixture.root, "bin", "missing.js"),
+        ".\\bin\\cli.js",
+        unknownScript,
+      ]) {
+        await expect(
+          resolveCliExecutableIdentity({
+            command,
+            cwd: fixture.root,
+            env: packageCommandEnv,
+            runtimeArtifact: commandPackagePolicy,
+          }),
+        ).resolves.toBeUndefined();
+      }
+    },
+  );
 
   it.runIf(process.platform === "win32")(
     "rejects mixed-case relative PATH entries and accepts mixed-case absolute entries",
     async () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-path-case-"));
-      tempDirs.push(root);
+      // Keep the PATH fixture on cwd's drive, outside concurrent compiler input scans.
+      const artifactRoot = path.join(process.cwd(), ".artifacts");
+      fs.mkdirSync(artifactRoot, { recursive: true });
+      const root = fs.realpathSync.native(
+        makeTempDir(tempDirs, "openclaw-cli-path-case-", artifactRoot),
+      );
       const binDir = path.join(root, "bin");
       const executable = path.join(binDir, "mixed-identity.exe");
       fs.mkdirSync(binDir);
-      fs.linkSync(process.execPath, executable);
+      fs.copyFileSync(process.execPath, executable);
       const relativeBinDir = path.relative(process.cwd(), binDir);
       const runtimeArtifact: CliBackendRuntimeArtifactPolicy = {
         ...commandPackagePolicy,
@@ -83,16 +166,157 @@ describe("CLI executable implementation identity", () => {
           runtimeArtifact,
         }),
       ).resolves.toBeUndefined();
+      await expect(
+        resolveCliExecutableIdentity({
+          command: ".\\mixed-identity.exe",
+          cwd: binDir,
+          env: { pAtH: binDir, pAtHeXt: ".EXE" },
+          runtimeArtifact,
+        }),
+      ).resolves.toBeUndefined();
+
+      for (const command of [executable, "~/mixed-identity.exe", "~\\mixed-identity.exe"]) {
+        const absoluteIdentity = await resolveCliExecutableIdentity({
+          command,
+          env: { HOME: binDir, pAtH: binDir, pAtHeXt: ".CMD" },
+          runtimeArtifact,
+        });
+        expect(absoluteIdentity?.resolvedPath).toBe(fs.realpathSync.native(executable));
+      }
 
       const identity = await resolveCliExecutableIdentity({
         command: "mixed-identity",
         env: { pAtH: binDir, pAtHeXt: ".EXE" },
         runtimeArtifact,
       });
-      expect(identity?.resolvedPath).toBe(fs.realpathSync(executable));
+      expect(identity?.resolvedPath).toBe(fs.realpathSync.native(executable));
       expect(identity?.runtimeArtifact).toEqual({ kind: "self-contained-executable" });
     },
   );
+
+  describe.runIf(process.platform === "win32")("Windows npm shim identity", () => {
+    it.each([
+      { artifact: "native", command: "explicit" },
+      { artifact: "native", command: "bare" },
+      { artifact: "package", command: "explicit" },
+      { artifact: "package", command: "bare" },
+    ] as const)("executes the bound $artifact owner for a $command command", async (scenario) => {
+      const fixture = makePackage();
+      const wrapperDir = path.join(fixture.root, "wrappers");
+      fs.mkdirSync(wrapperDir);
+      const entrypoint =
+        scenario.artifact === "native"
+          ? path.join(fixture.root, "bin", "verified-cli.exe")
+          : fixture.entrypoint;
+      if (scenario.artifact === "native") {
+        fs.copyFileSync(process.execPath, entrypoint);
+      } else {
+        const hookRoot = fs.realpathSync.native(
+          fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-unbound-hook-")),
+        );
+        tempDirs.push(hookRoot);
+        const hook = path.join(hookRoot, "unbound-hook.cjs");
+        fs.writeFileSync(hook, 'throw new Error("unbound-hook-loaded");\n');
+        // Windows invokes Node with the script path, so shebang flags must remain inert.
+        fs.writeFileSync(
+          entrypoint,
+          `#!${process.execPath} --require=${hook}\nimport "../dist/main.js";\n`,
+        );
+        fs.writeFileSync(fixture.implementation, 'process.stdout.write("identity-ok");\n');
+      }
+      const posixShim = path.join(wrapperDir, "verified-cli");
+      const cmdShim = `${posixShim}.cmd`;
+      const relativeEntrypoint = path.relative(wrapperDir, entrypoint);
+      fs.writeFileSync(
+        posixShim,
+        `#!/bin/sh\nexec "$basedir/${relativeEntrypoint.replaceAll("\\", "/")}" "$@"\n`,
+      );
+      fs.writeFileSync(cmdShim, `@ECHO off\r\n"%~dp0\\${relativeEntrypoint}" %*\r\n`);
+      const env = {
+        pAtH: `${wrapperDir};${path.dirname(process.execPath)}`,
+        pAtHeXt: ".CMD;.EXE",
+      };
+      const identity = await resolveCliExecutableIdentity({
+        command: scenario.command === "bare" ? "verified-cli" : cmdShim,
+        env,
+        runtimeArtifact: {
+          ...commandPackagePolicy,
+          nativeExecutableNames: ["verified-cli.exe"],
+        },
+      });
+
+      assert.ok(identity, "The Windows command must bind to its executable owner.");
+      expect(identity.resolvedPath).toBe(cmdShim);
+      expect(identity.invocation).toEqual({
+        command:
+          scenario.artifact === "native" ? entrypoint : fs.realpathSync.native(process.execPath),
+        leadingArgv: scenario.artifact === "native" ? [] : [entrypoint],
+        resolution: scenario.artifact === "native" ? "exe-entrypoint" : "node-entrypoint",
+      });
+      expect(identity.runtimeArtifact.kind).toBe(
+        scenario.artifact === "native" ? "self-contained-executable" : "package-tree",
+      );
+      expect(identity.files.map((file) => file.path)).toEqual(
+        expect.arrayContaining([cmdShim, entrypoint]),
+      );
+      expect(identity.files.some((file) => file.path === posixShim)).toBe(false);
+      const args =
+        scenario.artifact === "native" ? ["-e", 'process.stdout.write("identity-ok")'] : [];
+      const child = spawnSync(
+        identity.invocation.command,
+        [...identity.invocation.leadingArgv, ...args],
+        {
+          env,
+          encoding: "utf8",
+          windowsHide: true,
+        },
+      );
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(0);
+      expect(child.stdout).toBe("identity-ok");
+    });
+
+    it("does not bind a missing PATH command to an executable in the current directory", async () => {
+      const fixture = makePackage();
+      const emptyPath = path.join(fixture.root, "empty-path");
+      const command = `openclaw-cli-missing-owner-${randomUUID()}.exe`;
+      const executable = path.join(process.cwd(), command);
+      fs.mkdirSync(emptyPath);
+      // Workers cannot chdir; this uniquely owned file exercises implicit cwd lookup.
+      fs.copyFileSync(process.execPath, executable, fs.constants.COPYFILE_EXCL);
+      try {
+        await expect(
+          resolveCliExecutableIdentity({
+            command,
+            env: { PATH: emptyPath, PATHEXT: ".EXE" },
+            runtimeArtifact: {
+              ...commandPackagePolicy,
+              nativeExecutableNames: [command],
+            },
+          }),
+        ).resolves.toBeUndefined();
+      } finally {
+        fs.rmSync(executable);
+      }
+    });
+
+    it("keeps explicitly selected POSIX shims and arbitrary batch wrappers unverified", async () => {
+      const fixture = makePackage();
+      const posixShim = path.join(fixture.root, "unsafe-cli");
+      const cmdShim = `${posixShim}.cmd`;
+      fs.writeFileSync(posixShim, '#!/bin/sh\nexec "$basedir/bin/cli.js" "$@"\n');
+      fs.writeFileSync(cmdShim, '@ECHO off\r\nSET WRAPPER_FLAG=1\r\n"%~dp0\\bin\\cli.js" %*\r\n');
+      for (const command of [posixShim, cmdShim, "unsafe-cli"]) {
+        await expect(
+          resolveCliExecutableIdentity({
+            command,
+            env: { PATH: fixture.root, PATHEXT: ".CMD;.EXE" },
+            runtimeArtifact: commandPackagePolicy,
+          }),
+        ).resolves.toBeUndefined();
+      }
+    });
+  });
 
   it("does not depend on host locale collation when ordering package files", async () => {
     const fixture = makePackage();
@@ -105,6 +329,7 @@ describe("CLI executable implementation identity", () => {
     try {
       identity = await resolveCliExecutableIdentity({
         command: fixture.entrypoint,
+        env: packageCommandEnv,
         runtimeArtifact: commandPackagePolicy,
       });
     } finally {
@@ -117,11 +342,12 @@ describe("CLI executable implementation identity", () => {
   it("rejects an unknown script or a package policy with the wrong owner", async () => {
     const fixture = makePackage();
     await expect(
-      resolveCliExecutableIdentity({ command: fixture.entrypoint }),
+      resolveCliExecutableIdentity({ command: fixture.entrypoint, env: packageCommandEnv }),
     ).resolves.toBeUndefined();
     await expect(
       resolveCliExecutableIdentity({
         command: fixture.entrypoint,
+        env: packageCommandEnv,
         runtimeArtifact: { ...commandPackagePolicy, packageName: "@fixture/other" },
       }),
     ).resolves.toBeUndefined();
@@ -143,6 +369,7 @@ describe("CLI executable implementation identity", () => {
       await expect(
         resolveCliExecutableIdentity({
           command: fixture.entrypoint,
+          env: packageCommandEnv,
           runtimeArtifact: commandPackagePolicy,
         }),
       ).resolves.toBeUndefined();
@@ -208,25 +435,29 @@ describe("CLI executable implementation identity", () => {
         },
       });
       expect(linkedIdentity?.runtimeArtifact).toEqual({ kind: "self-contained-executable" });
-      expect(linkedIdentity?.resolvedPath).toBe(fs.realpathSync(versionedExecutable));
+      expect(linkedIdentity?.resolvedPath).toBe(fs.realpathSync.native(versionedExecutable));
     }
   });
 
-  it("rejects package script shebang flags that can load external code", async () => {
-    const fixture = makePackage();
-    fs.writeFileSync(
-      fixture.entrypoint,
-      `#!${process.execPath} --require=/tmp/unbound-hook.cjs\nimport "../dist/main.js";\n`,
-      { mode: 0o755 },
-    );
+  it.runIf(process.platform !== "win32")(
+    "rejects POSIX package script shebang flags that can load external code",
+    async () => {
+      const fixture = makePackage();
+      fs.writeFileSync(
+        fixture.entrypoint,
+        `#!${process.execPath} --require=/tmp/unbound-hook.cjs\nimport "../dist/main.js";\n`,
+        { mode: 0o755 },
+      );
 
-    await expect(
-      resolveCliExecutableIdentity({
-        command: fixture.entrypoint,
-        runtimeArtifact: commandPackagePolicy,
-      }),
-    ).resolves.toBeUndefined();
-  });
+      await expect(
+        resolveCliExecutableIdentity({
+          command: fixture.entrypoint,
+          env: packageCommandEnv,
+          runtimeArtifact: commandPackagePolicy,
+        }),
+      ).resolves.toBeUndefined();
+    },
+  );
 
   it("binds nested package dependencies and rejects redirecting symlinks", async () => {
     const nested = makePackage();
@@ -235,11 +466,13 @@ describe("CLI executable implementation identity", () => {
     fs.writeFileSync(dependency, "first\n");
     const first = await resolveCliExecutableIdentity({
       command: nested.entrypoint,
+      env: packageCommandEnv,
       runtimeArtifact: commandPackagePolicy,
     });
     fs.writeFileSync(dependency, "replacement\n");
     const second = await resolveCliExecutableIdentity({
       command: nested.entrypoint,
+      env: packageCommandEnv,
       runtimeArtifact: commandPackagePolicy,
     });
     expect(first?.runtimeArtifact.kind).toBe("package-tree");
@@ -251,6 +484,7 @@ describe("CLI executable implementation identity", () => {
       await expect(
         resolveCliExecutableIdentity({
           command: symlinked.entrypoint,
+          env: packageCommandEnv,
           runtimeArtifact: commandPackagePolicy,
         }),
       ).resolves.toBeUndefined();
@@ -266,6 +500,7 @@ describe("CLI executable implementation identity", () => {
     await expect(
       resolveCliExecutableIdentity({
         command: fixture.entrypoint,
+        env: packageCommandEnv,
         runtimeArtifact: commandPackagePolicy,
       }),
     ).resolves.toBeUndefined();

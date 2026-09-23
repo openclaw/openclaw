@@ -2,8 +2,18 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import * as uuid from "../../lib/uuid.ts";
+import { QUICK_ACTIONS_QUESTION } from "../../test-helpers/custodian-quick-actions.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
+
+function createHealthyRequest() {
+  return vi.fn().mockResolvedValue({
+    sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+    reply: "Everything is healthy.",
+    action: "none",
+  });
+}
 
 function rejectAfterSend(
   _method: unknown,
@@ -16,7 +26,7 @@ function rejectAfterSend(
 
 describe("custodian page nudges", () => {
   beforeEach(() => {
-    vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+    vi.spyOn(uuid, "generateUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
   });
 
   afterEach(() => {
@@ -25,11 +35,7 @@ describe("custodian page nudges", () => {
   });
 
   it("shows a channel-error nudge but ignores routine events", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+    const request = createHealthyRequest();
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -81,11 +87,7 @@ describe("custodian page nudges", () => {
   });
 
   it("shows configuration reload failures from health snapshots", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+    const request = createHealthyRequest();
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -102,11 +104,7 @@ describe("custodian page nudges", () => {
   });
 
   it("does not report an intentionally stopped channel as disconnected", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+    const request = createHealthyRequest();
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -134,11 +132,7 @@ describe("custodian page nudges", () => {
   });
 
   it("does not report a recovered channel with a retained error", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+    const request = createHealthyRequest();
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -162,11 +156,7 @@ describe("custodian page nudges", () => {
   });
 
   it("reports a channel that fails before its first start", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+    const request = createHealthyRequest();
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -194,11 +184,7 @@ describe("custodian page nudges", () => {
   });
 
   it("reports a failed restart after an earlier clean stop", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+    const request = createHealthyRequest();
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -227,11 +213,7 @@ describe("custodian page nudges", () => {
   });
 
   it("reports a current failed probe for an intentionally stopped channel", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+    const request = createHealthyRequest();
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -260,11 +242,7 @@ describe("custodian page nudges", () => {
   });
 
   it("shows a channel disconnect from the aggregate health row", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+    const request = createHealthyRequest();
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -286,11 +264,7 @@ describe("custodian page nudges", () => {
   });
 
   it("keeps a pending event nudge across a transient disconnect and reconnect", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+    const request = createHealthyRequest();
     const { context, emitGatewayEvent, setGatewaySnapshot } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -315,11 +289,7 @@ describe("custodian page nudges", () => {
   });
 
   it("clears a pending event nudge when gateway ownership changes", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+    const request = createHealthyRequest();
     const { context, emitGatewayEvent, setGatewaySnapshot, setGatewayToken } =
       createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
@@ -353,11 +323,7 @@ describe("custodian page nudges", () => {
   });
 
   it("dismisses event nudges for the rest of the page visit", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+    const request = createHealthyRequest();
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -382,11 +348,7 @@ describe("custodian page nudges", () => {
   });
 
   it("replaces a pending nudge with the latest health failure", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+    const request = createHealthyRequest();
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -435,11 +397,7 @@ describe("custodian page nudges", () => {
   });
 
   it("clears a pending nudge when health recovers", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+    const request = createHealthyRequest();
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -463,12 +421,20 @@ describe("custodian page nudges", () => {
     expect(page.querySelector(".custodian__nudge")).toBeNull();
   });
 
-  it("sends a real message when an event nudge is clicked", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+  it("replaces greeting quick actions with a real message when an event nudge is clicked", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Everything is healthy.",
+        action: "none",
+        question: QUICK_ACTIONS_QUESTION,
+      })
+      .mockResolvedValue({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Inspecting the channel failure.",
+        action: "none",
+      });
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -723,26 +689,37 @@ describe("custodian page nudges", () => {
 
   it("ignores a stale question reply outcome after a same-owner reconnect", async () => {
     let resolveQuestion!: (value: { sessionId: string; reply: string; action: "none" }) => void;
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Choose one.",
+    let chatCalls = 0;
+    const request = vi.fn((_method: string, params: { message?: string; sessionId?: string }) => {
+      if (params.message !== undefined) {
+        // The skip reply is in flight when the connection drops.
+        return new Promise((resolve) => {
+          resolveQuestion = resolve;
+        });
+      }
+      chatCalls += 1;
+      if (chatCalls === 1) {
+        return Promise.resolve({
+          sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+          reply: "Choose one.",
+          action: "none",
+          question: {
+            id: "access",
+            header: "Access",
+            question: "How should OpenClaw work?",
+            options: [{ label: "Full access" }, { label: "Ask first" }],
+            isOther: false,
+          },
+        });
+      }
+      // The unknown-outcome reply triggers a full rejoin; the Gateway answers
+      // with its authoritative current state (no live question).
+      return Promise.resolve({
+        sessionId: params.sessionId,
+        reply: "Welcome back.",
         action: "none",
-        question: {
-          id: "access",
-          header: "Access",
-          question: "How should OpenClaw work?",
-          options: [{ label: "Full access" }, { label: "Ask first" }],
-          isOther: false,
-        },
-      })
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveQuestion = resolve;
-          }),
-      );
+      });
+    });
     const { context, emitGatewayEvent, setGatewaySnapshot } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -760,7 +737,8 @@ describe("custodian page nudges", () => {
     setGatewaySnapshot({ phase: "reconnecting" });
     await page.updateComplete;
     setGatewaySnapshot({ phase: "connected" });
-    await page.updateComplete;
+    // The unknown outcome triggers a full rejoin instead of staying stale.
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
     resolveQuestion({
       sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
       reply: "Moving on.",
@@ -769,10 +747,12 @@ describe("custodian page nudges", () => {
 
     await Promise.resolve();
     await page.updateComplete;
+    // The stale outcome of the interrupted reply is ignored; the rejoin's
+    // authoritative state wins and the transcript never shows "Moving on.".
+    expect(page.textContent).not.toContain("Moving on.");
+    expect(page.textContent).toContain("Welcome back.");
     const action = page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!;
-    expect(action.disabled).toBe(true);
-    action.click();
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(action.disabled).toBe(false);
   });
 
   it("restores an event nudge after its request fails", async () => {

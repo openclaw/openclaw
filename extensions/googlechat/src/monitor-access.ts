@@ -1,8 +1,8 @@
 // Googlechat plugin module implements monitor access behavior.
 import {
   channelIngressRoutes,
-  createChannelIngressResolver,
-  defineStableChannelIngressIdentity,
+  type ChannelIngressContextBinding,
+  type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { ChannelBotLoopProtectionConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -22,65 +22,9 @@ import {
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
 import { buildGoogleChatGroupPolicyScope } from "./group-policy.js";
+import { googleChatIngressIdentity, normalizeGoogleChatUserId } from "./ingress-identity.js";
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";
 import type { GoogleChatAnnotation, GoogleChatMessage, GoogleChatSpace } from "./types.js";
-
-function normalizeUserId(raw?: string | null): string {
-  const trimmed = normalizeOptionalString(raw) ?? "";
-  if (!trimmed) {
-    return "";
-  }
-  return normalizeLowercaseStringOrEmpty(trimmed.replace(/^users\//i, ""));
-}
-
-const GOOGLECHAT_EMAIL_KIND = "plugin:googlechat-email" as const;
-
-function normalizeEntryValue(raw?: string | null): string {
-  return normalizeLowercaseStringOrEmpty(raw ?? "");
-}
-
-function normalizeGoogleChatStableEntry(entry: string): string | null {
-  const withoutProvider = normalizeEntryValue(entry).replace(
-    /^(googlechat|google-chat|gchat):/i,
-    "",
-  );
-  if (!withoutProvider) {
-    return null;
-  }
-  return withoutProvider.startsWith("users/") ? normalizeUserId(withoutProvider) : withoutProvider;
-}
-
-function normalizeGoogleChatEmailEntry(entry: string): string | null {
-  const withoutProvider = normalizeEntryValue(entry).replace(
-    /^(googlechat|google-chat|gchat):/i,
-    "",
-  );
-  if (withoutProvider.startsWith("users/")) {
-    return null;
-  }
-  const stable = normalizeGoogleChatStableEntry(entry);
-  return stable?.includes("@") ? stable : null;
-}
-
-const googleChatIngressIdentity = defineStableChannelIngressIdentity({
-  key: "sender-id",
-  normalizeEntry: normalizeGoogleChatStableEntry,
-  normalizeSubject: normalizeUserId,
-  aliases: [
-    {
-      key: "email",
-      kind: GOOGLECHAT_EMAIL_KIND,
-      normalizeEntry: normalizeGoogleChatEmailEntry,
-      normalizeSubject: normalizeEntryValue,
-      dangerous: true,
-    },
-  ],
-  isWildcardEntry: (entry) => normalizeEntryValue(entry) === "*",
-  resolveEntryId: ({ entryIndex, fieldKey }) =>
-    fieldKey === "stableId"
-      ? `entry-${entryIndex + 1}:user`
-      : `entry-${entryIndex + 1}:${fieldKey}`,
-});
 
 type GoogleChatGroupEntry = {
   requireMention?: boolean;
@@ -144,7 +88,7 @@ function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: strin
     if (botTargets.has(userName)) {
       return true;
     }
-    return normalizeUserId(userName) === "app";
+    return normalizeGoogleChatUserId(userName) === "app";
   });
   return { hasAnyMention, wasMentioned };
 }
@@ -207,11 +151,13 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   senderName: string;
   senderEmail?: string;
   rawBody: string;
+  contextBinding: ChannelIngressContextBinding;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   logVerbose: (message: string) => void;
 }): Promise<
   | {
       ok: true;
+      channelIngress: ResolvedChannelMessageIngress;
       commandAuthorized: boolean | undefined;
       effectiveWasMentioned: boolean | undefined;
       groupBotLoopProtection: ChannelBotLoopProtectionConfig | undefined;
@@ -327,50 +273,53 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
         blockReason: groupEntry ? "sender_empty_allowlist" : "route_not_allowlisted",
       },
   );
-  const resolvedAccess = await createChannelIngressResolver({
-    channelId: "googlechat",
-    accountId: account.accountId,
-    identity: googleChatIngressIdentity,
-    cfg: config,
-    readStoreAllowFrom: pairing.readAllowFromStore,
-  }).message({
-    subject: {
-      stableId: senderId,
-      aliases: { email: senderEmail },
-    },
-    conversation: {
-      kind: isGroup ? "group" : "direct",
-      id: spaceId,
-    },
-    route,
-    allowFrom: rawConfigAllowFrom,
-    groupAllowFrom,
-    dmPolicy,
-    groupPolicy: senderGroupPolicy,
-    policy: {
-      groupAllowFromFallbackToAllowFrom: false,
-      mutableIdentifierMatching: allowNameMatching ? "enabled" : "disabled",
-      ...(groupActivation
-        ? {
-            activation: {
-              requireMention: groupActivation.requireMention,
-              allowTextCommands: groupActivation.allowTextCommands,
+  const resolvedAccess = await core.channel.inbound.ingress
+    .createResolver({
+      channelId: "googlechat",
+      accountId: account.accountId,
+      identity: googleChatIngressIdentity,
+      cfg: config,
+      readStoreAllowFrom: pairing.readAllowFromStore,
+    })
+    .message({
+      subject: {
+        stableId: senderId,
+        aliases: { email: senderEmail },
+      },
+      conversation: {
+        kind: isGroup ? "group" : "direct",
+        id: spaceId,
+      },
+      contextBinding: params.contextBinding,
+      route,
+      allowFrom: rawConfigAllowFrom,
+      groupAllowFrom,
+      dmPolicy,
+      groupPolicy: senderGroupPolicy,
+      policy: {
+        groupAllowFromFallbackToAllowFrom: false,
+        mutableIdentifierMatching: allowNameMatching ? "enabled" : "disabled",
+        ...(groupActivation
+          ? {
+              activation: {
+                requireMention: groupActivation.requireMention,
+                allowTextCommands: groupActivation.allowTextCommands,
+              },
+            }
+          : {}),
+      },
+      ...(groupActivation == null
+        ? {}
+        : {
+            mentionFacts: {
+              canDetectMention: true,
+              wasMentioned: groupActivation.wasMentioned,
+              hasAnyMention: groupActivation.hasAnyMention,
+              implicitMentionKinds: [],
             },
-          }
-        : {}),
-    },
-    ...(groupActivation == null
-      ? {}
-      : {
-          mentionFacts: {
-            canDetectMention: true,
-            wasMentioned: groupActivation.wasMentioned,
-            hasAnyMention: groupActivation.hasAnyMention,
-            implicitMentionKinds: [],
-          },
-        }),
-    command,
-  });
+          }),
+      command,
+    });
   const senderAccess = resolvedAccess.senderAccess;
   const commandAuthorized = resolvedAccess.commandAccess.requested
     ? resolvedAccess.commandAccess.authorized
@@ -465,6 +414,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
 
   return {
     ok: true,
+    channelIngress: resolvedAccess,
     commandAuthorized,
     effectiveWasMentioned,
     groupBotLoopProtection: groupEntry?.botLoopProtection,

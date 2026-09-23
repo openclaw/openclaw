@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { closeSync } from "node:fs";
 import { mkdir, realpath, rm } from "node:fs/promises";
 import { basename, dirname, relative, resolve, sep } from "node:path";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { stringify as stringifyYaml } from "yaml";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { openLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
@@ -19,6 +20,7 @@ import { readClawManifestFile } from "./reader.js";
 import { isPortableClawAvatar } from "./schema-portability.js";
 import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
 import { MAX_CLAW_MANIFEST_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
+import { materializeClawToolProfile } from "./tool-profile-consent.js";
 import {
   CLAW_BOOTSTRAP_FILE_NAMES,
   CLAW_OUTPUT_STABILITY,
@@ -85,14 +87,40 @@ function portableOpenClawProfile(
   agent: AgentConfig,
   extensions: ClawOpenClawExtension[],
 ): ClawOpenClawProfile | undefined {
-  const tools = {
+  const configuredTools = {
     ...(agent.tools?.profile ? { profile: agent.tools.profile } : {}),
     ...(agent.tools?.allow?.length ? { allow: agent.tools.allow } : {}),
     ...(agent.tools?.alsoAllow?.length ? { alsoAllow: agent.tools.alsoAllow } : {}),
     ...(agent.tools?.deny?.length ? { deny: agent.tools.deny } : {}),
     ...(agent.tools?.fs?.workspaceOnly === true ? { fs: { workspaceOnly: true as const } } : {}),
   };
+  let tools: NonNullable<ClawOpenClawProfile["agent"]["tools"]> = configuredTools;
+  if (configuredTools.profile || configuredTools.allow?.length) {
+    try {
+      tools = materializeClawToolProfile({ tools: configuredTools }).tools ?? {};
+    } catch (error) {
+      throw new ClawExportError(
+        "tool_profile_consent_required",
+        `Could not freeze the exported tool profile: ${(error as Error).message}`,
+      );
+    }
+  }
   const settings = {
+    ...(agent.model !== undefined
+      ? { model: typeof agent.model === "string" ? { primary: agent.model } : agent.model }
+      : {}),
+    ...(agent.subagents
+      ? {
+          subagents: {
+            ...(agent.subagents.allowAgents !== undefined
+              ? { allowAgents: agent.subagents.allowAgents }
+              : {}),
+            ...(agent.subagents.delegationMode !== undefined
+              ? { delegationMode: agent.subagents.delegationMode }
+              : {}),
+          },
+        }
+      : {}),
     ...(agent.groupChat?.mentionPatterns?.length
       ? { groupChat: { mentionPatterns: agent.groupChat.mentionPatterns } }
       : {}),
@@ -168,9 +196,17 @@ function portableOpenClawProfile(
         }
       : {}),
   };
-  return extensions.length > 0 || Object.keys(settings).length > 0
-    ? { schemaVersion: 1, agent: settings, extensions }
-    : undefined;
+  if (extensions.length === 0 && Object.keys(settings).length === 0) {
+    return undefined;
+  }
+  const parsed = parseClawOpenClawProfile({ schemaVersion: 1, agent: settings, extensions });
+  if (!parsed.ok) {
+    throw new ClawExportError(
+      "export_openclaw_profile_invalid",
+      parsed.diagnostics.map((diagnostic) => diagnostic.message).join("; "),
+    );
+  }
+  return parsed.profile;
 }
 
 function normalizedRelativePath(value: string): string {
@@ -535,15 +571,6 @@ export async function exportClawAgent(
       parsed.diagnostics.map((diagnostic) => diagnostic.message).join("; "),
     );
   }
-  if (openClawProfile) {
-    const parsedProfile = parseClawOpenClawProfile(openClawProfile);
-    if (!parsedProfile.ok) {
-      throw new ClawExportError(
-        "export_openclaw_profile_invalid",
-        parsedProfile.diagnostics.map((diagnostic) => diagnostic.message).join("; "),
-      );
-    }
-  }
   const target = resolve(resolveUserPath(outputDirectory));
   await mkdir(dirname(target), { recursive: true });
   try {
@@ -606,10 +633,7 @@ export async function exportClawAgent(
     if (error instanceof ClawExportError) {
       throw error;
     }
-    throw new ClawExportError(
-      "export_write_failed",
-      error instanceof Error ? error.message : String(error),
-    );
+    throw new ClawExportError("export_write_failed", coerceErrorMessage(error));
   }
   return {
     schemaVersion: CLAW_EXPORT_RESULT_SCHEMA_VERSION,

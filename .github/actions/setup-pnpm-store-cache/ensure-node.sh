@@ -9,12 +9,12 @@ openclaw_node_version_matches() {
   case "$requested" in
     *x)
       [[ "${actual%%.*}" == "${requested%%.*}" ]] || return 1
-      if [[ "${requested%%.*}" == "22" ]]; then
-        openclaw_node_version_at_least "$actual" "22.22.3"
-      elif [[ "${requested%%.*}" == "24" ]]; then
-        openclaw_node_version_at_least "$actual" "24.15.0"
-      elif [[ "${requested%%.*}" == "25" ]]; then
-        openclaw_node_version_at_least "$actual" "25.9.0"
+      if [[ "${requested%%.*}" == "24" ]]; then
+        openclaw_node_version_at_least "$actual" "24.16.0"
+      elif [[ "${requested%%.*}" == "26" ]]; then
+        openclaw_node_version_at_least "$actual" "26.1.0"
+      else
+        (( ${requested%%.*} > 26 ))
       fi
       ;;
     *.*.*)
@@ -78,7 +78,11 @@ openclaw_find_toolcache_node() {
   local requested_node="$1"
   local roots=()
   local root
+  # The repo-owned cached toolchain comes first: on runners whose image toolcache
+  # predates our engines floor it is the only candidate that can satisfy the
+  # request without a network round trip.
   for root in \
+    "${OPENCLAW_NODE_TOOLCHAIN_ROOT:-}" \
     "${RUNNER_TOOL_CACHE:-}" \
     "${AGENT_TOOLSDIRECTORY:-}" \
     "${ACTIONS_RUNNER_TOOL_CACHE:-}" \
@@ -100,13 +104,15 @@ openclaw_find_toolcache_node() {
 
   local node_root candidate candidate_version
   for node_root in ${roots[@]+"${roots[@]}"}; do
+    # Hosted binaries are at version/arch/bin/node (Windows omits bin);
+    # cached distributions are shallower. Do not scan bundled npm trees.
     while IFS= read -r candidate; do
       candidate_version="$("$candidate" -p 'process.versions.node' 2>/dev/null || true)"
       if openclaw_node_version_matches "$candidate_version" "$requested_node"; then
         printf '%s\n' "$candidate"
         return 0
       fi
-    done < <(find "$node_root" \( -name node -o -name node.exe \) -type f 2>/dev/null | sort -r)
+    done < <(find "$node_root" -maxdepth 4 \( -name node -o -name node.exe \) -type f 2>/dev/null | sort -r)
   done
   return 1
 }
@@ -163,6 +169,14 @@ openclaw_download_node() {
     temp_root="$(cygpath -u "$temp_root" 2>/dev/null || printf '%s\n' "$temp_root")"
   fi
   install_root="${temp_root}/openclaw-node-${version}-${platform}"
+  # Land inside the cached root when one is configured so the post-job save
+  # publishes this download for the next run instead of repeating it. Clear the
+  # root first: reaching here means any restored payload was rejected, and
+  # keeping it would ride along in every future save and grow without bound.
+  if [[ -n "${OPENCLAW_NODE_TOOLCHAIN_ROOT:-}" ]]; then
+    rm -rf "${OPENCLAW_NODE_TOOLCHAIN_ROOT:?}"
+    install_root="${OPENCLAW_NODE_TOOLCHAIN_ROOT}/${version}-${platform}"
+  fi
   if [[ "$platform" == win-* ]]; then
     local ps_archive_path ps_install_root ps_bin_dir node_bin_dir
     archive_path="${temp_root}/node-${version}-${platform}.zip"

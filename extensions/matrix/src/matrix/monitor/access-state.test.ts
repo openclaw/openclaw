@@ -1,9 +1,15 @@
 // Matrix tests cover access state plugin behavior.
-import { describe, expect, it } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { beforeEach, describe, expect, it } from "vitest";
+import { setMatrixRuntime } from "../../runtime.js";
 import {
   resolveMatrixMonitorAccessState,
   resolveMatrixMonitorCommandAccess,
 } from "./access-state.js";
+
+beforeEach(() => {
+  setMatrixRuntime(createPluginRuntimeMock());
+});
 
 async function expectCommandAccess(
   state: Parameters<typeof resolveMatrixMonitorCommandAccess>[0],
@@ -23,14 +29,39 @@ describe("resolveMatrixMonitorAccessState", () => {
       storeAllowFrom: ["user:@bob:example.org"],
       groupAllowFrom: ["@Carol:Example.org"],
       roomUsers: ["user:@Dana:Example.org"],
-      senderId: "@dana:example.org",
+      senderId: "@Dana:Example.org",
       isRoom: true,
       groupPolicy: "allowlist",
     });
 
-    expect(state.effectiveGroupAllowFrom).toEqual(["@carol:example.org"]);
-    expect(state.effectiveRoomUsers).toEqual(["user:@dana:example.org"]);
+    expect(state.effectiveGroupAllowFrom).toEqual(["@Carol:Example.org"]);
+    expect(state.effectiveRoomUsers).toEqual(["user:@Dana:Example.org"]);
     expect(state.messageIngress.ingress.decision).toBe("allow");
+  });
+
+  it.each([
+    { isRoom: false, allowFrom: ["@\u212A:example.org"], groupAllowFrom: [] },
+    { isRoom: true, allowFrom: [], groupAllowFrom: ["@\u212A:example.org"] },
+  ])("rejects case-folding collisions at ingress and command gates", async (params) => {
+    const state = await resolveMatrixMonitorAccessState({
+      ...params,
+      storeAllowFrom: [],
+      roomUsers: [],
+      senderId: "@k:example.org",
+      dmPolicy: "allowlist",
+      groupPolicy: "allowlist",
+    });
+
+    expect(state.messageIngress.ingress.decision).toBe("block");
+    await expectCommandAccess(
+      state,
+      {
+        useAccessGroups: true,
+        allowTextCommands: true,
+        hasControlCommand: true,
+      },
+      { authorized: false, shouldBlockControlCommand: true },
+    );
   });
 
   it("does not let DM pairing-store entries authorize room control commands", async () => {

@@ -9,10 +9,8 @@ import {
   getRegisteredEventKeys,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
-import {
-  getDetachedTaskLifecycleRuntimeRegistration,
-  registerDetachedTaskLifecycleRuntime,
-} from "../tasks/detached-task-runtime-state.js";
+import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
+import { setDetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime.test-support.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
 import { registerEmbeddingProvider } from "./embedding-providers.js";
@@ -24,7 +22,7 @@ import {
 import * as hookRunnerGlobal from "./hook-runner-global.js";
 import {
   clearPluginInteractiveHandlers,
-  resolvePluginInteractiveNamespaceMatch,
+  resolvePluginInteractiveRegistrationsMatch,
 } from "./interactive-registry.js";
 import {
   claimPluginInteractiveCallbackDedupe,
@@ -32,7 +30,7 @@ import {
 } from "./interactive-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
-  makeTempDir,
+  makePluginLoaderTempDir,
   mkdirSafe,
   useNoBundledPlugins,
   writePlugin,
@@ -42,16 +40,13 @@ import {
   listEmbeddingProviders,
   expectGlobalHookRunner,
   createDetachedTaskRuntimeStub,
+  loadRegistryFromSinglePlugin,
   updatePluginManifest,
   expectDiagnosticContaining,
   expectCachePartitionByPluginSource,
   globalAfterEach0,
   globalAfterAll1,
 } from "./loader.test-harness.js";
-import {
-  listMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
-} from "./memory-embedding-providers.js";
 import {
   buildMemoryPromptSection,
   getMemoryCapabilityRegistration,
@@ -65,10 +60,12 @@ import {
   registerMemoryPromptSupplement,
   resolveMemoryFlushPlan,
 } from "./memory-state.test-fixtures.js";
-import { isPluginRegistryRetired } from "./registry-lifecycle.js";
+import { capturePluginLifecycleAuthority, isPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
+  getActivePluginChannelRegistry,
   getActivePluginRegistry,
+  requireActivePluginRegistry,
   getActivePluginRegistryKey,
   getActivePluginRegistryWorkspaceDir,
   getActivePluginRuntimeSubagentMode,
@@ -84,25 +81,14 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "duplicate-legacy-hook",
       filename: "duplicate-legacy-hook.cjs",
-      body: `module.exports = {
-          id: "duplicate-legacy-hook",
-          register(api) {
-            api.registerHook("gateway:startup", () => {}, { name: "shared-name" });
-            api.registerHook("command:new", () => {}, { name: "shared-name" });
-          },
-        };`,
+      registration: `api.registerHook("gateway:startup", () => {}, { name: "shared-name" });
+      api.registerHook("command:new", () => {}, { name: "shared-name" });`,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["duplicate-legacy-hook"],
-        },
-      },
-      onlyPluginIds: ["duplicate-legacy-hook"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["duplicate-legacy-hook"] },
+      options: { onlyPluginIds: ["duplicate-legacy-hook"] },
     });
 
     expect(
@@ -121,26 +107,15 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "typed-name-legacy-register",
       filename: "typed-name-legacy-register.cjs",
-      body: `module.exports = {
-          id: "typed-name-legacy-register",
-          register(api) {
-            api.registerHook(["before_tool_call", "message_received"], () => {}, {
-              name: "typed-name-legacy-register",
-            });
-          },
-        };`,
+      registration: `api.registerHook(["before_tool_call", "message_received"], () => {}, {
+        name: "typed-name-legacy-register",
+      });`,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["typed-name-legacy-register"],
-        },
-      },
-      onlyPluginIds: ["typed-name-legacy-register"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["typed-name-legacy-register"] },
+      options: { onlyPluginIds: ["typed-name-legacy-register"] },
     });
 
     expect(registry.legacyInternalHooks.map((entry) => entry.event)).toEqual([
@@ -167,25 +142,14 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "legacy-type-action-register",
       filename: "legacy-type-action-register.cjs",
-      body: `module.exports = {
-          id: "legacy-type-action-register",
-          register(api) {
-            api.registerHook("gateway:startup", () => {}, { name: "legacy-startup" });
-            api.registerHook("command:new", () => {}, { name: "legacy-command" });
-          },
-        };`,
+      registration: `api.registerHook("gateway:startup", () => {}, { name: "legacy-startup" });
+      api.registerHook("command:new", () => {}, { name: "legacy-command" });`,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["legacy-type-action-register"],
-        },
-      },
-      onlyPluginIds: ["legacy-type-action-register"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["legacy-type-action-register"] },
+      options: { onlyPluginIds: ["legacy-type-action-register"] },
     });
 
     expect(registry.legacyInternalHooks.map((entry) => entry.event)).toEqual([
@@ -204,38 +168,28 @@ describe("loadOpenClawPlugins", () => {
     const first = writePlugin({
       id: "hook-context-first",
       filename: "hook-context-first.cjs",
-      body: `module.exports = {
-          id: "hook-context-first",
-          register(api) {
-            api.registerHook(
-              "gateway:startup",
-              (event) => {
-                event.messages.push("first-config=" + event.context.pluginConfig?.marker);
-                event.context.note = "mutation-from-first";
-              },
-              { name: "hook-context-first" },
-            );
-          },
-        };`,
+      registration: `api.registerHook(
+        "gateway:startup",
+        (event) => {
+          event.messages.push("first-config=" + event.context.pluginConfig?.marker);
+          event.context.note = "mutation-from-first";
+        },
+        { name: "hook-context-first" },
+      );`,
     });
     const second = writePlugin({
       id: "hook-context-second",
       filename: "hook-context-second.cjs",
-      body: `module.exports = {
-          id: "hook-context-second",
-          register(api) {
-            api.registerHook(
-              "gateway:startup",
-              (event) => {
-                event.messages.push(
-                  "second-config=" + String(event.context.pluginConfig?.marker ?? "none"),
-                );
-                event.messages.push("note=" + String(event.context.note ?? "missing-note"));
-              },
-              { name: "hook-context-second" },
-            );
-          },
-        };`,
+      registration: `api.registerHook(
+        "gateway:startup",
+        (event) => {
+          event.messages.push(
+            "second-config=" + String(event.context.pluginConfig?.marker ?? "none"),
+          );
+          event.messages.push("note=" + String(event.context.note ?? "missing-note"));
+        },
+        { name: "hook-context-second" },
+      );`,
     });
     for (const plugin of [first, second]) {
       fs.writeFileSync(
@@ -293,81 +247,78 @@ describe("loadOpenClawPlugins", () => {
     clearInternalHooks();
   });
 
-  it("rolls back global side effects when registration fails", async () => {
+  it("preserves load diagnostics while rolling back global side effects when registration fails", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "failing-side-effects",
       filename: "failing-side-effects.cjs",
-      body: `module.exports = {
-          id: "failing-side-effects",
-          register(api) {
-            api.registerHook(
-              "gateway:startup",
-              (event) => {
-                event.messages.push("should-not-run");
-              },
-              { name: "failing-side-effects-hook" },
-            );
-            api.registerCommand({
-              name: "failme",
-              description: "Fail me",
-              handler: async () => ({ text: "nope" }),
-            });
-            api.registerProvider({
-              id: "failed-provider",
-              label: "Failed Provider",
-              auth: [],
-            });
-            api.registerReload({
-              onConfigReload: async () => {},
-            });
-            api.registerNodeHostCommand({
-              command: "failme",
-              description: "failme",
-              run: async () => ({ ok: true }),
-            });
-            api.registerNodeInvokePolicy({
-              commands: ["failme.node"],
-              handle: async () => ({ ok: true }),
-            });
-            api.registerSecurityAuditCollector({
-              id: "failme",
-              collect: async () => [],
-            });
-            api.registerInteractiveHandler({
-              channel: "slack",
-              namespace: "failme",
-              handle: async () => ({ handled: true }),
-            });
-            api.registerContextEngine("failme-context", () => ({
-              info: { id: "failme-context", name: "Failme Context" },
-              ingest: async () => {},
-              assemble: async () => ({ messages: [] }),
-            }));
-            throw new Error("boom");
-          },
-        };`,
+      registration: `api.registerHook(
+        "gateway:startup",
+        (event) => {
+          event.messages.push("should-not-run");
+        },
+        { name: "failing-side-effects-hook" },
+      );
+      api.registerCommand({
+        name: "failme",
+        description: "Fail me",
+        handler: async () => ({ text: "nope" }),
+      });
+      api.registerProvider({
+        id: "failed-provider",
+        label: "Failed Provider",
+        auth: [],
+      });
+      api.registerReload({
+        onConfigReload: async () => {},
+      });
+      api.registerNodeHostCommand({
+        command: "failme",
+        description: "failme",
+        run: async () => ({ ok: true }),
+      });
+      api.registerNodeInvokePolicy({
+        commands: ["failme.node"],
+        handle: async () => ({ ok: true }),
+      });
+      api.registerSecurityAuditCollector({
+        id: "failme",
+        collect: async () => [],
+      });
+      api.registerInteractiveHandler({
+        channel: "slack",
+        namespace: "failme",
+        handle: async () => ({ handled: true }),
+      });
+      api.registerContextEngine("failme-context", () => ({
+        info: { id: "failme-context", name: "Failme Context" },
+        ingest: async () => {},
+        assemble: async () => ({ messages: [] }),
+      }));
+      throw new Error("boom");`,
     });
 
     clearInternalHooks();
     clearPluginCommands();
     clearPluginInteractiveHandlers();
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["failing-side-effects"],
-        },
-      },
-      onlyPluginIds: ["failing-side-effects"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["failing-side-effects"] },
+      options: { onlyPluginIds: ["failing-side-effects"] },
     });
 
     const failedRecord = registry.plugins.find((entry) => entry.id === "failing-side-effects");
     expect(failedRecord?.status).toBe("error");
     expect(failedRecord?.providerIds).toStrictEqual([]);
+    expect(
+      registry.diagnostics
+        .filter((diagnostic) => diagnostic.pluginId === "failing-side-effects")
+        .map(({ level, message }) => ({ level, message })),
+    ).toEqual([
+      { level: "warn", message: "reload registration missing prefixes" },
+      { level: "error", message: "plugin failed during register: Error: boom" },
+    ]);
     expect(getRegisteredEventKeys()).toStrictEqual([]);
     expect(getPluginCommandSpecs()).toStrictEqual([]);
     expect(registry.reloads).toStrictEqual([]);
@@ -375,7 +326,13 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.nodeInvokePolicies).toStrictEqual([]);
     expect(registry.securityAuditCollectors).toStrictEqual([]);
     expect(registry.interactiveHandlers).toStrictEqual([]);
-    expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
+    expect(
+      resolvePluginInteractiveRegistrationsMatch(
+        getActivePluginChannelRegistry()?.interactiveHandlers ?? [],
+        "slack",
+        "failme:payload",
+      ),
+    ).toBeNull();
     expect(getContextEngineRegistration("failme-context")).toBeUndefined();
 
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
@@ -392,45 +349,33 @@ describe("loadOpenClawPlugins", () => {
     const prior = writePlugin({
       id: "activation-prior",
       filename: "activation-prior.cjs",
-      body: `module.exports = {
-          id: "activation-prior",
-          register(api) {
-            api.registerCommand({
-              name: "prior",
-              description: "Prior command",
-              handler: async () => ({ text: "prior" }),
-            });
-          },
-        };`,
+      registration: `api.registerCommand({
+        name: "prior",
+        description: "Prior command",
+        handler: async () => ({ text: "prior" }),
+      });`,
     });
-    const priorRegistry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: prior.dir,
-      config: {
-        plugins: {
-          load: { paths: [prior.file] },
-          allow: ["activation-prior"],
-        },
-      },
-      onlyPluginIds: ["activation-prior"],
+    const priorRegistry = loadRegistryFromSinglePlugin({
+      plugin: prior,
+      pluginConfig: { allow: ["activation-prior"] },
+      options: { onlyPluginIds: ["activation-prior"] },
     });
     const priorKey = getActivePluginRegistryKey();
     const priorMode = getActivePluginRuntimeSubagentMode();
     const priorWorkspaceDir = getActivePluginRegistryWorkspaceDir();
+    const priorRecord = priorRegistry.plugins.find((entry) => entry.id === "activation-prior");
+    expect(priorRecord).toBeDefined();
+    const priorAuthority = capturePluginLifecycleAuthority(priorRegistry, priorRecord!);
+    expect(priorAuthority).toBeDefined();
 
     const replacement = writePlugin({
       id: "activation-replacement",
       filename: "activation-replacement.cjs",
-      body: `module.exports = {
-          id: "activation-replacement",
-          register(api) {
-            api.registerCommand({
-              name: "replacement",
-              description: "Replacement command",
-              handler: async () => ({ text: "replacement" }),
-            });
-          },
-        };`,
+      registration: `api.registerCommand({
+        name: "replacement",
+        description: "Replacement command",
+        handler: async () => ({ text: "replacement" }),
+      });`,
     });
     const replacementOptions = {
       workspaceDir: replacement.dir,
@@ -461,10 +406,12 @@ describe("loadOpenClawPlugins", () => {
     expect(getActivePluginRuntimeSubagentMode()).toBe(priorMode);
     expect(getActivePluginRegistryWorkspaceDir()).toBe(priorWorkspaceDir);
     expect(getPluginCommandSpecs().map((command) => command.name)).toEqual(["prior"]);
+    expect(priorAuthority!()).toBe(true);
 
     const activated = loadOpenClawPlugins(replacementOptions);
     expect(activated.commands.map((entry) => entry.command.name)).toEqual(["replacement"]);
     expect(getPluginCommandSpecs().map((command) => command.name)).toEqual(["replacement"]);
+    expect(priorAuthority!()).toBe(false);
   });
 
   it("fails plugin registration when a hook is missing its required name", () => {
@@ -472,26 +419,15 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "nameless-hook",
       filename: "nameless-hook.cjs",
-      body: `module.exports = {
-          id: "nameless-hook",
-          register(api) {
-            api.registerHook("gateway:startup", () => {});
-          },
-        };`,
+      registration: `api.registerHook("gateway:startup", () => {});`,
     });
 
     clearInternalHooks();
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["nameless-hook"],
-        },
-      },
-      onlyPluginIds: ["nameless-hook"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["nameless-hook"] },
+      options: { onlyPluginIds: ["nameless-hook"] },
     });
 
     const record = registry.plugins.find((entry) => entry.id === "nameless-hook");
@@ -515,26 +451,15 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "invalid-memory-capability",
       filename: "invalid-memory-capability.cjs",
-      body: `module.exports = {
-          id: "invalid-memory-capability",
-          register(api) {
-            api.registerMemoryCapability({
-              promptBuilder: () => ["should not register"],
-            });
-          },
-        };`,
+      registration: `api.registerMemoryCapability({
+        promptBuilder: () => ["should not register"],
+      });`,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["invalid-memory-capability"],
-        },
-      },
-      onlyPluginIds: ["invalid-memory-capability"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["invalid-memory-capability"] },
+      options: { onlyPluginIds: ["invalid-memory-capability"] },
     });
 
     const record = registry.plugins.find((entry) => entry.id === "invalid-memory-capability");
@@ -551,7 +476,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("can scope bundled provider loads without hanging", () => {
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     const scopedDir = path.join(bundledDir, "scoped-provider");
     mkdirSafe(scopedDir);
     fs.writeFileSync(
@@ -566,16 +491,11 @@ describe("loadOpenClawPlugins", () => {
       id: "scoped-provider",
       dir: scopedDir,
       filename: "index.cjs",
-      body: `module.exports = {
-          id: "scoped-provider",
-          register(api) {
-            api.registerProvider({
-              id: "scoped-provider",
-              label: "Scoped Provider",
-              auth: [],
-            });
-          },
-        };`,
+      registration: `api.registerProvider({
+        id: "scoped-provider",
+        label: "Scoped Provider",
+        auth: [],
+      });`,
     });
     updatePluginManifest(plugin, { enabledByDefault: true, providers: ["scoped-provider"] });
 
@@ -625,7 +545,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("allows bundled plugins to supply system.notify without opening the command to external plugins", () => {
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     const bundledPluginDir = path.join(bundledDir, "notify-host");
     mkdirSafe(bundledPluginDir);
     fs.writeFileSync(
@@ -640,15 +560,10 @@ describe("loadOpenClawPlugins", () => {
       id: "notify-host",
       dir: bundledPluginDir,
       filename: "index.cjs",
-      body: `module.exports = {
-          id: "notify-host",
-          register(api) {
-            api.registerNodeHostCommand({
-              command: "system.notify",
-              handle: async () => "{}",
-            });
-          },
-        };`,
+      registration: `api.registerNodeHostCommand({
+        command: "system.notify",
+        handle: async () => "{}",
+      });`,
     });
     updatePluginManifest(bundled, { enabledByDefault: true });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
@@ -667,15 +582,10 @@ describe("loadOpenClawPlugins", () => {
     const external = writePlugin({
       id: "external-notify-host",
       filename: "external-notify-host.cjs",
-      body: `module.exports = {
-          id: "external-notify-host",
-          register(api) {
-            api.registerNodeHostCommand({
-              command: "system.notify",
-              handle: async () => "{}",
-            });
-          },
-        };`,
+      registration: `api.registerNodeHostCommand({
+        command: "system.notify",
+        handle: async () => "{}",
+      });`,
     });
     const externalRegistry = loadOpenClawPlugins({
       cache: false,
@@ -696,12 +606,43 @@ describe("loadOpenClawPlugins", () => {
     ).toBe(true);
   });
 
+  it("reserves private worker supervisor commands from plugin registration", () => {
+    useNoBundledPlugins();
+    const commands = [...NODE_WORKER_PRIVATE_COMMANDS];
+    const plugin = writePlugin({
+      id: "private-worker-controls",
+      filename: "private-worker-controls.cjs",
+      body: `module.exports = {
+          id: "private-worker-controls",
+          register(api) {
+            for (const command of ${JSON.stringify(commands)}) {
+              api.registerNodeHostCommand({ command, handle: async () => "{}" });
+            }
+            api.registerNodeInvokePolicy({
+              commands: ${JSON.stringify(commands)},
+              handle: async () => ({ ok: true, payloadJSON: "{}" }),
+            });
+          },
+        };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["private-worker-controls"] },
+      options: { onlyPluginIds: ["private-worker-controls"] },
+    });
+
+    expect(registry.nodeHostCommands).toEqual([]);
+    expect(registry.nodeInvokePolicies).toEqual([]);
+    for (const command of commands) {
+      expect(registry.diagnostics.some((diagnostic) => diagnostic.message.includes(command))).toBe(
+        true,
+      );
+    }
+  });
+
   it("does not replace active memory plugin registries during non-activating loads", () => {
     useNoBundledPlugins();
-    registerMemoryEmbeddingProvider({
-      id: "active",
-      create: async () => ({ provider: null }),
-    });
     registerMemoryCorpusSupplement("memory-wiki", {
       search: async () => [],
       get: async () => null,
@@ -735,10 +676,6 @@ describe("loadOpenClawPlugins", () => {
           id: "snapshot-memory",
           kind: "memory",
           register(api) {
-            api.registerMemoryEmbeddingProvider({
-              id: "snapshot",
-              create: async () => ({ provider: null }),
-            });
             api.registerMemoryCapability({
               promptBuilder: () => ["snapshot memory section"],
               flushPlanResolver: () => ({
@@ -762,18 +699,10 @@ describe("loadOpenClawPlugins", () => {
         };`,
     });
 
-    const scoped = loadOpenClawPlugins({
-      cache: false,
-      activate: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["snapshot-memory"],
-          slots: { memory: "snapshot-memory" },
-        },
-      },
-      onlyPluginIds: ["snapshot-memory"],
+    const scoped = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["snapshot-memory"], slots: { memory: "snapshot-memory" } },
+      options: { activate: false, onlyPluginIds: ["snapshot-memory"] },
     });
 
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-memory")?.status).toBe("loaded");
@@ -784,7 +713,6 @@ describe("loadOpenClawPlugins", () => {
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
-    expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
     expect(listMemoryPromptPreparations()).toHaveLength(1);
   });
 
@@ -797,31 +725,19 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "snapshot-embedding",
       filename: "snapshot-embedding.cjs",
-      body: `module.exports = {
-          id: "snapshot-embedding",
-          register(api) {
-            api.registerEmbeddingProvider({
-              id: "snapshot",
-              create: async () => ({ provider: null }),
-            });
-          },
-        };`,
+      registration: `api.registerEmbeddingProvider({
+        id: "snapshot",
+        create: async () => ({ provider: null }),
+      });`,
     });
     updatePluginManifest(plugin, {
       contracts: { embeddingProviders: ["snapshot"] },
     });
 
-    const scoped = loadOpenClawPlugins({
-      cache: false,
-      activate: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["snapshot-embedding"],
-        },
-      },
-      onlyPluginIds: ["snapshot-embedding"],
+    const scoped = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["snapshot-embedding"] },
+      options: { activate: false, onlyPluginIds: ["snapshot-embedding"] },
     });
 
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-embedding")?.status).toBe(
@@ -844,31 +760,19 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "snapshot-shared-embedding",
       filename: "snapshot-shared-embedding.cjs",
-      body: `module.exports = {
-          id: "snapshot-shared-embedding",
-          register(api) {
-            api.registerEmbeddingProvider({
-              id: "shared",
-              create: async () => ({ provider: null }),
-            });
-          },
-        };`,
+      registration: `api.registerEmbeddingProvider({
+        id: "shared",
+        create: async () => ({ provider: null }),
+      });`,
     });
     updatePluginManifest(plugin, {
       contracts: { embeddingProviders: ["shared"] },
     });
 
-    const scoped = loadOpenClawPlugins({
-      cache: false,
-      activate: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["snapshot-shared-embedding"],
-        },
-      },
-      onlyPluginIds: ["snapshot-shared-embedding"],
+    const scoped = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["snapshot-shared-embedding"] },
+      options: { activate: false, onlyPluginIds: ["snapshot-shared-embedding"] },
     });
 
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-shared-embedding")?.status).toBe(
@@ -887,31 +791,20 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "failing-embedding",
       filename: "failing-embedding.cjs",
-      body: `module.exports = {
-          id: "failing-embedding",
-          register(api) {
-            api.registerEmbeddingProvider({
-              id: "failed",
-              create: async () => ({ provider: null }),
-            });
-            throw new Error("embedding register failed");
-          },
-        };`,
+      registration: `api.registerEmbeddingProvider({
+        id: "failed",
+        create: async () => ({ provider: null }),
+      });
+      throw new Error("embedding register failed");`,
     });
     updatePluginManifest(plugin, {
       contracts: { embeddingProviders: ["failed"] },
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["failing-embedding"],
-        },
-      },
-      onlyPluginIds: ["failing-embedding"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["failing-embedding"] },
+      options: { onlyPluginIds: ["failing-embedding"] },
     });
 
     expect(registry.plugins.find((entry) => entry.id === "failing-embedding")?.status).toBe(
@@ -931,10 +824,6 @@ describe("loadOpenClawPlugins", () => {
           id: "failing-memory",
           kind: "memory",
           register(api) {
-            api.registerMemoryEmbeddingProvider({
-              id: "failed",
-              create: async () => ({ provider: null }),
-            });
             api.registerMemoryCapability({
               promptBuilder: () => ["stale failure section"],
               flushPlanResolver: () => ({
@@ -965,17 +854,10 @@ describe("loadOpenClawPlugins", () => {
         };`,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["failing-memory"],
-          slots: { memory: "failing-memory" },
-        },
-      },
-      onlyPluginIds: ["failing-memory"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["failing-memory"], slots: { memory: "failing-memory" } },
+      options: { onlyPluginIds: ["failing-memory"] },
     });
 
     expect(registry.plugins.find((entry) => entry.id === "failing-memory")?.status).toBe("error");
@@ -984,52 +866,39 @@ describe("loadOpenClawPlugins", () => {
     expect(listMemoryPromptPreparations()).toStrictEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
-    expect(listMemoryEmbeddingProviders()).toStrictEqual([]);
   });
 
   it("does not replace the active detached task runtime during non-activating loads", () => {
     useNoBundledPlugins();
     const activeRuntime = createDetachedTaskRuntimeStub("active");
-    registerDetachedTaskLifecycleRuntime("active-runtime", activeRuntime);
+    setDetachedTaskLifecycleRuntime(activeRuntime, "active-runtime");
 
     const plugin = writePlugin({
       id: "snapshot-detached-runtime",
       filename: "snapshot-detached-runtime.cjs",
-      body: `module.exports = {
-          id: "snapshot-detached-runtime",
-          register(api) {
-            api.registerDetachedTaskRuntime({
-              createQueuedTaskRun() { throw new Error("snapshot createQueuedTaskRun should not run"); },
-              createRunningTaskRun() { throw new Error("snapshot createRunningTaskRun should not run"); },
-              startTaskRunByRunId() { throw new Error("snapshot startTaskRunByRunId should not run"); },
-              recordTaskRunProgressByRunId() { throw new Error("snapshot recordTaskRunProgressByRunId should not run"); },
-              finalizeTaskRunByRunId() { throw new Error("snapshot finalizeTaskRunByRunId should not run"); },
-              completeTaskRunByRunId() { throw new Error("snapshot completeTaskRunByRunId should not run"); },
-              failTaskRunByRunId() { throw new Error("snapshot failTaskRunByRunId should not run"); },
-              setDetachedTaskDeliveryStatusByRunId() { throw new Error("snapshot setDetachedTaskDeliveryStatusByRunId should not run"); },
-              async cancelDetachedTaskRunById() { return { found: true, cancelled: true }; },
-            });
-          },
-        };`,
+      registration: `api.registerDetachedTaskRuntime({
+        createQueuedTaskRun() { throw new Error("snapshot createQueuedTaskRun should not run"); },
+        createRunningTaskRun() { throw new Error("snapshot createRunningTaskRun should not run"); },
+        startTaskRunByRunId() { throw new Error("snapshot startTaskRunByRunId should not run"); },
+        recordTaskRunProgressByRunId() { throw new Error("snapshot recordTaskRunProgressByRunId should not run"); },
+        finalizeTaskRunByRunId() { throw new Error("snapshot finalizeTaskRunByRunId should not run"); },
+        completeTaskRunByRunId() { throw new Error("snapshot completeTaskRunByRunId should not run"); },
+        failTaskRunByRunId() { throw new Error("snapshot failTaskRunByRunId should not run"); },
+        setDetachedTaskDeliveryStatusByRunId() { throw new Error("snapshot setDetachedTaskDeliveryStatusByRunId should not run"); },
+        async cancelDetachedTaskRunById() { return { found: true, cancelled: true }; },
+      });`,
     });
 
-    const scoped = loadOpenClawPlugins({
-      cache: false,
-      activate: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["snapshot-detached-runtime"],
-        },
-      },
-      onlyPluginIds: ["snapshot-detached-runtime"],
+    const scoped = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["snapshot-detached-runtime"] },
+      options: { activate: false, onlyPluginIds: ["snapshot-detached-runtime"] },
     });
 
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-detached-runtime")?.status).toBe(
       "loaded",
     );
-    const runtimeRegistration = getDetachedTaskLifecycleRuntimeRegistration();
+    const runtimeRegistration = requireActivePluginRegistry().detachedTaskRuntimes[0];
     expect(runtimeRegistration?.pluginId).toBe("active-runtime");
     expect(runtimeRegistration?.runtime).toBe(activeRuntime);
   });
@@ -1039,25 +908,14 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "detached-runtime-refresh",
       filename: "detached-runtime-refresh.cjs",
-      body: `module.exports = {
-          id: "detached-runtime-refresh",
-          register(api) {
-            api.registerDetachedTaskRuntime({ marker: "first" });
-            api.registerDetachedTaskRuntime({ marker: "second" });
-          },
-        };`,
+      registration: `api.registerDetachedTaskRuntime({ marker: "first" });
+      api.registerDetachedTaskRuntime({ marker: "second" });`,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["detached-runtime-refresh"],
-        },
-      },
-      onlyPluginIds: ["detached-runtime-refresh"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["detached-runtime-refresh"] },
+      options: { onlyPluginIds: ["detached-runtime-refresh"] },
     });
 
     expect(registry.detachedTaskRuntimes).toHaveLength(1);
@@ -1066,69 +924,85 @@ describe("loadOpenClawPlugins", () => {
     ).toBe("second");
   });
 
+  it("does not let another plugin replace the detached task runtime", () => {
+    useNoBundledPlugins();
+    const plugins = ["first-plugin", "second-plugin"].map((id) =>
+      writePlugin({
+        id,
+        body: `module.exports = { register(api) {
+          api.registerDetachedTaskRuntime({ marker: ${JSON.stringify(id)} });
+        } };`,
+      }),
+    );
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          allow: plugins.map(({ id }) => id),
+          load: { paths: plugins.map(({ dir }) => dir) },
+        },
+      },
+    });
+
+    expect(registry.detachedTaskRuntimes).toEqual([
+      { pluginId: "first-plugin", runtime: { marker: "first-plugin" } },
+    ]);
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "second-plugin",
+        message: "detached task runtime already registered by first-plugin",
+      }),
+    );
+  });
+
   it("clears newly-registered detached task runtimes when plugin register fails", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "failing-detached-runtime",
       filename: "failing-detached-runtime.cjs",
-      body: `module.exports = {
-          id: "failing-detached-runtime",
-          register(api) {
-            api.registerDetachedTaskRuntime({
-              createQueuedTaskRun() { throw new Error("failing createQueuedTaskRun should not run"); },
-              createRunningTaskRun() { throw new Error("failing createRunningTaskRun should not run"); },
-              startTaskRunByRunId() { throw new Error("failing startTaskRunByRunId should not run"); },
-              recordTaskRunProgressByRunId() { throw new Error("failing recordTaskRunProgressByRunId should not run"); },
-              finalizeTaskRunByRunId() { throw new Error("failing finalizeTaskRunByRunId should not run"); },
-              completeTaskRunByRunId() { throw new Error("failing completeTaskRunByRunId should not run"); },
-              failTaskRunByRunId() { throw new Error("failing failTaskRunByRunId should not run"); },
-              setDetachedTaskDeliveryStatusByRunId() { throw new Error("failing setDetachedTaskDeliveryStatusByRunId should not run"); },
-              async cancelDetachedTaskRunById() { return { found: true, cancelled: true }; },
-            });
-            throw new Error("detached runtime register failed");
-          },
-        };`,
+      registration: `api.registerDetachedTaskRuntime({
+        createQueuedTaskRun() { throw new Error("failing createQueuedTaskRun should not run"); },
+        createRunningTaskRun() { throw new Error("failing createRunningTaskRun should not run"); },
+        startTaskRunByRunId() { throw new Error("failing startTaskRunByRunId should not run"); },
+        recordTaskRunProgressByRunId() { throw new Error("failing recordTaskRunProgressByRunId should not run"); },
+        finalizeTaskRunByRunId() { throw new Error("failing finalizeTaskRunByRunId should not run"); },
+        completeTaskRunByRunId() { throw new Error("failing completeTaskRunByRunId should not run"); },
+        failTaskRunByRunId() { throw new Error("failing failTaskRunByRunId should not run"); },
+        setDetachedTaskDeliveryStatusByRunId() { throw new Error("failing setDetachedTaskDeliveryStatusByRunId should not run"); },
+        async cancelDetachedTaskRunById() { return { found: true, cancelled: true }; },
+      });
+      throw new Error("detached runtime register failed");`,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["failing-detached-runtime"],
-        },
-      },
-      onlyPluginIds: ["failing-detached-runtime"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["failing-detached-runtime"] },
+      options: { onlyPluginIds: ["failing-detached-runtime"] },
     });
 
     expect(registry.plugins.find((entry) => entry.id === "failing-detached-runtime")?.status).toBe(
       "error",
     );
-    expect(getDetachedTaskLifecycleRuntimeRegistration()).toBeUndefined();
+    expect(requireActivePluginRegistry().detachedTaskRuntimes[0]).toBeUndefined();
   });
 
-  it("restores cached detached task runtime registrations on cache hits", () => {
+  it("restores detached task runtime registrations after registry replacement", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "cached-detached-runtime",
       filename: "cached-detached-runtime.cjs",
-      body: `module.exports = {
-          id: "cached-detached-runtime",
-          register(api) {
-            api.registerDetachedTaskRuntime({
-              createQueuedTaskRun() { throw new Error("cached createQueuedTaskRun should not run"); },
-              createRunningTaskRun() { throw new Error("cached createRunningTaskRun should not run"); },
-              startTaskRunByRunId() { throw new Error("cached startTaskRunByRunId should not run"); },
-              recordTaskRunProgressByRunId() { throw new Error("cached recordTaskRunProgressByRunId should not run"); },
-              finalizeTaskRunByRunId() { throw new Error("cached finalizeTaskRunByRunId should not run"); },
-              completeTaskRunByRunId() { throw new Error("cached completeTaskRunByRunId should not run"); },
-              failTaskRunByRunId() { throw new Error("cached failTaskRunByRunId should not run"); },
-              setDetachedTaskDeliveryStatusByRunId() { throw new Error("cached setDetachedTaskDeliveryStatusByRunId should not run"); },
-              async cancelDetachedTaskRunById() { return { found: true, cancelled: true }; },
-            });
-          },
-        };`,
+      registration: `api.registerDetachedTaskRuntime({
+        createQueuedTaskRun() { throw new Error("cached createQueuedTaskRun should not run"); },
+        createRunningTaskRun() { throw new Error("cached createRunningTaskRun should not run"); },
+        startTaskRunByRunId() { throw new Error("cached startTaskRunByRunId should not run"); },
+        recordTaskRunProgressByRunId() { throw new Error("cached recordTaskRunProgressByRunId should not run"); },
+        finalizeTaskRunByRunId() { throw new Error("cached finalizeTaskRunByRunId should not run"); },
+        completeTaskRunByRunId() { throw new Error("cached completeTaskRunByRunId should not run"); },
+        failTaskRunByRunId() { throw new Error("cached failTaskRunByRunId should not run"); },
+        setDetachedTaskDeliveryStatusByRunId() { throw new Error("cached setDetachedTaskDeliveryStatusByRunId should not run"); },
+        async cancelDetachedTaskRunById() { return { found: true, cancelled: true }; },
+      });`,
     });
 
     const loadOptions = {
@@ -1143,33 +1017,32 @@ describe("loadOpenClawPlugins", () => {
     } satisfies Parameters<typeof loadOpenClawPlugins>[0];
 
     loadOpenClawPlugins(loadOptions);
-    expect(getDetachedTaskLifecycleRuntimeRegistration()?.pluginId).toBe("cached-detached-runtime");
+    expect(requireActivePluginRegistry().detachedTaskRuntimes[0]?.pluginId).toBe(
+      "cached-detached-runtime",
+    );
 
     setActivePluginRegistry(createEmptyPluginRegistry());
-    expect(getDetachedTaskLifecycleRuntimeRegistration()).toBeUndefined();
+    expect(requireActivePluginRegistry().detachedTaskRuntimes[0]).toBeUndefined();
 
     loadOpenClawPlugins(loadOptions);
 
-    expect(getDetachedTaskLifecycleRuntimeRegistration()?.pluginId).toBe("cached-detached-runtime");
+    expect(requireActivePluginRegistry().detachedTaskRuntimes[0]?.pluginId).toBe(
+      "cached-detached-runtime",
+    );
   });
 
-  it("restores cached legacy internal hook registrations on cache hits", async () => {
+  it("restores legacy internal hook registrations after registry replacement", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "cached-legacy-hook",
       filename: "cached-legacy-hook.cjs",
-      body: `module.exports = {
-          id: "cached-legacy-hook",
-          register(api) {
-            api.registerHook(
-              "gateway:startup",
-              (event) => {
-                event.messages.push("cached-hook-fired");
-              },
-              { name: "cached-legacy-hook" },
-            );
-          },
-        };`,
+      registration: `api.registerHook(
+        "gateway:startup",
+        (event) => {
+          event.messages.push("cached-hook-fired");
+        },
+        { name: "cached-legacy-hook" },
+      );`,
     });
 
     const loadOptions = {
@@ -1196,26 +1069,21 @@ describe("loadOpenClawPlugins", () => {
     expect(cachedEvent.messages).toEqual(["cached-hook-fired"]);
   });
 
-  it("restores cached command and interactive handler registrations on cache hits", () => {
+  it("preserves commands and interactive handlers across cache hits and registry replacement", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "cached-command-interactive",
       filename: "cached-command-interactive.cjs",
-      body: `module.exports = {
-          id: "cached-command-interactive",
-          register(api) {
-            api.registerCommand({
-              name: "hue",
-              description: "Control Hue lights",
-              handler: async () => ({ text: "ok" }),
-            });
-            api.registerInteractiveHandler({
-              channel: "telegram",
-              namespace: "hue",
-              handle: async () => ({ handled: true }),
-            });
-          },
-        };`,
+      registration: `api.registerCommand({
+        name: "hue",
+        description: "Control Hue lights",
+        handler: async () => ({ text: "ok" }),
+      });
+      api.registerInteractiveHandler({
+        channel: "telegram",
+        namespace: "hue",
+        handle: async () => ({ handled: true }),
+      });`,
     });
 
     const loadOptions = {
@@ -1240,7 +1108,11 @@ describe("loadOpenClawPlugins", () => {
         pluginId: "cached-command-interactive",
       }),
     ]);
-    const match = resolvePluginInteractiveNamespaceMatch("telegram", "hue:on");
+    const match = resolvePluginInteractiveRegistrationsMatch(
+      getActivePluginChannelRegistry()?.interactiveHandlers ?? [],
+      "telegram",
+      "hue:on",
+    );
     expect(match?.namespace).toBe("hue");
     expect(match?.payload).toBe("on");
 
@@ -1254,14 +1126,24 @@ describe("loadOpenClawPlugins", () => {
 
     setActivePluginRegistry(createEmptyPluginRegistry());
     expect(getPluginCommandSpecs()).toStrictEqual([]);
-    expect(resolvePluginInteractiveNamespaceMatch("telegram", "hue:on")).toBeNull();
+    expect(
+      resolvePluginInteractiveRegistrationsMatch(
+        getActivePluginChannelRegistry()?.interactiveHandlers ?? [],
+        "telegram",
+        "hue:on",
+      ),
+    ).toBeNull();
 
     loadOpenClawPlugins(loadOptions);
 
     expect(getPluginCommandSpecs()).toEqual([
       { name: "hue", description: "Control Hue lights", acceptsArgs: false },
     ]);
-    const registration = resolvePluginInteractiveNamespaceMatch("telegram", "hue:on")?.registration;
+    const registration = resolvePluginInteractiveRegistrationsMatch(
+      getActivePluginChannelRegistry()?.interactiveHandlers ?? [],
+      "telegram",
+      "hue:on",
+    )?.registration;
     expect(registration?.pluginId).toBe("cached-command-interactive");
     expect(registration?.namespace).toBe("hue");
     expect(registration?.channel).toBe("telegram");
@@ -1270,7 +1152,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("clears stale detached task runtime registrations on active reloads when no plugin re-registers one", () => {
     useNoBundledPlugins();
-    registerDetachedTaskLifecycleRuntime("stale-runtime", createDetachedTaskRuntimeStub("stale"));
+    setDetachedTaskLifecycleRuntime(createDetachedTaskRuntimeStub("stale"), "stale-runtime");
 
     loadOpenClawPlugins({
       cache: false,
@@ -1282,12 +1164,12 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    expect(getDetachedTaskLifecycleRuntimeRegistration()).toBeUndefined();
+    expect(requireActivePluginRegistry().detachedTaskRuntimes[0]).toBeUndefined();
   });
 
-  it("restores cached memory capability public artifacts on cache hits", async () => {
+  it("restores memory capability public artifacts with a fresh registry after replacement", async () => {
     useNoBundledPlugins();
-    const workspaceDir = makeTempDir();
+    const workspaceDir = makePluginLoaderTempDir();
     const absolutePath = path.join(workspaceDir, "MEMORY.md");
     fs.writeFileSync(absolutePath, "# Memory\n");
     const plugin = writePlugin({
@@ -1346,7 +1228,9 @@ describe("loadOpenClawPlugins", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
 
     const second = loadOpenClawPlugins(options);
-    expect(second).toBe(first);
+    // Scalar comparisons avoid materializing the registry's lazy runtime in failure output.
+    expect(second === first).toBe(false);
+    expect(loadOpenClawPlugins(options) === second).toBe(true);
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
       expectedArtifacts,
     );
@@ -1354,7 +1238,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("preserves previously registered memory capability across activate:false snapshot loads", async () => {
     useNoBundledPlugins();
-    const workspaceDir = makeTempDir();
+    const workspaceDir = makePluginLoaderTempDir();
     const absolutePath = path.join(workspaceDir, "MEMORY.md");
     fs.writeFileSync(absolutePath, "# Memory\n");
     const memoryPlugin = writePlugin({
@@ -1435,24 +1319,16 @@ describe("loadOpenClawPlugins", () => {
 
   it("uses discovery registration mode for non-activating loads", () => {
     useNoBundledPlugins();
-    const marker = "__openclawDiscoveryModeTest";
     const plugin = writePlugin({
       id: "discovery-mode-test",
       filename: "discovery-mode-test.cjs",
-      body: `module.exports = {
-          id: "discovery-mode-test",
-          register(api) {
-            globalThis.${marker} = globalThis.${marker} || [];
-            globalThis.${marker}.push(api.registrationMode);
-            api.registerProvider({ id: "discovery-provider", label: "Discovery Provider", auth: [] });
-            api.registerTool({
-              name: "discovery_tool",
-              description: "Discovery tool",
-              parameters: {},
-              execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
-            });
-          },
-        };`,
+      registration: `api.registerProvider({ id: "discovery-provider", label: api.registrationMode, auth: [] });
+      api.registerTool({
+        name: "discovery_tool",
+        description: "Discovery tool",
+        parameters: {},
+        execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      });`,
     });
     updatePluginManifest(plugin, { contracts: { tools: ["discovery_tool"] } });
     const config = {
@@ -1468,17 +1344,17 @@ describe("loadOpenClawPlugins", () => {
       workspaceDir: plugin.dir,
       config,
     });
-    expect((globalThis as Record<string, unknown>)[marker]).toEqual(["discovery"]);
+    expect(snapshot.providers.map(({ provider }) => provider.label)).toEqual(["discovery"]);
     expect(snapshot.providers.map((entry) => entry.provider.id)).toEqual(["discovery-provider"]);
     expect(snapshot.tools.flatMap((entry) => entry.names)).toContain("discovery_tool");
 
-    loadOpenClawPlugins({
+    const active = loadOpenClawPlugins({
       cache: false,
       workspaceDir: plugin.dir,
       config,
     });
-    expect((globalThis as Record<string, unknown>)[marker]).toEqual(["discovery", "full"]);
-    delete (globalThis as Record<string, unknown>)[marker];
+    expect(active.providers.map(({ provider }) => provider.label)).toEqual(["full"]);
+    expect(active.tools.flatMap((entry) => entry.names)).toContain("discovery_tool");
   });
 
   it("ignores plugin-supplied conversation-read authority claims", () => {
@@ -1486,41 +1362,30 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "conversation-read-provenance-test",
       filename: "conversation-read-provenance-test.cjs",
-      body: `module.exports = {
-          id: "conversation-read-provenance-test",
-          register(api) {
-            const createTool = (name) => () => ({
-              name,
-              description: name,
-              parameters: {},
-              execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
-            });
-            api.registerTool(createTool("attested_tool"), {
-              name: "attested_tool",
-              conversationReadPolicy: "current-or-configured-v1",
-              supportsConversationReadPolicyV1: true,
-            });
-            api.registerTool(createTool("unknown_policy_tool"), {
-              name: "unknown_policy_tool",
-              conversationReadPolicy: "future-policy",
-            });
-          },
-        };`,
+      registration: `const createTool = (name) => () => ({
+        name,
+        description: name,
+        parameters: {},
+        execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      });
+      api.registerTool(createTool("attested_tool"), {
+        name: "attested_tool",
+        conversationReadPolicy: "current-or-configured-v1",
+        supportsConversationReadPolicyV1: true,
+      });
+      api.registerTool(createTool("unknown_policy_tool"), {
+        name: "unknown_policy_tool",
+        conversationReadPolicy: "future-policy",
+      });`,
     });
     updatePluginManifest(plugin, {
       contracts: { tools: ["attested_tool", "unknown_policy_tool"] },
     });
 
-    const registry = loadOpenClawPlugins({
-      activate: false,
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["conversation-read-provenance-test"],
-        },
-      },
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["conversation-read-provenance-test"] },
+      options: { activate: false },
     });
 
     expect(registry.tools).toHaveLength(2);
@@ -1541,29 +1406,18 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "undeclared-tool-owner",
       filename: "undeclared-tool-owner.cjs",
-      body: `module.exports = {
-          id: "undeclared-tool-owner",
-          register(api) {
-            api.registerTool({
-              name: "undeclared_tool",
-              description: "Undeclared tool",
-              parameters: {},
-              execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
-            });
-          },
-        };`,
+      registration: `api.registerTool({
+        name: "undeclared_tool",
+        description: "Undeclared tool",
+        parameters: {},
+        execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      });`,
     });
 
-    const registry = loadOpenClawPlugins({
-      activate: false,
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["undeclared-tool-owner"],
-        },
-      },
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["undeclared-tool-owner"] },
+      options: { activate: false },
     });
 
     expect(registry.tools).toStrictEqual([]);
@@ -1581,30 +1435,19 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "wrong-tool-owner",
       filename: "wrong-tool-owner.cjs",
-      body: `module.exports = {
-          id: "wrong-tool-owner",
-          register(api) {
-            api.registerTool({
-              name: "runtime_tool",
-              description: "Runtime tool",
-              parameters: {},
-              execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
-            });
-          },
-        };`,
+      registration: `api.registerTool({
+        name: "runtime_tool",
+        description: "Runtime tool",
+        parameters: {},
+        execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      });`,
     });
     updatePluginManifest(plugin, { contracts: { tools: ["manifest_tool"] } });
 
-    const registry = loadOpenClawPlugins({
-      activate: false,
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["wrong-tool-owner"],
-        },
-      },
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["wrong-tool-owner"] },
+      options: { activate: false },
     });
 
     expect(registry.tools).toStrictEqual([]);
@@ -1620,21 +1463,16 @@ describe("loadOpenClawPlugins", () => {
   it("caches non-activating snapshots without restoring global side effects", () => {
     useNoBundledPlugins();
     clearPluginCommands();
-    const marker = "__openclawSnapshotCacheRegisterCount";
+    const register = vi.fn();
     const plugin = writePlugin({
       id: "snapshot-cache",
       filename: "snapshot-cache.cjs",
-      body: `module.exports = {
-          id: "snapshot-cache",
-          register(api) {
-            globalThis.${marker} = (globalThis.${marker} || 0) + 1;
-            api.registerCommand({
-              name: "snapshot-command",
-              description: "Snapshot command",
-              handler: async () => ({ text: "ok" }),
-            });
-          },
-        };`,
+      registration: `api.logger.info("registered");
+      api.registerCommand({
+        name: "snapshot-command",
+        description: "Snapshot command",
+        handler: async () => ({ text: "ok" }),
+      });`,
     });
     const options = {
       activate: false,
@@ -1646,13 +1484,14 @@ describe("loadOpenClawPlugins", () => {
         },
       },
       onlyPluginIds: ["snapshot-cache"],
+      logger: { info: register, warn: vi.fn(), error: vi.fn() },
     };
 
     const first = loadOpenClawPlugins(options);
     const second = loadOpenClawPlugins(options);
 
     expect(second).toBe(first);
-    expect((globalThis as Record<string, unknown>)[marker]).toBe(1);
+    expect(register).toHaveBeenCalledExactlyOnceWith("registered");
     expect(first.commands.map((entry) => entry.command.name)).toEqual(["snapshot-command"]);
     expect(getPluginCommandSpecs()).toStrictEqual([]);
 
@@ -1660,9 +1499,10 @@ describe("loadOpenClawPlugins", () => {
       workspaceDir: plugin.dir,
       config: options.config,
       onlyPluginIds: ["snapshot-cache"],
+      logger: options.logger,
     });
     expect(active).not.toBe(first);
-    expect((globalThis as Record<string, unknown>)[marker]).toBe(2);
+    expect(register).toHaveBeenCalledTimes(2);
     expect(getPluginCommandSpecs()).toEqual([
       {
         name: "snapshot-command",
@@ -1670,7 +1510,6 @@ describe("loadOpenClawPlugins", () => {
         acceptsArgs: false,
       },
     ]);
-    delete (globalThis as Record<string, unknown>)[marker];
   });
 
   it("re-initializes global hook runner when serving registry from cache", () => {
@@ -1709,16 +1548,12 @@ describe("loadOpenClawPlugins", () => {
     const firstPlugin = writePlugin({
       id: "retired-hook-surface",
       filename: "retired-hook-surface.cjs",
-      body: `module.exports = { id: "retired-hook-surface", register(api) {
-          api.on("subagent_ended", () => undefined);
-        } };`,
+      registration: `api.on("subagent_ended", () => undefined);`,
     });
     const secondPlugin = writePlugin({
       id: "replacing-hook-surface",
       filename: "replacing-hook-surface.cjs",
-      body: `module.exports = { id: "replacing-hook-surface", register(api) {
-          api.on("message_sent", () => undefined);
-        } };`,
+      registration: `api.on("message_sent", () => undefined);`,
     });
 
     loadOpenClawPlugins({
@@ -1755,8 +1590,8 @@ describe("loadOpenClawPlugins", () => {
       name: "does not reuse cached bundled plugin registries across env changes",
       pluginId: "cache-root",
       setup: () => {
-        const bundledA = makeTempDir();
-        const bundledB = makeTempDir();
+        const bundledA = makePluginLoaderTempDir();
+        const bundledB = makePluginLoaderTempDir();
         const pluginA = writePlugin({
           id: "cache-root",
           dir: path.join(bundledA, "cache-root"),
@@ -1807,10 +1642,10 @@ describe("loadOpenClawPlugins", () => {
       name: "does not reuse cached load-path plugin registries across env home changes",
       pluginId: "demo",
       setup: () => {
-        const homeA = makeTempDir();
-        const homeB = makeTempDir();
-        const stateDir = makeTempDir();
-        const bundledDir = makeTempDir();
+        const homeA = makePluginLoaderTempDir();
+        const homeB = makePluginLoaderTempDir();
+        const stateDir = makePluginLoaderTempDir();
+        const bundledDir = makePluginLoaderTempDir();
         const pluginA = writePlugin({
           id: "demo",
           dir: path.join(homeA, "plugins", "demo"),

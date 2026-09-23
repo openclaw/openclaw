@@ -11,6 +11,7 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessageToolsConfig } from "../../config/types.tools.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
+import { MessageActionDeniedError } from "./message-action-denial.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { formatTargetDisplay, lookupDirectoryDisplay } from "./target-resolver.js";
 
@@ -42,6 +43,8 @@ const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
   "unpin",
   "thread-create",
   "thread-reply",
+  "topic-create",
+  "topic-edit",
   "sticker",
 ]);
 
@@ -205,11 +208,15 @@ export function enforceMessageActionAllowlist(params: {
   if (!allowed || allowed.includes(params.action)) {
     return;
   }
-  throw new Error(`Message action "${params.action}" is disabled for this agent.`);
+  throw new MessageActionDeniedError(
+    `Message action "${params.action}" is disabled for this agent.`,
+    "message_action_disabled",
+    "message-actions:allowlist",
+  );
 }
 
 /**
- * Enforces cross-context message-send policy for a bound channel/thread context.
+ * Enforces source-provider policy independently of channel/thread target availability.
  */
 export function enforceCrossContextPolicy(params: {
   channel: ChannelId;
@@ -219,12 +226,6 @@ export function enforceCrossContextPolicy(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;
 }): void {
-  const currentTarget =
-    params.toolContext?.currentChannelId?.trim() ??
-    params.toolContext?.currentMessagingTarget?.trim();
-  if (!currentTarget) {
-    return;
-  }
   if (!CONTEXT_GUARDED_ACTIONS.has(params.action)) {
     return;
   }
@@ -237,19 +238,28 @@ export function enforceCrossContextPolicy(params: {
   // Runtime must not keep a second legacy interpretation path here.
   const currentProvider = params.toolContext?.currentChannelProvider;
   const allowWithinProvider = messageConfig?.crossContext?.allowWithinProvider !== false;
-  const allowAcrossProviders = messageConfig?.crossContext?.allowAcrossProviders === true;
+  const allowAcrossProviders = messageConfig?.crossContext?.allowAcrossProviders !== false;
 
   // Provider mismatch is stronger than target mismatch; normalize targets only within one provider.
   if (currentProvider && currentProvider !== params.channel) {
     if (!allowAcrossProviders) {
-      throw new Error(
+      throw new MessageActionDeniedError(
         `Cross-context messaging denied: action=${params.action} target provider "${params.channel}" while bound to "${currentProvider}".`,
+        "message_cross_context_denied",
+        "message-cross-context:provider",
       );
     }
     return;
   }
 
   if (allowWithinProvider) {
+    return;
+  }
+
+  const currentTarget =
+    params.toolContext?.currentChannelId?.trim() ??
+    params.toolContext?.currentMessagingTarget?.trim();
+  if (!currentTarget) {
     return;
   }
 
@@ -262,8 +272,10 @@ export function enforceCrossContextPolicy(params: {
     return;
   }
 
-  throw new Error(
+  throw new MessageActionDeniedError(
     `Cross-context messaging denied: action=${params.action} target="${target}" while bound to "${currentTarget}" (channel=${params.channel}).`,
+    "message_cross_context_denied",
+    "message-cross-context:target",
   );
 }
 

@@ -1,11 +1,20 @@
 // Discord tests cover message handler.process plugin behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
-import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 
-vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
+const runtimeEnvMocks = vi.hoisted(() => ({
+  logVerbose: vi.fn(),
+  sleepWithAbort: vi.fn(async () => undefined),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  logVerbose: runtimeEnvMocks.logVerbose,
+  sleepWithAbort: runtimeEnvMocks.sleepWithAbort,
+}));
 
 const getGlobalHookRunner = vi.hoisted(() => vi.fn());
 
@@ -19,8 +28,8 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 
 export const getGlobalHookRunnerForTest = getGlobalHookRunner;
 
-export const logVerboseForTest = logVerbose;
-export const sleepWithAbortForTest = sleepWithAbort;
+export const logVerboseForTest = runtimeEnvMocks.logVerbose;
+export const sleepWithAbortForTest = runtimeEnvMocks.sleepWithAbort;
 
 const sendMocks = vi.hoisted(() => ({
   reactMessageDiscord: vi.fn<
@@ -32,12 +41,15 @@ const sendMocks = vi.hoisted(() => ({
 }));
 export function createMockDraftStream() {
   let messageId: string | undefined = "preview-1";
+  let text = "";
   return {
-    update: vi.fn<(text: string) => void>(() => {
+    update: vi.fn<(next: string) => void>((next) => {
+      text = next;
       messageId ??= "preview-next";
     }),
     flush: vi.fn(async () => {}),
     messageId: vi.fn(() => messageId),
+    lastDeliveredText: vi.fn(() => text),
     clear: vi.fn(async () => {
       messageId = undefined;
     }),
@@ -48,22 +60,15 @@ export function createMockDraftStream() {
     seal: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
     retarget: vi.fn(async () => {}),
-    cleanupRetargeted: vi.fn(async () => {}),
+    cleanupPendingMessages: vi.fn(async () => {}),
     forceNewMessage: vi.fn(() => {
       messageId = undefined;
+      text = "";
     }),
   };
 }
 
 const deliveryMocks = vi.hoisted(() => ({
-  editMessageDiscord: vi.fn<
-    (
-      channelId: string,
-      messageId: string,
-      payload: unknown,
-      opts?: unknown,
-    ) => Promise<import("discord-api-types/v10").APIMessage>
-  >(async () => ({ id: "m1" }) as import("discord-api-types/v10").APIMessage),
   deliverDiscordReply: vi.fn<(params: unknown) => Promise<{ visibleReplySent: boolean }>>(
     async () => ({
       visibleReplySent: true,
@@ -73,7 +78,6 @@ const deliveryMocks = vi.hoisted(() => ({
     () => createMockDraftStream(),
   ),
 }));
-export const editMessageDiscord = deliveryMocks.editMessageDiscord;
 export const deliverDiscordReply = deliveryMocks.deliverDiscordReply;
 export const createDiscordDraftStream = deliveryMocks.createDiscordDraftStream;
 
@@ -129,11 +133,6 @@ vi.mock("../send.shared.js", () => ({
     discordTargetMocks.resolveDiscordTargetChannelId(target, opts),
 }));
 
-vi.mock("../send.messages.js", () => ({
-  editMessageDiscord: (channelId: string, messageId: string, payload: unknown, opts?: unknown) =>
-    deliveryMocks.editMessageDiscord(channelId, messageId, payload, opts),
-}));
-
 vi.mock("../draft-stream.js", () => ({
   createDiscordDraftStream: (params: unknown) => deliveryMocks.createDiscordDraftStream(params),
 }));
@@ -150,75 +149,7 @@ export type DispatchInboundParams = {
     sendFinalReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
     waitForIdle: () => Promise<void>;
   };
-  replyOptions?: {
-    onReasoningStream?: (payload?: {
-      text?: string;
-      isReasoningSnapshot?: boolean;
-      requiresReasoningProgressOptIn?: boolean;
-    }) => Promise<void> | void;
-    onReasoningEnd?: () => Promise<void> | void;
-    onToolStart?: (payload: {
-      name?: string;
-      phase?: string;
-      args?: Record<string, unknown>;
-      detailMode?: "explain" | "raw";
-    }) => Promise<void> | void;
-    onItemEvent?: (payload: {
-      itemId?: string;
-      kind?: string;
-      phase?: string;
-      status?: string;
-      progressText?: string;
-      summary?: string;
-      title?: string;
-      name?: string;
-    }) => Promise<boolean | void> | boolean | void;
-    onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;
-    onProgressNarratorLifecycle?: (lifecycle: {
-      beginTurn: () => void;
-      stopTurn: () => void;
-    }) => void;
-    isProgressDraftVisible?: () => boolean;
-    progressPreambleEnabled?: boolean;
-    narrationHideCommandText?: boolean;
-    onVerboseProgressVisibility?: (isActive: () => boolean) => void;
-    onPlanUpdate?: (payload: {
-      phase?: string;
-      explanation?: string;
-      steps?: Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
-    }) => Promise<void> | void;
-    onApprovalEvent?: (payload: { phase?: string; command?: string }) => Promise<void> | void;
-    onCommandOutput?: (payload: {
-      phase?: string;
-      name?: string;
-      title?: string;
-      status?: string;
-      exitCode?: number | null;
-    }) => Promise<false | void> | false | void;
-    onPatchSummary?: (payload: {
-      phase?: string;
-      summary?: string;
-      title?: string;
-      name?: string;
-      added?: string[];
-      modified?: string[];
-      deleted?: string[];
-    }) => Promise<void> | void;
-    onReplyStart?: () => Promise<void> | void;
-    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-    typingKeepalive?: boolean;
-    disableBlockStreaming?: boolean;
-    suppressDefaultToolProgressMessages?: boolean;
-    queuedDeliveryCorrelations?: Array<{ begin: () => () => void }>;
-    suppressTyping?: boolean;
-    onCompactionStart?: () => Promise<void> | void;
-    onCompactionEnd?: () => Promise<void> | void;
-    onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
-    onAssistantMessageStart?: () => Promise<void> | void;
-    onQueuedFollowupAdmitted?: () => Promise<void> | void;
-    allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
-    onTypingCleanup?: () => Promise<void> | void;
-  };
+  replyOptions?: import("openclaw/plugin-sdk/reply-runtime").GetReplyOptions;
 };
 const dispatchInboundMessage = vi.hoisted(() =>
   vi.fn<
@@ -226,12 +157,26 @@ const dispatchInboundMessage = vi.hoisted(() =>
       queuedFinal: boolean;
       counts: { final: number; tool: number; block: number };
       failedCounts?: { final?: number; tool?: number; block?: number };
+      settledReceipt?: {
+        counts: Record<
+          "tool" | "block" | "final",
+          {
+            delivered: number;
+            deliveredNotVisible: number;
+            cancelled: number;
+            failedBeforeSend: number;
+            failedAfterSend: number;
+          }
+        >;
+        anyVisibleDelivered: boolean;
+      };
     }>
   >(async (_params?: DispatchInboundParams) => ({
     queuedFinal: false,
     counts: { final: 0, tool: 0, block: 0 },
   })),
 );
+const readAgentRunTerminalOutcome = vi.hoisted(() => vi.fn());
 const recordInboundSession = vi.hoisted(() =>
   vi.fn<(params?: unknown) => Promise<void>>(async () => {}),
 );
@@ -267,92 +212,80 @@ export const sendMocksForTest = sendMocks;
 export const typingMocksForTest = typingMocks;
 export const discordTargetMocksForTest = discordTargetMocks;
 export const dispatchInboundMessageForTest = dispatchInboundMessage;
+export const readAgentRunTerminalOutcomeForTest = readAgentRunTerminalOutcome;
 export const recordInboundSessionForTest = recordInboundSession;
 export const createDiscordRestClientSpyForTest = createDiscordRestClientSpy;
 let createBaseDiscordMessageContext: typeof import("./message-handler.test-harness.js").createBaseDiscordMessageContext;
 let createDiscordDirectMessageContextOverrides: typeof import("./message-handler.test-harness.js").createDiscordDirectMessageContextOverrides;
-let threadBindingTesting: typeof import("./thread-bindings.js").testing;
 export let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
 export let formatDiscordReplySkip: typeof import("./message-handler.process.js").formatDiscordReplySkip;
 export let discordInboundEventDelivery: typeof import("../inbound-event-delivery.js").discordInboundEventDelivery;
 
+const dispatchBufferedReply = vi.hoisted(() =>
+  vi.fn<
+    typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithBufferedBlockDispatcher
+  >(),
+);
+
+export const dispatchBufferedReplyForTest = dispatchBufferedReply;
+
 vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
-  dispatchReplyWithBufferedBlockDispatcher: async (params: {
-    dispatcherOptions: {
-      beforeDeliver?: (
-        payload: ReplyPayload,
-        info: { kind: "block" | "final" },
-      ) => Promise<ReplyPayload | null> | ReplyPayload | null;
-      deliver: (payload: unknown, info: { kind: "block" | "final" }) => Promise<void> | void;
-      onError?: (err: unknown, info: { kind: "block" | "final" }) => void;
-      transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
-      typingCallbacks?: {
-        onReplyStart?: () => Promise<void> | void;
-        onIdle?: () => void;
-        onCleanup?: () => void;
+  dispatchReplyWithBufferedBlockDispatcher: dispatchBufferedReply.mockImplementation(
+    async (params) => {
+      const pendingDeliveries: Promise<void>[] = [];
+      const deliver = async (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
+        const transformed = params.dispatcherOptions.transformReplyPayload
+          ? params.dispatcherOptions.transformReplyPayload(payload)
+          : payload;
+        if (!transformed) {
+          return;
+        }
+        const deliverPayload = params.dispatcherOptions.beforeDeliver
+          ? await params.dispatcherOptions.beforeDeliver(transformed, info)
+          : transformed;
+        if (!deliverPayload) {
+          return;
+        }
+        await params.dispatcherOptions.deliver(deliverPayload, info);
       };
-      onReplyStart?: () => Promise<void> | void;
-      onIdle?: () => void;
-      onCleanup?: () => void;
-      onSettled?: () => unknown;
-      onFreshSettledDelivery?: () => unknown;
-    };
-    ctx?: Record<string, unknown>;
-    replyOptions?: DispatchInboundParams["replyOptions"];
-  }) => {
-    const pendingDeliveries: Promise<void>[] = [];
-    const deliver = async (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
-      const transformed = params.dispatcherOptions.transformReplyPayload
-        ? params.dispatcherOptions.transformReplyPayload(payload)
-        : payload;
-      if (!transformed) {
-        return;
+      const queueDelivery = (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
+        const delivery = Promise.resolve(deliver(payload, info)).catch(async (err: unknown) => {
+          await params.dispatcherOptions.onError?.(err, info);
+        });
+        pendingDeliveries.push(delivery);
+        return true;
+      };
+      const typingCallbacks = params.dispatcherOptions.typingCallbacks;
+      const replyOptions = {
+        ...params.replyOptions,
+        onReplyStart: params.dispatcherOptions.onReplyStart ?? typingCallbacks?.onReplyStart,
+        onTypingCleanup: params.dispatcherOptions.onCleanup ?? typingCallbacks?.onCleanup,
+      };
+      try {
+        return await dispatchInboundMessage({
+          ctx: params.ctx,
+          replyOptions,
+          dispatcher: {
+            sendBlockReply: vi.fn((payload: ReplyPayload) =>
+              queueDelivery(payload, { kind: "block" }),
+            ),
+            sendFinalReply: vi.fn((payload: ReplyPayload) =>
+              queueDelivery(payload, { kind: "final" }),
+            ),
+            waitForIdle: vi.fn(async () => {
+              await Promise.all(pendingDeliveries);
+            }),
+          },
+        });
+      } finally {
+        await params.dispatcherOptions.onSettled?.();
+        await params.dispatcherOptions.onFreshSettledDelivery?.();
+        await params.dispatcherOptions.onIdle?.();
+        typingCallbacks?.onIdle?.();
       }
-      const deliverPayload = params.dispatcherOptions.beforeDeliver
-        ? await params.dispatcherOptions.beforeDeliver(transformed, info)
-        : transformed;
-      if (!deliverPayload) {
-        return;
-      }
-      await params.dispatcherOptions.deliver(deliverPayload, info);
-    };
-    const queueDelivery = (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
-      const delivery = Promise.resolve(deliver(payload, info)).catch((err: unknown) => {
-        params.dispatcherOptions.onError?.(err, info);
-      });
-      pendingDeliveries.push(delivery);
-      return true;
-    };
-    const typingCallbacks = params.dispatcherOptions.typingCallbacks;
-    const replyOptions = {
-      ...params.replyOptions,
-      onReplyStart: params.dispatcherOptions.onReplyStart ?? typingCallbacks?.onReplyStart,
-      onTypingCleanup: params.dispatcherOptions.onCleanup ?? typingCallbacks?.onCleanup,
-    };
-    try {
-      return await dispatchInboundMessage({
-        ctx: params.ctx,
-        replyOptions,
-        dispatcher: {
-          sendBlockReply: vi.fn((payload: ReplyPayload) =>
-            queueDelivery(payload, { kind: "block" }),
-          ),
-          sendFinalReply: vi.fn((payload: ReplyPayload) =>
-            queueDelivery(payload, { kind: "final" }),
-          ),
-          waitForIdle: vi.fn(async () => {
-            await Promise.all(pendingDeliveries);
-          }),
-        },
-      });
-    } finally {
-      await params.dispatcherOptions.onSettled?.();
-      await params.dispatcherOptions.onFreshSettledDelivery?.();
-      params.dispatcherOptions.onIdle?.();
-      typingCallbacks?.onIdle?.();
-    }
-  },
+    },
+  ),
   dispatchInboundMessage: (params: DispatchInboundParams) => dispatchInboundMessage(params),
   settleReplyDispatcher: async (params: {
     dispatcher: { markComplete: () => void; waitForIdle: () => Promise<void> };
@@ -384,6 +317,7 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
           await Promise.all(pendingDeliveries);
         }),
         getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
         markComplete: vi.fn(),
       },
       replyOptions: {
@@ -400,6 +334,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const replyRuntime = await import("openclaw/plugin-sdk/reply-runtime");
   return {
     ...actual,
+    readAgentRunTerminalOutcome,
     dispatchChannelInboundTurn: async (
       plan: import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan<"provider_message_sending">,
     ) => {
@@ -412,7 +347,14 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
               cfg,
               dispatcherOptions: {
                 ...plan.dispatcherOptions,
-                deliver: (delivery.deliverWithProviderMessageSending ?? delivery.deliver)!,
+                deliver: (payload, info) => {
+                  const providerInfo = {
+                    ...info,
+                    onPlatformSendDispatch: async () => undefined,
+                    assertPlatformSendAuthorized: () => undefined,
+                  };
+                  return delivery.deliverWithProviderMessageSending(payload, providerInfo);
+                },
                 onError: delivery.onError,
               },
               toolsAllow: plan.toolsAllow,
@@ -558,8 +500,7 @@ export function registerDiscordProcessTestLifecycle() {
     vi.useRealTimers();
     ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
       await import("./message-handler.test-harness.js"));
-    ({ testing: threadBindingTesting, createThreadBindingManager } =
-      await import("./thread-bindings.js"));
+    ({ createThreadBindingManager } = await import("./thread-bindings.js"));
     ({ processDiscordMessage, formatDiscordReplySkip } =
       await import("./message-handler.process.js"));
     ({ discordInboundEventDelivery } = await import("../inbound-event-delivery.js"));
@@ -567,15 +508,17 @@ export function registerDiscordProcessTestLifecycle() {
 
   beforeEach(() => {
     vi.useRealTimers();
+    runtimeEnvMocks.logVerbose.mockReset();
+    runtimeEnvMocks.sleepWithAbort.mockReset().mockResolvedValue(undefined);
     sendMocks.reactMessageDiscord.mockClear();
     sendMocks.removeReactionDiscord.mockClear();
     typingMocks.sendTyping.mockClear();
     typingMocks.sendTyping.mockResolvedValue(undefined);
     discordTargetMocks.resolveDiscordTargetChannelId.mockClear();
-    editMessageDiscord.mockClear();
     deliverDiscordReply.mockClear();
     createDiscordDraftStream.mockClear();
     dispatchInboundMessage.mockClear();
+    readAgentRunTerminalOutcome.mockReset().mockReturnValue(undefined);
     recordInboundSession.mockClear();
     readSessionUpdatedAt.mockClear();
     getSessionEntry.mockClear();
@@ -590,7 +533,7 @@ export function registerDiscordProcessTestLifecycle() {
     readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
     resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
     getGlobalHookRunner.mockReturnValue(null);
-    threadBindingTesting.resetThreadBindingsForTests();
+    resetThreadBindingsForTests();
   });
 
   afterEach(() => {

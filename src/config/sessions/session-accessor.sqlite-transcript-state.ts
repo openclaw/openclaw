@@ -3,23 +3,83 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
-import { normalizeSqliteNumber } from "./session-accessor.sqlite-normalize.js";
+import type { SessionTranscriptContextVersion } from "./session-accessor.sqlite-contract.js";
+import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
-  assertCanonicalSqliteSessionKeysCurrent,
-  assertCanonicalSessionKeyWriteMatchesDatabase,
+  assertCanonicalSqliteSessionRootWrite,
   canonicalSessionKeyMigrationRequiredError,
 } from "./session-canonical-key.js";
-import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+import { certifyCanonicalSessionValidationRow } from "./session-canonical-validation.js";
+import {
+  assertSessionTranscriptHot,
+  readSessionColdTranscript,
+} from "./session-cold-storage-state.js";
 import {
   foldedSessionKeyAliasCandidates,
   normalizeStoreSessionKey,
   resolveDeliveryProvenCanonicalSessionKey,
 } from "./store-entry.js";
+
+function createTranscriptContextVersionQuery(database: Pick<OpenClawAgentDatabase, "db">) {
+  const db = getSessionKysely(database.db);
+  return prepareSqliteQueryTakeFirstSync<string, SessionTranscriptContextVersion>(
+    database.db,
+    (parameter) =>
+      db
+        .selectFrom("transcript_events")
+        .select((eb) => [
+          eb.fn.max<number | null>("seq").as("rawSeq"),
+          eb
+            .selectFrom("transcript_rewrite_watermarks")
+            .select("generation")
+            .where(
+              "session_id",
+              "=",
+              parameter((sessionId) => sessionId),
+            )
+            .as("generation"),
+          eb
+            .selectFrom("session_windows")
+            .select("transcript_updated_at")
+            .where(
+              "session_id",
+              "=",
+              parameter((sessionId) => sessionId),
+            )
+            .as("updatedAt"),
+        ])
+        .where(
+          "session_id",
+          "=",
+          parameter((sessionId) => sessionId),
+        ),
+  );
+}
+
+const transcriptContextVersionQueries = new WeakMap<
+  OpenClawAgentDatabase["db"],
+  ReturnType<typeof createTranscriptContextVersionQuery>
+>();
+
+export function readTranscriptContextVersionInTransaction(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+) {
+  const cold = readSessionColdTranscript(database.db, sessionId);
+  let query = transcriptContextVersionQueries.get(database.db);
+  if (!query) {
+    query = createTranscriptContextVersionQuery(database);
+    transcriptContextVersionQueries.set(database.db, query);
+  }
+  const version = query(sessionId)!;
+  return cold ? { ...version, rawSeq: cold.last_seq } : version;
+}
 
 function createTranscriptGeneration(): string {
   return randomUUID().replaceAll("-", "");
@@ -44,7 +104,7 @@ export function readTranscriptGenerationInTransaction(
 export function ensureTranscriptGenerationInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
-): string {
+): void {
   const db = getSessionKysely(database.db);
   const generation = createTranscriptGeneration();
   executeSqliteQuerySync(
@@ -54,7 +114,6 @@ export function ensureTranscriptGenerationInTransaction(
       .values({ session_id: sessionId, generation, updated_at: Date.now() })
       .onConflict((conflict) => conflict.column("session_id").doNothing()),
   );
-  return readTranscriptGenerationInTransaction(database, sessionId) ?? generation;
 }
 
 /** Rotate the watermark in the same transaction as destructive transcript replacement. */
@@ -82,10 +141,22 @@ export function ensureTranscriptSessionRoot(
   updatedAt: number,
   options: { allowStoredAlias?: boolean } = {},
 ): void {
+  const db = getSessionKysely(database.db);
+  let nodeExists = false;
   if (!options.allowStoredAlias) {
-    assertCanonicalSqliteSessionKeysCurrent(database);
-    assertCanonicalSessionKeyWriteMatchesDatabase(database, scope.sessionKey);
-    const db = getSessionKysely(database.db);
+    assertCanonicalSqliteSessionRootWrite(database, scope.sessionKey);
+    const persistedSessionKey = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_windows")
+        .select("session_key")
+        .where("session_id", "=", scope.sessionId),
+    )?.session_key;
+    if (persistedSessionKey && persistedSessionKey !== scope.sessionKey) {
+      throw new Error(
+        `Transcript session ${scope.sessionId} is owned by ${persistedSessionKey}, not ${scope.sessionKey}; resolve the transcript target again before retrying.`,
+      );
+    }
     const lookupKeys = uniqueStrings([
       scope.sessionKey,
       ...foldedSessionKeyAliasCandidates(normalizeStoreSessionKey(scope.sessionKey)),
@@ -98,7 +169,7 @@ export function ensureTranscriptSessionRoot(
         .where("session_key", "in", lookupKeys),
     ).rows;
     for (const candidate of candidates) {
-      const entry = parseSqliteSessionEntryJson(candidate);
+      const entry = parseSessionEntryJson(candidate);
       if (!entry) {
         const retainedWindow =
           candidate.entry_json === "{}"
@@ -128,6 +199,7 @@ export function ensureTranscriptSessionRoot(
       }
     }
     const existing = candidates.find((candidate) => candidate.session_key === scope.sessionKey);
+    nodeExists = existing !== undefined;
     if (existing && existing.entry_valid !== 1) {
       const retainedWindow =
         existing.entry_json === "{}"
@@ -147,29 +219,30 @@ export function ensureTranscriptSessionRoot(
       }
     }
   }
-  const db = getSessionKysely(database.db);
-  const insertedNode = executeSqliteQuerySync(
-    database.db,
-    db
-      .insertInto("session_nodes")
-      .values({
-        session_key: scope.sessionKey,
-        current_session_id: scope.sessionId,
-        entry_json: "{}",
-        entry_valid: -1,
-        updated_at: updatedAt,
-      })
-      .onConflict((conflict) => conflict.column("session_key").doNothing()),
-  );
-  if ((insertedNode.numAffectedRows ?? 0n) > 0n) {
-    executeSqliteQuerySync(
+  if (!nodeExists) {
+    const insertedNode = executeSqliteQuerySync(
       database.db,
       db
-        .updateTable("session_nodes")
-        .set({ entry_valid: -1 })
-        .where("session_key", "=", scope.sessionKey),
+        .insertInto("session_nodes")
+        .values({
+          session_key: scope.sessionKey,
+          current_session_id: scope.sessionId,
+          entry_json: "{}",
+          entry_valid: -1,
+          updated_at: updatedAt,
+        })
+        .onConflict((conflict) => conflict.column("session_key").doNothing()),
     );
-    publishSqliteSessionEntryCacheInvalidation(database);
+    if ((insertedNode.numAffectedRows ?? 0n) > 0n) {
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("session_nodes")
+          .set({ entry_valid: -1 })
+          .where("session_key", "=", scope.sessionKey),
+      );
+      publishSessionEntryCacheInvalidation(database, { sessionKey: scope.sessionKey });
+    }
   }
   executeSqliteQuerySync(
     database.db,
@@ -186,14 +259,17 @@ export function ensureTranscriptSessionRoot(
       })
       .onConflict((conflict) =>
         conflict.column("session_id").doUpdateSet({
-          session_key: scope.sessionKey,
           updated_at: updatedAt,
         }),
       ),
   );
+  if (!options.allowStoredAlias) {
+    certifyCanonicalSessionValidationRow(database, scope.sessionKey);
+  }
 }
 
 export function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId: string): number {
+  assertSessionTranscriptHot(database.db, sessionId);
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -203,7 +279,7 @@ export function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId
       .where("session_id", "=", sessionId),
   );
   const maxSeq =
-    row?.max_seq === null || row?.max_seq === undefined ? -1 : normalizeSqliteNumber(row.max_seq);
+    row?.max_seq === null || row?.max_seq === undefined ? -1 : sqliteNumber(row.max_seq);
   return maxSeq + 1;
 }
 
@@ -212,18 +288,39 @@ function normalizeTranscriptMutationAtMs(value: number): number | undefined {
   return Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : undefined;
 }
 
+function createTranscriptMutationStateQuery(database: Pick<OpenClawAgentDatabase, "db">) {
+  const db = getSessionKysely(database.db);
+  return prepareSqliteQueryTakeFirstSync<
+    string,
+    { transcript_observed_at: number | null; transcript_updated_at: number | null }
+  >(database.db, (parameter) =>
+    db
+      .selectFrom("session_windows")
+      .select(["transcript_observed_at", "transcript_updated_at"])
+      .where(
+        "session_id",
+        "=",
+        parameter((sessionId) => sessionId),
+      ),
+  );
+}
+
+// Only compilation is retained; writer transactions must see their latest mutation fences.
+const transcriptMutationStateQueries = new WeakMap<
+  OpenClawAgentDatabase["db"],
+  ReturnType<typeof createTranscriptMutationStateQuery>
+>();
+
 export function readTranscriptMutationStateInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
 ): { observedAt: number | null; updatedAt: number | null } {
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("session_windows")
-      .select(["transcript_observed_at", "transcript_updated_at"])
-      .where("session_id", "=", sessionId),
-  );
+  let query = transcriptMutationStateQueries.get(database.db);
+  if (!query) {
+    query = createTranscriptMutationStateQuery(database);
+    transcriptMutationStateQueries.set(database.db, query);
+  }
+  const row = query(sessionId);
   return {
     observedAt: row?.transcript_observed_at ?? null,
     updatedAt: row?.transcript_updated_at ?? null,
@@ -267,10 +364,11 @@ export function touchTranscriptMutationInTransaction(
   }
 }
 
-export function deleteSqliteTranscriptEventsInTransaction(
+export function deleteTranscriptEventsInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
 ): boolean {
+  assertSessionTranscriptHot(database.db, sessionId);
   const db = getSessionKysely(database.db);
   executeSqliteQuerySync(
     database.db,
@@ -280,7 +378,5 @@ export function deleteSqliteTranscriptEventsInTransaction(
     database.db,
     db.deleteFrom("transcript_events").where("session_id", "=", sessionId),
   );
-  // FTS rows have no FK onto transcript_events; clear them in this transaction.
-  deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
   return (result.numAffectedRows ?? 0n) > 0n;
 }

@@ -3,12 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import {
-  listConfiguredMcpServers,
-  setConfiguredMcpServer,
-  unsetConfiguredMcpServer,
-} from "./mcp-config.js";
+import { listConfiguredMcpServers, mcpConfigInternal } from "./mcp-config.js";
 import { REDACTED_SENTINEL } from "./redact-snapshot.js";
+
+const { set: setConfiguredMcpServer, unset: unsetConfiguredMcpServer } = mcpConfigInternal;
 
 function validationOk(raw: unknown) {
   return { ok: true as const, config: raw, warnings: [] };
@@ -36,15 +34,23 @@ const mockReadSourceConfigSnapshot = vi.hoisted(() => async () => {
   }
 });
 
-const mockReplaceConfigFile = vi.hoisted(() => async ({ nextConfig }: { nextConfig: unknown }) => {
-  const fsLocal = await import("node:fs/promises");
-  const pathLocal = await import("node:path");
-  const configPath = pathLocal.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
-  await fsLocal.writeFile(configPath, JSON.stringify(nextConfig, null, 2), "utf-8");
-});
+const mockReplaceConfigFile = vi.hoisted(
+  () =>
+    async ({ sourceConfig }: { sourceConfig: unknown }) => {
+      const fsLocal = await import("node:fs/promises");
+      const pathLocal = await import("node:path");
+      const configPath = pathLocal.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
+      await fsLocal.writeFile(configPath, JSON.stringify(sourceConfig, null, 2), "utf-8");
+      return { nextConfig: sourceConfig };
+    },
+);
 
 vi.mock("./io.js", () => ({
   readSourceConfigSnapshot: mockReadSourceConfigSnapshot,
+  readSourceConfigSnapshotForWrite: async () => ({
+    snapshot: await mockReadSourceConfigSnapshot(),
+    writeOptions: {},
+  }),
 }));
 
 vi.mock("./mutate.js", () => ({

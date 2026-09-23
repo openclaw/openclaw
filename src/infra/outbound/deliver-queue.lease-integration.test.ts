@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
@@ -13,8 +14,8 @@ import {
   matrixOutboundForQueueTest,
 } from "./deliver.queue-integration.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
-import { claimDeliveryPlatformSendAttempt } from "./delivery-queue-storage.js";
-import { enqueueDeliveryOnce } from "./delivery-queue.js";
+import * as platformLease from "./delivery-queue-platform-lease.js";
+import { claimDeliveryPlatformSendAttempt, enqueueDeliveryOnce } from "./delivery-queue-storage.js";
 import {
   installDeliveryQueueTmpDirHooks,
   readQueuedEntry,
@@ -22,6 +23,25 @@ import {
 } from "./delivery-queue.test-helpers.js";
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
+
+function useLeaseHeartbeatTimers() {
+  // Worker leases use the real clock; only drive the host heartbeat scheduler.
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const renew = vi.spyOn(platformLease, "renewDeliveryPlatformSendLease");
+  return async () => {
+    const previousCalls = renew.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(renew).toHaveBeenCalledTimes(previousCalls + 1);
+    const renewal = renew.mock.results.at(-1);
+    if (!renewal || renewal.type !== "return") {
+      throw new Error("Expected an accepted producer lease renewal");
+    }
+    const expiresAt = await renewal.value;
+    // Let the lease owner consume the storage result before releasing the adapter.
+    await setImmediate();
+    return expiresAt;
+  };
+}
 
 async function startBlockedFreshDelivery(params: { tmpDir: string }) {
   process.env.OPENCLAW_STATE_DIR = params.tmpDir;
@@ -294,42 +314,53 @@ describe("delivery producer lease integration", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("publishes a fresh live delivery with cross-process ownership before provider I/O", async () => {
-    const tmpDir = fixtures.tmpDir();
-    let blocked: Awaited<ReturnType<typeof startBlockedFreshDelivery>> | undefined;
-    try {
-      blocked = await startBlockedFreshDelivery({ tmpDir });
-      const entry = readQueuedEntry(tmpDir, blocked.queueId);
+  it.for([0, 38_000])(
+    "retains fresh delivery ownership before provider I/O after a %ims scheduling stall",
+    async (stallMs) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const tmpDir = fixtures.tmpDir();
+      let blocked: Awaited<ReturnType<typeof startBlockedFreshDelivery>> | undefined;
+      try {
+        blocked = await startBlockedFreshDelivery({ tmpDir });
+        // Age persisted ownership without running a heartbeat or changing the
+        // worker clock before the delayed provider boundary resumes.
+        const initial = readQueuedEntry(tmpDir, blocked.queueId);
+        setQueuedEntryState(tmpDir, blocked.queueId, {
+          retryCount: 0,
+          availableAt: (initial.availableAt as number) - stallMs,
+        });
+        const entry = readQueuedEntry(tmpDir, blocked.queueId);
 
-      expect(entry).toMatchObject({
-        recoveryState: "producer_claimed",
-        requiresProducerClaim: true,
-        producerClaimId: expect.any(String),
-        availableAt: expect.any(Number),
-      });
-      expect(entry.availableAt as number).toBeGreaterThan(Date.now());
-      expect(await claimDeliveryPlatformSendAttempt(blocked.queueId, tmpDir)).toBeUndefined();
+        expect(entry).toMatchObject({
+          recoveryState: "producer_claimed",
+          requiresProducerClaim: true,
+          producerClaimId: expect.any(String),
+          availableAt: expect.any(Number),
+        });
+        expect(entry.availableAt as number).toBeGreaterThan(Date.now());
+        expect(await claimDeliveryPlatformSendAttempt(blocked.queueId, tmpDir)).toBeUndefined();
 
-      blocked.releasePreparation();
-      await expect(blocked.delivery).resolves.toMatchObject([{ messageId: blocked.messageId }]);
-      expect(blocked.sendText).toHaveBeenCalledOnce();
-      expect(
-        getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, blocked.queueId, tmpDir),
-      ).toBeUndefined();
-    } finally {
-      blocked?.releasePreparation();
-      await blocked?.delivery.catch(() => undefined);
-    }
-  });
+        blocked.releasePreparation();
+        await expect(blocked.delivery).resolves.toMatchObject([{ messageId: blocked.messageId }]);
+        expect(blocked.sendText).toHaveBeenCalledOnce();
+        expect(
+          getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, blocked.queueId, tmpDir),
+        ).toBeUndefined();
+      } finally {
+        blocked?.releasePreparation();
+        await blocked?.delivery.catch(() => undefined);
+      }
+    },
+  );
 
   it("upgrades and renews a legacy reused intent through long channel preparation", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
+    const heartbeat = useLeaseHeartbeatTimers();
     const tmpDir = fixtures.tmpDir();
     const deliveryIntentId = "cron-direct-delivery:v1:renew-long-channel-preparation";
     let blocked: Awaited<ReturnType<typeof startBlockedStableDelivery>> | undefined;
@@ -339,7 +370,22 @@ describe("delivery producer lease integration", () => {
         deliveryIntentId,
         requiresProducerClaim: false,
       });
-      await vi.advanceTimersByTimeAsync(35_000);
+      const producerClaimId = readQueuedEntry(tmpDir, deliveryIntentId).producerClaimId;
+      for (let tick = 0; tick < 3; tick += 1) {
+        const availableAt =
+          (readQueuedEntry(tmpDir, deliveryIntentId).availableAt as number) - 20_000;
+        setQueuedEntryState(tmpDir, deliveryIntentId, { retryCount: 0, availableAt });
+        const renewedUntil = await heartbeat();
+        expect(renewedUntil).toBeGreaterThan(availableAt);
+        expect(readQueuedEntry(tmpDir, deliveryIntentId)).toMatchObject({
+          producerClaimId,
+          availableAt: renewedUntil,
+        });
+      }
+      setQueuedEntryState(tmpDir, deliveryIntentId, {
+        retryCount: 0,
+        availableAt: (readQueuedEntry(tmpDir, deliveryIntentId).availableAt as number) - 5_000,
+      });
 
       expect(await claimDeliveryPlatformSendAttempt(deliveryIntentId, tmpDir)).toBeUndefined();
       expect(readQueuedEntry(tmpDir, deliveryIntentId)).toMatchObject({
@@ -364,8 +410,7 @@ describe("delivery producer lease integration", () => {
   });
 
   it("stops before provider I/O when the exact owner is replaced", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
+    const heartbeat = useLeaseHeartbeatTimers();
     const tmpDir = fixtures.tmpDir();
     const deliveryIntentId = "cron-direct-delivery:v1:lose-owner-before-provider";
     let blocked: Awaited<ReturnType<typeof startBlockedStableDelivery>> | undefined;
@@ -380,11 +425,12 @@ describe("delivery producer lease integration", () => {
         retryCount: 0,
         producerClaimId: "replacement-owner",
       });
-      await vi.advanceTimersByTimeAsync(10_001);
+      expect(await heartbeat()).toBeUndefined();
 
-      const rejected = expect(blocked.delivery).rejects.toThrow(
-        `Delivery platform claim was lost: ${deliveryIntentId}`,
-      );
+      const rejected = expect(blocked.delivery).rejects.toMatchObject({
+        message: `Delivery platform claim was lost: ${deliveryIntentId}`,
+        queueCustody: "held",
+      });
       blocked.releasePreparation();
       await rejected;
 
@@ -401,8 +447,7 @@ describe("delivery producer lease integration", () => {
   });
 
   it("retains retryable custody when the owner expires before provider I/O", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
+    const heartbeat = useLeaseHeartbeatTimers();
     const tmpDir = fixtures.tmpDir();
     const deliveryIntentId = "cron-direct-delivery:v1:expire-owner-before-provider";
     let blocked: Awaited<ReturnType<typeof startBlockedStableDelivery>> | undefined;
@@ -418,7 +463,7 @@ describe("delivery producer lease integration", () => {
         retryCount: 0,
         availableAt: Date.now() - 1,
       });
-      await vi.advanceTimersByTimeAsync(10_001);
+      expect(await heartbeat()).toBeUndefined();
 
       const rejected = expect(blocked.delivery).rejects.toThrow(
         `Delivery platform claim was lost: ${deliveryIntentId}`,
@@ -446,8 +491,7 @@ describe("delivery producer lease integration", () => {
   });
 
   it("preserves lease loss through presentation preparation before provider I/O", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
+    const heartbeat = useLeaseHeartbeatTimers();
     const tmpDir = fixtures.tmpDir();
     const deliveryIntentId = "cron-direct-delivery:v1:expire-owner-during-presentation";
     let blocked: Awaited<ReturnType<typeof startBlockedRenderedStableDelivery>> | undefined;
@@ -459,7 +503,7 @@ describe("delivery producer lease integration", () => {
         retryCount: 0,
         availableAt: Date.now() - 1,
       });
-      await vi.advanceTimersByTimeAsync(10_001);
+      expect(await heartbeat()).toBeUndefined();
 
       const rejected = expect(blocked.delivery).rejects.toThrow(
         `Delivery platform claim was lost: ${deliveryIntentId}`,
@@ -488,11 +532,10 @@ describe("delivery producer lease integration", () => {
   });
 
   it("does not settle a queue row when the lease expires after provider dispatch", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
+    const heartbeat = useLeaseHeartbeatTimers();
     const tmpDir = fixtures.tmpDir();
     const deliveryIntentId = "cron-direct-delivery:v1:expire-owner-after-dispatch";
-    const auditEvents: unknown[] = [];
+    const auditEvents: Array<{ outcome: string }> = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
     let blocked: Awaited<ReturnType<typeof startBlockedProviderStableDelivery>> | undefined;
     try {
@@ -510,7 +553,7 @@ describe("delivery producer lease integration", () => {
         platformSendStartedAt: dispatched.platformSendStartedAt as number,
         availableAt: Date.now() - 1,
       });
-      await vi.advanceTimersByTimeAsync(10_001);
+      expect(await heartbeat()).toBeUndefined();
 
       const rejected = expect(blocked.delivery).rejects.toThrow(
         `Delivery platform claim was lost: ${deliveryIntentId}`,
@@ -520,7 +563,7 @@ describe("delivery producer lease integration", () => {
 
       expect(blocked.sendText).toHaveBeenCalledOnce();
       expect(blocked.onDeliveryResult).not.toHaveBeenCalled();
-      expect(auditEvents).toEqual([]);
+      expect(auditEvents.map((event) => event.outcome)).toEqual(["queued", "platform_started"]);
       expect(
         getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
       ).toBe("pending");

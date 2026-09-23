@@ -23,7 +23,7 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
-      verboseLevel: "on",
+      verboseLevel: "full",
       onToolResult,
     });
 
@@ -71,7 +71,7 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
-      verboseLevel: "on",
+      verboseLevel: "full",
       onToolResult,
     });
     const command = "pnpm test";
@@ -176,14 +176,21 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
     const toolResultMessage = result.messagesSnapshot.find(
       (message) => requireRecord(message, "message").role === "toolResult",
     );
+    expect(toolResultMessage).toMatchObject({
+      role: "toolResult",
+      toolCallId: "cmd-streamed-echo",
+      toolName: "bash",
+      isError: false,
+    });
     const toolResultContent = requireArray(
       requireRecord(toolResultMessage, "tool result message").content,
       "tool result content",
     );
+    expect(toolResultContent).toEqual([{ type: "text", text: expect.any(String) }]);
     const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
-    expect(toolResultContentItem.content).toHaveLength(10_000);
-    expect(toolResultContentItem.content).toContain("original 12367 chars");
-    expect(toolResultContentItem.content).not.toContain("tail-should-not-appear");
+    expect(toolResultContentItem.text).toHaveLength(10_000);
+    expect(toolResultContentItem.text).toContain("original 12367 chars");
+    expect(toolResultContentItem.text).not.toContain("tail-should-not-appear");
   });
 
   it("bounds streamed output echo signatures per tool item", async () => {
@@ -354,7 +361,9 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
     expect(result.assistantTexts).toEqual([]);
     expect(result.lastAssistant).toBeUndefined();
     expect(result.currentAttemptAssistant).toBeUndefined();
-    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("tail-should-not-appear");
+    expect(
+      JSON.stringify(result.messagesSnapshot.filter((message) => message.role === "toolResult")),
+    ).toContain("tail-should-not-appear");
   });
 
   it("keeps final answers that only start with a streamed tool-output prefix", async () => {

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { isStagedInputPath, stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
 import {
   MAX_WORKSPACE_INVENTORY_ENTRIES,
   MAX_WORKSPACE_INVENTORY_PATH_BYTES,
@@ -43,9 +44,12 @@ export type WorkerWorkspaceReconciliationJournalAdapter = {
   abort(): void;
 };
 
-export const MAX_RECONCILIATION_ENTRIES = 25_000;
+// A complete rebase can replace every entry in both valid inventories.
+export const MAX_RECONCILIATION_ENTRIES = MAX_WORKSPACE_INVENTORY_ENTRIES * 2;
 export const MAX_RECONCILIATION_FILE_BYTES = 64 * 1024 * 1024;
-export const MAX_RECONCILIATION_TOTAL_BYTES = 256 * 1024 * 1024;
+export const MAX_RECONCILIATION_TOTAL_BYTES = 768 * 1024 * 1024;
+// Keep the durable SQLite rollback blob bounded independently of raw file bytes.
+export const MAX_RECONCILIATION_PACK_BYTES = 256 * 1024 * 1024;
 const MANIFEST_REF_PATTERN = /^sha256:([a-f0-9]{64})$/u;
 const GIT_COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 
@@ -142,6 +146,7 @@ function validateAndProjectEntries(values: unknown[]): {
     throw new Error("Worker workspace manifest has too many entries");
   }
   const rawEntries = values.map(parseRawEntry);
+  const stagedInputs = stagedInputDirectoriesFromEntries(rawEntries);
   let previous = "";
   let pathBytes = 0;
   let totalBytes = 0;
@@ -175,27 +180,35 @@ function validateAndProjectEntries(values: unknown[]): {
   return {
     entries: rawEntries.filter(
       (entry): entry is WorkerWorkspaceManifestEntry =>
-        entry.type !== "directory" && !isDerivedWorkspacePath(entry.path),
+        entry.type !== "directory" &&
+        !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
     ),
     directories: rawEntries
-      .filter((entry) => entry.type === "directory" && !isDerivedWorkspacePath(entry.path))
+      .filter(
+        (entry) =>
+          entry.type === "directory" &&
+          !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
+      )
       .map((entry) => entry.path),
   };
 }
 
 export function serializeWorkerWorkspaceManifest(manifest: WorkerWorkspaceManifest): string {
+  const stagedInputs = stagedInputDirectoriesFromEntries(manifest.entries);
   const entries = [
-    ...(manifest.directories ?? [])
-      .filter((entryPath) => !isDerivedWorkspacePath(entryPath))
-      .map((entryPath) => ({
-        path: entryPath,
-        type: "directory" as const,
-        // Phase 1 projects directory permissions away. Keep recomputed
-        // manifests deterministic without creating a new mode contract.
-        mode: 0o700,
-      })),
-    ...manifest.entries.filter((entry) => !isDerivedWorkspacePath(entry.path)),
-  ].toSorted(compareManifestPaths);
+    ...(manifest.directories ?? []).map((entryPath) => ({
+      path: entryPath,
+      type: "directory" as const,
+      // Phase 1 projects directory permissions away. Keep recomputed
+      // manifests deterministic without creating a new mode contract.
+      mode: 0o700,
+    })),
+    ...manifest.entries,
+  ]
+    .filter(
+      (entry) => !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
+    )
+    .toSorted(compareManifestPaths);
   if (entries.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
     throw new Error("Worker workspace manifest has too many entries");
   }

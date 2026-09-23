@@ -1,8 +1,6 @@
 name: Mantis Discord Thread Attachment
 
 on:
-  issue_comment:
-    types: [created]
   workflow_dispatch:
     inputs:
       candidate_ref:
@@ -100,7 +98,7 @@ jobs:
       candidate_revision: ${{ steps.validate.outputs.candidate-revision }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -125,37 +123,28 @@ jobs:
       output_dir: ${{ steps.run_mantis.outputs.output_dir }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
 
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
       - name: Build Mantis harness
         run: pnpm build
 
-      - name: Setup Go for Crabbox CLI
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version: "1.26.x"
-          cache: false
-
       - name: Install Crabbox CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          install_dir="${RUNNER_TEMP}/crabbox"
-          mkdir -p "$install_dir" "$HOME/.local/bin"
-          timeout --signal=TERM --kill-after=10s 120s git clone --depth 1 https://github.com/openclaw/crabbox.git "$install_dir/src"
-          go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          "$HOME/.local/bin/crabbox" --version
-          "$HOME/.local/bin/crabbox" warmup --help 2>&1 | grep -q -- "-desktop"
+        env:
+          OPENCLAW_STATE_DIR: ${{ runner.temp }}/openclaw-crabbox-setup
+        run: node scripts/crabbox-setup.mjs
 
       - name: Prepare baseline and candidate worktrees
         shell: bash
@@ -166,8 +155,8 @@ jobs:
 
           worktree_root=".artifacts/qa-e2e/mantis/discord-thread-attachment-worktrees"
           mkdir -p "$worktree_root"
-          git worktree add --detach "$worktree_root/baseline" "$CANDIDATE_SHA"
-          git worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 worktree add --detach "$worktree_root/baseline" "$CANDIDATE_SHA"
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
 
           baseline_file="$worktree_root/baseline/extensions/discord/src/actions/handle-action.guild-admin.ts"
           node - "$baseline_file" <<'NODE'
@@ -342,8 +331,32 @@ jobs:
 
           read_discord_thread_attachment_status() {
             local lane="$1"
-            if [[ -f "$root/$lane/qa-evidence.json" ]]; then
-              jq -r '.entries[] | select(.test.id == "discord-thread-reply-filepath-attachment") | .result.status' "$root/$lane/qa-evidence.json"
+            if [[ -e "$root/$lane/qa-evidence.json" || -L "$root/$lane/qa-evidence.json" ]]; then
+              QA_EVIDENCE_PATH="$root/$lane/qa-evidence.json" \
+                QA_EVIDENCE_REPO_ROOT="${GITHUB_WORKSPACE}/${worktree_root}/${lane}" \
+                node --import tsx --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+          import { pathToFileURL } from "node:url";
+
+          const qaEvidence = await import(pathToFileURL(
+            path.join(process.env.QA_EVIDENCE_REPO_ROOT, "extensions/qa-lab/api.ts"),
+          ).href);
+          const evidence = qaEvidence.validateQaEvidenceSummaryJson(
+            JSON.parse(fs.readFileSync(process.env.QA_EVIDENCE_PATH, "utf8")),
+          );
+          if (evidence.schemaVersion === 3 && typeof qaEvidence.projectQaEvidenceScenarioOutcomes !== "function") {
+            throw new Error("QA evidence v3 requires the lane checkout's scenario reader");
+          }
+          const outcomes = evidence.schemaVersion === 3
+            ? qaEvidence.projectQaEvidenceScenarioOutcomes(evidence)
+            : evidence.entries.map((entry) => ({ scenarioId: entry.test.id, status: entry.result.status }));
+          for (const outcome of outcomes) {
+            if (outcome.scenarioId === "discord-thread-reply-filepath-attachment") {
+              console.log(outcome.status);
+            }
+          }
+          NODE
               return
             fi
             jq -r '.scenarios[] | select(.id == "discord-thread-reply-filepath-attachment") | .status' "$root/$lane/discord-qa-summary.json"
@@ -403,15 +416,16 @@ jobs:
             --arg candidateStatus "$candidate_status" \
             --argjson pass "$([[ "$comparison_status" == "pass" ]] && echo true || echo false)" \
             '{
-              schemaVersion: 1,
+              schemaVersion: 2,
               id: "discord-thread-attachment",
               title: "Mantis Discord Thread Attachment QA",
               summary: "Mantis reproduced the Discord thread-reply filePath attachment bug with a synthetic baseline that reverts only the thread attachment fix, then verified the candidate preserves the attachment.",
               scenario: "discord-thread-reply-filepath-attachment",
               comparison: {
+                outcome: (if $pass then "pass" else "fail" end),
                 pass: $pass,
-                baseline: { ref: $baselineRef, status: $baselineStatus, expected: "thread reply omits filePath attachment" },
-                candidate: { ref: $candidateRef, status: $candidateStatus, expected: "thread reply includes filePath attachment" }
+                baseline: { ref: $baselineRef, status: $baselineStatus, expected: "thread reply omits filePath attachment", expectationMet: ($baselineStatus == "fail") },
+                candidate: { ref: $candidateRef, status: $candidateStatus, expected: "thread reply includes filePath attachment", expectationMet: ($candidateStatus == "pass") }
               },
               artifacts: [
                 { kind: "timeline", lane: "baseline", label: "Baseline missing filePath attachment", path: "baseline/discord-thread-reply-filepath-attachment-attachment.png", targetPath: "baseline.png", alt: "Baseline Discord thread reply without filePath attachment", width: 420 },

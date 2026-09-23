@@ -1,4 +1,3 @@
-// Slack plugin module implements target parsing behavior.
 import {
   buildMessagingTarget,
   ensureTargetId,
@@ -20,7 +19,7 @@ export type SlackTargetParseOptions = MessagingTargetParseOptions;
 // Letter-leading folded IDs are indistinguishable from supported channel names.
 // Doctor reports that ambiguity; runtime repairs only the digit-leading form.
 const SLACK_CHANNEL_API_ID_RE = /^[CDG][0-9][A-Z0-9]{7,}$/i;
-const SLACK_USER_API_ID_RE = /^[UW][A-Z0-9]{8,}$/i;
+const SLACK_USER_API_ID_RE = /^[BUW][A-Z0-9]{8,}$/i;
 const SLACK_QUALIFIED_TARGET_RE = /^team:([^:]+):(user|channel):([^:]+)$/i;
 
 function decodeSlackTargetPart(raw: string): string | undefined {
@@ -44,7 +43,7 @@ function parseQualifiedSlackTarget(raw: string): SlackTarget | undefined {
   const teamId = decodeSlackTargetPart(match[1] ?? "");
   const kind = match[2]?.toLowerCase() as SlackTargetKind | undefined;
   const id = decodeSlackTargetPart(match[3] ?? "");
-  const idPattern = kind === "user" ? /^[UW][A-Z0-9]+$/i : /^[CDG][A-Z0-9]+$/i;
+  const idPattern = kind === "user" ? /^[BUW][A-Z0-9]+$/i : /^[CDG][A-Z0-9]+$/i;
   if (!teamId || !/^T[A-Z0-9]+$/i.test(teamId) || !kind || !id || !idPattern.test(id)) {
     throw new Error("Invalid Slack workspace-qualified target");
   }
@@ -68,11 +67,33 @@ export function formatSlackTarget(params: {
   if (!teamId) {
     return params.explicitKind ? `${params.kind}:${id}` : id;
   }
-  const idPattern = params.kind === "user" ? /^[UW][A-Z0-9]+$/i : /^[CDG][A-Z0-9]+$/i;
+  const idPattern = params.kind === "user" ? /^[BUW][A-Z0-9]+$/i : /^[CDG][A-Z0-9]+$/i;
   if (!/^T[A-Z0-9]+$/i.test(teamId) || !idPattern.test(id)) {
     throw new Error("Invalid Slack workspace-qualified target");
   }
   return `team:${encodeURIComponent(teamId)}:${params.kind}:${encodeURIComponent(id)}`;
+}
+
+export function resolveWorkspaceQualifiedSlackTarget(
+  input: string,
+  kind: SlackTargetKind,
+): { input: string; resolved: true; id: string } | undefined {
+  if (!/^team:/i.test(input)) {
+    return undefined;
+  }
+  try {
+    const target = parseSlackTarget(input);
+    if (target?.kind !== kind || !target.teamId) {
+      return undefined;
+    }
+    return {
+      input,
+      resolved: true,
+      id: formatSlackTarget({ teamId: target.teamId, kind, id: target.id }),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function isUnambiguousSlackUserId(rawId: string): boolean {

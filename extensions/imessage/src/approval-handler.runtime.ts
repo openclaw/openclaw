@@ -1,8 +1,8 @@
-// Imessage plugin module implements approval handler behavior.
 import { setTimeout as delay } from "node:timers/promises";
 import {
   buildChannelApprovalExpiredText,
   buildChannelApprovalResolvedText,
+  type ChannelApprovalKind,
   createChannelApprovalNativeRuntimeAdapter,
   type PendingApprovalView,
   resolvePreparedApprovalAccountId,
@@ -16,6 +16,7 @@ import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-rep
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
+  SystemAgentApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -53,7 +54,7 @@ const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
 // gap keeps a poll posted second from sorting above the approval it follows.
 const APPROVAL_POLL_ORDERING_DELAY_MS = 1_100;
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 type IMessagePendingDelivery = {
   /** Prompt text carrying the tapback hint; used when no poll will be sent. */
   text: string;
@@ -67,6 +68,11 @@ type IMessagePendingDelivery = {
 type PreparedIMessageApprovalTarget = {
   to: string;
   accountId?: string;
+};
+type IMessageApprovalPromptBinding = {
+  approvalId: string;
+  approvalKind: ChannelApprovalKind;
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
 };
 type PendingIMessageApprovalEntry = {
   accountId?: string;
@@ -88,7 +94,7 @@ type IMessageFinalPayload = {
 
 function buildPendingPayload(params: {
   request: ApprovalRequest;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   nowMs: number;
   view: PendingApprovalView;
 }): IMessagePendingDelivery {
@@ -220,7 +226,7 @@ async function deliverIMessageApprovalPoll(params: {
   cfg: OpenClawConfig;
   target: PreparedIMessageApprovalTarget;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   expiresAtMs: number;
   question: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
@@ -271,7 +277,7 @@ async function deliverIMessageApprovalPoll(params: {
       // that contract is violated. Leave the unbound poll inert and restore the
       // complete text fallback so delivery is not retried and duplicated.
       log.error("imessage approvals: imsg poll response did not return a complete option mapping");
-      iMessageApprovalPollTargets.registerTombstone({
+      await iMessageApprovalPollTargets.registerTombstone({
         accountId: resolveIMessageAccount({
           cfg: params.cfg,
           accountId: params.target.accountId,
@@ -287,7 +293,7 @@ async function deliverIMessageApprovalPoll(params: {
       cfg: params.cfg,
       accountId: params.target.accountId,
     }).accountId;
-    const registered = iMessageApprovalPollTargets.register({
+    const registered = await iMessageApprovalPollTargets.register({
       accountId,
       conversation: { chatGuid },
       ...(pollGuid ? { pollGuid } : {}),
@@ -297,7 +303,7 @@ async function deliverIMessageApprovalPoll(params: {
       expiresAtMs: params.expiresAtMs,
     });
     if (!registered) {
-      iMessageApprovalPollTargets.registerTombstone({
+      await iMessageApprovalPollTargets.registerTombstone({
         accountId,
         conversation: { chatGuid },
         ...(pollGuid ? { pollGuid } : {}),
@@ -363,12 +369,12 @@ async function recoverIMessageApprovalTextFallback(params: {
   target: PreparedIMessageApprovalTarget;
   promptMessageId?: string;
   fallbackText: string;
-  approvalKind: "exec" | "plugin";
+  approvalPrompt: IMessageApprovalPromptBinding;
 }): Promise<string | undefined> {
   try {
     const result = await sendMessageIMessage(params.target.to, params.fallbackText, {
       config: params.cfg,
-      approvalKind: params.approvalKind,
+      approvalPrompt: params.approvalPrompt,
       conversationReadOrigin: "direct-operator",
       ...(params.target.accountId ? { accountId: params.target.accountId } : {}),
       ...(params.promptMessageId ? { replyToId: params.promptMessageId } : {}),
@@ -381,28 +387,34 @@ async function recoverIMessageApprovalTextFallback(params: {
 }
 
 /** Clear both controls together; a stale binding would resolve a dead approval. */
-function clearIMessageApprovalBindings(entry: PendingIMessageApprovalEntry): void {
+async function clearIMessageApprovalBindings(entry: PendingIMessageApprovalEntry): Promise<void> {
   const accountId = entry.accountId?.trim();
   if (!accountId) {
     return;
   }
+  const deletions: Promise<void>[] = [];
   for (const messageId of [entry.messageId, entry.hintMessageId]) {
     if (messageId && (!entry.poll || entry.reactionFallbackVisible)) {
-      unregisterIMessageApprovalReactionTarget({
-        accountId,
-        conversation: entry.conversation,
-        messageId,
-      });
+      deletions.push(
+        unregisterIMessageApprovalReactionTarget({
+          accountId,
+          conversation: entry.conversation,
+          messageId,
+        }),
+      );
     }
   }
   if (entry.poll) {
-    iMessageApprovalPollTargets.unregister({
-      accountId,
-      conversation: entry.conversation,
-      pollGuid: entry.poll.pollGuid,
-      optionDecisions: entry.poll.optionDecisions,
-    });
+    deletions.push(
+      iMessageApprovalPollTargets.unregister({
+        accountId,
+        conversation: entry.conversation,
+        pollGuid: entry.poll.pollGuid,
+        optionDecisions: entry.poll.optionDecisions,
+      }),
+    );
   }
+  await Promise.all(deletions);
 }
 
 function shouldThreadApprovalUpdate(to: string): boolean {
@@ -419,14 +431,14 @@ function shouldThreadApprovalUpdate(to: string): boolean {
 
 const eagerlyBoundApprovalEntries = new WeakSet<PendingIMessageApprovalEntry>();
 
-function bindIMessageApprovalEntry(params: {
+async function bindIMessageApprovalEntry(params: {
   entry: PendingIMessageApprovalEntry;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   expiresAtMs: number;
   pollTargetWasRegisteredDuringDelivery?: boolean;
-}): true | null {
+}): Promise<true | null> {
   const accountId = params.entry.accountId?.trim();
   if (!accountId) {
     log.error(
@@ -441,9 +453,9 @@ function bindIMessageApprovalEntry(params: {
     );
     return null;
   }
-  const reactionBound =
+  const reactionRegistrations =
     params.entry.poll && !params.entry.reactionFallbackVisible
-      ? false
+      ? []
       : [params.entry.messageId, params.entry.hintMessageId]
           .filter((messageId): messageId is string => Boolean(messageId))
           .map((messageId) =>
@@ -456,9 +468,8 @@ function bindIMessageApprovalEntry(params: {
               allowedDecisions: params.allowedDecisions,
               ttlMs,
             }),
-          )
-          .some(Boolean);
-  const pollBound = params.entry.poll
+          );
+  const pollRegistration = params.entry.poll
     ? params.pollTargetWasRegisteredDuringDelivery ||
       iMessageApprovalPollTargets.register({
         accountId,
@@ -470,7 +481,11 @@ function bindIMessageApprovalEntry(params: {
         expiresAtMs: params.expiresAtMs,
       })
     : false;
-  return reactionBound || pollBound ? true : null;
+  const [reactionTargets, pollBound] = await Promise.all([
+    Promise.all(reactionRegistrations),
+    pollRegistration,
+  ]);
+  return reactionTargets.some(Boolean) || pollBound ? true : null;
 }
 
 export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
@@ -480,7 +495,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
   true,
   IMessageFinalPayload
 >({
-  eventKinds: ["exec", "plugin"],
+  eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
     isConfigured: ({ context }) => Boolean(context),
     shouldHandle: ({ context }) => Boolean(context),
@@ -543,9 +558,14 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         // fallback visible until the send receipt confirms the actual transport.
         const reactionFallbackVisible = !expectPoll || targetTransport !== "imessage";
         const promptText = reactionFallbackVisible ? pendingPayload.text : pendingPayload.pollText;
+        const approvalPrompt: IMessageApprovalPromptBinding = {
+          approvalId: view.approvalId,
+          approvalKind: view.approvalKind,
+          allowedDecisions: pendingPayload.allowedDecisions,
+        };
         const result = await sendMessageIMessage(preparedTarget.to, promptText, {
           config: cfg,
-          ...(reactionFallbackVisible ? { approvalKind: view.approvalKind } : {}),
+          ...(reactionFallbackVisible ? { approvalPrompt } : {}),
           // Approval delivery is host-originated: the target comes from the
           // approval's own routing (origin session or a configured approver),
           // never from model input. Attest that so #99905's conversation-read
@@ -587,7 +607,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
                 target: preparedTarget,
                 promptMessageId: result.guid,
                 fallbackText: pendingPayload.text,
-                approvalKind: view.approvalKind,
+                approvalPrompt,
               })
             : undefined;
         const entry: PendingIMessageApprovalEntry = {
@@ -606,7 +626,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
               }
             : {}),
         };
-        const bound = bindIMessageApprovalEntry({
+        const bound = await bindIMessageApprovalEntry({
           entry,
           approvalId: view.approvalId,
           approvalKind: view.approvalKind,
@@ -652,12 +672,8 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         expiresAtMs: view.expiresAtMs,
       });
     },
-    unbindPending: ({ entry }) => {
-      clearIMessageApprovalBindings(entry);
-    },
-    cancelDelivered: ({ entry }) => {
-      clearIMessageApprovalBindings(entry);
-    },
+    unbindPending: ({ entry }) => clearIMessageApprovalBindings(entry),
+    cancelDelivered: ({ entry }) => clearIMessageApprovalBindings(entry),
   },
   observe: {
     onDeliveryError: ({ error, request }) => {

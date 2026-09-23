@@ -6,11 +6,15 @@ import {
   resetDiagnosticEventsForTest,
 } from "../../infra/diagnostic-events.js";
 import { markTrustedOtelDiagnosticListener } from "../../infra/diagnostic-otel-listener-provenance.js";
-import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
+import type { Model } from "../../llm/types.js";
+import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 
 const hoisted = vi.hoisted(() => ({
-  prepareSimpleCompletionModelForAgent: vi.fn(),
+  acquireSimpleCompletionModelForAgent:
+    vi.fn<
+      typeof import("../../agents/simple-completion-runtime.js").acquireSimpleCompletionModelForAgent
+    >(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
   runIsolatedCompletion: vi.fn(),
@@ -21,7 +25,7 @@ vi.mock("../../agents/isolated-completion.js", () => ({
 }));
 
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: hoisted.prepareSimpleCompletionModelForAgent,
+  acquireSimpleCompletionModelForAgent: hoisted.acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel: hoisted.completeWithPreparedSimpleCompletionModel,
   resolveSimpleCompletionSelectionForAgent: hoisted.resolveSimpleCompletionSelectionForAgent,
 }));
@@ -68,7 +72,7 @@ function expectSingleCallFirstArg(mock: { mock: { calls: unknown[][] } }, expect
 describe("runtime.llm.complete isolated agent runtime", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
-    hoisted.prepareSimpleCompletionModelForAgent.mockReset();
+    hoisted.acquireSimpleCompletionModelForAgent.mockReset();
     hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
     hoisted.runIsolatedCompletion.mockReset();
@@ -116,7 +120,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
       authority: { allowComplete: true, preferredProfile: "openai:authority-bound" },
     });
 
-    const result = await withPluginRuntimePluginIdScope("llm-task", () =>
+    const result = await withPluginRuntimePluginScope({ pluginId: "llm-task" }, () =>
       llm.complete({
         messages: [{ role: "user", content: "Return JSON" }],
         systemPrompt: "JSON only",
@@ -167,6 +171,104 @@ describe("runtime.llm.complete isolated agent runtime", () => {
       },
     ]);
     expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "isolated unknown tiered total",
+      isolated: true,
+      tiered: true,
+      total: undefined,
+      expected: undefined,
+    },
+    {
+      name: "isolated flat estimate",
+      isolated: true,
+      tiered: false,
+      total: undefined,
+      expected: 0.3,
+    },
+    {
+      name: "isolated recorded total",
+      isolated: true,
+      tiered: true,
+      total: 0.125,
+      expected: 0.125,
+    },
+    { name: "isolated recorded zero", isolated: true, tiered: true, total: 0, expected: 0 },
+    {
+      name: "direct single-call tier",
+      isolated: false,
+      tiered: true,
+      total: undefined,
+      expected: 0.6,
+    },
+  ])("prices $name at its execution boundary", async ({ isolated, tiered, total, expected }) => {
+    const selection = { provider: "fixture", modelId: "priced", agentDir: "/tmp/main" };
+    const model = {
+      id: "priced",
+      name: "Priced",
+      provider: "fixture",
+      api: "openai-completions",
+      baseUrl: "https://fixture.invalid",
+      reasoning: false,
+      input: ["text" as const],
+      contextWindow: 1_000_000,
+      maxTokens: 1_000,
+      cost: {
+        input: 1,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        ...(tiered
+          ? {
+              tieredPricing: [
+                { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] as [number] },
+              ],
+            }
+          : {}),
+      },
+    } satisfies Model<"openai-completions">;
+    const usage = {
+      input: 300_000,
+      output: 200,
+      ...(total !== undefined ? { cost: { total } } : {}),
+    };
+    hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValueOnce(selection);
+    hoisted.runIsolatedCompletion.mockResolvedValueOnce({
+      text: "isolated",
+      provider: "fixture",
+      model: "priced",
+      owner: { kind: "cli", id: "fixture-cli" },
+      usage,
+    });
+    hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      async [Symbol.asyncDispose]() {},
+      selection,
+      model,
+      auth: { mode: "api-key", source: "fixture" },
+    });
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [{ type: "text", text: "direct" }],
+      stopReason: "stop",
+      usage,
+    });
+    const llm = createRuntimeLlm({
+      getConfig: () => ({
+        models: { providers: { fixture: { baseUrl: "https://fixture.invalid", models: [model] } } },
+      }),
+      authority: { allowComplete: true },
+    });
+
+    const messages: [{ role: "user"; content: string }] = [
+      { role: "user", content: "Return JSON" },
+    ];
+    const request: Parameters<typeof llm.complete>[0] = isolated
+      ? { messages, execution: { mode: "isolated-agent-runtime" } }
+      : { messages };
+    const result = await llm.complete(request);
+
+    expect(result.usage.costUsd).toBe(expected);
   });
 
   it("keeps usage-free isolated completions silent", async () => {
@@ -243,7 +345,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("model-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "model-plugin" }, () =>
         llm.complete({
           model: "openai/gpt-5.4@openai:model-profile",
           messages: [{ role: "user", content: "Return JSON" }],
@@ -273,7 +375,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
 
     await expect(
-      withPluginRuntimePluginIdScope("plain-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "plain-plugin" }, () =>
         llm.complete({
           messages: [{ role: "user", content: "Return JSON" }],
           execution: {
@@ -308,7 +410,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("plain-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "plain-plugin" }, () =>
         llm.complete({
           model: "openai/gpt-5.4@openai:work",
           messages: [{ role: "user", content: "Return JSON" }],
@@ -361,7 +463,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("model-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "model-plugin" }, () =>
         llm.complete({
           model: "openai/gpt-5.4",
           messages: [{ role: "user", content: "Return JSON" }],
@@ -409,6 +511,24 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     expect(hoisted.runIsolatedCompletion).not.toHaveBeenCalled();
     expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
   });
+
+  it.each([{ requiredAuthMode: "oauth" }, { responseFormat: { type: "json_object" } }])(
+    "rejects direct-provider controls before isolated dispatch: %j",
+    async (controls) => {
+      const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
+
+      await expect(
+        llm.complete({
+          messages: [{ role: "user", content: "Return JSON" }],
+          execution: { mode: "isolated-agent-runtime" },
+          ...controls,
+        } as unknown as Parameters<typeof llm.complete>[0]),
+      ).rejects.toMatchObject({ code: "LLM_ISOLATED_INPUT_REJECTED" });
+      expect(hoisted.runIsolatedCompletion).not.toHaveBeenCalled();
+      expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([2_147_483_648, Number.NaN])("rejects invalid isolated timeout %s", async (timeoutMs) => {
     const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });

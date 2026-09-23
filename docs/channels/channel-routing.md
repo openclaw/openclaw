@@ -1,5 +1,5 @@
 ---
-summary: "Routing rules per channel (WhatsApp, Telegram, Discord, Slack) and shared context"
+summary: "How OpenClaw picks an agent and session for each inbound message, and how replies route back"
 read_when:
   - Changing channel routing or inbox behavior
 title: "Channel routing"
@@ -28,11 +28,16 @@ Explicit outbound targets may include a provider prefix, such as `telegram:123` 
 
 Target-kind and service prefixes such as `channel:<id>`, `user:<id>`, `room:<id>`, `thread:<id>`, `imessage:<handle>`, and `sms:<number>` stay inside the selected channel's grammar. They do not select the provider by themselves.
 
+Plugin send receipts that report failure, suppression, or dry run leave the
+conversation's stored route and delivery transcript unchanged. Confirmed partial
+sends can establish a route, but requested content is not mirrored as fully
+delivered.
+
 ## Session key shapes (examples)
 
 Direct messages collapse to the agent's **main** session by default:
 
-- `agent:<agentId>:<mainKey>` (default: `agent:main:main`)
+- `agent:<agentId>:main` (for example: `agent:main:main`)
 
 `session.dmScope` controls DM collapsing: `main` (default) shares one main
 session, while `per-peer`, `per-channel-peer`, and `per-account-channel-peer`
@@ -43,10 +48,16 @@ Even when direct-message conversation history is shared with main, sandbox and
 tool policy use a derived per-account direct-chat runtime key for external DMs
 so channel-originated messages are not treated like local main-session runs.
 
-Groups and channels remain isolated per channel:
+With the default `session.groupScope: "per-group"`, groups and channels remain
+isolated per channel:
 
 - Groups: `agent:<agentId>:<channel>:group:<id>`
 - Channels/rooms: `agent:<agentId>:<channel>:channel:<id>`
+
+Set `session.groupScope: "main"` to route all non-direct peers into the agent's
+main session, or use `bindings[].session.groupScope` for selected rooms. The
+binding override wins over the global value. This changes shared context only;
+mention gating and replies still use the originating group or channel.
 
 Threads:
 
@@ -80,7 +91,7 @@ does not create a route-only session entry just because a message was observed.
 
 ## Routing rules (how an agent is chosen)
 
-Routing picks **one agent** for each inbound message:
+Ordinary routing picks **one agent** for each inbound message:
 
 1. **Exact peer match** (`bindings` with `peer.kind` + `peer.id`).
 2. **Parent peer match** (thread inheritance).
@@ -90,7 +101,9 @@ Routing picks **one agent** for each inbound message:
 6. **Team match** (Slack) via `teamId`.
 7. **Account match** (`accountId` on the channel).
 8. **Channel match** (any account on that channel, `accountId: "*"`).
-9. **Default agent** (`agents.entries.*.default`, else first list entry, fallback to `main`).
+9. **Fallback owner**: an owner supplied by the caller, otherwise the sole configured agent or a retained legacy owner. Multiple agents without an owner require a matching binding; routing does not pick the first roster entry.
+
+Raw legacy default markers and the `main` fallback for raw configurations without an agent roster remain supported for compatibility.
 
 When a binding includes multiple match fields (`peer`, `guildId`, `teamId`, `roles`), **all provided fields must match** for that binding to apply.
 
@@ -98,21 +111,39 @@ The matched agent determines which workspace and session store are used.
 
 ## Broadcast groups (run multiple agents)
 
-Broadcast groups let you run **multiple agents** for the same peer **when OpenClaw would normally reply** (for example: in WhatsApp groups, after mention/activation gating).
-
-Config:
+Agent group threads use the top-level `broadcast` config to run several agents
+for an admitted inbound message. A qualified `"<channel>:<peerId>"` key takes
+precedence over an unqualified WhatsApp peer key. Ordinary routing still
+provides the conversation route; the coordinator gives each participant its
+own agent session for that channel, account, peer, and thread.
 
 ```json5
 {
   broadcast: {
     strategy: "parallel",
+    "telegram:-100123": {
+      agents: ["reviewer", "writer"],
+      maxRounds: 2,
+      maxTurns: 4,
+    },
+    "slack:C0123": ["support", "reviewer"],
     "120363403215116621@g.us": ["alfred", "baerbel"],
-    "+15555550123": ["support", "logger"],
   },
 }
 ```
 
-See: [Broadcast Groups](/channels/broadcast-groups).
+Qualified entries default to explicit mention selection, one round, and one
+turn per configured agent. `maxTurns` bounds participant runs started across
+all rounds, not physical platform messages. Legacy WhatsApp arrays retain
+single-pass fan-out to all listed agents.
+
+Channel allowlists still apply. On Discord, Slack, and Telegram, an explicit
+mention of any qualified participant can satisfy the room’s mention gate.
+Configured ACP bindings remain exclusive and bypass group-thread fan-out.
+
+See [Broadcast groups](/channels/broadcast-groups) for selection, continuation
+eligibility, budgets, and participant labeling. Control UI does not yet offer a
+dedicated team-thread session.
 
 ## Config overview
 
@@ -134,32 +165,45 @@ Example:
   },
   bindings: [
     { match: { channel: "slack", teamId: "T123" }, agentId: "support" },
-    { match: { channel: "telegram", peer: { kind: "group", id: "-100123" } }, agentId: "support" },
+    {
+      match: { channel: "slack", peer: { kind: "channel", id: "C0123TEAM" } },
+      agentId: "support",
+      session: { groupScope: "main" },
+    },
   ],
 }
 ```
 
 ## Session storage
 
-Runtime session rows live in each agent's SQLite database under the state
-directory (default `~/.openclaw`):
+Runtime session rows and transcripts live in each agent's SQLite database under
+the state directory (default `~/.openclaw`):
 
 - `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
 
 Older installs may have legacy transcript JSONL files and a `sessions.json` row
-store under `~/.openclaw/agents/<agentId>/sessions/`. Gateway startup and
-`openclaw doctor --fix` import hot legacy rows/history into SQLite
-automatically. Use `openclaw doctor --session-sqlite inspect
+store under `~/.openclaw/agents/<agentId>/sessions/`. To import that history into
+SQLite, stop the Gateway, back up its state, and run `openclaw doctor --fix`
+before restarting it. Gateway startup does not import legacy session files: if
+it finds a legacy store, it refuses readiness and prints the Doctor command for
+the active profile. Use `openclaw doctor --session-sqlite inspect
 --session-sqlite-all-agents` and the
-[Doctor](/cli/doctor#session-sqlite-migration) validation sequence when you need
-explicit migration evidence.
-You can still select a legacy store path via `session.store` and `{agentId}`
-templating for migration and offline-maintenance workflows.
+[Doctor](/cli/doctor#session-sqlite-migration) migration sequence for inspection
+and validation.
 
-Gateway and ACP session discovery also scans disk-backed agent stores under the
-default `agents/` root and under templated `session.store` roots. Discovered
-stores must stay inside that resolved agent root and use a regular legacy
-`sessions.json` file. Symlinks and out-of-root paths are ignored.
+`session.store` supports `{agentId}` templating. At runtime, a legacy store path
+selects its corresponding SQLite database; the JSON file itself is only a
+migration input or an explicit offline-maintenance target.
+
+Gateway session discovery can include on-disk stores under the default `agents/`
+root and templated `session.store` roots that use the
+`agents/<agentId>/sessions/sessions.json` layout. It recognizes the corresponding
+`agent/openclaw-agent.sqlite` database without requiring a legacy `sessions.json`
+file. Discovered store files must be regular files within the resolved agent
+root; symlinked store files and out-of-root paths are ignored.
+
+ACP session discovery reads SQLite ACP metadata and joins it to the corresponding
+session entries.
 
 ## WebChat behavior
 
@@ -181,3 +225,5 @@ This is consistent across channels.
 - [Groups](/channels/groups)
 - [Broadcast groups](/channels/broadcast-groups)
 - [Pairing](/channels/pairing)
+- [Multi-agent routing](/concepts/multi-agent)
+- [Agent bindings](/concepts/agent-bindings)

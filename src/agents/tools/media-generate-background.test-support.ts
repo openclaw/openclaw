@@ -189,9 +189,12 @@ export function expectFallbackMediaAnnouncement({
     "deliverSubagentAnnouncement params",
   );
   expect(params.requesterSessionKey).toBe(requesterSessionKey);
-  const requesterOrigin = requireRecord(params.requesterOrigin, "requesterOrigin");
-  expect(requesterOrigin.channel).toBe(channel);
-  expect(requesterOrigin.to).toBe(to);
+  const requesterSessionOrigin = requireRecord(
+    params.requesterSessionOrigin,
+    "requesterSessionOrigin",
+  );
+  expect(requesterSessionOrigin.channel).toBe(channel);
+  expect(requesterSessionOrigin.to).toBe(to);
   expect(params.expectsCompletionMessage).toBe(true);
 
   const event = requireRecordArray(params.internalEvents, "internalEvents").find(

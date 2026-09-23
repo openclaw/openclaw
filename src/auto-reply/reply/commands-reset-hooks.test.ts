@@ -1,12 +1,18 @@
 // Tests reset hook emission and cleanup around reset commands.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { MsgContext } from "../templating.js";
+import { buildCommandContext } from "./commands-context.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { parseInlineDirectives } from "./directive-handling.parse.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 
 const triggerInternalHookMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const routeReplyMock = vi.hoisted(() =>
@@ -21,7 +27,7 @@ const routeReplyMock = vi.hoisted(() =>
 );
 const resetMocks = vi.hoisted(() => ({
   resetConfiguredBindingTargetInPlace: vi.fn().mockResolvedValue({ ok: true as const }),
-  resolveBoundAcpThreadSessionKey: vi.fn(() => undefined as string | undefined),
+  resolveBoundAcpThreadSessionKey: vi.fn(async (): Promise<string | undefined> => undefined),
 }));
 
 vi.mock("../../hooks/internal-hooks.js", () => ({
@@ -99,9 +105,10 @@ function buildResetParams(
       to: ctx.To ?? "bot",
       resetHookTriggered: false,
     },
-    directives: parseInlineDirectives(""),
+    directives: parseInlineSessionDirectives(""),
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:main:main",
+    agentId: "main",
     workspaceDir: "/tmp/openclaw-commands",
     defaultGroupActivation: () => "mention",
     resolvedVerboseLevel: "off",
@@ -147,7 +154,7 @@ describe("handleCommands reset hooks", () => {
     vi.clearAllMocks();
     clearBootstrapSnapshotSpy = vi.spyOn(bootstrapCache, "clearBootstrapSnapshot");
     resetMocks.resetConfiguredBindingTargetInPlace.mockResolvedValue({ ok: true });
-    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(undefined);
+    resetMocks.resolveBoundAcpThreadSessionKey.mockResolvedValue(undefined);
     triggerInternalHookMock.mockResolvedValue(undefined);
     routeReplyMock.mockResolvedValue({
       ok: true,
@@ -216,6 +223,34 @@ describe("handleCommands reset hooks", () => {
     }
   });
 
+  it.each(["/reset", "/reset soft"])(
+    "stops %s before reset effects when canceled during binding lookup",
+    async (command) => {
+      const lookup = createDeferred<string | undefined>();
+      const started = createDeferred();
+      const controller = new AbortController();
+      const reason = new Error("reset canceled during binding lookup");
+      resetMocks.resolveBoundAcpThreadSessionKey.mockImplementationOnce(() => {
+        started.resolve();
+        return lookup.promise;
+      });
+      const params = buildResetParams(command, {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      });
+      params.opts = { abortSignal: controller.signal };
+      const result = maybeHandleResetCommand(params);
+      const failure = expect(result).rejects.toBe(reason);
+      await started.promise;
+      controller.abort(reason);
+      lookup.resolve(command === "/reset" ? "agent:main:acp:bound" : undefined);
+      await failure;
+      expect(resetMocks.resetConfiguredBindingTargetInPlace).not.toHaveBeenCalled();
+      expect(triggerInternalHookMock).not.toHaveBeenCalled();
+      expect(params.command.softResetTriggered).toBeUndefined();
+    },
+  );
+
   it("uses gateway session reset for bound ACP sessions", async () => {
     resetMocks.resetConfiguredBindingTargetInPlace.mockResolvedValue({
       ok: true,
@@ -223,7 +258,7 @@ describe("handleCommands reset hooks", () => {
       sessionId: "session-after-acp-reset",
       storePath: "/tmp/claude-sessions.json",
     });
-    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(
+    resetMocks.resolveBoundAcpThreadSessionKey.mockResolvedValue(
       "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
     );
     const onSessionPrepared = vi.fn();
@@ -257,7 +292,7 @@ describe("handleCommands reset hooks", () => {
     });
     expect(result).toEqual({
       shouldContinue: false,
-      reply: { text: "✅ ACP session reset in place." },
+      reply: { text: "✅ ACP session reset in place.", isStatusNotice: true },
     });
     expect(triggerInternalHookMock).not.toHaveBeenCalled();
     expect(params.command.resetHookTriggered).toBe(true);
@@ -268,8 +303,30 @@ describe("handleCommands reset hooks", () => {
     });
   });
 
+  it("keeps a failed ACP reset as a failure status notice", async () => {
+    resetMocks.resetConfiguredBindingTargetInPlace.mockResolvedValueOnce({
+      ok: false,
+      error: "reset rejected",
+    });
+    resetMocks.resolveBoundAcpThreadSessionKey.mockResolvedValue("agent:main:acp:bound");
+    const params = buildResetParams("/reset", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+
+    expect(await maybeHandleResetCommand(params)).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ ACP session reset failed. Check /acp status and try again.",
+        isStatusNotice: true,
+      },
+    });
+    expect(params.command.resetHookTriggered).not.toBe(true);
+    expect(triggerInternalHookMock).not.toHaveBeenCalled();
+  });
+
   it("keeps tail dispatch after a bound ACP reset", async () => {
-    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(
+    resetMocks.resolveBoundAcpThreadSessionKey.mockResolvedValue(
       "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
     );
     const params = buildResetParams(
@@ -351,7 +408,7 @@ describe("handleCommands reset hooks", () => {
       expect(onObservedReplyDelivery).not.toHaveBeenCalled();
       expect(result).toEqual({
         shouldContinue: false,
-        reply: { text: "✅ New session started." },
+        reply: { text: "✅ New session started.", isStatusNotice: true },
       });
     },
   );
@@ -425,13 +482,16 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("marks soft reset turns and emits reset hooks", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-soft-reset-tombstone-"));
+    const storePath = path.join(tempDir, "sessions.json");
     const params = buildResetParams("/reset soft", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
-    params.sessionEntry = {
+    const sessionEntry: NonNullable<HandleCommandsParams["sessionEntry"]> = {
       sessionId: "session-1",
-      updatedAt: Date.now(),
+      lifecycleRevision: "soft-reset-revision",
+      updatedAt: 0,
       cliSessionIds: { "claude-cli": "cli-session-1" },
       cliSessionBindings: {
         "claude-cli": {
@@ -440,50 +500,192 @@ describe("handleCommands reset hooks", () => {
         },
       },
       claudeCliSessionId: "cli-session-1",
-    } as HandleCommandsParams["sessionEntry"];
+    };
+    params.sessionEntry = sessionEntry;
+    params.sessionStore = { [params.sessionKey]: sessionEntry };
+    params.storePath = storePath;
+    await replaceSessionEntry({ sessionKey: params.sessionKey, storePath }, sessionEntry);
 
-    const result = await maybeHandleResetCommand(params);
+    try {
+      const result = await maybeHandleResetCommand(params);
 
-    expect(result).toBeNull();
-    const event = firstHookEvent();
-    expectObjectFields(event, { type: "command", action: "reset" }, "hook event");
-    const context = requireRecord(event.context, "hook context");
-    expectObjectFields(context.previousSessionEntry, { sessionId: "session-1" }, "session entry");
-    expect(params.command.resetHookTriggered).toBe(true);
-    expect(params.command.softResetTriggered).toBe(true);
-    expect(params.command.softResetTail).toBe("");
-    expect(params.sessionEntry?.cliSessionIds).toBeUndefined();
-    expect(params.sessionEntry?.cliSessionBindings).toBeUndefined();
-    expect(params.sessionEntry?.claudeCliSessionId).toBeUndefined();
-    expect(clearBootstrapSnapshotSpy).toHaveBeenCalledWith("agent:main:main");
+      expect(result).toBeNull();
+      const event = firstHookEvent();
+      expectObjectFields(event, { type: "command", action: "reset" }, "hook event");
+      const context = requireRecord(event.context, "hook context");
+      expectObjectFields(context.previousSessionEntry, { sessionId: "session-1" }, "session entry");
+      expect(params.command.resetHookTriggered).toBe(true);
+      expect(params.command.softResetTriggered).toBe(true);
+      expect(params.command.softResetTail).toBe("");
+      expect(params.sessionEntry?.cliSessionIds).toBeUndefined();
+      expect(params.sessionEntry?.cliSessionBindings).toBeUndefined();
+      expect(params.sessionEntry?.claudeCliSessionId).toBeUndefined();
+      expect(
+        loadSessionEntry({ sessionKey: params.sessionKey, storePath })?.updatedAt,
+      ).toBeGreaterThan(0);
+      expect(clearBootstrapSnapshotSpy).toHaveBeenCalledWith("agent:main:main");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
-  it("requires operator.admin for internal /reset soft commands", async () => {
-    const params = buildResetParams(
-      "/reset soft",
-      {
-        commands: { text: true },
-        channels: { webchat: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
-      {
-        Provider: "webchat",
-        Surface: "webchat",
-        CommandAuthorized: true,
-        GatewayClientScopes: ["operator.write"],
-      },
-    );
-    params.command.isAuthorizedSender = true;
-    params.command.channel = "webchat";
-    params.command.channelId = "webchat";
-    params.command.surface = "webchat";
+  it.each<{
+    name: string;
+    provider?: string;
+    surface: string;
+    scopes?: string[];
+    allowed: boolean;
+    body?: string;
+    source?: "text" | "native";
+    originatingChannel?: string;
+    commandAuthorized?: boolean;
+    silent?: boolean;
+  }>([
+    {
+      name: "write scope",
+      provider: "webchat",
+      surface: "webchat",
+      scopes: ["operator.write"],
+      allowed: false,
+    },
+    {
+      name: "admin scope",
+      provider: "webchat",
+      surface: "webchat",
+      scopes: ["operator.admin"],
+      allowed: true,
+    },
+    {
+      name: "legacy missing scopes",
+      provider: "webchat",
+      surface: "webchat",
+      scopes: undefined,
+      allowed: true,
+    },
+    {
+      name: "legacy empty scopes",
+      provider: "webchat",
+      surface: "webchat",
+      scopes: [],
+      allowed: true,
+    },
+    {
+      name: "internal Provider remains authoritative",
+      provider: "webchat",
+      surface: "telegram",
+      scopes: ["operator.write"],
+      allowed: false,
+    },
+    {
+      name: "external Provider remains authoritative",
+      provider: "telegram",
+      surface: "webchat",
+      scopes: ["operator.write"],
+      allowed: true,
+    },
+    {
+      name: "missing Provider uses internal Surface",
+      provider: undefined,
+      surface: "webchat",
+      scopes: ["operator.write"],
+      allowed: false,
+    },
+    ...["/new Create a note", "/reset Create a note", "/reset soft Create a note"].flatMap((body) =>
+      (["text", "native"] as const).flatMap((source) => [
+        {
+          name: `${source} ${body} forwarded from Gateway to external origin`,
+          body,
+          source,
+          provider: "webchat",
+          surface: "webchat",
+          originatingChannel: "telegram",
+          scopes: ["operator.write"],
+          allowed: false,
+          silent: true,
+        },
+        {
+          name: `${source} ${body} from external Provider with internal Surface and origin`,
+          body,
+          source,
+          provider: "telegram",
+          surface: "webchat",
+          originatingChannel: "webchat",
+          commandAuthorized: false,
+          allowed: false,
+          silent: true,
+        },
+      ]),
+    ),
+  ])(
+    "preserves reset authorization and denial routing: $name",
+    async ({
+      provider,
+      surface,
+      scopes,
+      allowed,
+      body = "/reset soft",
+      source = "text",
+      originatingChannel,
+      commandAuthorized = true,
+      silent = false,
+    }) => {
+      const params = buildResetParams(
+        body,
+        {
+          commands: { text: true },
+        } as OpenClawConfig,
+        {
+          Provider: provider,
+          Surface: surface,
+          OriginatingChannel: originatingChannel,
+          OriginatingTo: originatingChannel ? "chat:reset-test" : undefined,
+          ExplicitDeliverRoute: originatingChannel !== undefined,
+          CommandSource: source,
+          CommandAuthorized: commandAuthorized,
+          GatewayClientScopes: scopes,
+        },
+      );
+      params.command = buildCommandContext({
+        ctx: params.ctx,
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        isGroup: false,
+        triggerBodyNormalized: body,
+        commandAuthorized,
+      });
+      params.sessionEntry = {
+        sessionId: "existing-soft-session",
+        lifecycleRevision: "existing-soft-generation",
+        updatedAt: 1,
+        cliSessionIds: { "claude-cli": "existing-cli-binding" },
+      };
+      const before = structuredClone(params.sessionEntry);
 
-    const result = await maybeHandleResetCommand(params);
+      const result = await maybeHandleResetCommand(params);
 
-    expect(result).toEqual({ shouldContinue: false });
-    expect(triggerInternalHookMock).not.toHaveBeenCalled();
-    expect(params.command.softResetTriggered).not.toBe(true);
-    expect(clearBootstrapSnapshotSpy).not.toHaveBeenCalled();
-  });
+      if (allowed) {
+        expect(result).toBeNull();
+      } else if (silent) {
+        expect(result).toStrictEqual({ shouldContinue: false });
+      } else {
+        expect(result?.shouldContinue).toBe(false);
+        expect(result?.reply?.text).toMatch(/not authorized/i);
+        expect(result?.reply?.text).toContain("operator.admin");
+      }
+      expect(params.sessionEntry.sessionId).toBe(before.sessionId);
+      expect(params.sessionEntry.lifecycleRevision).toBe(before.lifecycleRevision);
+      expect(params.command.softResetTriggered === true).toBe(allowed);
+      expect(triggerInternalHookMock).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(clearBootstrapSnapshotSpy).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(routeReplyMock).not.toHaveBeenCalled();
+      expect(resetMocks.resetConfiguredBindingTargetInPlace).not.toHaveBeenCalled();
+      if (allowed) {
+        expect(params.sessionEntry.cliSessionIds).toBeUndefined();
+      } else {
+        expect(params.sessionEntry).toEqual(before);
+      }
+    },
+  );
 
   it("clears both sessionStore and sessionEntry when they are distinct objects", async () => {
     const params = buildResetParams("/reset soft", {
@@ -529,7 +731,7 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("rejects soft reset for bound ACP sessions", async () => {
-    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(
+    resetMocks.resolveBoundAcpThreadSessionKey.mockResolvedValue(
       "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
     );
     const params = buildResetParams(
@@ -565,7 +767,7 @@ describe("handleCommands reset hooks", () => {
 
     expect(result).toEqual({
       shouldContinue: false,
-      reply: { text: "✅ Session reset." },
+      reply: { text: "✅ Session reset.", isStatusNotice: true },
     });
     expectObjectFields(firstHookEvent(), { type: "command", action: "reset" }, "hook event");
   });
@@ -580,7 +782,7 @@ describe("handleCommands reset hooks", () => {
 
     expect(result).toEqual({
       shouldContinue: false,
-      reply: { text: "✅ New session started." },
+      reply: { text: "✅ New session started.", isStatusNotice: true },
     });
     expectObjectFields(firstHookEvent(), { type: "command", action: "new" }, "hook event");
   });

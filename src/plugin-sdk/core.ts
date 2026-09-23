@@ -1,7 +1,9 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ResolvedConfiguredAcpBinding } from "../acp/persistent-bindings.types.js";
-import { buildChatChannelMetaById } from "../channels/chat-meta-shared.js";
+import {
+  findChatChannelMeta,
+  getChatChannelMeta as getBuiltInChatChannelMeta,
+} from "../channels/chat-meta.js";
 import type { ChatChannelId } from "../channels/ids.js";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
@@ -18,7 +20,7 @@ import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
 import type {
   ChannelMessagingAdapter,
   ChannelOutboundSessionRoute,
-  ChannelPollResult,
+  ChannelSecurityDmPolicy,
   ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -26,9 +28,7 @@ import type { ChannelMeta } from "../channels/plugins/types.public.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
-import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { normalizeOutboundThreadId } from "../infra/outbound/thread-id.js";
-import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
@@ -36,6 +36,7 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
+import { createAttachedChannelResultAdapter } from "./channel-send-result.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
 export type {
   AgentPromptGuidance,
@@ -279,9 +280,9 @@ export {
   readNumberParam,
   readReactionParams,
   readStringArrayParam,
-  readStringParam,
+  readToolStringParam as readStringParam,
 } from "../agents/tools/common.js";
-export { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+export { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 export { isTrustedProxyAddress, resolveClientIp } from "../gateway/net.js";
 export { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 export { resolveConfiguredAcpBindingRecord } from "../acp/persistent-bindings.resolve.js";
@@ -292,7 +293,7 @@ export async function ensureConfiguredAcpBindingReady(params: {
   configuredBinding: ResolvedConfiguredAcpBinding | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const runtime = await import("../acp/persistent-bindings.lifecycle.js");
-  return runtime.ensureConfiguredAcpBindingReady(params);
+  return runtime.ensureConfiguredAcpBindingReadyCore(params);
 }
 
 export {
@@ -315,30 +316,11 @@ export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
 >[0];
 
-let cachedSdkChatChannelMeta:
-  | {
-      cacheKey: string;
-      metaById: ReturnType<typeof buildChatChannelMetaById>;
-    }
-  | undefined;
-
-function resolveSdkChatChannelMeta(id: string) {
-  const cacheKey = resolveBundledPluginsDir(process.env) ?? "";
-  if (cachedSdkChatChannelMeta?.cacheKey !== cacheKey) {
-    cachedSdkChatChannelMeta = {
-      cacheKey,
-      metaById: buildChatChannelMetaById(),
-    };
-  }
-  // Optional by design: createChannelPluginBase serves external plugin ids that
-  // are never in the bundled catalog; their meta comes entirely from params.meta.
-  return cachedSdkChatChannelMeta.metaById[id];
+function getChatChannelMetaForSdk(id: ChatChannelId): ChannelMeta {
+  return getBuiltInChatChannelMeta(id);
 }
 
-/** Resolve bundled chat channel metadata while respecting the active bundled-plugin directory. */
-export function getChatChannelMeta(id: ChatChannelId): ChannelMeta {
-  return expectDefined(resolveSdkChatChannelMeta(id), `chat channel metadata: ${id}`);
-}
+export { getChatChannelMetaForSdk as getChatChannelMeta };
 
 /** Remove one of the known provider prefixes from a free-form target string. */
 export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
@@ -543,21 +525,7 @@ type CreatedChannelPluginBase<TResolvedAccount> = Pick<
   Partial<
     Pick<
       ChannelPlugin<TResolvedAccount>,
-      | "setupWizard"
-      | "setup"
-      | "setupContract"
-      | "capabilities"
-      | "commands"
-      | "doctor"
-      | "agentPrompt"
-      | "streaming"
-      | "reload"
-      | "gatewayMethods"
-      | "gatewayMethodDescriptors"
-      | "configSchema"
-      | "config"
-      | "security"
-      | "groups"
+      Exclude<keyof CreateChannelPluginBaseOptions<TResolvedAccount>, "id" | "meta">
     >
   >;
 
@@ -627,12 +595,12 @@ export function defineSetupPluginEntry<TPlugin>(plugin: TPlugin) {
 
 type ChatChannelPluginBase<TResolvedAccount, Probe, Audit> = Omit<
   ChannelPlugin<TResolvedAccount, Probe, Audit>,
-  "security" | "pairing" | "threading" | "outbound"
+  "capabilities" | "security" | "pairing" | "threading" | "outbound"
 > &
   Partial<
     Pick<
       ChannelPlugin<TResolvedAccount, Probe, Audit>,
-      "security" | "pairing" | "threading" | "outbound"
+      "capabilities" | "security" | "pairing" | "threading" | "outbound"
     >
   >;
 
@@ -648,8 +616,10 @@ type ChatChannelSecurityOptions<TResolvedAccount extends { accountId?: string | 
     approveChannelId?: string;
     approveHint?: string;
     normalizeEntry?: (raw: string) => string;
+    classifyEntryAuthentication?: ChannelSecurityDmPolicy["classifyEntryAuthentication"];
     inheritSharedDefaultsFromDefaultAccount?: boolean;
   };
+  dmRouting?: ChannelSecurityAdapter<TResolvedAccount>["dmRouting"];
   collectWarnings?: ChannelSecurityAdapter<TResolvedAccount>["collectWarnings"];
   collectAuditFindings?: ChannelSecurityAdapter<TResolvedAccount>["collectAuditFindings"];
 };
@@ -689,46 +659,8 @@ type ChatChannelThreadingOptions<TResolvedAccount> =
 
 type ChatChannelAttachedOutboundOptions = {
   base: Omit<ChannelOutboundAdapter, "sendText" | "sendMedia" | "sendPoll">;
-  attachedResults: {
-    channel: string;
-    sendText?: (
-      ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0],
-    ) => MaybePromise<Omit<OutboundDeliveryResult, "channel">>;
-    sendMedia?: (
-      ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0],
-    ) => MaybePromise<Omit<OutboundDeliveryResult, "channel">>;
-    sendPoll?: (
-      ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0],
-    ) => MaybePromise<Omit<ChannelPollResult, "channel">>;
-  };
+  attachedResults: Parameters<typeof createAttachedChannelResultAdapter>[0];
 };
-
-type MaybePromise<T> = T | Promise<T>;
-
-function createInlineAttachedChannelResultAdapter(
-  params: ChatChannelAttachedOutboundOptions["attachedResults"],
-) {
-  return {
-    sendText: params.sendText
-      ? async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0]) => ({
-          channel: params.channel,
-          ...(await params.sendText!(ctx)),
-        })
-      : undefined,
-    sendMedia: params.sendMedia
-      ? async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0]) => ({
-          channel: params.channel,
-          ...(await params.sendMedia!(ctx)),
-        })
-      : undefined,
-    sendPoll: params.sendPoll
-      ? async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0]) => ({
-          channel: params.channel,
-          ...(await params.sendPoll!(ctx)),
-        })
-      : undefined,
-  } satisfies Pick<ChannelOutboundAdapter, "sendText" | "sendMedia" | "sendPoll">;
-}
 
 function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: string | null }>(
   security:
@@ -757,9 +689,11 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
         approveChannelId: security.dm.approveChannelId,
         approveHint: security.dm.approveHint,
         normalizeEntry: security.dm.normalizeEntry,
+        classifyEntryAuthentication: security.dm.classifyEntryAuthentication,
         inheritSharedDefaultsFromDefaultAccount:
           security.dm.inheritSharedDefaultsFromDefaultAccount,
       }),
+    ...(security.dmRouting ? { dmRouting: security.dmRouting } : {}),
     ...(security.collectWarnings ? { collectWarnings: security.collectWarnings } : {}),
     ...(security.collectAuditFindings
       ? { collectAuditFindings: security.collectAuditFindings }
@@ -815,7 +749,7 @@ function resolveChatChannelOutbound(
   }
   return {
     ...outbound.base,
-    ...createInlineAttachedChannelResultAdapter(outbound.attachedResults),
+    ...createAttachedChannelResultAdapter(outbound.attachedResults),
   };
 }
 
@@ -838,6 +772,7 @@ export function createChatChannelPlugin<
 }): ChannelPlugin<TResolvedAccount, Probe, Audit> {
   return {
     ...params.base,
+    capabilities: params.base.capabilities ?? { chatTypes: ["direct"] },
     conversationBindings: {
       supportsCurrentConversationBinding: true,
       ...params.base.conversationBindings,
@@ -856,7 +791,7 @@ export function createChannelPluginBase<TResolvedAccount>(
   return {
     id: params.id,
     meta: {
-      ...resolveSdkChatChannelMeta(params.id),
+      ...findChatChannelMeta(params.id as ChatChannelId),
       ...params.meta,
       id: params.id,
     },

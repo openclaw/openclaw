@@ -1,13 +1,37 @@
 // Resolves plugin enablement state from config and channel context.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import { normalizePluginId, normalizePluginsConfig } from "./config-state.js";
+import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
 
 type PluginEnableOptions = {
   updateChannelConfig?: boolean;
 };
+
+/** Keep install policy while staging a plugin whose required settings are not configured yet. */
+export function prepareConfigForDisabledInstall(
+  config: OpenClawConfig,
+  pluginId: string,
+): OpenClawConfig {
+  const entry = config.plugins?.entries?.[pluginId];
+  const policy = isRecord(entry) ? { ...entry } : {};
+  delete policy.config;
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      entries: {
+        ...config.plugins?.entries,
+        [pluginId]: { ...policy, enabled: false },
+      },
+    },
+  };
+}
 
 /** Result of enabling a plugin in config. */
 export type PluginEnableResult = {
@@ -62,4 +86,66 @@ export function enableExplicitlySelectedPluginInConfig(
     result.pluginId,
     options,
   );
+}
+
+/** Review a managed plugin before an explicit setup action activates it. */
+export async function enablePluginWithCapabilityConsent(
+  cfg: OpenClawConfig,
+  pluginId: string,
+  options: PluginEnableOptions & {
+    env?: NodeJS.ProcessEnv;
+    workspaceDir?: string;
+    onCapabilityConsent?: PluginCapabilityConsentHandler;
+    beforePersistentEffect?: () => void | Promise<void>;
+  } = {},
+): Promise<PluginEnableResult> {
+  const result = enableExplicitlySelectedPluginInConfig(cfg, pluginId, options);
+  if (!result.enabled) {
+    return result;
+  }
+  try {
+    const { withPluginLifecycleLease } = await import("./plugin-lifecycle-lease.js");
+    return await withPluginLifecycleLease({ env: options.env }, async () => {
+      const { loadInstalledPluginIndexInstallRecords } =
+        await import("./installed-plugin-index-records.js");
+      const records = await loadInstalledPluginIndexInstallRecords({ env: options.env });
+      if (Object.keys(records).length === 0) {
+        return result;
+      }
+      const { resolvePluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
+      const metadata = resolvePluginMetadataSnapshot({
+        config: cfg,
+        env: options.env,
+        workspaceDir: options.workspaceDir,
+        allowCurrent: false,
+      });
+      const id = metadata.normalizePluginId(result.pluginId);
+      const installed = metadata.index.plugins.find((plugin) => plugin.pluginId === id);
+      // Compare the original state, never the synthetic enabled config. Legacy
+      // plugins already running remain available without retroactive consent.
+      if (installed && !installed.enabled && installed.origin !== "bundled") {
+        const { resolvePluginCapabilityConsent } = await import("./capability-consent.js");
+        await resolvePluginCapabilityConsent({
+          config: cfg,
+          pluginId: id,
+          env: options.env,
+          metadata,
+          onCapabilityConsent: options.onCapabilityConsent,
+          beforePersistentEffect: options.beforePersistentEffect,
+        });
+      }
+      return result;
+    });
+  } catch (error) {
+    // A declined review is a policy result; prompt navigation and guard failures must unwind.
+    if (!(error instanceof ManagedPluginLifecycleError)) {
+      throw error;
+    }
+    return {
+      config: cfg,
+      pluginId: result.pluginId,
+      enabled: false,
+      reason: sanitizeTerminalText(error.message),
+    };
+  }
 }

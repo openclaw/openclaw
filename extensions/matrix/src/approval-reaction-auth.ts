@@ -1,10 +1,8 @@
-// Matrix plugin module implements approval reaction auth behavior.
 import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-auth-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { normalizeMatrixApproverId } from "./approval-ids.js";
-import { resolveMatrixAccount } from "./matrix/accounts.js";
+import { resolveDefaultMatrixAccountId, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import type { CoreConfig } from "./types.js";
-
-type MatrixApprovalReactionKind = "exec" | "plugin";
 
 function normalizeMatrixExecApproverId(value: string | number): string | undefined {
   const normalized = normalizeMatrixApproverId(value);
@@ -14,9 +12,12 @@ function normalizeMatrixExecApproverId(value: string | number): string | undefin
 function getMatrixApprovalReactionApprovers(params: {
   cfg: CoreConfig;
   accountId?: string | null;
-  approvalKind: MatrixApprovalReactionKind;
+  approvalKind: ChannelApprovalKind;
 }): string[] {
-  const account = resolveMatrixAccount(params).config;
+  const account = resolveMatrixAccountConfig({
+    cfg: params.cfg,
+    accountId: params.accountId ?? resolveDefaultMatrixAccountId(params.cfg),
+  });
   if (params.approvalKind === "plugin") {
     return resolveApprovalApprovers({
       allowFrom: account.dm?.allowFrom,
@@ -34,7 +35,7 @@ export function isMatrixApprovalReactionAuthorizedSender(params: {
   cfg: CoreConfig;
   accountId?: string | null;
   senderId?: string | null;
-  approvalKind: MatrixApprovalReactionKind;
+  approvalKind: ChannelApprovalKind;
 }): boolean {
   const normalizedSenderId = params.senderId
     ? normalizeMatrixApproverId(params.senderId)

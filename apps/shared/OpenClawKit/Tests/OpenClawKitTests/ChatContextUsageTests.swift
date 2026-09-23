@@ -191,13 +191,15 @@ struct ChatContextUsageTests {
 
     @Test @MainActor func `view model resolves context totals through a selected global alias`() {
         let vm = OpenClawChatViewModel(
-            sessionKey: "global",
+            sessionKey: "agent:ops:main",
             transport: ContextUsageTestTransport(),
-            activeAgentId: "ops")
+            activeAgentId: "main",
+            sessionRoutingContract: "global|main|main")
         vm.sessions = [OpenClawChatSessionEntry(
-            key: "agent:ops:global",
+            key: "global",
             kind: nil,
             displayName: nil,
+            agentId: "ops",
             surface: nil,
             subject: nil,
             room: nil,

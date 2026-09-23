@@ -2,13 +2,10 @@
 // agent reports a model id. This includes custom models.json entries.
 
 import { getRuntimeConfig } from "../config/config.js";
-import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
-import { resolveAgentDir, resolveDefaultAgentId } from "./agent-scope.js";
 import {
   applyConfiguredContextWindows,
-  type ContextWindowCatalog,
   prepareContextWindowCaches,
   prepareDiscoveredContextTokenCache,
 } from "./context-cache-projection.js";
@@ -22,8 +19,9 @@ import {
 } from "./context-cache.js";
 import {
   type ContextTokenResolutionParams,
+  type ModelContextTokenProjection,
   type ModelsConfig,
-  resolveContextTokensForModelFromCache,
+  resolveModelContextTokenProjectionFromCache,
 } from "./context-resolution.js";
 import {
   beginContextWindowCacheRefresh,
@@ -43,10 +41,6 @@ export {
   applyConfiguredContextWindows,
   applyDiscoveredContextWindows,
 } from "./context-cache-projection.js";
-type ContextWindowCatalogOwner = {
-  config: OpenClawConfig;
-  modelCatalog: ContextWindowCatalog;
-};
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,
@@ -89,10 +83,7 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   }
 }
 
-function ensureContextWindowCacheLoadedFromOwner(params: {
-  cfgOverride?: OpenClawConfig;
-  catalogOwner?: ContextWindowCatalogOwner;
-}): Promise<void> {
+export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Promise<void> {
   const generation = CONTEXT_WINDOW_RUNTIME_STATE.generation;
   if (
     CONTEXT_WINDOW_RUNTIME_STATE.loadPromise &&
@@ -101,11 +92,9 @@ function ensureContextWindowCacheLoadedFromOwner(params: {
     return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   }
 
-  const cfg = params.catalogOwner
-    ? primeConfiguredContextWindowsFromConfig(params.catalogOwner.config)
-    : params.cfgOverride
-      ? primeConfiguredContextWindowsFromConfig(params.cfgOverride)
-      : primeConfiguredContextWindows();
+  const cfg = cfgOverride
+    ? primeConfiguredContextWindowsFromConfig(cfgOverride)
+    : primeConfiguredContextWindows();
   if (!cfg) {
     return Promise.resolve();
   }
@@ -116,22 +105,16 @@ function ensureContextWindowCacheLoadedFromOwner(params: {
       }
       let stagedTokenCache = new Map<string, number>();
       try {
-        const catalogResult = params.catalogOwner
-          ? ({ status: "fulfilled" as const, value: params.catalogOwner } as const)
-          : await (async () => {
-              const { loadPreparedModelCatalogOwnerSnapshot } =
-                await loadPreparedModelCatalogRuntime();
-              const defaultAgentId = resolveDefaultAgentId(cfg);
-              return await loadPreparedModelCatalogOwnerSnapshot({
-                config: cfg,
-                agentId: defaultAgentId,
-                agentDir: resolveAgentDir(cfg, defaultAgentId),
-                readOnly: true,
-              }).then(
-                (value) => ({ status: "fulfilled" as const, value }),
-                (reason: unknown) => ({ status: "rejected" as const, reason }),
-              );
-            })();
+        const catalogResult = await (async () => {
+          const { loadPreparedModelCatalogOwnerSnapshot } = await loadPreparedModelCatalogRuntime();
+          return await loadPreparedModelCatalogOwnerSnapshot({
+            config: cfg,
+            readOnly: true,
+          }).then(
+            (value) => ({ status: "fulfilled" as const, value }),
+            (reason: unknown) => ({ status: "rejected" as const, reason }),
+          );
+        })();
         if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
           return;
         }
@@ -160,10 +143,6 @@ function ensureContextWindowCacheLoadedFromOwner(params: {
   return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
 }
 
-export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Promise<void> {
-  return ensureContextWindowCacheLoadedFromOwner({ cfgOverride });
-}
-
 /**
  * Reuse the Gateway's published catalog generation. Omitting the Gateway binding
  * falls through to a read-only owner whose key hashes the full model config.
@@ -188,11 +167,8 @@ export async function prewarmContextWindowCacheAfterReady(params: {
     if (shouldStop()) {
       return;
     }
-    const defaultAgentId = resolveDefaultAgentId(params.config);
     const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
       config: params.config,
-      agentId: defaultAgentId,
-      agentDir: resolveAgentDir(params.config, defaultAgentId),
       allowGatewaySubagentBinding: true,
     });
     if (!owner) {
@@ -316,20 +292,16 @@ export function lookupContextTokens(
 export function resolveContextTokensForModel(
   params: ContextTokenResolutionParams,
 ): number | undefined {
+  return resolveModelContextTokenProjection(params).contextTokens;
+}
+
+export function resolveModelContextTokenProjection(
+  params: ContextTokenResolutionParams,
+): ModelContextTokenProjection {
   const lookupOptions = {
     allowAsyncLoad: params.allowAsyncLoad,
     skipRuntimeConfigLoad: Boolean(params.cfg),
   };
   prepareContextWindowCache(lookupOptions);
-  const sourceCfg =
-    params.sourceCfg !== undefined
-      ? params.sourceCfg
-      : params.cfg
-        ? projectConfigOntoRuntimeSourceSnapshot(params.cfg)
-        : undefined;
-  return resolveContextTokensForModelFromCache(
-    { ...params, sourceCfg },
-    (modelId) => lookupCachedContextTokens(modelId),
-    (modelId) => lookupCachedContextWindow(modelId),
-  );
+  return resolveModelContextTokenProjectionFromCache(params);
 }

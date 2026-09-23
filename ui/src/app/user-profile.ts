@@ -3,6 +3,19 @@ import type { PresenceEntry } from "../api/types.ts";
 export type AuthenticatedUser = NonNullable<PresenceEntry["user"]>;
 export type PresencePayload = { presence: readonly PresenceEntry[] };
 
+export function sameSelfUser(
+  left: AuthenticatedUser | null | undefined,
+  right: AuthenticatedUser | null | undefined,
+): boolean {
+  return (
+    left?.id === right?.id &&
+    left?.identity?.id === right?.identity?.id &&
+    left?.email === right?.email &&
+    left?.name === right?.name &&
+    left?.avatarUrl === right?.avatarUrl
+  );
+}
+
 export function readPresenceEntries(value: unknown): PresenceEntry[] | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -24,7 +37,7 @@ export function resolveSelfPresenceUser(
   return entry?.user?.id ? entry.user : null;
 }
 
-/** Prefers local profile edits for the current presence identity only. */
+/** Gateway state owns live identity updates and local profile edits; hello may be stale. */
 export function resolveCurrentSelfUser({
   snapshotUser,
   presenceEntries,
@@ -34,42 +47,5 @@ export function resolveCurrentSelfUser({
   presenceEntries?: readonly PresenceEntry[];
   presenceInstanceId?: string;
 }): AuthenticatedUser | null {
-  const presenceUser = resolveSelfPresenceUser(presenceEntries ?? [], presenceInstanceId);
-  // Gateway state folds newer presence into snapshotUser, so a matching profile is
-  // either the latest presence projection or the local profile edit it should retain.
-  return snapshotUser && (!presenceUser || snapshotUser.id === presenceUser.id)
-    ? snapshotUser
-    : presenceUser;
-}
-
-export function userProfileAvatarUrl(
-  gatewayUrl: string,
-  profileId: string,
-  revision: string | number,
-  documentHref = globalThis.location?.href,
-): string | null {
-  if (!documentHref) {
-    return null;
-  }
-  try {
-    const url = new URL(gatewayUrl, documentHref);
-    if (url.protocol === "ws:") {
-      url.protocol = "http:";
-    } else if (url.protocol === "wss:") {
-      url.protocol = "https:";
-    }
-    // The shared avatar loader authenticates cross-origin Gateway requests and
-    // turns their response into a local blob accepted by the Control UI CSP.
-    if (!["http:", "https:"].includes(url.protocol)) {
-      return null;
-    }
-    url.username = "";
-    url.password = "";
-    url.pathname = `/api/users/${encodeURIComponent(profileId)}/avatar`;
-    url.search = `?v=${revision}`;
-    url.hash = "";
-    return url.href;
-  } catch {
-    return null;
-  }
+  return snapshotUser ?? resolveSelfPresenceUser(presenceEntries ?? [], presenceInstanceId);
 }

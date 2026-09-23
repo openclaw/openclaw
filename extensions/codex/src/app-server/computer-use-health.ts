@@ -1,17 +1,13 @@
 // Codex plugin module implements periodic Computer Use health probes.
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
-import {
-  killStaleComputerUseMcpChildren,
-  type CodexComputerUseRepairStatus,
-} from "./computer-use-process-repair.js";
-import { runCodexComputerUseLiveTest } from "./computer-use.js";
+import { runCodexComputerUseLiveTest } from "./computer-use-readiness.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
 
 type ComputerUseHealthMonitor = {
   fingerprint: string;
   intervalMs: number;
-  repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
   timer: ReturnType<typeof setInterval>;
   disposeCloseHandler: () => void;
   running: boolean;
@@ -21,22 +17,15 @@ type ComputerUseHealthMonitorState = {
   monitors: WeakMap<CodexAppServerClient, ComputerUseHealthMonitor>;
 };
 
-const COMPUTER_USE_HEALTH_MONITOR_STATE = Symbol.for("openclaw.codexComputerUseHealthMonitorState");
-
-function getComputerUseHealthMonitorState(): ComputerUseHealthMonitorState {
-  const globalState = globalThis as typeof globalThis & {
-    [COMPUTER_USE_HEALTH_MONITOR_STATE]?: ComputerUseHealthMonitorState;
-  };
-  globalState[COMPUTER_USE_HEALTH_MONITOR_STATE] ??= {
-    monitors: new WeakMap(),
-  };
-  return globalState[COMPUTER_USE_HEALTH_MONITOR_STATE];
-}
+const getComputerUseHealthMonitorState = defineCodexBuildState(
+  "openclaw.codexComputerUseHealthMonitorState",
+  (): ComputerUseHealthMonitorState => ({ monitors: new WeakMap() }),
+);
 
 export function startCodexComputerUseHealthMonitor(params: {
   client: CodexAppServerClient;
   config: ResolvedCodexComputerUseConfig;
-  repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
+  tools?: readonly string[];
 }): { started: boolean; intervalMs?: number; reason?: string } {
   const state = getComputerUseHealthMonitorState();
   const existing = state.monitors.get(params.client);
@@ -49,28 +38,19 @@ export function startCodexComputerUseHealthMonitor(params: {
       reason: params.config.enabled ? "health_disabled" : "disabled",
     };
   }
-  const fingerprint = buildComputerUseHealthMonitorFingerprint(params.config);
+  const fingerprint = buildComputerUseHealthMonitorFingerprint(params.config, params.tools);
   const intervalMs = params.config.healthCheckIntervalMinutes * 60_000;
-  if (
-    existing?.fingerprint === fingerprint &&
-    existing.repairComputerUseMcpChildren === params.repairComputerUseMcpChildren
-  ) {
+  if (existing?.fingerprint === fingerprint) {
     return { started: false, intervalMs, reason: "already_started" };
   }
   if (existing) {
     clearComputerUseHealthMonitor(params.client, existing);
   }
-  const repairComputerUseMcpChildren =
-    params.repairComputerUseMcpChildren ??
-    (() => killStaleComputerUseMcpChildren({ ancestorPid: params.client.getTransportPid() }));
   const monitor: ComputerUseHealthMonitor = {
     fingerprint,
     intervalMs,
-    repairComputerUseMcpChildren: params.repairComputerUseMcpChildren,
     timer: setInterval(() => {
-      void runCodexComputerUseHealthProbe(params.client, params.config, monitor, {
-        repairComputerUseMcpChildren,
-      });
+      void runCodexComputerUseHealthProbe(params.client, params.config, monitor, params.tools);
     }, intervalMs),
     disposeCloseHandler: () => undefined,
     running: false,
@@ -86,13 +66,17 @@ export function startCodexComputerUseHealthMonitor(params: {
   return { started: true, intervalMs };
 }
 
-function buildComputerUseHealthMonitorFingerprint(config: ResolvedCodexComputerUseConfig): string {
+function buildComputerUseHealthMonitorFingerprint(
+  config: ResolvedCodexComputerUseConfig,
+  tools?: readonly string[],
+): string {
   return JSON.stringify({
     autoRepair: config.autoRepair,
     healthCheckIntervalMinutes: config.healthCheckIntervalMinutes,
     liveTestTimeoutMs: config.liveTestTimeoutMs,
     mcpServerName: config.mcpServerName,
     toolCallTimeoutMs: config.toolCallTimeoutMs,
+    tools: tools?.toSorted(),
   });
 }
 
@@ -100,9 +84,7 @@ async function runCodexComputerUseHealthProbe(
   client: CodexAppServerClient,
   config: ResolvedCodexComputerUseConfig,
   monitor: ComputerUseHealthMonitor,
-  options: {
-    repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
-  },
+  tools?: readonly string[],
 ): Promise<void> {
   if (monitor.running) {
     return;
@@ -110,15 +92,17 @@ async function runCodexComputerUseHealthProbe(
   monitor.running = true;
   try {
     const { liveTest, repair } = await runCodexComputerUseLiveTest({
+      client,
       config,
-      repairComputerUseMcpChildren: options.repairComputerUseMcpChildren,
+      tools,
       request: async <T>(
         method: string,
         requestParams?: unknown,
-        requestOptions?: { timeoutMs?: number },
+        requestOptions?: { timeoutMs?: number; signal?: AbortSignal },
       ) =>
         await client.request<T>(method, requestParams, {
           timeoutMs: requestOptions?.timeoutMs ?? config.liveTestTimeoutMs,
+          ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
         }),
     });
     if (!liveTest.ok) {
@@ -131,10 +115,9 @@ async function runCodexComputerUseHealthProbe(
       });
       return;
     }
-    if (repair?.killedPids.length) {
-      embeddedAgentLog.info("codex computer-use periodic health repaired stale children", {
+    if (repair?.attempted && repair.warnings.length === 0) {
+      embeddedAgentLog.info("codex computer-use periodic health reloaded MCP servers", {
         mcpServerName: config.mcpServerName,
-        killedPids: repair.killedPids,
       });
     }
   } catch (error) {

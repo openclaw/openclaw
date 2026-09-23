@@ -1,31 +1,62 @@
 /**
  * Registry for native agent harness implementations and lifecycle cleanup.
  */
+import { retainCliRegistryHarnesses } from "../../cli/runtime-cleanup-scope.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   assertDirectPluginRegistrationReplacement,
+  getPluginRegistryForContext,
   requireActivePluginRegistry,
   resolveDirectPluginRegistrationOwner,
 } from "../../plugins/runtime.js";
-import type { AgentHarness, AgentHarnessResetParams, RegisteredAgentHarness } from "./types.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import type {
+  AgentHarness,
+  AgentHarnessNativeCompaction,
+  AgentHarnessRegistrationOptions,
+  AgentHarnessResetParams,
+  RegisteredAgentHarness,
+} from "./types.js";
 
 const log = createSubsystemLogger("agents/harness");
+const CODEX_NATIVE_COMPACTION_OWNER_ID = "codex";
 
 function getAgentHarnesses() {
-  return requireActivePluginRegistry().agentHarnesses;
+  const registry = getPluginRegistryForContext();
+  // Retained request scopes keep their registry after cleanup; they must not
+  // reacquire disposed harnesses or fall through to a different active registry.
+  if (!registry || isPluginRegistryRetired(registry)) {
+    return [];
+  }
+  retainCliRegistryHarnesses(registry, (harness) =>
+    withPluginRuntimeRegistryScope(registry, () => disposeAgentHarness(harness)),
+  );
+  return registry.agentHarnesses;
 }
 
 /** Registers or replaces an agent harness under its trimmed id. */
 export function registerAgentHarness(
   harness: AgentHarness,
-  options?: { ownerPluginId?: string },
+  options?: AgentHarnessRegistrationOptions & { ownerPluginId?: string },
 ): void {
   const id = harness.id.trim();
-  const harnesses = getAgentHarnesses();
+  const harnesses = requireActivePluginRegistry().agentHarnesses;
   const pluginId = resolveDirectPluginRegistrationOwner(options?.ownerPluginId) ?? "core";
+  if (id === "openclaw") {
+    throw new Error('agent harness id "openclaw" is reserved for the built-in runtime');
+  }
+  if (
+    options?.nativeCompaction &&
+    (id !== CODEX_NATIVE_COMPACTION_OWNER_ID || pluginId !== CODEX_NATIVE_COMPACTION_OWNER_ID)
+  ) {
+    throw new Error("native compaction requires the registry-owned Codex harness");
+  }
   const entry = {
     pluginId,
     source: "runtime",
+    ...(options?.nativeCompaction ? { nativeCompaction: options.nativeCompaction } : {}),
     harness: {
       ...harness,
       id,
@@ -57,6 +88,33 @@ export function getRegisteredAgentHarness(id: string): RegisteredAgentHarness | 
     : undefined;
 }
 
+/** Resolves the registry-owned approval identity for the exact registered harness object. */
+export function resolveAgentHarnessOwnerPluginId(harness: AgentHarness): string {
+  const registration = getRegisteredAgentHarness(harness.id);
+  if (registration?.harness !== harness) {
+    throw new Error(`Agent harness ${harness.id} changed during owner resolution.`);
+  }
+  return registration.ownerPluginId ?? "core";
+}
+
+/** Resolves the private Codex compaction bridge from exact registry-owned capability state. */
+export function resolveCodexAgentHarnessNativeCompaction(
+  harness: AgentHarness,
+): AgentHarnessNativeCompaction | undefined {
+  if (harness.id !== CODEX_NATIVE_COMPACTION_OWNER_ID) {
+    return undefined;
+  }
+  const registration = getAgentHarnesses().find(
+    (entry) => entry.harness.id === CODEX_NATIVE_COMPACTION_OWNER_ID,
+  );
+  if (registration?.harness !== harness) {
+    throw new Error(`Agent harness ${harness.id} changed during native compaction resolution.`);
+  }
+  return registration.pluginId === CODEX_NATIVE_COMPACTION_OWNER_ID
+    ? registration.nativeCompaction
+    : undefined;
+}
+
 /** Lists registered harness records for selection and lifecycle fan-out. */
 export function listRegisteredAgentHarnesses(): RegisteredAgentHarness[] {
   return getAgentHarnesses().map((entry) => ({
@@ -70,42 +128,47 @@ export function clearAgentHarnesses(): void {
   getAgentHarnesses().length = 0;
 }
 
-/** Calls each registered harness session-reset hook without letting one failure stop the fan-out. */
+/** Resets each live harness owner once, retaining the caller's registry for direct hosts. */
 export async function resetRegisteredAgentHarnessSessions(
   params: AgentHarnessResetParams,
+  executionRegistries: readonly PluginRegistry[] = [],
 ): Promise<void> {
-  await Promise.all(
-    listRegisteredAgentHarnesses().map(async (entry) => {
-      if (!entry.harness.reset) {
-        return;
-      }
-      try {
-        await entry.harness.reset(params);
-      } catch (error) {
-        log.warn(`${entry.harness.label} session reset hook failed`, {
-          harnessId: entry.harness.id,
-          error,
-        });
-      }
-    }),
-  );
+  const current = getPluginRegistryForContext();
+  const registries = new Set([...executionRegistries, ...(current ? [current] : [])]);
+  const visited = new Set<AgentHarness>();
+  for (const registry of registries) {
+    await withPluginRuntimeRegistryScope(registry, async () => {
+      await Promise.all(
+        listRegisteredAgentHarnesses().map(async (entry) => {
+          if (!entry.harness.reset || visited.has(entry.harness)) {
+            return;
+          }
+          visited.add(entry.harness);
+          try {
+            await entry.harness.reset(params);
+          } catch (error) {
+            log.warn(`${entry.harness.label} session reset hook failed`, {
+              harnessId: entry.harness.id,
+              error,
+            });
+          }
+        }),
+      );
+    });
+  }
+}
+
+async function disposeAgentHarness(harness: AgentHarness): Promise<void> {
+  try {
+    await harness.dispose?.();
+  } catch (error) {
+    log.warn(`${harness.label} dispose hook failed`, { harnessId: harness.id, error });
+  }
 }
 
 /** Calls each registered harness dispose hook during registry shutdown or reload. */
 export async function disposeRegisteredAgentHarnesses(): Promise<void> {
   await Promise.all(
-    listRegisteredAgentHarnesses().map(async (entry) => {
-      if (!entry.harness.dispose) {
-        return;
-      }
-      try {
-        await entry.harness.dispose();
-      } catch (error) {
-        log.warn(`${entry.harness.label} dispose hook failed`, {
-          harnessId: entry.harness.id,
-          error,
-        });
-      }
-    }),
+    listRegisteredAgentHarnesses().map(({ harness }) => disposeAgentHarness(harness)),
   );
 }

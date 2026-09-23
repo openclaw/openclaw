@@ -1,18 +1,24 @@
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-policy.js";
+import { projectEffectiveExecPolicy } from "../../agents/session-permission-exec-mode.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { logWarn } from "../../logger.js";
 import {
-  WORKER_LOCAL_TOOL_NAMES,
-  type WorkerLocalToolName,
+  WORKER_REQUIRED_LOCAL_TOOL_NAMES,
+  WORKER_SESSION_TOOL_NAMES,
+  type WorkerOptionalLocalToolName,
+  type WorkerToolName,
   type WorkerToolAuthority,
 } from "../../worker/tool-authority.js";
 
 function resolveWorkerCapabilityProfile(params: {
   modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
+  availableOptionalToolNames?: readonly WorkerOptionalLocalToolName[];
 }) {
   const turn = params.turn;
   const sandboxSessionKey =
@@ -53,12 +59,19 @@ function resolveWorkerCapabilityProfile(params: {
     senderIsOwner: turn.senderIsOwner,
     modelProvider: params.modelRef.provider,
     modelId: params.modelRef.model,
+    modelHasVision: turn.modelHasVision,
     workspaceDir: turn.workspaceDir,
     cwd: turn.cwd,
     isCanonicalWorkspace: turn.isCanonicalWorkspace,
     promptMode: turn.promptMode,
     skillsSnapshot: turn.skillsSnapshot,
-    sandboxToolPolicy: sandbox.sandboxed ? sandbox.toolPolicy : undefined,
+    sandboxToolPolicy: sandbox.sandboxed
+      ? resolveSandboxToolPolicyForAgent(turn.config, sandbox.classificationAgentId, {
+          containedToolNames: params.availableOptionalToolNames?.includes("computer")
+            ? ["computer"]
+            : [],
+        })
+      : undefined,
     runtimeToolAllowlist: turn.toolsAllow,
     inheritRuntimeToolAllowlist: true,
     runtimePluginToolGrant: turn.runtimePluginToolGrant,
@@ -72,19 +85,71 @@ function resolveWorkerCapabilityProfile(params: {
 export function resolveWorkerToolAuthority(params: {
   modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
+  availableOptionalToolNames?: readonly WorkerOptionalLocalToolName[];
+  portalAvailable?: boolean;
 }): WorkerToolAuthority {
   const turn = params.turn;
+  const defaults = resolveExecDefaults({
+    cfg: turn.config,
+    sessionEntry: turn.execSession,
+    execOverrides: turn.execOverrides,
+    agentId: turn.agentId,
+    sessionKey: turn.sandboxSessionKey?.trim() || turn.sessionKey?.trim() || turn.sessionId,
+  });
+  const policy = projectEffectiveExecPolicy({
+    base: { ...defaults, host: defaults.effectiveHost },
+    scheduledExecTarget: turn.scheduledToolPolicy?.execTarget,
+  });
+  // A captured target cannot create the worker's missing host/approval transport.
+  const execUnavailable =
+    policy.ask === "always" ||
+    (turn.scheduledToolPolicy?.execTarget !== undefined && defaults.effectiveHost !== "gateway");
+  const { effectiveHost: host, security, node: configuredNode } = defaults;
+  const ask = policy.ask ?? defaults.ask;
+  const node = configuredNode?.trim();
+  // Executable paths, safe-bin profiles, and command approvals are host-specific.
+  // Until a portable allowlist exists, transmit an explicit empty safe-bin cap.
+  const exec: NonNullable<WorkerToolAuthority["exec"]> =
+    host === "node"
+      ? {
+          host,
+          security,
+          ask,
+          safeBins: [],
+          ...(node ? { node } : {}),
+        }
+      : { host, security, ask, safeBins: [] };
   if (turn.disableTools === true || turn.modelRun === true || turn.promptMode === "none") {
-    return { allowedToolNames: [] };
+    return { allowedToolNames: [], exec };
   }
   const runtimeCappedTools = applyEmbeddedAttemptToolsAllow(
-    WORKER_LOCAL_TOOL_NAMES.map((name) => ({ name })),
+    [
+      ...WORKER_REQUIRED_LOCAL_TOOL_NAMES,
+      ...(params.availableOptionalToolNames ?? []).filter(
+        (name) => name !== "computer" || turn.modelHasVision !== false,
+      ),
+      ...WORKER_SESSION_TOOL_NAMES.filter((name) =>
+        name === "skill_workshop"
+          ? turn.skillLibraryAuthoring !== undefined
+          : name !== "portal" || params.portalAvailable === true,
+      ),
+    ].map((name) => ({ name })),
     turn.toolsAllow,
   );
-  const projected: WorkerLocalToolName[] = projectConversationToolNames({
+  const projected: WorkerToolName[] = projectConversationToolNames({
     capabilityProfile: resolveWorkerCapabilityProfile(params),
     toolNames: runtimeCappedTools.map((tool) => tool.name),
     warn: logWarn,
   });
-  return { allowedToolNames: projected };
+  if (execUnavailable) {
+    logWarn(
+      "Worker exec/process withheld: captured exec policy requires local host or interactive approval. Run this turn locally.",
+    );
+  }
+  return {
+    allowedToolNames: execUnavailable
+      ? projected.filter((name) => name !== "exec" && name !== "process")
+      : projected,
+    exec,
+  };
 }

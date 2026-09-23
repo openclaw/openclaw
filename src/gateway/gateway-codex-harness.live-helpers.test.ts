@@ -62,19 +62,21 @@ describe("gateway codex harness live helpers", () => {
       guardianProbe: false,
       imageProbe: false,
       mcpProbe: false,
+      multiSessionProbe: false,
       resumeStress: false,
       subagentProbe: true,
     };
 
     expect(shouldUseCodexHarnessSubagentOnlyFastPath(base)).toBe(true);
-    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, resumeStress: true })).toBe(false);
-    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, compactionStress: true })).toBe(
-      false,
-    );
-    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, codeModeOnly: true })).toBe(false);
-    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, explicitOptOut: true })).toBe(
-      false,
-    );
+    for (const flag of [
+      "codeModeOnly",
+      "compactionStress",
+      "explicitOptOut",
+      "multiSessionProbe",
+      "resumeStress",
+    ] as const) {
+      expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, [flag]: true })).toBe(false);
+    }
   });
 
   it("classifies sessions.list timeouts as retryable live Codex errors", () => {
@@ -788,14 +790,6 @@ describe("gateway codex harness live helpers", () => {
   it("accepts the normal-work status emitted by current codex", () => {
     const text =
       "Working normally. Current cwd is `/tmp/openclaw-live-codex-harness/workspace/dev`, sandbox is workspace-write, network is restricted, and the current date is 2026-05-09 UTC.";
-
-    expect(
-      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
-    ).toBe(true);
-  });
-
-  it("accepts the ready status emitted by current codex", () => {
-    const text = "Ready.";
 
     expect(
       EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),

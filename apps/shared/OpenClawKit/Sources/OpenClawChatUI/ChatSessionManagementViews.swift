@@ -137,6 +137,9 @@ struct ChatSessionInspectorDetails: Equatable {
     }
 
     private static func runState(for session: OpenClawChatSessionEntry) -> String? {
+        if self.normalized(session.status)?.lowercased() == "queued" {
+            return String(localized: "Queued")
+        }
         if session.hasActiveRun == true || session.hasActiveSubagentRun == true {
             return String(localized: "Running")
         }
@@ -200,7 +203,7 @@ struct ChatSessionInspectorSheet: View {
                         .font(OpenClawChatTypography.body)
                     Toggle("Archived", isOn: self.archivedBinding)
                         .font(OpenClawChatTypography.body)
-                        .disabled(!self.displayedSession.isArchived && !ChatSessionSidebarModel.canArchiveSession(
+                        .disabled(!ChatSessionSidebarModel.canArchiveSession(
                             self.displayedSession,
                             mainSessionKey: self.viewModel.resolvedMainSessionKey))
                 }
@@ -258,7 +261,9 @@ struct ChatSessionInspectorSheet: View {
                 }
             }
             .onChange(of: self.viewModel.sessions) {
-                if let refreshed = self.viewModel.sessions.first(where: { $0.key == self.displayedSession.key }) {
+                if let refreshed = self.viewModel.sessions.first(where: {
+                    $0.key == self.displayedSession.key && $0.agentId == self.displayedSession.agentId
+                }) {
                     self.displayedSession = refreshed
                 }
             }
@@ -276,12 +281,14 @@ struct ChatSessionInspectorSheet: View {
                 let nextGroup = next.isEmpty ? nil : next
                 self.displayedSession.category = nextGroup
                 self.isMutatingGroup = true
+                let target = self.displayedSession
                 Task {
                     defer { self.isMutatingGroup = false }
                     do {
                         try await self.viewModel.setSessionGroup(
-                            key: self.displayedSession.key,
-                            group: nextGroup)
+                            key: target.key,
+                            group: nextGroup,
+                            agentID: target.agentId)
                         self.errorText = nil
                     } catch {
                         self.displayedSession.category = previous
@@ -296,7 +303,10 @@ struct ChatSessionInspectorSheet: View {
             get: { self.displayedSession.isPinned },
             set: { pinned in
                 self.displayedSession.pinned = pinned
-                self.viewModel.setSessionPinned(key: self.displayedSession.key, pinned: pinned)
+                self.viewModel.setSessionPinned(
+                    key: self.displayedSession.key,
+                    pinned: pinned,
+                    agentID: self.displayedSession.agentId)
             })
     }
 
@@ -305,7 +315,7 @@ struct ChatSessionInspectorSheet: View {
             get: { self.displayedSession.isArchived },
             set: { archived in
                 self.displayedSession.archived = archived
-                self.viewModel.setSessionArchived(key: self.displayedSession.key, archived: archived)
+                self.viewModel.setSessionArchived(self.displayedSession, archived: archived)
             })
     }
 
@@ -562,80 +572,143 @@ public struct ChatNewSessionOptionsPopover: View {
             }
             self.routeLease = routeLease
             self.agents = response.agents
-            self.selectedAgentID = response.agents.contains(where: { $0.id == response.defaultId })
+            self.selectedAgentID = response.agents.first(where: {
+                $0.id.lowercased() == self.viewModel.selectedAgentID
+            })?.id ?? (response.agents.contains(where: { $0.id == response.defaultId })
                 ? response.defaultId
-                : response.agents[0].id
+                : response.agents[0].id)
         } catch {
             self.errorText = error.localizedDescription
         }
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("New Thread Options")
-                .font(OpenClawChatTypography.body(size: 15, weight: .semibold, relativeTo: .headline))
-            Picker("Agent", selection: self.$selectedAgentID) {
-                ForEach(self.agents) { agent in
-                    Text(verbatim: agent.displayName)
-                        .font(OpenClawChatTypography.body)
-                        .tag(agent.id)
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("New Thread")
+                    .font(OpenClawChatTypography.headline)
+                Text("Choose an agent and a place to work.")
+                    .font(OpenClawChatTypography.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Agent")
+                    .font(OpenClawChatTypography.captionSemiBold)
+                    .foregroundStyle(.secondary)
+                Picker(selection: self.$selectedAgentID) {
+                    ForEach(self.agents) { agent in
+                        Text(verbatim: agent.displayName)
+                            .font(OpenClawChatTypography.formControl)
+                            .tag(agent.id)
+                    }
+                } label: {
+                    Text("Agent")
+                        .font(OpenClawChatTypography.formControl)
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .controlSize(.large)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .disabled(self.isLoading || self.isCreating || self.agents.isEmpty)
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle(isOn: self.$usesWorktree) {
+                    Text("Separate working copy")
+                        .font(OpenClawChatTypography.formControl.weight(.medium))
+                }
+                .toggleStyle(.switch)
+                .disabled(self.isLoading || self.isCreating || self.selectedAgent?.workspaceGit == false)
+                Text(self.selectedAgent?.workspaceGit == false
+                    ? "This agent needs a Git repository to use a worktree."
+                    : "Keep code changes isolated in a Git worktree.")
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                if self.usesWorktree {
+                    TextField(
+                        text: self.$baseRef,
+                        prompt: Text("Repository default").font(OpenClawChatTypography.formControl))
+                    {
+                        Text("Base branch or commit")
+                            .font(OpenClawChatTypography.formControl)
+                    }
+                    .font(OpenClawChatTypography.formControl)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(self.isCreating)
+                    .help("Leave empty to use the repository's default base.")
                 }
             }
-            .disabled(self.isLoading || self.agents.isEmpty)
-            Toggle("Create in a worktree", isOn: self.$usesWorktree)
-                .font(OpenClawChatTypography.body)
-                .disabled(self.selectedAgent?.workspaceGit == false)
-            if self.usesWorktree {
-                TextField("Base ref (optional)", text: self.$baseRef)
-                    .font(OpenClawChatTypography.body)
-            }
+            .padding(14)
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
+
             if let errorText {
-                Text(errorText)
+                Label(errorText, systemImage: "exclamationmark.circle")
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(OpenClawChatTheme.danger)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            HStack {
+
+            HStack(spacing: 10) {
+                if self.isLoading || self.isCreating {
+                    ProgressView()
+                        .controlSize(.small)
+                }
                 if self.errorText != nil, self.routeLease == nil {
-                    Button("Retry") {
+                    Button {
                         Task { await self.loadOptions() }
+                    } label: {
+                        Text("Retry").font(OpenClawChatTypography.formControl)
                     }
-                    .font(OpenClawChatTypography.body)
+                    .disabled(self.isLoading)
                 }
                 Spacer()
-                Button("Create") {
-                    guard !self.isCreating, let routeLease = self.routeLease else { return }
-                    self.isCreating = true
-                    self.errorText = nil
-                    let baseRef = self.baseRef.trimmingCharacters(in: .whitespacesAndNewlines)
-                    Task {
-                        defer { self.isCreating = false }
-                        let created = await self.viewModel.startNewSession(
-                            agentID: self.selectedAgentID,
-                            worktree: self.usesWorktree,
-                            worktreeBaseRef: baseRef.isEmpty ? nil : baseRef,
-                            using: routeLease)
-                        // Keep inputs on failure; dismissing would discard the
-                        // selected agent/worktree while no session exists.
-                        if created {
-                            self.onComplete()
-                        } else {
-                            self.errorText = self.viewModel.errorText
-                                ?? String(localized: "The thread could not be created.")
-                        }
-                    }
+                Button(action: self.onComplete) {
+                    Text("Cancel").font(OpenClawChatTypography.formControl)
                 }
-                .font(OpenClawChatTypography.body)
+                .keyboardShortcut(.cancelAction)
+                .disabled(self.isCreating)
+                Button(action: self.createThread) {
+                    Text("Create Thread").font(OpenClawChatTypography.formControl.weight(.medium))
+                }
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(
                     self.isLoading || self.isCreating || self.selectedAgentID.isEmpty || self.routeLease == nil)
             }
         }
-        .padding(16)
-        .frame(width: 320)
+        .padding(20)
+        .frame(width: 360)
         .task { await self.loadOptions() }
         .onChange(of: self.selectedAgentID) {
             if self.selectedAgent?.workspaceGit == false {
                 self.usesWorktree = false
+            }
+        }
+    }
+
+    private func createThread() {
+        guard !self.isCreating, let routeLease = self.routeLease else { return }
+        self.isCreating = true
+        self.errorText = nil
+        let agentID = self.selectedAgentID
+        let usesWorktree = self.usesWorktree
+        let baseRef = self.baseRef.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task {
+            defer { self.isCreating = false }
+            let created = await self.viewModel.startNewSession(
+                agentID: agentID,
+                worktree: usesWorktree,
+                worktreeBaseRef: baseRef.isEmpty ? nil : baseRef,
+                using: routeLease)
+            // Failed creation keeps the selected agent and working-copy options available for retry.
+            if created {
+                self.onComplete()
+            } else {
+                self.errorText = self.viewModel.errorText
+                    ?? String(localized: "The thread could not be created.")
             }
         }
     }

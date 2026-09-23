@@ -2,27 +2,30 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { CronJob } from "../../cron/types.js";
+import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
-import { parseStrictPositiveIntOrUndefined } from "../program/helpers.js";
+import { CronCliError } from "./cron-cli-error.js";
 import { listCronJobsFromGateway } from "./list-jobs.js";
+import { createCronOutputCommand } from "./output-mode.js";
+import { registerCronMutationOptions } from "./register.cron-options.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
-  getCronChannelOptions,
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
   handleCronCliError,
   parseCronCommandArgv,
   parseCronCommandEnv,
-  parseCronFallbacks,
-  parseCronToolsAllow,
+  parseCronIntegerOption,
+  parseCronNoOutputTimeoutOption,
+  parseCronStringList,
   printCronJson,
   printCronList,
   warnIfCronSchedulerDisabled,
@@ -32,10 +35,8 @@ import { readCronPayloadScript, readCronTriggerScript } from "./trigger-options.
 
 export function registerCronStatusCommand(cron: Command) {
   addGatewayClientOptions(
-    cron
-      .command("status")
+    createCronOutputCommand(cron, "status")
       .description("Show automations scheduler status")
-      .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
           const res = await callGatewayFromCli("cron.status", opts, {});
@@ -62,7 +63,7 @@ export function registerCronListCommand(cron: Command) {
           };
           const agentId = normalizeOptionalString(opts.agent);
           if (typeof opts.agent === "string" && !agentId) {
-            throw new Error("--agent must not be blank");
+            throw new CronCliError("--agent must not be blank");
           }
           if (agentId) {
             listParams.agentId = sanitizeAgentId(agentId);
@@ -84,86 +85,15 @@ export function registerCronListCommand(cron: Command) {
 
 export function registerCronAddCommand(cron: Command) {
   addGatewayClientOptions(
-    cron
-      .command("add")
-      .alias("create")
-      .description("Add an automation")
-      .argument("[scheduleOrName]", "Schedule string, or job name when using --at/--every/--cron")
-      .argument("[message]", "Agent message when using a positional schedule")
-      .option("--name <name>", "Job name")
+    registerCronMutationOptions(
+      createCronOutputCommand(cron, "add")
+        .description("Add an automation")
+        .argument("[scheduleOrName]", "Schedule string, or job name when using --at/--every/--cron")
+        .argument("[message]", "Agent message when using a positional schedule"),
+      "add",
+    )
       .option("--declaration-key <key>", "Idempotent declaration identity key")
-      .option("--display-name <name>", "Human-readable declarative job label")
-      .option("--description <text>", "Optional description")
       .option("--disabled", "Create job disabled", false)
-      .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
-      .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
-      .option("--agent <id>", "Agent id for this job")
-      .option("--session <target>", "Session target (main|isolated)")
-      .option("--session-key <key>", "Session key for job routing (e.g. agent:my-agent:my-session)")
-      .option("--wake <mode>", "Wake mode (now|next-heartbeat)", "now")
-      .option(
-        "--at <when>",
-        "Run once at time (ISO with offset, or +duration). Use --tz for offset-less datetimes",
-      )
-      .option("--every <duration>", "Run every duration (e.g. 10m, 1h)")
-      .option("--pacing-min <duration>", "Minimum delay accepted from a dynamic next check")
-      .option("--pacing-max <duration>", "Maximum delay accepted from a dynamic next check")
-      .option("--cron <expr>", "Cron expression (5-field or 6-field with seconds)")
-      .option(
-        "--on-exit <shell>",
-        "Fire once when this watched command exits (event trigger; survives turn teardown)",
-      )
-      .option("--on-exit-cwd <path>", "Working directory for the --on-exit watched command")
-      .option("--stream-command <json>", "Stream source argv as a JSON array of strings")
-      .option("--stream-cwd <path>", "Working directory for the stream source")
-      .option("--stream-mode <mode>", "Stream line selection mode (line|match)")
-      .option("--stream-match <regex>", "Regex source required for stream match mode")
-      .option("--stream-batch-ms <n>", "Quiet-window batch delay in milliseconds")
-      .option("--stream-max-batch-bytes <n>", "Maximum UTF-8 bytes per stream batch")
-      .option(
-        "--tz <iana>",
-        "Timezone for cron expressions (IANA; cron default: Gateway host local timezone)",
-        "",
-      )
-      .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
-      .option("--exact", "Disable cron staggering (set stagger to 0)", false)
-      .option("--trigger-script <path|->", "Condition script file, or - for stdin")
-      .option("--trigger-once", "Disable after the first successful triggered run", false)
-      .option("--system-event <text>", "System event payload (main session)")
-      .option("--message <text>", "Agent message payload")
-      .option("--script <file|->", "Headless script payload file, or - for stdin")
-      .option("--script-timeout-seconds <n>", "Script wall-clock timeout seconds")
-      .option("--script-tool-budget <n>", "Maximum script tool calls")
-      .option("--command <shell>", "Command payload run as sh -lc <shell> on the Gateway")
-      .option("--command-argv <json>", "Command payload argv as JSON array of strings")
-      .option("--command-cwd <path>", "Working directory for command payloads")
-      .option(
-        "--command-env <KEY=VALUE>",
-        "Environment override for command payloads (repeatable)",
-        (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
-      )
-      .option("--command-input <text>", "stdin for command payloads")
-      .option("--thinking <level>", `Thinking level for agent jobs (${THINKING_LEVELS_HELP})`)
-      .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
-      .option("--fallbacks <list>", "Fallback model list for agent jobs")
-      .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
-      .option("--no-output-timeout-seconds <n>", "No-output timeout seconds for command jobs")
-      .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")
-      .option("--light-context", "Use lightweight bootstrap context for agent jobs", false)
-      .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
-      .option("--announce", "Fallback-deliver final text to a chat", false)
-      .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")
-      .option("--no-deliver", "Disable runner fallback delivery")
-      .option("--webhook <url>", "POST the finished payload to a webhook URL")
-      .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`, "last")
-      .option(
-        "--to <dest>",
-        "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
-      )
-      .option("--thread-id <id>", "Telegram forum topic thread id")
-      .option("--account <id>", "Channel account id for delivery (multi-account setups)")
-      .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
-      .option("--json", "Output JSON", false)
       .action(
         async (
           nameArg: string | undefined,
@@ -172,6 +102,15 @@ export function registerCronAddCommand(cron: Command) {
           cmd: Command,
         ) => {
           try {
+            for (const [flag, cwd] of [
+              ["--command-cwd", opts.commandCwd],
+              ["--on-exit-cwd", opts.onExitCwd],
+              ["--stream-cwd", opts.streamCwd],
+            ] as const) {
+              if (typeof cwd === "string" && !normalizeOptionalString(cwd)) {
+                throw new CronCliError(`${flag} must not be blank`);
+              }
+            }
             const hasScheduleFlag =
               typeof opts.at === "string" ||
               typeof opts.cron === "string" ||
@@ -179,27 +118,11 @@ export function registerCronAddCommand(cron: Command) {
               typeof opts.onExit === "string" ||
               typeof opts.streamCommand === "string";
             const positionalSchedule = hasScheduleFlag ? undefined : nameArg;
-            const schedule = resolveCronCreateScheduleFromArgs({
-              at: opts.at,
-              cron: opts.cron,
-              every: opts.every,
-              onExit: opts.onExit,
-              onExitCwd: opts.onExitCwd,
-              streamCommand: opts.streamCommand,
-              streamCwd: opts.streamCwd,
-              streamMode: opts.streamMode,
-              streamMatch: opts.streamMatch,
-              streamBatchMs: opts.streamBatchMs,
-              streamMaxBatchBytes: opts.streamMaxBatchBytes,
-              exact: opts.exact,
-              positionalSchedule,
-              stagger: opts.stagger,
-              tz: opts.tz,
-            });
+            const schedule = resolveCronCreateScheduleFromArgs({ ...opts, positionalSchedule });
 
             const wakeMode = normalizeOptionalString(opts.wake) ?? "now";
             if (wakeMode !== "now" && wakeMode !== "next-heartbeat") {
-              throw new Error("--wake must be now or next-heartbeat");
+              throw new CronCliError("--wake must be now or next-heartbeat");
             }
 
             const rawAgentId = normalizeOptionalString(opts.agent);
@@ -207,32 +130,42 @@ export function registerCronAddCommand(cron: Command) {
 
             const hasAnnounce = Boolean(opts.announce) || opts.deliver === true;
             const hasNoDeliver = opts.deliver === false;
-            const webhookUrl = normalizeOptionalString(opts.webhook);
-            const hasWebhook = typeof opts.webhook === "string";
+            const webhookUrl =
+              typeof opts.webhook === "string" ? normalizeHttpWebhookUrl(opts.webhook) : null;
+            if (typeof opts.webhook === "string" && !webhookUrl) {
+              throw new CronCliError("--webhook must be a valid http(s) URL");
+            }
+            const hasWebhook = Boolean(webhookUrl);
             const deliveryFlagCount = [hasAnnounce, hasNoDeliver, hasWebhook].filter(
               Boolean,
             ).length;
             if (deliveryFlagCount > 1) {
-              throw new Error("Choose at most one of --announce, --no-deliver, or --webhook");
+              throw new CronCliError(
+                "Choose at most one of --announce, --no-deliver, or --webhook",
+              );
             }
 
-            const payload = (() => {
+            const resolvedPayload = await (async () => {
               // Main-session jobs use system events; isolated/current/session jobs use messages.
               const systemEvent = normalizeOptionalString(opts.systemEvent) ?? "";
               const optionMessage = normalizeOptionalString(opts.message);
               const positionalMessage = normalizeOptionalString(messageArg);
-              const commandShell = normalizeOptionalString(opts.command);
+              const commandShell = readNonBlankString(opts.command);
               const commandArgv = parseCronCommandArgv(opts.commandArgv);
-              const scriptPath = normalizeOptionalString(opts.script);
-              const toolsAllow = parseCronToolsAllow(opts.tools);
+              // File arguments identify exact local paths; trimming can select another file.
+              const scriptPath = readNonBlankString(opts.script);
+              if (typeof opts.script === "string" && !scriptPath) {
+                throw new CronCliError("--script must not be blank");
+              }
+              const toolsAllow = parseCronStringList(opts.tools);
               if (optionMessage && positionalMessage && optionMessage !== positionalMessage) {
-                throw new Error(
+                throw new CronCliError(
                   "Pass the automation message either positionally or with --message, not both.",
                 );
               }
               const message = optionMessage ?? positionalMessage ?? "";
               if (commandShell && commandArgv) {
-                throw new Error(
+                throw new CronCliError(
                   "Pass command payload either with --command or --command-argv, not both.",
                 );
               }
@@ -243,7 +176,7 @@ export function registerCronAddCommand(cron: Command) {
                 Boolean(scriptPath),
               ].filter(Boolean).length;
               if (chosen !== 1) {
-                throw new Error(
+                throw new CronCliError(
                   "Choose exactly one payload: --system-event, --message, --command, or --script",
                 );
               }
@@ -255,63 +188,47 @@ export function registerCronAddCommand(cron: Command) {
                 };
               }
               if (scriptPath) {
-                const scriptTimeoutSeconds = parseStrictPositiveIntOrUndefined(
+                if (opts.timeoutSeconds !== undefined) {
+                  throw new CronCliError(
+                    "Use --script-timeout-seconds for script jobs, not --timeout-seconds.",
+                  );
+                }
+                const scriptTimeoutSeconds = parseCronIntegerOption(
                   opts.scriptTimeoutSeconds,
+                  "--script-timeout-seconds",
                 );
-                if (opts.scriptTimeoutSeconds !== undefined && scriptTimeoutSeconds === undefined) {
-                  throw new Error("Invalid --script-timeout-seconds (must be a positive integer).");
-                }
-                const scriptToolBudget = parseStrictPositiveIntOrUndefined(opts.scriptToolBudget);
-                if (opts.scriptToolBudget !== undefined && scriptToolBudget === undefined) {
-                  throw new Error("Invalid --script-tool-budget (must be a positive integer).");
-                }
+                const scriptToolBudget = parseCronIntegerOption(
+                  opts.scriptToolBudget,
+                  "--script-tool-budget",
+                );
                 return {
                   kind: "script" as const,
-                  scriptPath,
                   timeoutSeconds: scriptTimeoutSeconds,
                   toolBudget: scriptToolBudget,
                   toolsAllow,
+                  script: await readCronPayloadScript(scriptPath),
                 };
               }
-              const timeoutSeconds = parseStrictPositiveIntOrUndefined(opts.timeoutSeconds);
-              if (opts.timeoutSeconds !== undefined && timeoutSeconds === undefined) {
-                throw new Error("Invalid --timeout-seconds (must be a positive integer).");
-              }
+              const timeoutSeconds = parseCronIntegerOption(
+                opts.timeoutSeconds,
+                "--timeout-seconds",
+                "non-negative",
+              );
               if (commandShell || commandArgv) {
-                const rawNoOutputTimeoutSeconds =
-                  opts.noOutputTimeoutSeconds ??
-                  (typeof opts.outputTimeoutSeconds === "string" ||
-                  typeof opts.outputTimeoutSeconds === "number"
-                    ? opts.outputTimeoutSeconds
-                    : undefined);
-                const noOutputTimeoutSeconds =
-                  parseStrictPositiveIntOrUndefined(rawNoOutputTimeoutSeconds);
-                if (
-                  rawNoOutputTimeoutSeconds !== undefined &&
-                  noOutputTimeoutSeconds === undefined
-                ) {
-                  throw new Error(
-                    "Invalid --no-output-timeout-seconds (must be a positive integer).",
-                  );
-                }
-                const outputMaxBytes = parseStrictPositiveIntOrUndefined(opts.outputMaxBytes);
-                if (opts.outputMaxBytes !== undefined && outputMaxBytes === undefined) {
-                  throw new Error("Invalid --output-max-bytes (must be a positive integer).");
-                }
+                const noOutputTimeoutSeconds = parseCronNoOutputTimeoutOption(opts);
+                const outputMaxBytes = parseCronIntegerOption(
+                  opts.outputMaxBytes,
+                  "--output-max-bytes",
+                );
                 return {
                   kind: "command" as const,
                   argv: commandArgv ?? ["sh", "-lc", commandShell ?? ""],
                   cwd: normalizeOptionalString(opts.commandCwd),
                   env: parseCronCommandEnv(opts.commandEnv),
                   input: typeof opts.commandInput === "string" ? opts.commandInput : undefined,
-                  timeoutSeconds:
-                    timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
-                  noOutputTimeoutSeconds:
-                    noOutputTimeoutSeconds && Number.isFinite(noOutputTimeoutSeconds)
-                      ? noOutputTimeoutSeconds
-                      : undefined,
-                  outputMaxBytes:
-                    outputMaxBytes && Number.isFinite(outputMaxBytes) ? outputMaxBytes : undefined,
+                  timeoutSeconds,
+                  noOutputTimeoutSeconds,
+                  outputMaxBytes,
                   ...(toolsAllow ? { toolsAllow } : {}),
                 };
               }
@@ -319,22 +236,11 @@ export function registerCronAddCommand(cron: Command) {
                 kind: "agentTurn" as const,
                 message,
                 model: normalizeOptionalString(opts.model),
-                fallbacks: parseCronFallbacks(opts.fallbacks),
+                fallbacks: parseCronStringList(opts.fallbacks),
                 thinking: normalizeOptionalString(opts.thinking),
-                timeoutSeconds:
-                  timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
+                timeoutSeconds,
                 lightContext: opts.lightContext === true ? true : undefined,
                 toolsAllow,
-              };
-            })();
-            const resolvedPayload = await (async () => {
-              if (payload.kind !== "script") {
-                return payload;
-              }
-              const { scriptPath, ...scriptPayload } = payload;
-              return {
-                ...scriptPayload,
-                script: await readCronPayloadScript(scriptPath),
               };
             })();
 
@@ -356,11 +262,11 @@ export function registerCronAddCommand(cron: Command) {
             const isIsolatedLikeSessionTarget =
               sessionTarget === "isolated" || sessionTarget === "current" || isCustomSessionTarget;
             if (sessionTarget !== "main" && !isIsolatedLikeSessionTarget) {
-              throw new Error("--session must be main, isolated, current, or session:<id>");
+              throw new CronCliError("--session must be main, isolated, current, or session:<id>");
             }
 
             if (opts.deleteAfterRun && opts.keepAfterRun) {
-              throw new Error("Choose --delete-after-run or --keep-after-run, not both");
+              throw new CronCliError("Choose --delete-after-run or --keep-after-run, not both");
             }
 
             if (
@@ -368,14 +274,14 @@ export function registerCronAddCommand(cron: Command) {
               resolvedPayload.kind !== "systemEvent" &&
               resolvedPayload.kind !== "script"
             ) {
-              throw new Error("Main jobs require --system-event or --script.");
+              throw new CronCliError("Main jobs require --system-event or --script.");
             }
             if (
               resolvedPayload.kind === "script" &&
               sessionTarget !== "main" &&
               sessionTarget !== "isolated"
             ) {
-              throw new Error("Script jobs require --session main or --session isolated.");
+              throw new CronCliError("Script jobs require --session main or --session isolated.");
             }
             if (
               isIsolatedLikeSessionTarget &&
@@ -383,7 +289,7 @@ export function registerCronAddCommand(cron: Command) {
               resolvedPayload.kind !== "command" &&
               resolvedPayload.kind !== "script"
             ) {
-              throw new Error("Isolated jobs require --message, --command, or --script.");
+              throw new CronCliError("Isolated jobs require --message, --command, or --script.");
             }
             if (
               (opts.announce || typeof opts.deliver === "boolean") &&
@@ -392,7 +298,7 @@ export function registerCronAddCommand(cron: Command) {
                   resolvedPayload.kind !== "command" &&
                   resolvedPayload.kind !== "script"))
             ) {
-              throw new Error(
+              throw new CronCliError(
                 "--announce/--no-deliver require a non-main agentTurn, command, or script session target.",
               );
             }
@@ -413,12 +319,12 @@ export function registerCronAddCommand(cron: Command) {
                   resolvedPayload.kind !== "command" &&
                   resolvedPayload.kind !== "script"))
             ) {
-              throw new Error(
+              throw new CronCliError(
                 "--channel, --to, --account, and --thread-id require a non-main agentTurn, command, or script job with delivery.",
               );
             }
             if (hasWebhook && hasChatDeliveryTarget) {
-              throw new Error("--webhook cannot be combined with chat delivery options.");
+              throw new CronCliError("--webhook cannot be combined with chat delivery options.");
             }
 
             const deliveryMode = hasWebhook
@@ -437,44 +343,44 @@ export function registerCronAddCommand(cron: Command) {
             const optionName = normalizeOptionalString(opts.name);
             const positionalName = hasScheduleFlag ? normalizeOptionalString(nameArg) : undefined;
             if (optionName && positionalName && optionName !== positionalName) {
-              throw new Error(
+              throw new CronCliError(
                 "Pass the automation name either positionally or with --name, not both.",
               );
             }
             const name = optionName ?? positionalName ?? "";
             if (!name) {
-              throw new Error("Cron job name is required. Pass a name or --name <name>.");
+              throw new CronCliError("Cron job name is required. Pass a name or --name <name>.");
             }
 
             const description = normalizeOptionalString(opts.description);
             const declarationKey = normalizeOptionalString(opts.declarationKey);
             if (typeof opts.declarationKey === "string" && !declarationKey) {
-              throw new Error("--declaration-key must not be blank");
+              throw new CronCliError("--declaration-key must not be blank");
             }
             const displayName = normalizeOptionalString(opts.displayName);
             if (typeof opts.displayName === "string" && !displayName) {
-              throw new Error("--display-name must not be blank");
+              throw new CronCliError("--display-name must not be blank");
             }
             const pacingMin = normalizeOptionalString(opts.pacingMin);
             const pacingMax = normalizeOptionalString(opts.pacingMax);
             if (typeof opts.pacingMin === "string" && !pacingMin) {
-              throw new Error("--pacing-min must not be blank");
+              throw new CronCliError("--pacing-min must not be blank");
             }
             if (typeof opts.pacingMax === "string" && !pacingMax) {
-              throw new Error("--pacing-max must not be blank");
+              throw new CronCliError("--pacing-max must not be blank");
             }
 
             const sessionKey = normalizeOptionalString(opts.sessionKey);
-            const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
-            if (opts.triggerOnce && !triggerScriptPath) {
-              throw new Error("--trigger-once requires --trigger-script");
+            const triggerScriptPath = readNonBlankString(opts.triggerScript);
+            if ((opts.triggerOnce || opts.triggerScript !== undefined) && !triggerScriptPath) {
+              throw new CronCliError(
+                `--trigger-${opts.triggerOnce ? "once requires --trigger-script" : "script must not be blank"}`,
+              );
             }
-            const trigger = triggerScriptPath
-              ? {
-                  script: await readCronTriggerScript(triggerScriptPath),
-                  ...(opts.triggerOnce ? { once: true } : {}),
-                }
-              : undefined;
+            const trigger = triggerScriptPath && {
+              script: await readCronTriggerScript(triggerScriptPath),
+              ...(opts.triggerOnce ? { once: true } : {}),
+            };
 
             if (
               (resolvedPayload.kind === "agentTurn" || resolvedPayload.kind === "script") &&
@@ -483,7 +389,7 @@ export function registerCronAddCommand(cron: Command) {
               defaultRuntime.error(
                 theme.warn(
                   "No --agent specified; the job will run with the configured default agent. " +
-                    "Specify --agent to choose a specific agent.",
+                    "Specify --agent to choose a specific agent, or set agents.defaults.systemAgent.agentId.",
                 ),
               );
             }

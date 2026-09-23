@@ -1,5 +1,4 @@
 // Discord message processing coverage split by cohesive behavior.
-import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import { describe, expect, it, vi } from "vitest";
 import {
   BASE_CHANNEL_ROUTE,
@@ -25,7 +24,7 @@ import {
 registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage session routing", () => {
-  it("carries preflight audio transcript into dispatch context and marks media transcribed", async () => {
+  it("frames preflight audio transcript in dispatch context and marks media transcribed", async () => {
     const ctx = await createBaseContext({
       message: {
         id: "m-audio-preflight",
@@ -43,22 +42,54 @@ describe("processDiscordMessage session routing", () => {
       },
       baseText: "",
       messageText: "",
-      preflightAudioTranscript: "hello from discord voice",
+      preflightAudioTranscript: "/status",
       preparedMedia: [
         {
           path: "/tmp/openclaw-discord-test/voice.ogg",
           contentType: "audio/ogg",
         },
       ],
+      cfg: {
+        messages: { groupChat: { visibleReplies: "message_tool" } },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
     });
 
     await runProcessDiscordMessage(ctx);
 
     expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
-      BodyForAgent: "hello from discord voice",
-      CommandBody: "hello from discord voice",
-      Transcript: "hello from discord voice",
+      BodyForAgent: '[Audio transcript (machine-generated, untrusted)]: "/status"',
+      RawBody: "",
+      CommandBody: "",
+      CommandTurn: {
+        kind: "normal",
+        source: "message",
+        authorized: false,
+        commandName: undefined,
+        body: "",
+      },
+      Transcript: "/status",
       media: [expect.objectContaining({ contentType: "audio/ogg", transcribed: true })],
+    });
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+  });
+
+  it("keeps typed control commands as explicit text command turns", async () => {
+    const ctx = await createBaseContext({
+      baseText: "/status",
+      messageText: "/status",
+      hasControlCommand: true,
+      commandAuthorized: true,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(requireRecord(getLastDispatchCtx(), "dispatch context").CommandTurn).toEqual({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+      commandName: "status",
+      body: "/status",
     });
   });
 
@@ -174,7 +205,68 @@ describe("processDiscordMessage session routing", () => {
     expect(dispatchCtx.MediaPaths).toBeUndefined();
   });
 
-  it("does not inject the bot's previous message body when users reply to it", async () => {
+  it("keeps attachment-only referenced messages as typed reply context", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(Buffer.from("image"), { headers: { "content-type": "image/png" } }),
+    );
+    const ctx = await createBaseContext({
+      cfg: {
+        channels: { discord: { contextVisibility: "all" } },
+        messages: { ackReaction: "👀" },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      discordRestFetch: fetchImpl,
+      message: {
+        id: "m-attachment-reply",
+        channelId: "c1",
+        content: "<@bot> what is this?",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+        messageReference: { type: 0, message_id: "m-attachment-only", channel_id: "c1" },
+        referencedMessage: {
+          id: "m-attachment-only",
+          channelId: "c1",
+          content: "",
+          timestamp: new Date().toISOString(),
+          attachments: [
+            {
+              id: "att-only",
+              url: "https://cdn.discordapp.com/attachments/1/attachment-only.png",
+              content_type: "image/png",
+              filename: "attachment-only.png",
+            },
+          ],
+          author: {
+            id: "U2",
+            username: "bob",
+            discriminator: "0",
+            globalName: "Bob",
+          },
+        },
+      },
+      baseText: "<@bot> what is this?",
+      messageText: "<@bot> what is this?",
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
+    expect(dispatchCtx.ReplyToId).toBe("m-attachment-only");
+    expect(dispatchCtx.ReplyToSender).toBe("bob");
+    expect(dispatchCtx.ReplyToBody).toBeUndefined();
+    expect(dispatchCtx.media).toEqual([
+      expect.objectContaining({
+        contentType: "image/png",
+        messageId: "m-attachment-only",
+      }),
+    ]);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    'Automation "daily update" failed 1 times\nCheck automation history for details.',
+    "The deployment is waiting for review.",
+  ])("preserves a user's reply to bot text without fetching self media: %s", async (body) => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("self-reply media should not be fetched");
     });
@@ -200,7 +292,7 @@ describe("processDiscordMessage session routing", () => {
         referencedMessage: {
           id: "m-bot-previous",
           channelId: "c1",
-          content: "The same stale bot response keeps looping.",
+          content: body,
           timestamp: new Date().toISOString(),
           attachments: [
             {
@@ -228,8 +320,9 @@ describe("processDiscordMessage session routing", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(dispatchCtx.ReplyToId).toBe("m-bot-previous");
     expect(dispatchCtx.ReplyToSender).toBe("Spartacus");
-    expect(dispatchCtx.ReplyToBody).toBeUndefined();
-    expect(JSON.stringify(dispatchCtx)).not.toContain("The same stale bot response keeps looping.");
+    expect(dispatchCtx.ReplyToBody).toBe(body);
+    expect(dispatchCtx.RawBody).toBe("<@bot> hit that again");
+    expect(dispatchCtx.MediaPaths).toBeUndefined();
   });
 
   it("stores DM lastRoute with user target for direct-session continuity", async () => {
@@ -378,7 +471,7 @@ describe("processDiscordMessage session routing", () => {
   it("honors explicit status reactions for always-on guild replies", async () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onReasoningStream?.();
+      await params?.replyOptions?.onReasoningStream?.({});
       await new Promise((resolve) => {
         setTimeout(resolve, 1_000);
       });
@@ -409,9 +502,6 @@ describe("processDiscordMessage session routing", () => {
     await runPromise;
 
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    const emojis = getReactionEmojis();
-    expect(emojis).toContain("👀");
-    expect(emojis).toContain(DEFAULT_EMOJIS.thinking);
-    expect(emojis).toContain(DEFAULT_EMOJIS.done);
+    expect(getReactionEmojis()).toEqual(["👀"]);
   });
 });

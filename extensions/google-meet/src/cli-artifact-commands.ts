@@ -6,10 +6,10 @@ import {
   buildGoogleMeetExportManifest,
   googleMeetExportFileNames,
   renderArtifactsMarkdown,
+  renderArtifactsSummary,
   renderAttendanceCsv,
   renderAttendanceMarkdown,
-  writeArtifactsSummary,
-  writeAttendanceSummary,
+  renderAttendanceSummary,
   writeMeetExportBundle,
 } from "./cli-export.js";
 import {
@@ -38,6 +38,10 @@ async function resolveCliArtifactQuery(
   };
 }
 
+function resolveTokenSource(refreshed: boolean) {
+  return refreshed ? "refresh-token" : "cached-access-token";
+}
+
 export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommandContext): void {
   const params = context;
   const { root } = context;
@@ -55,32 +59,25 @@ export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommand
     .action(async (options: MeetArtifactOptions) => {
       const resolved = await resolveCliArtifactQuery(params, options);
       const result = await fetchResolvedGoogleMeetArtifacts(resolved);
+      const tokenSource = resolveTokenSource(resolved.token.refreshed);
+      let text: string;
       if (options.json) {
-        await writeCliOutput(
-          options,
-          JSON.stringify(
-            {
-              ...result,
-              tokenSource: resolved.token.refreshed ? "refresh-token" : "cached-access-token",
-            },
-            null,
-            2,
-          ),
+        text = JSON.stringify(
+          {
+            ...result,
+            tokenSource,
+          },
+          null,
+          2,
         );
-        return;
-      }
-      if (options.format === "markdown") {
-        await writeCliOutput(options, renderArtifactsMarkdown(result));
-        return;
-      }
-      if (options.format && options.format !== "summary") {
+      } else if (options.format === "markdown") {
+        text = renderArtifactsMarkdown(result);
+      } else if (!options.format || options.format === "summary") {
+        text = `${renderArtifactsSummary(result)}token source: ${tokenSource}\n`;
+      } else {
         throw new Error("Unsupported format. Expected summary or markdown.");
       }
-      writeArtifactsSummary(result);
-      writeStdoutLine(
-        "token source: %s",
-        resolved.token.refreshed ? "refresh-token" : "cached-access-token",
-      );
+      await writeCliOutput(options, text);
     });
 
   addGoogleMeetArtifactOptions(
@@ -95,36 +92,27 @@ export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommand
     .action(async (options: MeetArtifactOptions) => {
       const resolved = await resolveCliArtifactQuery(params, options);
       const result = await fetchResolvedGoogleMeetAttendance(resolved);
+      const tokenSource = resolveTokenSource(resolved.token.refreshed);
+      let text: string;
       if (options.json) {
-        await writeCliOutput(
-          options,
-          JSON.stringify(
-            {
-              ...result,
-              tokenSource: resolved.token.refreshed ? "refresh-token" : "cached-access-token",
-            },
-            null,
-            2,
-          ),
+        text = JSON.stringify(
+          {
+            ...result,
+            tokenSource,
+          },
+          null,
+          2,
         );
-        return;
-      }
-      if (options.format === "markdown") {
-        await writeCliOutput(options, renderAttendanceMarkdown(result));
-        return;
-      }
-      if (options.format === "csv") {
-        await writeCliOutput(options, renderAttendanceCsv(result));
-        return;
-      }
-      if (options.format && options.format !== "summary") {
+      } else if (options.format === "markdown") {
+        text = renderAttendanceMarkdown(result);
+      } else if (options.format === "csv") {
+        text = renderAttendanceCsv(result);
+      } else if (!options.format || options.format === "summary") {
+        text = `${renderAttendanceSummary(result)}token source: ${tokenSource}\n`;
+      } else {
         throw new Error("Unsupported format. Expected summary, markdown, or csv.");
       }
-      writeAttendanceSummary(result);
-      writeStdoutLine(
-        "token source: %s",
-        resolved.token.refreshed ? "refresh-token" : "cached-access-token",
-      );
+      await writeCliOutput(options, text);
     });
 
   addGoogleMeetArtifactOptions(
@@ -175,11 +163,11 @@ export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommand
             attendance,
             files: googleMeetExportFileNames(),
             request,
-            tokenSource: resolved.token.refreshed ? "refresh-token" : "cached-access-token",
+            tokenSource: resolveTokenSource(resolved.token.refreshed),
             ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
           }),
           ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
-          tokenSource: resolved.token.refreshed ? "refresh-token" : "cached-access-token",
+          tokenSource: resolveTokenSource(resolved.token.refreshed),
         });
         return;
       }
@@ -189,13 +177,13 @@ export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommand
         attendance,
         zip: Boolean(options.zip),
         request,
-        tokenSource: resolved.token.refreshed ? "refresh-token" : "cached-access-token",
+        tokenSource: resolveTokenSource(resolved.token.refreshed),
         ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
       });
       const payload = {
         ...bundle,
         ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
-        tokenSource: resolved.token.refreshed ? "refresh-token" : "cached-access-token",
+        tokenSource: resolveTokenSource(resolved.token.refreshed),
       };
       if (options.json) {
         writeStdoutJson(payload);

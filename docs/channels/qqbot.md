@@ -19,8 +19,13 @@ Status: official downloadable plugin.
 ## Install
 
 ```bash
-openclaw plugins install @openclaw/qqbot
+openclaw plugins install @tencent-connect/openclaw-qqbot
 ```
+
+If the bot was installed as `@openclaw/qqbot` under plugin id `qqbot`,
+`openclaw plugins update qqbot` and `openclaw update` rewrite it to
+`@tencent-connect/openclaw-qqbot` under plugin id `openclaw-qqbot`. Channel
+config stays under `channels.qqbot`.
 
 ## Setup
 
@@ -30,7 +35,7 @@ openclaw plugins install @openclaw/qqbot
 3. Find **AppID** and **AppSecret** on the bot's settings page and copy them.
 
 <Note>
-AppSecret is not stored in plaintext. If you leave the page without saving it, you'll have to regenerate a new one.
+Save the AppSecret before leaving the QQ Open Platform page; otherwise, you will need to regenerate it.
 </Note>
 
 4. Add the channel:
@@ -39,7 +44,7 @@ AppSecret is not stored in plaintext. If you leave the page without saving it, y
 openclaw channels add --channel qqbot --token "AppID:AppSecret"
 ```
 
-5. Restart the Gateway.
+5. Check `openclaw channels status --probe`; start the Gateway if it is offline. Config changes follow [hot reload](/gateway/configuration/hot-reload).
 
 ## Inbound durability
 
@@ -67,6 +72,8 @@ Minimal config:
   channels: {
     qqbot: {
       enabled: true,
+      dmPolicy: "open",
+      allowFrom: ["openclaw:approval-disabled"],
       appId: "YOUR_APP_ID",
       clientSecret: "YOUR_APP_SECRET",
     },
@@ -74,34 +81,56 @@ Minimal config:
 }
 ```
 
+These examples keep direct messages open with `dmPolicy: "open"` while the
+`openclaw:approval-disabled` marker leaves native approval actions disabled.
+To enable those actions, replace the marker with specific approver QQ OpenIDs.
+
 Default-account env vars (top-level account only):
 
 - `QQBOT_APP_ID`
 - `QQBOT_CLIENT_SECRET`
 
-File-backed AppSecret:
+Use a [SecretRef](/gateway/secrets/secretref-contract) to keep the AppSecret out
+of the channel config. For an environment-backed secret:
 
 ```json5
 {
   channels: {
     qqbot: {
       enabled: true,
+      dmPolicy: "open",
+      allowFrom: ["openclaw:approval-disabled"],
       appId: "YOUR_APP_ID",
-      clientSecretFile: "/path/to/qqbot-secret.txt",
+      clientSecret: {
+        source: "env",
+        provider: "default",
+        id: "QQBOT_CLIENT_SECRET",
+      },
     },
   },
 }
 ```
 
-Env SecretRef AppSecret:
+For a file-backed AppSecret, configure a `singleValue` file provider:
 
 ```json5
 {
+  secrets: {
+    providers: {
+      qqbot_secret: {
+        source: "file",
+        path: "/path/to/qqbot-secret.txt",
+        mode: "singleValue",
+      },
+    },
+  },
   channels: {
     qqbot: {
       enabled: true,
+      dmPolicy: "open",
+      allowFrom: ["openclaw:approval-disabled"],
       appId: "YOUR_APP_ID",
-      clientSecret: { source: "env", provider: "default", id: "QQBOT_CLIENT_SECRET" },
+      clientSecret: { source: "file", provider: "qqbot_secret", id: "value" },
     },
   },
 }
@@ -110,11 +139,16 @@ Env SecretRef AppSecret:
 Notes:
 
 - `openclaw channels add --channel qqbot --token-file ...` sets the AppSecret
-  only; `appId` must already be set in config or `QQBOT_APP_ID`.
-- `clientSecret` accepts a plaintext string, a file path (`clientSecretFile`),
-  or a structured SecretRef object.
-- Legacy `secretref:...` / `secretref-env:...` marker strings are rejected for
-  `clientSecret`; use a structured SecretRef object instead.
+  only; `appId` must already be set in config or `QQBOT_APP_ID`. Run
+  `openclaw doctor --fix` afterward to migrate the legacy file setting.
+- `clientSecret` accepts plaintext or an environment-, file-, exec-, or
+  store-backed SecretRef. OpenClaw resolves the reference before handing the
+  credential to the QQ Bot plugin.
+- `clientSecretFile` is a migration-only legacy setting. `openclaw doctor --fix`
+  replaces it with a file-backed `clientSecret` SecretRef. New configurations
+  should use `clientSecret` directly.
+- Top-level credentials and environment fallbacks belong only to the default
+  account. Named accounts configure their own `appId` and `clientSecret`.
 
 ### Streaming
 
@@ -164,13 +198,17 @@ Run multiple QQ bots under a single OpenClaw instance:
   channels: {
     qqbot: {
       enabled: true,
+      dmPolicy: "open",
+      allowFrom: ["openclaw:approval-disabled"],
       appId: "111111111",
-      clientSecret: "secret-of-bot-1",
+      clientSecret: { source: "env", provider: "default", id: "QQBOT_DEFAULT_SECRET" },
       accounts: {
         bot2: {
           enabled: true,
+          dmPolicy: "open",
+          allowFrom: ["openclaw:approval-disabled"],
           appId: "222222222",
-          clientSecret: "secret-of-bot-2",
+          clientSecret: { source: "env", provider: "default", id: "QQBOT_BOT2_SECRET" },
         },
       },
     },
@@ -181,6 +219,13 @@ Run multiple QQ bots under a single OpenClaw instance:
 Each account owns an isolated WebSocket connection, API client, and token
 cache, keyed by `appId`. Log lines are tagged with the owning account id so
 diagnostics stay separable when you run several bots under one Gateway.
+
+At startup, a missing SecretRef value makes only its account unavailable;
+healthy siblings and the Gateway remain available. An explicit failed reference
+does not fall back to environment or plugin backup credentials. Malformed refs
+and unknown secret providers still fail startup or reload. On reload, an
+unchanged account can retain its last-known-good credential; see
+[Secrets runtime model](/gateway/secrets/runtime-model).
 
 Add a second bot via CLI:
 
@@ -223,16 +268,16 @@ group, then mention it or configure the group to run without a mention.
 `groups["*"]` sets defaults for every group; a concrete `groups.GROUP_OPENID`
 entry overrides those defaults for one group. Group settings:
 
-| Field                 | Default          | Description                                                                                        |
-| --------------------- | ---------------- | -------------------------------------------------------------------------------------------------- |
-| `requireMention`      | `true`           | Require an `@`-mention before the bot replies.                                                     |
-| `commandLevel`        | `all`            | Which built-in slash commands can run in the group (see below).                                    |
-| `ignoreOtherMentions` | `false`          | Drop messages that mention someone else but not the bot.                                           |
-| `historyLimit`        | `50`             | Recent non-mention messages kept as context for the next mentioned turn. `0` disables history.     |
-| `tools`               | —                | Allow/deny tools for the whole group.                                                              |
-| `toolsBySender`       | —                | Per-sender tool overrides; see [Groups](/channels/groups#groupchannel-tool-restrictions-optional). |
-| `name`                | openid prefix    | Friendly label used in logs and group context.                                                     |
-| `prompt`              | built-in default | Per-group behavior prompt appended to the agent context.                                           |
+| Field                 | Default          | Description                                                                                           |
+| --------------------- | ---------------- | ----------------------------------------------------------------------------------------------------- |
+| `requireMention`      | `true`           | Require an `@`-mention before the bot replies.                                                        |
+| `commandLevel`        | `all`            | Which built-in slash commands can run in the group (see below).                                       |
+| `ignoreOtherMentions` | `false`          | Drop messages that mention someone else but not the bot.                                              |
+| `historyLimit`        | `50`             | Recent non-mention messages kept as context for the next mentioned turn. `0` disables history.        |
+| `tools`               | —                | Allow/deny tools for the whole group.                                                                 |
+| `toolsBySender`       | —                | Per-sender tool overrides; see [Groups](/channels/groups#group%2Fchannel-tool-restrictions-optional). |
+| `name`                | openid prefix    | Friendly label used in logs and group context.                                                        |
+| `prompt`              | built-in default | Per-group behavior prompt appended to the agent context.                                              |
 
 `commandLevel` accepts:
 

@@ -2,7 +2,7 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodesCli } from "./nodes-cli.js";
-import { callGatewayCli } from "./nodes-cli/rpc.js";
+import { callNodesGatewayCli } from "./nodes-cli/rpc.js";
 
 type NodeInvokeCall = {
   method?: string;
@@ -47,8 +47,6 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall): Promise<unknown> => {
   return { ok: true };
 });
 
-const randomIdempotencyKey = vi.fn(() => "rk_test");
-
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
   return createCliRuntimeMock(vi);
@@ -58,7 +56,6 @@ const { runtimeErrors, defaultRuntime } = mocks;
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
-  randomIdempotencyKey: () => randomIdempotencyKey(),
 }));
 
 vi.mock("../runtime.js", async () => ({
@@ -98,13 +95,12 @@ describe("nodes-cli coverage", () => {
       return;
     }
     sharedProgram.exitOverride();
-    await registerNodesCli(sharedProgram);
+    await registerNodesCli(sharedProgram, ["node", "openclaw", "nodes", "status"]);
   });
 
   beforeEach(() => {
     runtimeErrors.length = 0;
     callGateway.mockClear();
-    randomIdempotencyKey.mockClear();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
     defaultRuntime.writeStdout.mockClear();
@@ -249,6 +245,123 @@ describe("nodes-cli coverage", () => {
     expect(callGateway.mock.calls.map(([call]) => call.method)).toEqual(["node.pair.reject"]);
   });
 
+  it.each([
+    {
+      label: "status with an invalid last-connected duration",
+      command: "status",
+      args: ["nodes", "status", "--last-connected", "not-a-duration"],
+      message: "Invalid --last-connected: Invalid duration",
+    },
+    {
+      label: "list with an invalid last-connected duration",
+      command: "list",
+      args: ["nodes", "list", "--last-connected", "not-a-duration"],
+      message: "Invalid --last-connected: Invalid duration",
+    },
+    {
+      label: "status with an empty last-connected duration",
+      command: "status",
+      args: ["nodes", "status", "--last-connected", ""],
+      message: "Invalid --last-connected",
+    },
+    {
+      label: "list with a blank last-connected duration",
+      command: "list",
+      args: ["nodes", "list", "--last-connected", "   "],
+      message: "Invalid --last-connected",
+    },
+    {
+      label: "invoke with a blank node",
+      command: "invoke",
+      args: ["nodes", "invoke", "--node", "   ", "--command", "canvas.eval"],
+      message: "--node and --command required",
+    },
+    {
+      label: "invoke with a blank command",
+      command: "invoke",
+      args: ["nodes", "invoke", "--node", "mac-1", "--command", "   "],
+      message: "--node and --command required",
+    },
+    {
+      label: "invoke with an empty idempotency key",
+      command: "invoke",
+      args: [
+        "nodes",
+        "invoke",
+        "--node",
+        "mac-1",
+        "--command",
+        "canvas.eval",
+        "--idempotency-key",
+        "",
+      ],
+      message: "--idempotency-key",
+    },
+    {
+      label: "rename with a blank name",
+      command: "rename",
+      args: ["nodes", "rename", "--node", "mac-1", "--name", "   "],
+      message: "--name must not be empty",
+    },
+    {
+      label: "push with an invalid environment",
+      command: "push",
+      args: ["nodes", "push", "--node", "mac-1", "--environment", "staging"],
+      message: "invalid --environment (use sandbox|production)",
+    },
+    {
+      label: "notify without a title or body",
+      command: "notify",
+      args: ["nodes", "notify", "--node", "mac-1", "--title", " ", "--body", " "],
+      message: "missing --title or --body",
+    },
+    {
+      label: "camera snap with an invalid facing",
+      command: "camera snap",
+      args: ["nodes", "camera", "snap", "--node", "mac-1", "--facing", "side"],
+      message: "invalid facing: side (expected front|back|both)",
+    },
+    {
+      label: "camera clip with an invalid facing",
+      command: "camera clip",
+      args: ["nodes", "camera", "clip", "--node", "mac-1", "--facing", "both"],
+      message: "invalid facing: both (expected front|back)",
+    },
+    {
+      label: "camera clip with an invalid duration",
+      command: "camera clip",
+      args: ["nodes", "camera", "clip", "--node", "mac-1", "--duration", "later"],
+      message: "Invalid duration",
+    },
+    {
+      label: "screen record with an invalid duration",
+      command: "screen record",
+      args: ["nodes", "screen", "record", "--node", "mac-1", "--duration", "later"],
+      message: "Invalid duration",
+    },
+  ])("reports $label once before calling the gateway", async ({ command, args, message }) => {
+    await expect(sharedProgram.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runtimeErrors).toEqual([expect.stringContaining(`nodes ${command} failed: ${message}`)]);
+    expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["invoke node", ["nodes", "invoke", "--command", "canvas.eval"]],
+    ["invoke command", ["nodes", "invoke", "--node", "mac-1"]],
+    ["rename name", ["nodes", "rename", "--node", "mac-1"]],
+  ])("preserves Commander validation for a missing %s", async (_label, args) => {
+    await withSuppressedStderr(async () => {
+      await expect(sharedProgram.parseAsync(args, { from: "user" })).rejects.toMatchObject({
+        code: "commander.missingMandatoryOptionValue",
+      });
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
   it("blocks system.run on nodes invoke", async () => {
     await expect(
       sharedProgram.parseAsync(["nodes", "invoke", "--node", "mac-1", "--command", "system.run"], {
@@ -269,6 +382,20 @@ describe("nodes-cli coverage", () => {
     expect(runtimeErrors.at(-1)).toContain("--params must be valid JSON.");
     expect(callGateway).not.toHaveBeenCalled();
     expect(lastNodeInvokeCall).toBeNull();
+  });
+
+  it.each([" \t ", "  caller-key\t "])("preserves nonempty idempotency key %j", async (key) => {
+    const invoke = await runNodesCommand([
+      "nodes",
+      "invoke",
+      "--node",
+      "mac-1",
+      "--command",
+      "canvas.eval",
+      "--idempotency-key",
+      key,
+    ]);
+    expect(invoke.params?.idempotencyKey).toBe(key);
   });
 
   it("invokes system.notify with provided fields", async () => {
@@ -431,7 +558,7 @@ describe("nodes-cli coverage", () => {
       idempotencyKey: "rk_test",
     };
 
-    await callGatewayCli("node.invoke", { timeout: "10000", json: true }, params);
+    await callNodesGatewayCli("node.invoke", { timeout: "10000", json: true }, params);
 
     expect(getNodeInvokeCall()).toMatchObject({
       method: "node.invoke",
@@ -470,78 +597,37 @@ describe("nodes-cli coverage", () => {
   });
 
   it.each([
-    {
-      args: ["nodes", "location", "get", "--node", "mac-1", "--max-age", "1000ms"],
-      flag: "--max-age",
-    },
-    {
-      args: ["nodes", "location", "get", "--node", "mac-1", "--location-timeout", "5s"],
-      flag: "--location-timeout",
-    },
-    {
-      args: ["nodes", "location", "get", "--node", "mac-1", "--invoke-timeout", "6s"],
-      flag: "--invoke-timeout",
-    },
-    {
-      args: ["nodes", "camera", "snap", "--node", "mac-1", "--max-width", "1024px"],
-      flag: "--max-width",
-    },
-    {
-      args: ["nodes", "camera", "snap", "--node", "mac-1", "--delay-ms", "20ms"],
-      flag: "--delay-ms",
-    },
-    {
-      args: ["nodes", "camera", "snap", "--node", "mac-1", "--invoke-timeout", "20s"],
-      flag: "--invoke-timeout",
-    },
-    {
-      args: ["nodes", "camera", "snap", "--node", "mac-1", "--quality", "0.8jpg"],
-      flag: "--quality",
-    },
-    {
-      args: ["nodes", "camera", "snap", "--node", "mac-1", "--quality", "1.1"],
-      flag: "--quality",
-    },
-    {
-      args: ["nodes", "camera", "clip", "--node", "mac-1", "--invoke-timeout", "90s"],
-      flag: "--invoke-timeout",
-    },
-    {
-      args: ["nodes", "screen", "record", "--node", "mac-1", "--screen", "1x"],
-      flag: "--screen",
-    },
-    {
-      args: ["nodes", "screen", "record", "--node", "mac-1", "--invoke-timeout", "120s"],
-      flag: "--invoke-timeout",
-    },
-    {
-      args: ["nodes", "screen", "record", "--node", "mac-1", "--fps", "10fps"],
-      flag: "--fps",
-    },
-    {
-      args: ["nodes", "screen", "record", "--node", "mac-1", "--fps", "0"],
-      flag: "--fps",
-    },
-    {
-      args: ["nodes", "notify", "--node", "mac-1", "--title", "Ping", "--invoke-timeout", "15s"],
-      flag: "--invoke-timeout",
-    },
-    {
-      args: [
-        "nodes",
-        "invoke",
-        "--node",
-        "mac-1",
-        "--command",
-        "canvas.eval",
-        "--invoke-timeout",
-        "15s",
-      ],
-      flag: "--invoke-timeout",
-    },
-  ])("rejects partial numeric option for $args", async ({ args, flag }) => {
+    [["nodes", "location", "get", "--node", "mac-1", "--max-age", "1000ms"], "--max-age"],
+    [
+      ["nodes", "location", "get", "--node", "mac-1", "--location-timeout", "5s"],
+      "--location-timeout",
+    ],
+    [["nodes", "location", "get", "--node", "mac-1", "--invoke-timeout", "6s"], "--invoke-timeout"],
+    [["nodes", "camera", "snap", "--node", "mac-1", "--max-width", "1024px"], "--max-width"],
+    [["nodes", "camera", "snap", "--node", "mac-1", "--delay-ms", "20ms"], "--delay-ms"],
+    [["nodes", "camera", "snap", "--node", "mac-1", "--invoke-timeout", "20s"], "--invoke-timeout"],
+    [["nodes", "camera", "snap", "--node", "mac-1", "--quality", "0.8jpg"], "--quality"],
+    [["nodes", "camera", "snap", "--node", "mac-1", "--quality", "1.1"], "--quality"],
+    [["nodes", "camera", "clip", "--node", "mac-1", "--invoke-timeout", "90s"], "--invoke-timeout"],
+    [["nodes", "screen", "record", "--node", "mac-1", "--screen", "1x"], "--screen"],
+    [
+      ["nodes", "screen", "record", "--node", "mac-1", "--invoke-timeout", "120s"],
+      "--invoke-timeout",
+    ],
+    [["nodes", "screen", "record", "--node", "mac-1", "--fps", "10fps"], "--fps"],
+    [["nodes", "screen", "record", "--node", "mac-1", "--fps", "0"], "--fps"],
+    [
+      ["nodes", "notify", "--node", "mac-1", "--title", "Ping", "--invoke-timeout", "15s"],
+      "--invoke-timeout",
+    ],
+    [
+      ["nodes", "invoke", "--node", "mac-1", "--command", "canvas.eval", "--invoke-timeout", "15s"],
+      "--invoke-timeout",
+    ],
+  ])("rejects invalid numeric option before calling the gateway for %s", async (args, flag) => {
     await expect(sharedProgram.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
     expect(runtimeErrors.at(-1)).toContain(`${flag} must be`);
+    expect(callGateway).not.toHaveBeenCalled();
     expect(lastNodeInvokeCall).toBeNull();
   });
 });

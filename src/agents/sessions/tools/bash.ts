@@ -3,151 +3,36 @@
  *
  * Executes local shell commands with streaming output accumulation and TUI renderers.
  */
-import { existsSync } from "node:fs";
 import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
-import { toErrorObject } from "../../../infra/errors.js";
 import { formatDurationSeconds } from "../../../infra/format-time/format-duration.js";
-import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
-import { spawnCommand } from "../../../process/exec.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
-import { theme } from "../../modes/interactive/theme/theme.js";
+import { interactiveAgentTheme as theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
-import {
-  buildShellCommandInvocation,
-  getBashShellConfig,
-  getBashShellEnv,
-  killProcessTree,
-} from "../../shell-utils.js";
+import { executionTitleSchema } from "../../schema/typebox.js";
+import { getBashShellEnv } from "../../shell-utils.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { createLocalBashOperations, resolveBashTimeoutMs } from "./bash-local-exec.js";
 import type { BashOperations } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
-import { getTextOutput, invalidArgText, str } from "./render-utils.js";
+import { getTextOutput, invalidArgText, reuseTextComponent, str } from "./render-utils.js";
 import { formatFullOutputFooter, type BashToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
 
 const bashSchema = Type.Object({
+  title: executionTitleSchema(),
   command: Type.String({ description: "Bash command." }),
   timeout: Type.Optional(Type.Number({ description: "Optional timeout seconds; default none." })),
 });
-function resolveBashTimeoutMs(timeoutSeconds: unknown): number | undefined {
-  if (timeoutSeconds === undefined) {
-    return undefined;
-  }
-  if (
-    typeof timeoutSeconds !== "number" ||
-    !Number.isFinite(timeoutSeconds) ||
-    timeoutSeconds <= 0
-  ) {
-    throw new Error("Invalid timeout: must be a positive finite number of seconds");
-  }
-  return resolveTimerTimeoutMs(timeoutSeconds * 1000, 1);
-}
-
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.bashToolTestApi")] = {
     resolveBashTimeoutMs,
   };
 }
 
-/**
- * Create bash operations using OpenClaw runtime's built-in local shell execution backend.
- *
- * This is useful for extensions that intercept user_bash and still want OpenClaw runtime's
- * standard local shell behavior while wrapping or rewriting commands.
- */
-export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
-  return {
-    exec: (command, cwd, { onData, signal, timeout, env }) => {
-      return new Promise((resolve, reject) => {
-        const shellConfig = getBashShellConfig(options?.shellPath);
-        const invocation = buildShellCommandInvocation(command, shellConfig);
-        if (!existsSync(cwd)) {
-          reject(
-            new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`),
-          );
-          return;
-        }
-        const child = spawnCommand(invocation.argv, {
-          baseEnv: {},
-          buffer: false,
-          cwd,
-          detached: process.platform !== "win32",
-          env: env ?? getBashShellEnv(shellConfig.shell),
-          ...(invocation.input === undefined ? {} : { input: invocation.input }),
-          reject: false,
-          stdio: [invocation.stdin, "pipe", "pipe"],
-        });
-        const releaseOutput = releaseChildProcessOutputAfterExit(child.nodeChildProcess);
-        let timedOut = false;
-        let timeoutHandle: NodeJS.Timeout | undefined;
-        const timeoutMs = resolveBashTimeoutMs(timeout);
-        if (timeoutMs !== undefined) {
-          timeoutHandle = setTimeout(() => {
-            timedOut = true;
-            if (child.pid) {
-              killProcessTree(child.pid, { detached: true });
-            }
-          }, timeoutMs);
-        }
-        // Stream stdout and stderr. Tag each pipe so downstream decode state
-        // stays per-stream; a pending sequence on one must not eat the other.
-        child.stdout?.on("data", (data: Buffer) => onData(data, "stdout"));
-        child.stderr?.on("data", (data: Buffer) => onData(data, "stderr"));
-        // Handle abort signal by killing the entire process tree.
-        const onAbort = () => {
-          if (child.pid) {
-            killProcessTree(child.pid, { detached: true });
-          }
-        };
-        if (signal) {
-          if (signal.aborted) {
-            onAbort();
-          } else {
-            signal.addEventListener("abort", onAbort, { once: true });
-          }
-        }
-        void child
-          .then((result) => {
-            if (result.failed && result.exitCode === undefined && result.signal === undefined) {
-              if (result instanceof Error) {
-                throw result;
-              }
-              throw new Error(`Failed to launch shell: ${shellConfig.shell}`, { cause: result });
-            }
-            if (timeoutHandle) {
-              clearTimeout(timeoutHandle);
-            }
-            if (signal) {
-              signal.removeEventListener("abort", onAbort);
-            }
-            if (signal?.aborted) {
-              reject(new Error("aborted"));
-              return;
-            }
-            if (timedOut) {
-              reject(new Error(`timeout:${timeout}`));
-              return;
-            }
-            resolve({ exitCode: result.exitCode ?? (result.failed ? 1 : 0) });
-          })
-          .catch((err: unknown) => {
-            if (timeoutHandle) {
-              clearTimeout(timeoutHandle);
-            }
-            if (signal) {
-              signal.removeEventListener("abort", onAbort);
-            }
-            reject(toErrorObject(err, "Non-Error rejection"));
-          })
-          .finally(releaseOutput);
-      });
-    },
-  };
-}
+export { createLocalBashOperations } from "./bash-local-exec.js";
 
 export interface BashSpawnContext {
   command: string;
@@ -465,9 +350,7 @@ export function createBashToolDefinition(
         state.startedAt = Date.now();
         state.endedAt = undefined;
       }
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatBashCall(args));
-      return text;
+      return reuseTextComponent(context.lastComponent, formatBashCall(args));
     },
     renderResult(result, optionsLocal, themeLocal, context) {
       void themeLocal;

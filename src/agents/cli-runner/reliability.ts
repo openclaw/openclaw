@@ -10,8 +10,8 @@ import {
   CLI_RESUME_WATCHDOG_DEFAULTS,
   CLI_WATCHDOG_MIN_TIMEOUT_MS,
 } from "../cli-watchdog-defaults.js";
-import type { EmbeddedRunTrigger } from "../embedded-agent-runner/run/params.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
+import type { EmbeddedRunTrigger } from "../run-trigger.js";
 
 function pickWatchdogProfile(
   backend: CliBackendConfig,
@@ -69,9 +69,15 @@ export function resolveCliNoOutputTimeoutMs(params: {
   backend: CliBackendConfig;
   timeoutMs: number;
   useResume: boolean;
+  expectedQuiet?: boolean;
   trigger?: EmbeddedRunTrigger;
   runTimeoutOverrideMs?: number;
 }): number {
+  if (params.expectedQuiet) {
+    // Expected-quiet controls have no earlier liveness signal; the caller's
+    // overall operation timeout remains their authoritative execution budget.
+    return params.timeoutMs;
+  }
   const hasExplicitRunTimeout =
     typeof params.runTimeoutOverrideMs === "number" &&
     Number.isFinite(params.runTimeoutOverrideMs) &&

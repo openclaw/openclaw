@@ -1,9 +1,13 @@
 // Doctor gateway methods inspect and repair memory dreaming artifacts and managed cron state.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  AgentSelectionRequiredError,
+  tryResolveAmbientOwnerAgentId,
+} from "../../agents/agent-scope-config.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -17,26 +21,36 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryRemDreamingConfig,
+  type ShortTermDreamingStats,
+  type ShortTermDreamingStatsEntry,
 } from "../../memory-host-sdk/dreaming.js";
-import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
+import * as defaultMemoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-runtime.js";
+import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { formatError } from "../server-utils.js";
 import {
-  dedupeDreamDiaryEntries,
-  loadShortTermPromotionDreamingStats,
-  previewGroundedRemMarkdown,
-  removeBackfillDiaryEntries,
-  removeGroundedShortTermCandidates,
-  repairDreamingArtifacts,
-  writeBackfillDiaryEntries,
-} from "./doctor.memory-core-runtime.js";
-import { normalizeTrimmedString } from "./record-shared.js";
+  listWorkspaceDailyFiles,
+  readDreamDiary,
+  type DoctorMemoryDreamDiaryPayload,
+} from "./doctor-memory-files.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+
+export type { DoctorMemoryDreamDiaryPayload } from "./doctor-memory-files.js";
+
+type DoctorMemoryCoreRuntime = Pick<
+  typeof defaultMemoryCoreRuntime,
+  | "dedupeDreamDiaryEntries"
+  | "loadShortTermPromotionDreamingStats"
+  | "previewGroundedRemMarkdown"
+  | "removeBackfillDiaryEntries"
+  | "removeGroundedShortTermCandidates"
+  | "repairDreamingArtifacts"
+  | "writeBackfillDiaryEntries"
+>;
 
 const MANAGED_DEEP_SLEEP_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DEEP_SLEEP_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
 const DEEP_SLEEP_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_short_term_promotion_dream__";
-const DREAM_DIARY_FILE_NAMES = ["DREAMS.md", "dreams.md"] as const;
 
 type DoctorMemoryDreamingPhasePayload = {
   enabled: boolean;
@@ -65,47 +79,21 @@ type DoctorMemoryRemDreamingPayload = DoctorMemoryDreamingPhasePayload & {
   minPatternStrength: number;
 };
 
-type DoctorMemoryDreamingEntryPayload = {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  recallCount: number;
-  dailyCount: number;
-  groundedCount: number;
-  totalSignalCount: number;
-  lightHits: number;
-  remHits: number;
-  phaseHitCount: number;
-  promotedAt?: string;
-  lastRecalledAt?: string;
+type DreamingStoreStats = Omit<ShortTermDreamingStats, "storePath" | "phaseSignalPath"> & {
+  storePath?: string;
+  phaseSignalPath?: string;
+  storeError?: string;
 };
 
-type DoctorMemoryDreamingPayload = {
+type DoctorMemoryDreamingConfigPayload = {
   enabled: boolean;
   timezone?: string;
   verboseLogging: boolean;
   storageMode: "inline" | "separate" | "both";
   separateReports: boolean;
-  shortTermCount: number;
-  recallSignalCount: number;
-  dailySignalCount: number;
-  groundedSignalCount: number;
-  totalSignalCount: number;
-  phaseSignalCount: number;
-  lightPhaseHitCount: number;
-  remPhaseHitCount: number;
-  promotedTotal: number;
-  promotedToday: number;
-  storePath?: string;
-  phaseSignalPath?: string;
-  lastPromotedAt?: string;
-  storeError?: string;
-  phaseSignalError?: string;
-  shortTermEntries: DoctorMemoryDreamingEntryPayload[];
-  signalEntries: DoctorMemoryDreamingEntryPayload[];
-  promotedEntries: DoctorMemoryDreamingEntryPayload[];
+  shortTermEntries: ShortTermDreamingStatsEntry[];
+  signalEntries: ShortTermDreamingStatsEntry[];
+  promotedEntries: ShortTermDreamingStatsEntry[];
   phases: {
     light: DoctorMemoryLightDreamingPayload;
     deep: DoctorMemoryDeepDreamingPayload;
@@ -113,8 +101,11 @@ type DoctorMemoryDreamingPayload = {
   };
 };
 
+type DoctorMemoryDreamingPayload = DoctorMemoryDreamingConfigPayload & DreamingStoreStats;
+
 export type DoctorMemoryStatusPayload = {
   agentId: string;
+  searchRuntimeRegistered?: boolean;
   provider?: string;
   embedding: {
     ok: boolean;
@@ -131,33 +122,12 @@ export type DoctorMemoryStatusPayload = {
 export type DoctorMemoryEmbeddingRuntimePayload = {
   engine: "llama.cpp";
   state: "ready" | "failed";
-  backend?: "metal" | "cuda" | "vulkan" | "cpu";
-  buildType?: "localBuild" | "prebuilt";
-  deviceNames?: string[];
-  memory?: {
-    totalBytes: number;
-    usedBytes: number;
-    freeBytes: number;
-    unifiedBytes: number;
-    observedAtMs: number;
-  };
-  offload?: {
-    supported: boolean;
-    offloadedLayers?: number;
-    totalLayers?: number;
-  };
-  context?: {
-    requestedSize: number | "auto";
-  };
+  backend?: "metal" | "cpu";
+  buildInfo?: string;
+  model?: { id: string; path?: string };
+  capabilities?: { vision: boolean; draft: boolean };
+  endpoints?: Record<string, "ready" | "unavailable">;
   loadError?: string;
-};
-
-export type DoctorMemoryDreamDiaryPayload = {
-  agentId: string;
-  found: boolean;
-  path: string;
-  content?: string;
-  updatedAtMs?: number;
 };
 
 export type DoctorMemoryDreamActionPayload = {
@@ -201,42 +171,7 @@ function groundedMarkdownToDiaryLines(markdown: string): string[] {
     );
 }
 
-async function listWorkspaceDailyFiles(memoryDir: string): Promise<string[]> {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(memoryDir);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-      return [];
-    }
-    throw err;
-  }
-  return entries
-    .filter((name) => /^\d{4}-\d{2}-\d{2}(?:-[^/]+)?\.md$/i.test(name))
-    .map((name) => path.join(memoryDir, name))
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function resolveDreamingConfig(
-  cfg: OpenClawConfig,
-): Omit<
-  DoctorMemoryDreamingPayload,
-  | "shortTermCount"
-  | "recallSignalCount"
-  | "dailySignalCount"
-  | "groundedSignalCount"
-  | "totalSignalCount"
-  | "phaseSignalCount"
-  | "lightPhaseHitCount"
-  | "remPhaseHitCount"
-  | "promotedTotal"
-  | "promotedToday"
-  | "storePath"
-  | "phaseSignalPath"
-  | "lastPromotedAt"
-  | "storeError"
-  | "phaseSignalError"
-> {
+function resolveDreamingConfig(cfg: OpenClawConfig): DoctorMemoryDreamingConfigPayload {
   const resolved = resolveMemoryDreamingConfig({
     pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
     cfg,
@@ -293,43 +228,17 @@ function resolveDreamingConfig(
   };
 }
 
-type DreamingStoreStats = Pick<
-  DoctorMemoryDreamingPayload,
-  | "shortTermCount"
-  | "recallSignalCount"
-  | "dailySignalCount"
-  | "groundedSignalCount"
-  | "totalSignalCount"
-  | "phaseSignalCount"
-  | "lightPhaseHitCount"
-  | "remPhaseHitCount"
-  | "promotedTotal"
-  | "promotedToday"
-  | "storePath"
-  | "phaseSignalPath"
-  | "lastPromotedAt"
-  | "storeError"
-  | "phaseSignalError"
-  | "shortTermEntries"
-  | "signalEntries"
-  | "promotedEntries"
->;
-
 const DREAMING_ENTRY_LIST_LIMIT = 8;
 
 // Keep malformed persisted timestamps behind valid entries; returning NaN here
 // makes Array.sort preserve arbitrary input order and can hide valid diagnostics.
 function parseDreamingTimestampMs(value: string | undefined): number {
-  if (!value) {
-    return Number.NEGATIVE_INFINITY;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+  return parseDateStringTimestampMs(value) ?? Number.NEGATIVE_INFINITY;
 }
 
 function compareDreamingEntryByRecency(
-  a: DoctorMemoryDreamingEntryPayload,
-  b: DoctorMemoryDreamingEntryPayload,
+  a: ShortTermDreamingStatsEntry,
+  b: ShortTermDreamingStatsEntry,
 ): number {
   const aMs = parseDreamingTimestampMs(a.lastRecalledAt);
   const bMs = parseDreamingTimestampMs(b.lastRecalledAt);
@@ -343,8 +252,8 @@ function compareDreamingEntryByRecency(
 }
 
 function compareDreamingEntryBySignals(
-  a: DoctorMemoryDreamingEntryPayload,
-  b: DoctorMemoryDreamingEntryPayload,
+  a: ShortTermDreamingStatsEntry,
+  b: ShortTermDreamingStatsEntry,
 ): number {
   if (b.totalSignalCount !== a.totalSignalCount) {
     return b.totalSignalCount - a.totalSignalCount;
@@ -356,8 +265,8 @@ function compareDreamingEntryBySignals(
 }
 
 function compareDreamingEntryByPromotion(
-  a: DoctorMemoryDreamingEntryPayload,
-  b: DoctorMemoryDreamingEntryPayload,
+  a: ShortTermDreamingStatsEntry,
+  b: ShortTermDreamingStatsEntry,
 ): number {
   const aMs = parseDreamingTimestampMs(a.promotedAt);
   const bMs = parseDreamingTimestampMs(b.promotedAt);
@@ -368,10 +277,10 @@ function compareDreamingEntryByPromotion(
 }
 
 function trimDreamingEntries(
-  entries: DoctorMemoryDreamingEntryPayload[],
-  compare: (a: DoctorMemoryDreamingEntryPayload, b: DoctorMemoryDreamingEntryPayload) => number,
-): DoctorMemoryDreamingEntryPayload[] {
-  const selected: DoctorMemoryDreamingEntryPayload[] = [];
+  entries: ShortTermDreamingStatsEntry[],
+  compare: (a: ShortTermDreamingStatsEntry, b: ShortTermDreamingStatsEntry) => number,
+): ShortTermDreamingStatsEntry[] {
+  const selected: ShortTermDreamingStatsEntry[] = [];
   for (const entry of entries) {
     // Keep the public status payload bounded while preserving the comparator's best entries.
     let insertAt = selected.length;
@@ -396,6 +305,7 @@ function trimDreamingEntries(
 async function loadDreamingStoreStats(
   workspaceDir: string,
   nowMs: number,
+  loadShortTermPromotionDreamingStats: DoctorMemoryCoreRuntime["loadShortTermPromotionDreamingStats"],
   timezone?: string,
 ): Promise<DreamingStoreStats> {
   try {
@@ -437,9 +347,9 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
   const phaseSignalPaths = new Set<string>();
   const storeErrors: string[] = [];
   const phaseSignalErrors: string[] = [];
-  const shortTermEntries: DoctorMemoryDreamingEntryPayload[] = [];
-  const signalEntries: DoctorMemoryDreamingEntryPayload[] = [];
-  const promotedEntries: DoctorMemoryDreamingEntryPayload[] = [];
+  const shortTermEntries: ShortTermDreamingStatsEntry[] = [];
+  const signalEntries: ShortTermDreamingStatsEntry[] = [];
+  const promotedEntries: ShortTermDreamingStatsEntry[] = [];
 
   for (const stat of stats) {
     shortTermCount += stat.shortTermCount;
@@ -521,14 +431,14 @@ function isManagedDreamingJob(
   job: ManagedCronJobLike,
   params: { name: string; tag: string; payloadText: string },
 ): boolean {
-  const description = normalizeTrimmedString(job.description);
+  const description = normalizeOptionalString(job.description);
   if (description?.includes(params.tag)) {
     return true;
   }
   // Older managed jobs may lack the tag, so fall back to the exact system-event signature.
-  const name = normalizeTrimmedString(job.name);
-  const payloadKind = normalizeTrimmedString(job.payload?.kind)?.toLowerCase();
-  const payloadText = normalizeTrimmedString(job.payload?.text);
+  const name = normalizeOptionalString(job.name);
+  const payloadKind = normalizeOptionalString(job.payload?.kind)?.toLowerCase();
+  const payloadText = normalizeOptionalString(job.payload?.text);
   return (
     name === params.name && payloadKind === "systemevent" && payloadText === params.payloadText
   );
@@ -592,49 +502,6 @@ async function resolveAllManagedDreamingCronStatuses(context: {
   };
 }
 
-async function readDreamDiary(
-  workspaceDir: string,
-): Promise<Omit<DoctorMemoryDreamDiaryPayload, "agentId">> {
-  for (const name of DREAM_DIARY_FILE_NAMES) {
-    const filePath = path.join(workspaceDir, name);
-    let stat;
-    try {
-      stat = await fs.lstat(filePath);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException | undefined)?.code;
-      if (code === "ENOENT") {
-        continue;
-      }
-      return {
-        found: false,
-        path: name,
-      };
-    }
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      // Ignore redirected diaries; doctor actions only operate on real workspace files.
-      continue;
-    }
-    try {
-      const content = await fs.readFile(filePath, "utf-8");
-      return {
-        found: true,
-        path: name,
-        content,
-        updatedAtMs: Math.floor(stat.mtimeMs),
-      };
-    } catch {
-      return {
-        found: false,
-        path: name,
-      };
-    }
-  }
-  return {
-    found: false,
-    path: DREAM_DIARY_FILE_NAMES[0],
-  };
-}
-
 function shouldProbeMemoryEmbeddings(params: unknown): boolean {
   if (!params || typeof params !== "object") {
     return false;
@@ -647,6 +514,7 @@ function resolveDoctorMemoryAgent(
   context: GatewayRequestContext,
   params: unknown,
   respond: RespondFn,
+  omittedAgentId?: string,
 ): {
   cfg: OpenClawConfig;
   agentId: string;
@@ -662,7 +530,21 @@ function resolveDoctorMemoryAgent(
   }
   const requestedAgentId =
     typeof rawAgentId === "string" ? normalizeAgentId(rawAgentId) : undefined;
-  const agentId = requestedAgentId ?? resolveDefaultAgentId(cfg);
+  let agentId = requestedAgentId ?? omittedAgentId;
+  if (!agentId) {
+    try {
+      agentId = resolveDefaultAgentId(cfg, {
+        surface: "doctor memory",
+        hint: "Pass agentId to select a configured agent.",
+      });
+    } catch (error) {
+      if (!(error instanceof AgentSelectionRequiredError)) {
+        throw error;
+      }
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+      return null;
+    }
+  }
   if (requestedAgentId && !listAgentIds(cfg).includes(agentId)) {
     respond(
       false,
@@ -700,14 +582,17 @@ const SKIPPED_MEMORY_EMBEDDING_PROBE = {
   error: "memory embedding readiness not checked; run `openclaw memory status --deep` to probe",
 } as const;
 
-export const doctorHandlers: GatewayRequestHandlers = {
+export const createDoctorHandlers = (
+  memoryCoreRuntime: DoctorMemoryCoreRuntime = defaultMemoryCoreRuntime,
+): GatewayRequestHandlers => ({
   "doctor.memory.status": async ({ respond, context, params }) => {
-    const resolved = resolveDoctorMemoryAgent(context, params, respond);
+    const omittedAgentId = tryResolveAmbientOwnerAgentId(context.getRuntimeConfig());
+    const resolved = resolveDoctorMemoryAgent(context, params, respond, omittedAgentId);
     if (!resolved) {
       return;
     }
     const { cfg, agentId, requestedAgentId } = resolved;
-    const { manager, error } = await getActiveMemorySearchManager({
+    const { manager, error, searchRuntimeRegistered } = await getActiveMemorySearchManagerCore({
       cfg,
       agentId,
       purpose: "status",
@@ -715,6 +600,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
     if (!manager) {
       const payload: DoctorMemoryStatusPayload = {
         agentId,
+        searchRuntimeRegistered,
         embedding: {
           ok: false,
           error: error ?? "memory search unavailable",
@@ -738,8 +624,10 @@ export const doctorHandlers: GatewayRequestHandlers = {
       }
       const nowMs = Date.now();
       const dreamingConfig = resolveDreamingConfig(cfg);
-      const workspaceDir = normalizeTrimmedString((status as Record<string, unknown>).workspaceDir);
-      const configuredWorkspaces = requestedAgentId
+      const workspaceDir = normalizeOptionalString(
+        (status as Record<string, unknown>).workspaceDir,
+      );
+      const allWorkspaces = requestedAgentId
         ? workspaceDir
           ? [workspaceDir]
           : []
@@ -747,14 +635,17 @@ export const doctorHandlers: GatewayRequestHandlers = {
             primaryWorkspaceDir: workspaceDir,
             primaryAgentId: agentId,
           }).map((entry) => entry.workspaceDir);
-      const allWorkspaces =
-        configuredWorkspaces.length > 0 ? configuredWorkspaces : workspaceDir ? [workspaceDir] : [];
       const storeStats =
         allWorkspaces.length > 0
           ? mergeDreamingStoreStats(
               await Promise.all(
                 allWorkspaces.map((entry) =>
-                  loadDreamingStoreStats(entry, nowMs, dreamingConfig.timezone),
+                  loadDreamingStoreStats(
+                    entry,
+                    nowMs,
+                    memoryCoreRuntime.loadShortTermPromotionDreamingStats,
+                    dreamingConfig.timezone,
+                  ),
                 ),
               ),
             )
@@ -833,8 +724,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       return;
     }
     const { cfg, agentId, workspaceDir } = target;
-    const memoryDir = path.join(workspaceDir, "memory");
-    const sourceFiles = await listWorkspaceDailyFiles(memoryDir);
+    const sourceFiles = await listWorkspaceDailyFiles(workspaceDir);
     if (sourceFiles.length === 0) {
       const dreamDiary = await readDreamDiary(workspaceDir);
       const payload: DoctorMemoryDreamActionPayload = {
@@ -849,7 +739,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       respond(true, payload, undefined);
       return;
     }
-    const grounded = await previewGroundedRemMarkdown({
+    const grounded = await memoryCoreRuntime.previewGroundedRemMarkdown({
       workspaceDir,
       inputPaths: sourceFiles,
     });
@@ -870,7 +760,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
         };
       })
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-    const written = await writeBackfillDiaryEntries({
+    const written = await memoryCoreRuntime.writeBackfillDiaryEntries({
       workspaceDir,
       entries,
       timezone: remConfig.timezone,
@@ -893,7 +783,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       return;
     }
     const { agentId, workspaceDir } = target;
-    const removed = await removeBackfillDiaryEntries({ workspaceDir });
+    const removed = await memoryCoreRuntime.removeBackfillDiaryEntries({ workspaceDir });
     const dreamDiary = await readDreamDiary(workspaceDir);
     const payload: DoctorMemoryDreamActionPayload = {
       agentId,
@@ -910,7 +800,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       return;
     }
     const { agentId, workspaceDir } = target;
-    const removed = await removeGroundedShortTermCandidates({ workspaceDir });
+    const removed = await memoryCoreRuntime.removeGroundedShortTermCandidates({ workspaceDir });
     const payload: DoctorMemoryDreamActionPayload = {
       agentId,
       action: "resetGroundedShortTerm",
@@ -924,7 +814,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       return;
     }
     const { agentId, workspaceDir } = target;
-    const repair = await repairDreamingArtifacts({ workspaceDir });
+    const repair = await memoryCoreRuntime.repairDreamingArtifacts({ workspaceDir });
     const payload: DoctorMemoryDreamActionPayload = {
       agentId,
       action: "repairDreamingArtifacts",
@@ -943,7 +833,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       return;
     }
     const { agentId, workspaceDir } = target;
-    const dedupe = await dedupeDreamDiaryEntries({ workspaceDir });
+    const dedupe = await memoryCoreRuntime.dedupeDreamDiaryEntries({ workspaceDir });
     const dreamDiary = await readDreamDiary(workspaceDir);
     const payload: DoctorMemoryDreamActionPayload = {
       agentId,
@@ -956,5 +846,5 @@ export const doctorHandlers: GatewayRequestHandlers = {
     };
     respond(true, payload, undefined);
   },
-};
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -12,11 +12,12 @@ import { z } from "zod";
 
 const SecretInputSchema = buildSecretInputSchema();
 
-const SmsAccountConfigSchema = z
+export const SmsAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    mediaMaxMb: z.number().positive().optional(),
     accountSid: z.string().optional(),
     authToken: SecretInputSchema.optional(),
     fromNumber: z.string().optional(),
@@ -31,7 +32,7 @@ const SmsAccountConfigSchema = z
   })
   .strict();
 
-const SmsConfigSchema = buildMultiAccountChannelSchema(SmsAccountConfigSchema, {
+export const SmsConfigSchema = buildMultiAccountChannelSchema(SmsAccountConfigSchema, {
   optionalAccount: true,
   refine: (value, ctx) => {
     requireChannelOpenAllowFrom({

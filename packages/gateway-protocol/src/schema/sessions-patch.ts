@@ -4,15 +4,31 @@ import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../session-agent-status.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
-import { SessionToolOverridesSchema } from "./sessions-row.js";
+import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
 
 export const SESSIONS_PATCH_MANY_MAX_TARGETS = 100;
 
+const ExpectedMarkedUnreadAt = Type.Optional(
+  Type.Union([Type.Number({ minimum: 0 }), Type.Null()], {
+    description:
+      "Apply an automatic unread=false acknowledgement only if the explicit unread marker still matches; null asserts no marker.",
+  }),
+);
+
 const SessionsPatchMutationProperties = {
   label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+  /** Automatic device name, separate from explicit user renames; null clears it. */
+  autoLabel: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+  icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  /** Named sidebar tint from SESSION_COLOR_IDS; null clears it. */
+  color: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   /** User-defined organization bucket ("category", not chat-group); null clears it. */
   category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+  /** Shared dashboard default; null restores the built-in split view. */
+  boardPresentation: Type.Optional(
+    Type.Union([Type.Literal("split"), Type.Literal("expanded"), Type.Null()]),
+  ),
   statusNote: Type.Optional(
     Type.Union([Type.String({ maxLength: 120 }), Type.Null()], {
       description: "Short expiring sidebar status note; null clears it and any declared attention.",
@@ -27,6 +43,7 @@ const SessionsPatchMutationProperties = {
   unread: Type.Optional(
     Type.Boolean({ description: "Set true to mark unread; false records the session as read." }),
   ),
+  contextWindow: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Null()])),
   toolOverrides: Type.Optional(Type.Union([SessionToolOverridesSchema, Type.Null()])),
@@ -45,10 +62,18 @@ const SessionsPatchMutationProperties = {
   ),
   elevatedLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execHost: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  // Retired v4 fields stay wire-valid so the applier can explain their replacement.
+  // Remove them only with the next owner-approved protocol version bump.
   execSecurity: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  permissionMode: Type.Optional(Type.Union([SessionPermissionModeSchema, Type.Null()])),
+  /** Null restores configured containment; required session isolation cannot be relaxed. */
+  sandboxMode: Type.Optional(Type.Union([Type.Literal("off"), Type.Null()])),
+  nativeRuntimeConsent: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  /** Explicit runtime for the selected model; null follows configured routing. */
+  agentRuntime: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   completionOwnerSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   inheritedToolPolicyVersion: Type.Optional(Type.Union([Type.Literal(1), Type.Null()])),
   inheritedToolAllow: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
@@ -66,6 +91,16 @@ export const SessionsPatchParamsSchema = closedObject({
   /** Reject the mutation if the session was reset or replaced before it commits. */
   expectedSessionId: Type.Optional(NonEmptyString),
   expectedLifecycleRevision: Type.Optional(NonEmptyString),
+  expectedPermissionMode: Type.Optional(Type.Union([SessionPermissionModeSchema, Type.Null()])),
+  expectedSandboxMode: Type.Optional(Type.Union([Type.Literal("off"), Type.Null()])),
+  expectedNativeRuntimeConsent: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  expectedToolOverrides: Type.Optional(
+    Type.Union([SessionToolOverridesSchema, Type.Null()], {
+      description:
+        "Replace toolOverrides only when the current sparse overlay still matches this value; null asserts no overlay.",
+    }),
+  ),
+  expectedMarkedUnreadAt: ExpectedMarkedUnreadAt,
   ...SessionsPatchMutationProperties,
 });
 
@@ -79,6 +114,9 @@ export const SessionsPatchManyTargetSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   expectedSessionId: Type.Optional(NonEmptyString),
   expectedLifecycleRevision: Type.Optional(NonEmptyString),
+  expectedSandboxMode: Type.Optional(Type.Union([Type.Literal("off"), Type.Null()])),
+  expectedPermissionMode: Type.Optional(Type.Union([SessionPermissionModeSchema, Type.Null()])),
+  expectedNativeRuntimeConsent: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
 });
 
 export const SessionsPatchManyParamsSchema = closedObject({

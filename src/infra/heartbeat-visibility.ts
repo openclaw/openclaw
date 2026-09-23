@@ -1,6 +1,7 @@
 // Resolves heartbeat visibility toggles across config precedence levels.
 import type { ChannelHeartbeatVisibilityConfig } from "../config/types.channels.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 
 /** Resolved heartbeat presentation toggles after defaults/channel/account precedence. */
 export type ResolvedHeartbeatVisibility = {
@@ -49,7 +50,9 @@ export function resolveHeartbeatVisibility(params: {
   const perChannel = channelCfg?.heartbeatVisibility;
 
   // Layer 3: Per-account config (most specific)
-  const accountCfg = accountId ? channelCfg?.accounts?.[accountId] : undefined;
+  const accountCfg = accountId
+    ? resolveChannelAccountEntry(channelCfg?.accounts, accountId, channel, (id) => id)
+    : undefined;
   const perAccount = accountCfg?.heartbeatVisibility;
 
   return {

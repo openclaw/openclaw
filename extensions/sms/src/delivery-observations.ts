@@ -261,37 +261,42 @@ async function recordSmsDeliveryObservation(params: {
   observation: SmsDeliveryObservation;
   store: PluginStateKeyedStore<SmsDeliveryRecord>;
 }): Promise<{ duplicate: boolean; record: SmsDeliveryRecord }> {
-  if (!params.store.update) {
-    throw new Error("SMS delivery observations require atomic plugin state updates.");
+  if (!params.store.observe || !params.store.compareAndApply) {
+    throw new Error("SMS delivery observations require plugin state comparisons.");
   }
+  const accountId = params.account.accountId;
   const accountSidHash = hashAccountSid(params.account.accountSid);
   const key = deliveryRecordKey({
-    accountId: params.account.accountId,
+    accountId,
     accountSidHash,
     messageSid: params.messageSid,
   });
-  let record: SmsDeliveryRecord | undefined;
-  let duplicate = false;
-  await params.store.update(key, (current) => {
+  let observed = await params.store.observe(key);
+  while (true) {
     const next = mergeSmsDeliveryObservation({
-      accountId: params.account.accountId,
+      accountId,
       accountSidHash,
       messageSid: params.messageSid,
-      current,
+      current: observed.value,
       observation: params.observation,
     });
-    if (!next) {
-      duplicate = true;
-      record = current;
-      return undefined;
+    const result = await params.store.compareAndApply(
+      key,
+      observed.comparison,
+      next
+        ? { operation: "update", action: "set", value: next }
+        : { operation: "update", action: "keep" },
+    );
+    if (result.status === "conflict") {
+      observed = result.current;
+      continue;
     }
-    record = next;
-    return next;
-  });
-  if (!record) {
-    throw new Error("SMS delivery observation was not persisted.");
+    const record = next ?? observed.value;
+    if (!record) {
+      throw new Error("SMS delivery observation was not persisted.");
+    }
+    return { duplicate: !next, record };
   }
-  return { duplicate, record };
 }
 
 export function createSmsDeliveryRecorder(

@@ -1,6 +1,10 @@
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 // Nostr tests cover channel.outbound plugin behavior.
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
-import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  createPluginRuntimeMock,
+  createStartAccountContext,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
@@ -59,13 +63,17 @@ async function startOutboundAccount(accountId?: string) {
   };
   mocks.startNostrBus.mockResolvedValueOnce(bus as unknown);
   const abort = new AbortController();
-
-  const task = startNostrGatewayAccount(
-    createStartAccountContext({
-      account: buildResolvedNostrAccount(accountId ? { accountId } : undefined),
-      abortSignal: abort.signal,
-    }),
-  );
+  const context = createStartAccountContext({
+    account: buildResolvedNostrAccount(accountId ? { accountId } : undefined),
+    abortSignal: abort.signal,
+  });
+  context.channelRuntime = {
+    inbound: {
+      ...createPluginRuntimeMock().channel.inbound,
+      buildContext: buildChannelInboundEventContext,
+    },
+  } as never;
+  const task = startNostrGatewayAccount(context);
   await vi.waitFor(() => {
     expect(mocks.startNostrBus).toHaveBeenCalledTimes(1);
   });
@@ -193,7 +201,11 @@ describe("nostr outbound cfg threading", () => {
     });
     expect(convertMarkdownTables).toHaveBeenCalledWith("|a|b|", "off");
     expect(mocks.normalizePubkey).toHaveBeenCalledWith("NPUB123");
-    expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "Table: docs (https://example.com)");
+    expect(sendDm).toHaveBeenCalledWith(
+      "normalized-npub123",
+      "Table: docs (https://example.com)",
+      expect.any(Object),
+    );
     await expect(
       nostrOutboundAdapter.sendText({
         cfg: cfg as OpenClawConfig,
@@ -230,7 +242,7 @@ describe("nostr outbound cfg threading", () => {
       channel: "nostr",
       accountId: "work",
     });
-    expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello");
+    expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello", expect.any(Object));
 
     await cleanup.stop();
   });
@@ -278,7 +290,7 @@ describe("nostr outbound cfg threading", () => {
             text: "hello",
             accountId: "default",
           });
-          expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello");
+          expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello", expect.any(Object));
           expect(result.receipt.parts[0]?.kind).toBe("text");
         },
         messageSendingHooks: () => {

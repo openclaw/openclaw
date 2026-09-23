@@ -1,12 +1,12 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isLikelyContextOverflowError } from "../../agents/failover/classify.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { logVerbose } from "../../globals.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
+import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
-import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -15,123 +15,90 @@ import {
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
-import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import { markPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
+import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
+import { accountAgentTurnCompaction } from "./agent-runner-result-accounting.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
+import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
-import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import {
   buildRecoverablePendingFinalDeliveryText,
   normalizePendingFinalDeliveryPayloads,
 } from "./pending-final-delivery.js";
-import type { FollowupRun } from "./queue.js";
-import type { ReplyMediaContext } from "./reply-media-paths.js";
+import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
+import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
-import { resolveReplyToMode } from "./reply-threading.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
-import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
-import type { TypingSignaler } from "./typing-mode.js";
-type SessionResetOptions = {
-  failureLabel: string;
-  buildLogMessage: (nextSessionId: string) => string;
-  cleanupTranscripts?: boolean;
-};
+type ExecutePreparedReplyAgentRunInput = Omit<
+  FinalizeReplyAgentRunInput,
+  | "activeIsNewSession"
+  | "activeSessionEntry"
+  | "preflightCompactionApplied"
+  | "execution"
+  | "runId"
+  | "runStartedAt"
+> &
+  Pick<
+    RunReplyAgentParams,
+    "blockReplyChunking" | "toolProgressDetail" | "transcriptCommandBody" | "typing" | "typingMode"
+  > & {
+    admitUserTurn: ReturnType<typeof createReplyRestartRecoveryClaimController>["admitUserTurn"];
+    applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
+    beginBeforeAgentReply: ReturnType<
+      typeof createReplyRestartRecoveryClaimController
+    >["beginBeforeAgentReply"];
+    checkpointBeforeAgentReply: ReturnType<
+      typeof createReplyRestartRecoveryClaimController
+    >["checkpointBeforeAgentReply"];
+    resolveVisibleReplyDelivery: () => Promise<boolean>;
+    getActiveIsNewSession: () => boolean;
+    getActiveSessionEntry: () => SessionEntry | undefined;
+    isRestartRecoveryArmed: () => boolean;
+    resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
+    sendDirectCompactionNotice: ((phase: CompactionNoticePhase) => Promise<void>) | undefined;
+    setRunFollowupTurn: (runner: FinalizeReplyAgentRunInput["runFollowupTurn"]) => void;
+    setActiveSessionEntry: (entry: SessionEntry | undefined) => void;
+    shouldEmitToolOutput: () => boolean;
+    shouldEmitToolResult: () => boolean;
+    traceAgentPhase: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
+    turnAdoptionLifecycle: NonNullable<RunReplyAgentParams["opts"]>["turnAdoptionLifecycle"];
+  };
 
-type ExecutePreparedReplyAgentRunInput = Pick<
-  RunReplyAgentParams,
-  | "agentCfgContextTokens"
-  | "blockReplyChunking"
-  | "blockStreamingEnabled"
-  | "commandBody"
-  | "defaultModel"
-  | "followupRun"
-  | "opts"
-  | "queueKey"
-  | "replyThreadingOverride"
-  | "resolvedBlockStreamingBreak"
-  | "resolvedQueue"
-  | "resolvedVerboseLevel"
-  | "runtimePolicySessionKey"
-  | "sessionCtx"
-  | "sessionKey"
-  | "shouldInjectGroupIntro"
-  | "storePath"
-  | "toolProgressDetail"
-  | "transcriptCommandBody"
-  | "typing"
-  | "typingMode"
-> & {
-  activeSessionStore: Record<string, SessionEntry> | undefined;
-  admitUserTurn: ReturnType<typeof createReplyRestartRecoveryClaimController>["admitUserTurn"];
-  applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
-  beginBeforeAgentReply: ReturnType<
-    typeof createReplyRestartRecoveryClaimController
-  >["beginBeforeAgentReply"];
-  blockReplyPipeline: BlockReplyPipeline | null;
-  cfg: OpenClawConfig;
-  checkpointBeforeAgentReply: ReturnType<
-    typeof createReplyRestartRecoveryClaimController
-  >["checkpointBeforeAgentReply"];
-  getActiveIsNewSession: () => boolean;
-  getActiveSessionEntry: () => SessionEntry | undefined;
-  isHeartbeat: boolean;
-  isRestartRecoveryArmed: () => boolean;
-  pendingToolTasks: Set<Promise<void>>;
-  performSessionReset: (options: SessionResetOptions) => Promise<boolean>;
-  replyMediaContext: ReplyMediaContext;
-  replyOperation: ReplyOperation;
-  replyRouteThreadId: ReturnType<typeof resolveRoutedDeliveryThreadId>;
-  replyToChannel: OriginatingChannelType | undefined;
-  replyToMode: ReturnType<typeof resolveReplyToMode>;
-  resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
-  returnWithQueuedFollowupDrain: <T>(value: T) => T;
-  runFollowupTurn: (queued: FollowupRun) => Promise<void>;
-  sendDirectCompactionNotice: ((phase: CompactionNoticePhase) => Promise<void>) | undefined;
-  setRunFollowupTurn: (runner: (queued: FollowupRun) => Promise<void>) => void;
-  setActiveSessionEntry: (entry: SessionEntry | undefined) => void;
-  shouldEmitToolOutput: () => boolean;
-  shouldEmitToolResult: () => boolean;
-  traceAgentPhase: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
-  turnAdoptionLifecycle: NonNullable<RunReplyAgentParams["opts"]>["turnAdoptionLifecycle"];
-  typingSignals: TypingSignaler;
-};
+function markPostCompactionFailureResult(
+  result: ReplyPayload | ReplyPayload[] | undefined,
+  postCompactionModelFailure: true | undefined,
+): ReplyPayload | ReplyPayload[] | undefined {
+  if (Array.isArray(result)) {
+    return result.map((payload) =>
+      markPostCompactionModelFailurePayload(postCompactionModelFailure, payload),
+    );
+  }
+  return result
+    ? markPostCompactionModelFailurePayload(postCompactionModelFailure, result)
+    : result;
+}
 
 export async function executePreparedReplyAgentRun(
-  context: ExecutePreparedReplyAgentRunInput,
+  input: ExecutePreparedReplyAgentRunInput,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  // Preserve the invocation snapshot across preparation; live session state uses its getters.
+  const context = { ...input };
   const {
     activeSessionStore,
     admitUserTurn: admitUserTurnWithRecovery,
-    agentCfgContextTokens,
-    applyReplyToMode,
     beginBeforeAgentReply: beginBeforeAgentReplyWithRecovery,
-    blockReplyChunking,
-    blockReplyPipeline,
-    blockStreamingEnabled,
     cfg,
     checkpointBeforeAgentReply: checkpointBeforeAgentReplyWithRecovery,
-    commandBody,
     defaultModel,
     followupRun,
     getActiveIsNewSession,
     getActiveSessionEntry,
-    isHeartbeat,
-    isRestartRecoveryArmed,
     opts,
-    pendingToolTasks,
-    performSessionReset,
-    queueKey,
-    replyMediaContext,
     replyOperation,
-    replyRouteThreadId,
     replyThreadingOverride,
-    replyToChannel,
-    replyToMode,
-    resetSessionAfterRoleOrderingConflict,
-    resolvedBlockStreamingBreak,
-    resolvedQueue,
-    resolvedVerboseLevel,
     returnWithQueuedFollowupDrain,
     runtimePolicySessionKey,
     sendDirectCompactionNotice,
@@ -139,27 +106,15 @@ export async function executePreparedReplyAgentRun(
     sessionKey,
     setActiveSessionEntry,
     setRunFollowupTurn,
-    shouldEmitToolOutput,
-    shouldEmitToolResult,
-    shouldInjectGroupIntro,
     storePath,
     toolProgressDetail,
     traceAgentPhase,
-    transcriptCommandBody,
     turnAdoptionLifecycle,
     typing,
     typingMode,
     typingSignals,
   } = context;
   let activeSessionEntry = getActiveSessionEntry();
-  let activeIsNewSession: boolean;
-  let preflightCompactionApplied: boolean | undefined;
-  const resetSession = async (options: SessionResetOptions): Promise<boolean> => {
-    const reset = await performSessionReset(options);
-    activeSessionEntry = getActiveSessionEntry();
-    activeIsNewSession = getActiveIsNewSession();
-    return reset;
-  };
   const admitUserTurn = async (
     ...args: Parameters<typeof admitUserTurnWithRecovery>
   ): ReturnType<typeof admitUserTurnWithRecovery> => {
@@ -184,91 +139,48 @@ export async function executePreparedReplyAgentRun(
 
   await typingSignals.signalRunStart();
 
-  // Preserve the one-flush-per-compaction-cycle gate: an earlier same-cycle
-  // flush is the checkpoint for this upcoming compaction, not a reason to rerun maintenance.
-  const memoryFlushResult = await traceAgentPhase("reply.memory_flush", () =>
-    runMemoryFlushIfNeeded({
-      cfg,
-      followupRun,
-      promptForEstimate: followupRun.prompt,
-      sessionCtx,
-      opts,
-      defaultModel,
-      agentCfgContextTokens,
-      resolvedVerboseLevel,
-      sessionEntry: activeSessionEntry,
-      sessionStore: activeSessionStore,
-      sessionKey,
-      runtimePolicySessionKey,
-      storePath,
-      isHeartbeat,
-      replyOperation,
-      onVisibleErrorPayloads: (payloads) => {
-        logVerbose(
-          `memory flush produced ${payloads.length} visible maintenance error payload(s); continuing user reply`,
-        );
-      },
-    }),
+  const preflightAdmission = readPendingUserTurnTranscriptAdmission(
+    followupRun.userTurnTranscriptRecorder,
   );
-  activeSessionEntry = memoryFlushResult.sessionEntry;
-  setActiveSessionEntry(activeSessionEntry);
-
-  if (replyOperation.result?.kind === "aborted") {
-    throw replyOperation.abortSignal.reason ?? new Error("reply operation aborted");
-  }
-
-  const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
-  try {
-    activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
-      runPreflightCompactionIfNeeded({
-        cfg,
-        followupRun,
+  const checkpointMemory = async (entry: SessionEntry) => {
+    const flushed = await traceAgentPhase("reply.memory_flush", () =>
+      runMemoryFlushIfNeeded({
+        ...context,
+        preflightAdmission,
         promptForEstimate: followupRun.prompt,
-        defaultModel,
-        agentCfgContextTokens,
-        sessionEntry: activeSessionEntry,
+        sessionEntry: entry,
         sessionStore: activeSessionStore,
-        sessionKey,
-        runtimePolicySessionKey,
-        storePath,
-        isHeartbeat,
-        replyOperation,
-        onCompactionNotice: sendDirectCompactionNotice,
       }),
     );
-    setActiveSessionEntry(activeSessionEntry);
-    preflightCompactionApplied =
-      (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
-  } catch (err) {
-    const canRotateAfterPreflightFailure =
-      memoryFlushResult.outcome === "exhausted" &&
-      !replyOperation.abortSignal.aborted &&
-      isLikelyContextOverflowError(String(err));
-    if (!canRotateAfterPreflightFailure) {
-      throw err;
+    setActiveSessionEntry(flushed.sessionEntry);
+    replyOperation.abortSignal.throwIfAborted();
+    if (flushed.outcome === "exhausted") {
+      await sendDirectCompactionNotice?.("memory_flush_degraded");
     }
-    logVerbose(`Preflight compaction could not recover exhausted memory flush: ${String(err)}`);
-  }
+    return flushed.sessionEntry;
+  };
 
-  if (memoryFlushResult.outcome === "exhausted" && !preflightCompactionApplied) {
-    await resetSession({
-      failureLabel: "memory flush exhaustion",
-      buildLogMessage: (nextSessionId) =>
-        `Memory flush exhausted. Rotating bloated session ${sessionKey} -> ${nextSessionId}.`,
-      // Rotate only when compaction could not recover the bloated context.
-      cleanupTranscripts: false,
-    });
-    if (activeSessionEntry?.sessionId) {
-      replyOperation.updateSessionId(activeSessionEntry.sessionId);
-    }
-  }
-
-  // Exhausted background maintenance is non-terminal: optionally notify, then reply normally.
-  if (memoryFlushResult.outcome === "exhausted") {
-    await sendDirectCompactionNotice?.("memory_flush_degraded");
-  }
+  const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+  activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
+    runSessionCompactionIfNeeded({
+      ...context,
+      pendingUserEntryId: preflightAdmission?.entryId,
+      promptForEstimate: followupRun.prompt,
+      sessionEntry: activeSessionEntry,
+      sessionStore: activeSessionStore,
+      abortSignal: replyOperation.abortSignal,
+      beforeCompaction: checkpointMemory,
+      onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
+      onSessionIdChanged: (sessionId) => replyOperation.updateSessionId(sessionId),
+      onCompactionNotice: sendDirectCompactionNotice,
+    }),
+  );
+  setActiveSessionEntry(activeSessionEntry);
+  const preflightCompactionApplied =
+    (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
 
   const runFollowupTurn = createFollowupRunner({
+    resolveGatewayContext: getGatewayContextResolver(replyOperation),
     opts,
     typing,
     typingMode,
@@ -277,7 +189,6 @@ export async function executePreparedReplyAgentRun(
     sessionKey,
     storePath,
     defaultModel,
-    agentCfgContextTokens,
     toolProgressDetail,
   });
   setRunFollowupTurn(runFollowupTurn);
@@ -299,14 +210,14 @@ export async function executePreparedReplyAgentRun(
       },
       afterDispatch: async (hookResult) => {
         if (!hookResult?.handled) {
-          await checkpointBeforeAgentReply({ state: "continue" });
+          await checkpointBeforeAgentReply({ state: undefined });
           return hookResult;
         }
         const hookReply = hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
         const hookFinalDeliveryText = buildRecoverablePendingFinalDeliveryText([hookReply]);
         const normalizedHookReplies = normalizePendingFinalDeliveryPayloads([hookReply]);
         let hookCheckpoint: Parameters<typeof checkpointBeforeAgentReply>[0] = {
-          state: normalizedHookReplies.length === 0 ? "handled-silent" : "handled-unrecoverable",
+          state: normalizedHookReplies.length === 0 ? "handled-silent" : "pending",
         };
         if (sessionKey && storePath && normalizedHookReplies.length > 0) {
           const sourceReplyPolicy = resolveSourceReplyPolicy({
@@ -319,15 +230,26 @@ export async function executePreparedReplyAgentRun(
           });
           if (!sourceReplyPolicy.suppressDelivery) {
             const pendingFinalDeliveryIntentId = crypto.randomUUID();
+            const pendingFinalDeliveryDeliveryId = crypto.randomUUID();
             setReplyPayloadMetadata(hookReply, {
-              pendingFinalDeliveryIntentId,
-              pendingFinalDeliveryRetryText: hookFinalDeliveryText,
+              pendingFinalDeliveryCompletion: {
+                agentId: followupRun.run.agentId,
+                deliveryId: pendingFinalDeliveryDeliveryId,
+                intentId: pendingFinalDeliveryIntentId,
+                ...(activeSessionEntry?.restartRecoveryDeliveryRunId
+                  ? { recoveryRunId: activeSessionEntry.restartRecoveryDeliveryRunId }
+                  : {}),
+                sessionId: replyOperation.sessionId,
+                sessionKey,
+                storePath,
+              },
             });
             hookCheckpoint = {
-              state: hookFinalDeliveryText ? "handled-reply" : "handled-unrecoverable",
+              state: "handled-reply",
               pendingFinalDelivery: {
                 text: hookFinalDeliveryText ?? "",
                 intentId: pendingFinalDeliveryIntentId,
+                deliveries: [{ id: pendingFinalDeliveryDeliveryId, state: "prepared" }],
                 context: resolveReplyRunDeliveryContext({
                   cfg,
                   sessionCtx,
@@ -351,87 +273,57 @@ export async function executePreparedReplyAgentRun(
     () =>
       traceAgentPhase("reply.run_agent_turn", () =>
         executeAgentTurn({
-          commandBody,
-          transcriptCommandBody,
-          followupRun,
-          sessionCtx,
+          ...context,
+          resolveVisibleReplyDelivery: input.resolveVisibleReplyDelivery,
           replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-          replyOperation,
-          opts,
-          typingSignals,
-          blockReplyPipeline,
-          blockStreamingEnabled,
-          blockReplyChunking,
-          resolvedBlockStreamingBreak,
-          applyReplyToMode,
-          shouldEmitToolResult,
-          shouldEmitToolOutput,
-          pendingToolTasks,
-          resetSessionAfterRoleOrderingConflict,
-          isHeartbeat,
-          sessionKey,
-          runtimePolicySessionKey,
-          getActiveSessionEntry,
-          activeSessionStore,
-          storePath,
-          resolvedVerboseLevel,
-          toolProgressDetail,
-          replyMediaContext,
-          isRestartRecoveryArmed,
         }),
       ),
   );
+  const operationSuperseded = isReplyOperationSuperseded(replyOperation);
+  recordReplyOperationAgentTurn(
+    followupRun.replyOperationRunStates,
+    replyOperation,
+    runOutcome.outcome,
+  );
   activeSessionEntry = getActiveSessionEntry();
-  activeIsNewSession = getActiveIsNewSession();
+  const activeIsNewSession = getActiveIsNewSession();
 
+  if (runOutcome.outcome.kind !== "settled") {
+    // Only captured facts cross cancellation; no successor adoption, hooks, or reply work.
+    await accountAgentTurnCompaction({
+      compaction: runOutcome.outcome.compaction,
+      sessionStore: activeSessionStore,
+      replyOperation,
+    });
+  }
+  if (operationSuperseded) {
+    return { text: SILENT_REPLY_TOKEN };
+  }
   if (runOutcome.outcome.kind !== "settled") {
     if (runOutcome.outcome.kind === "rejected" && !replyOperation.result) {
       replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
     }
     return returnWithQueuedFollowupDrain(
       runOutcome.outcome.kind === "rejected"
-        ? runOutcome.outcome.payload
+        ? markPostCompactionModelFailurePayload(
+            runOutcome.outcome.postCompactionModelFailure,
+            runOutcome.outcome.payload,
+          )
         : { text: SILENT_REPLY_TOKEN },
     );
   }
 
-  return await finalizeReplyAgentRun({
+  const result = await finalizeReplyAgentRun({
+    ...context,
     activeIsNewSession,
     activeSessionEntry,
-    activeSessionStore,
-    agentCfgContextTokens,
-    blockReplyPipeline,
-    blockStreamingEnabled,
-    cfg,
-    commandBody,
-    defaultModel,
-    followupRun,
-    isHeartbeat,
-    opts,
-    pendingToolTasks,
     preflightCompactionApplied,
-    queueKey,
-    replyMediaContext,
-    replyOperation,
-    replyRouteThreadId,
-    replyThreadingOverride,
-    replyToChannel,
-    replyToMode,
-    resolvedBlockStreamingBreak,
-    resolvedQueue,
-    resolvedVerboseLevel,
-    returnWithQueuedFollowupDrain,
     runFollowupTurn,
     execution: runOutcome.outcome,
     runId: runOutcome.runId,
     runStartedAt,
-    runtimePolicySessionKey,
-    sessionCtx,
-    sessionKey,
-    shouldInjectGroupIntro,
-    storePath,
-    typingSignals,
   });
+  return markPostCompactionFailureResult(result, runOutcome.outcome.postCompactionModelFailure);
 }
 
 export function createReplyAgentRestartRecoveryController(
@@ -469,6 +361,9 @@ export function createReplyAgentRestartRecoveryController(
         hasRepliedRef: undefined,
       }).sameChannelThreadRequired
     : undefined;
+  const admissionRunId =
+    normalizeOptionalString(sessionCtx.MessageSid) ??
+    normalizeOptionalString(sessionCtx.MessageSidFull);
   const {
     admitUserTurn,
     beginBeforeAgentReply,
@@ -476,15 +371,14 @@ export function createReplyAgentRestartRecoveryController(
     clear: clearRestartRecoveryDeliveryClaim,
     isArmed: isRestartRecoveryArmed,
   } = createReplyRestartRecoveryClaimController({
-    admissionRunId:
-      normalizeOptionalString(sessionCtx.MessageSid) ??
-      normalizeOptionalString(sessionCtx.MessageSidFull),
+    agentId: followupRun.run.agentId,
+    lifecycleGeneration: replyOperation.lifecycleGeneration,
+    admissionRunId,
     getEntry: () =>
       sessionKey
         ? (activeSessionStore?.[sessionKey] ?? getActiveSessionEntry())
         : getActiveSessionEntry(),
     getSessionId: () => replyOperation.sessionId,
-    beforeAgentReplyState: "admitted",
     isRestartAbort: () =>
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart",
@@ -538,8 +432,31 @@ export function createReplyAgentRestartRecoveryController(
       : opts?.sourceReplyDeliveryMode,
     ...(storePath ? { storePath } : {}),
   });
+  const admitUserTurnWithSourceBinding: typeof admitUserTurn = async (...args) => {
+    const result = await admitUserTurn(...args);
+    if (result === "admitted") {
+      let sourceTurnId = restartRecoverySourceTurnId;
+      if (
+        !sourceTurnId &&
+        admissionRunId &&
+        isInternalMessageChannel(sessionCtx.Provider ?? sessionCtx.Surface)
+      ) {
+        const entry = getActiveSessionEntry();
+        // Gateway inputs use run IDs, not channel hashes. Recovery retains the
+        // admitted source so historical terminal receipts cannot fence a later turn.
+        sourceTurnId =
+          entry?.restartRecoveryDeliveryRunId === admissionRunId
+            ? (normalizeOptionalString(entry?.restartRecoveryDeliverySourceRunId) ?? admissionRunId)
+            : admissionRunId;
+      }
+      if (sourceTurnId) {
+        replyRunRegistry.bindSourceTurnId(replyOperation, sourceTurnId);
+      }
+    }
+    return result;
+  };
   return {
-    admitUserTurn,
+    admitUserTurn: admitUserTurnWithSourceBinding,
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,

@@ -1,5 +1,8 @@
+import { drainProcessOutput } from "../process/output-drain.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
+import { waitForPendingCliDisposers } from "./runtime-cleanup.js";
+import { waitForCliSignalExit } from "./signal-exit-barrier.js";
 
 type VitestWorkerMarkers = {
   tinypoolState?: unknown;
@@ -78,15 +81,18 @@ function requestExitAfterSystemCaCliCompletion(
   if (platform !== "darwin" || !usesSystemCa || runtime !== defaultRuntime) {
     return false;
   }
-  if (requestedExitCode === undefined) {
-    requestedExitCode = params.exitCode ?? "process";
+  if (requestedExitCode !== undefined) {
+    return false;
   }
+  requestedExitCode = params.exitCode ?? "process";
   return true;
 }
 
 export async function runCliWithExitFinalization(params: {
   run: () => Promise<void>;
   onError: (error: unknown) => void | Promise<void>;
+  /** Join caller-owned state after command cleanup and before scheduling process exit. */
+  finalize?: () => Promise<void>;
   runtime?: RuntimeEnv;
   env?: NodeJS.ProcessEnv;
   execArgv?: readonly string[];
@@ -94,30 +100,84 @@ export async function runCliWithExitFinalization(params: {
   markers?: VitestWorkerMarkers;
 }): Promise<void> {
   const runtime = params.runtime ?? defaultRuntime;
+  let finalizationFailure: { error: unknown } | undefined;
   try {
     await params.run();
   } catch (error) {
-    await params.onError(error);
-    requestExitAfterOneShotOutput(runtime, resolveProcessExitCode(1));
+    if (error instanceof ExitError) {
+      if (!requestExitAfterOneShotOutput(runtime, error.code)) {
+        throw error;
+      }
+    } else {
+      await params.onError(error);
+      requestExitAfterOneShotOutput(runtime, resolveProcessExitCode(1));
+    }
   } finally {
-    requestExitAfterSystemCaCliCompletion(runtime, {
+    await waitForCliSignalExit();
+    const automaticExit = requestExitAfterSystemCaCliCompletion(runtime, {
       env: params.env,
       execArgv: params.execArgv,
       platform: params.platform,
     });
+    if (
+      params.finalize ||
+      (automaticExit && !isVitestWorker(params.env ?? process.env, params.markers))
+    ) {
+      await waitForPendingCliDisposers();
+    }
+    if (params.finalize) {
+      try {
+        await params.finalize();
+      } catch (error) {
+        try {
+          await params.onError(error);
+        } catch (reportError) {
+          finalizationFailure = { error: reportError };
+        }
+        if (!requestExitAfterOneShotOutput(runtime, 1)) {
+          finalizationFailure ??= { error };
+        }
+      }
+    }
     flushExitAfterOneShotOutput(runtime, params.env, params.markers);
   }
+  // A cleanup failure must not replace an embedded runtime's original exit.
+  if (finalizationFailure) {
+    throw finalizationFailure.error;
+  }
+}
+
+/** Unwind an already-reported CLI outcome before shared cleanup and output draining. */
+export function exitCliAfterOutput(runtime: RuntimeEnv, exitCode: number): never {
+  if (runtime !== defaultRuntime) {
+    runtime.exit(exitCode);
+  }
+  throw new ExitError(exitCode);
 }
 
 export function requestExitAfterOneShotOutput(
   runtime: RuntimeEnv = defaultRuntime,
-  exitCode = 0,
+  exitCode?: number,
 ): boolean {
   if (runtime !== defaultRuntime) {
     return false;
   }
-  requestedExitCode = exitCode;
+  requestedExitCode = exitCode ?? "process";
   return true;
+}
+
+/** A recorded command outcome must not be held hostage by resource cleanup. */
+export function watchCliExitAfterOutput(exitCode: number, onStall: () => void): void {
+  if (isVitestWorker(process.env)) {
+    return;
+  }
+  setTimeout(() => {
+    try {
+      onStall();
+    } finally {
+      defaultRuntime.exit(exitCode);
+    }
+  }, 10_000).unref();
 }
 
 function flushExitAfterOneShotOutput(
@@ -133,17 +193,5 @@ function flushExitAfterOneShotOutput(
 
   const exit = () =>
     runtime.exit(requestedCode === "process" ? resolveProcessExitCode() : requestedCode);
-  let pendingStreams = 2;
-
-  const drain = (stream: NodeJS.WriteStream) => {
-    stream.write("", () => {
-      pendingStreams -= 1;
-      if (pendingStreams === 0) {
-        setImmediate(exit);
-      }
-    });
-  };
-
-  drain(process.stdout);
-  drain(process.stderr);
+  drainProcessOutput(exit);
 }

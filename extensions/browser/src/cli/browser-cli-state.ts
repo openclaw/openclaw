@@ -14,6 +14,7 @@ import {
   callBrowserRequest,
   printBrowserJsonResult,
   runBrowserCliCommand as runBrowserCommand,
+  runBrowserCliRequest,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 import { registerBrowserCookiesAndStorageCommands } from "./browser-cli-state.cookies-storage.js";
@@ -35,31 +36,6 @@ function parseFiniteNumberOption(value: string | undefined, label: string): numb
     return undefined;
   }
   return parsed;
-}
-
-async function runBrowserSetRequest(params: {
-  parent: BrowserParentOpts;
-  path: string;
-  body: Record<string, unknown>;
-  successMessage: string;
-}) {
-  await runBrowserCommand(async () => {
-    const profile = params.parent?.browserProfile;
-    const result = await callBrowserRequest(
-      params.parent,
-      {
-        method: "POST",
-        path: params.path,
-        query: profile ? { profile } : undefined,
-        body: params.body,
-      },
-      { timeoutMs: 20000 },
-    );
-    if (printBrowserJsonResult(params.parent, result)) {
-      return;
-    }
-    defaultRuntime.log(params.successMessage);
-  });
 }
 
 /** Registers Browser state/configuration commands. */
@@ -92,7 +68,6 @@ export function registerBrowserStateCommands(
           width,
           height,
           targetId: opts.targetId,
-          timeoutMs: 20000,
           successMessage: `viewport set: ${width}x${height}`,
         });
       });
@@ -111,7 +86,7 @@ export function registerBrowserStateCommands(
         defaultRuntime.exit(1);
         return;
       }
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/offline",
         body: {
@@ -147,19 +122,15 @@ export function registerBrowserStateCommands(
           }
         }
         const profile = parent?.browserProfile;
-        const result = await callBrowserRequest(
-          parent,
-          {
-            method: "POST",
-            path: "/set/headers",
-            query: profile ? { profile } : undefined,
-            body: {
-              headers,
-              targetId: normalizeOptionalString(opts.targetId),
-            },
+        const result = await callBrowserRequest(parent, {
+          method: "POST",
+          path: "/set/headers",
+          query: profile ? { profile } : undefined,
+          body: {
+            headers,
+            targetId: normalizeOptionalString(opts.targetId),
           },
-          { timeoutMs: 20000 },
-        );
+        });
         if (printBrowserJsonResult(parent, result)) {
           return;
         }
@@ -176,7 +147,7 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (username: string | undefined, password: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/credentials",
         body: {
@@ -211,7 +182,7 @@ export function registerBrowserStateCommands(
         ) {
           return;
         }
-        await runBrowserSetRequest({
+        await runBrowserCliRequest({
           parent,
           path: "/set/geolocation",
           body: {
@@ -242,7 +213,7 @@ export function registerBrowserStateCommands(
         defaultRuntime.exit(1);
         return;
       }
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/media",
         body: {
@@ -260,7 +231,7 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (timezoneId: string, opts, cmd) => {
       const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/timezone",
         body: {
@@ -278,7 +249,7 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (locale: string, opts, cmd) => {
       const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/locale",
         body: {
@@ -296,7 +267,7 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (name: string, opts, cmd) => {
       const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/device",
         body: {

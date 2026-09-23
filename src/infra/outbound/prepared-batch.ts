@@ -1,9 +1,10 @@
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type {
   OutboundPayloadDeliveryOutcome,
   OutboundPayloadDeliverySuppressionReason,
 } from "./deliver-types.js";
-import { summarizeOutboundPayloadForTransport } from "./payloads.js";
+import { resolveSendableOutboundReplyParts } from "./reply-payload-parts.js";
 
 export const PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION = 1 as const;
 
@@ -37,6 +38,7 @@ export type PreparedOutboundBatch = {
   /** True only when accepted payloads already passed post-policy channel normalization. */
   channelNormalized?: true;
   runId?: string;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   entries: PreparedOutboundBatchEntry[];
 };
 
@@ -53,7 +55,7 @@ export function createUnmodifiedPreparedOutboundBatch(
       payload,
       replyHookChanged: false,
       messageHookChanged: false,
-      preparedMediaCount: summarizeOutboundPayloadForTransport(payload).mediaUrls.length,
+      preparedMediaCount: resolveSendableOutboundReplyParts(payload).mediaCount,
     })),
   };
 }

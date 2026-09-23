@@ -12,7 +12,7 @@ import {
   restoreRedactedValues,
   type TestSnapshot,
 } from "./redact-snapshot.test-helpers.js";
-import { buildConfigSchema } from "./schema.js";
+import { buildConfigSchemaCore } from "./schema.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
 
 function expectNestedPairValue(
@@ -50,32 +50,6 @@ function expectGatewayAuthFieldValue(
 }
 
 describe("redactConfigSnapshot", () => {
-  it("does not expose internal plugin metadata snapshot fields", () => {
-    const snapshot = {
-      ...makeSnapshot({
-        plugins: {
-          allow: ["demo"],
-        },
-      }),
-      pluginMetadataSnapshot: {
-        manifestRegistry: {
-          plugins: [
-            {
-              id: "demo",
-              rootDir: "/private/plugin/root",
-              manifestPath: "/private/plugin/root/openclaw.plugin.json",
-            },
-          ],
-          diagnostics: [],
-        },
-      },
-    };
-
-    const result = redactConfigSnapshot(snapshot);
-
-    expect("pluginMetadataSnapshot" in result).toBe(false);
-  });
-
   it("redacts common secret field patterns across config sections", () => {
     const snapshot = makeSnapshot({
       gateway: {
@@ -208,51 +182,55 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts and restores MCP SSE header values from schema hints", () => {
-    const hints = buildConfigSchema().uiHints;
-    const snapshot = makeSnapshot({
+    const hints = buildConfigSchemaCore().uiHints;
+    expect(hints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
+    const editable = {
+      enabled: false,
+      url: "http://127.0.0.1:19999/mcp",
+      headers: { "X-Empty": "", "X-Blank": "   ", "X-Env": "${MCP_HEADER}" },
+    };
+    const protectedServer = {
+      ...editable,
+      headers: { Authorization: "synthetic-header-value", "X-Test": "ok" },
+    };
+    const config = { mcp: { servers: { editable, protected: protectedServer } } };
+    const snapshot = makeSnapshot(config);
+    const result = redactConfigSnapshot(snapshot, hints);
+    const expected = {
       mcp: {
         servers: {
-          remote: {
-            url: "https://example.com/mcp",
-            headers: {
-              Authorization: "Bearer secret-token",
-              "X-Test": "ok",
-            },
+          editable,
+          protected: {
+            ...protectedServer,
+            headers: { Authorization: REDACTED_SENTINEL, "X-Test": REDACTED_SENTINEL },
           },
         },
       },
+    };
+
+    for (const projection of [
+      result.config,
+      result.parsed,
+      result.sourceConfig,
+      result.resolved,
+      result.runtimeConfig,
+    ]) {
+      expect(projection).toEqual(expected);
+    }
+    expect(result.raw).toBe(JSON.stringify(expected));
+    expect(restoreRedactedValues(result.config, config, hints)).toEqual(config);
+
+    const servers = expectDefined(result.config.mcp?.servers, "redacted MCP servers");
+    const renamed = {
+      mcp: { servers: { renamed: servers.editable, protected: servers.protected } },
+    };
+    expect(restoreRedactedValues(renamed, config, hints)).toEqual({
+      mcp: { servers: { renamed: editable, protected: protectedServer } },
     });
-
-    const result = redactConfigSnapshot(snapshot, hints);
-    const servers = (result.config.mcp as { servers: Record<string, Record<string, unknown>> })
-      .servers;
-    expect(
-      (
-        expectDefined(servers.remote, "servers.remote test invariant").headers as Record<
-          string,
-          string
-        >
-      ).Authorization,
-    ).toBe(REDACTED_SENTINEL);
-    expect(
-      expectDefined(
-        (
-          expectDefined(servers.remote, "servers.remote test invariant").headers as Record<
-            string,
-            string
-          >
-        )["X-Test"],
-        '(servers.remote.headers as Record<string, string>)["X-Test"] test invariant',
-      ),
-    ).toBe(REDACTED_SENTINEL);
-
-    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
-    expect(restored.mcp.servers.remote.headers.Authorization).toBe("Bearer secret-token");
-    expect(restored.mcp.servers.remote.headers["X-Test"]).toBe("ok");
   });
 
   it("redacts sensitive auth material from MCP SSE URLs", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   mcp: {
     servers: {
@@ -289,7 +267,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts media request auth and proxy transport secrets from config snapshots", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   tools: {
     media: {
@@ -346,7 +324,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts model provider request auth secrets from config snapshots", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   models: {
     providers: {
@@ -394,7 +372,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts model provider local service env values from config snapshots", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   models: {
     providers: {
@@ -448,7 +426,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts install policy env values from config snapshots", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   security: {
     installPolicy: {
@@ -498,7 +476,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts model provider request proxy URLs from config snapshots", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   models: {
     providers: {
@@ -566,7 +544,6 @@ describe("redactConfigSnapshot", () => {
             maxTokens: 8192,
             maxOutputTokens: 4096,
             maxCompletionTokens: 2048,
-            contextTokens: 128000,
             tokenCount: 500,
             tokenLimit: 100000,
             tokenBudget: 50000,
@@ -600,9 +577,6 @@ describe("redactConfigSnapshot", () => {
     expect(
       expectDefined(providers.openai, "providers.openai test invariant").maxCompletionTokens,
     ).toBe(2048);
-    expect(expectDefined(providers.openai, "providers.openai test invariant").contextTokens).toBe(
-      128000,
-    );
     expect(expectDefined(providers.openai, "providers.openai test invariant").tokenCount).toBe(500);
     expect(expectDefined(providers.openai, "providers.openai test invariant").tokenLimit).toBe(
       100000,
@@ -662,7 +636,7 @@ describe("redactConfigSnapshot", () => {
       },
     } satisfies OpenClawConfig;
     const raw = JSON.stringify(sourceConfig);
-    const runtimeConfig = materializeRuntimeConfig(structuredClone(sourceConfig), "snapshot");
+    const runtimeConfig = materializeRuntimeConfig(structuredClone(sourceConfig));
     const snapshot = {
       ...makeSnapshot(sourceConfig, raw),
       config: runtimeConfig,
@@ -746,24 +720,30 @@ describe("redactConfigSnapshot", () => {
     expect(restored).toEqual(snapshot.config);
   });
 
-  it("does not mangle raw when a sensitive field value is empty string", () => {
-    const config = {
-      gateway: { auth: { token: "" } },
-      other: "",
-    };
-    const raw = '{ "gateway": { "auth": { "token": "" } }, "other": "" }';
-    const snapshot = makeSnapshot(config, raw);
-    const result = redactConfigSnapshot(snapshot);
-    expect(result.config.gateway?.auth?.token).toBe(REDACTED_SENTINEL);
+  it.each([
+    { kind: "empty", value: "" },
+    { kind: "whitespace", value: "   " },
+    { kind: "environment reference", value: "${GATEWAY_TOKEN}" },
+  ])("does not mangle raw when a sensitive field is $kind", ({ value }) => {
+    const config = { gateway: { auth: { token: value } }, other: value };
+    const raw = JSON.stringify(config);
+    const result = redactConfigSnapshot(makeSnapshot(config, raw));
+    expect(result.config).toEqual(config);
     expect(result.raw).toBe(raw);
-    expect((result.raw ?? "").split(REDACTED_SENTINEL).length).toBe(1);
+    expect(restoreRedactedValues(result.config, config)).toEqual(config);
   });
 
-  it("redacts parsed and resolved objects", () => {
-    const snapshot = makeSnapshot({
+  it("redacts each projection without using its secrets to rewrite another projection", () => {
+    const config = {
       channels: { discord: { token: "MTIzNDU2Nzg5MDEyMzQ1Njc4.GaBcDe.FgH" } },
       gateway: { auth: { token: "supersecrettoken123456" } },
-    });
+      meta: { lastTouchedVersion: "resolved-only-value migration-only-value" },
+    };
+    const snapshot = {
+      ...makeSnapshot(config, JSON.stringify(config)),
+      resolved: { ...config, gateway: { auth: { token: "resolved-only-value" } } },
+      sourceConfigBeforeMigrations: { gateway: { auth: { token: "migration-only-value" } } },
+    };
     const result = redactConfigSnapshot(snapshot);
     const parsed = result.parsed as Record<string, Record<string, Record<string, string>>>;
     const sourceConfig = result.sourceConfig as Record<
@@ -789,6 +769,8 @@ describe("redactConfigSnapshot", () => {
     expect(runtimeDiscord.token).toBe(REDACTED_SENTINEL);
     expect(result.sourceConfig).toBe(result.resolved);
     expect(result.runtimeConfig).toBe(result.config);
+    expect(result).not.toHaveProperty("sourceConfigBeforeMigrations");
+    expect(result.raw).toContain('"lastTouchedVersion":"resolved-only-value migration-only-value"');
   });
 
   it("handles null raw gracefully", () => {
@@ -1413,7 +1395,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts browser cdpUrl secrets while preserving bare endpoints", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   browser: {
     cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",

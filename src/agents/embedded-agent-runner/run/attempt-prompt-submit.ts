@@ -2,17 +2,19 @@
  * Submits or skips the prompt after build/preflight and before stream execution.
  * It may assume prompt context is assembled and admission state is published.
  */
-import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "../../../llm/types.js";
-import { readPersistedMediaFacts } from "../../../media/media-facts.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
-import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import type { SandboxContext } from "../../sandbox/types.js";
+import { agentSessionQueuePromptContext } from "../../sessions/agent-session-prompting.js";
+import {
+  attachPromptCompactionRequestBudget,
+  type CompactionRequestBudget,
+} from "../../sessions/compaction/request-budget.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { ackPendingAgentSteeringItems } from "../../subagent-registry.js";
-import { normalizeAssistantReplayContent } from "../replay-history.js";
+import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { ackPendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
+import { recordAggregateTruncation } from "../prompt-cache-observability.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import {
   type getEmbeddedSessionPromptState,
@@ -25,17 +27,15 @@ import { snapshotRecentMessages } from "./attempt-context-summary.js";
 import {
   installModelPromptTransform,
   installRuntimeContextMessageForPrompt,
-} from "./attempt.llm-boundary.js";
+} from "./attempt-llm-boundary.js";
 import {
   isSessionsYieldAbortError,
   persistSessionsYieldContextMessage,
   stripSessionsYieldArtifacts,
   waitForSessionsYieldAbortSettle,
-} from "./attempt.sessions-yield.js";
-import { detectAndLoadPromptImages } from "./images.js";
+} from "./attempt-sessions-yield.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
-import { readPersistedMediaImageLayout } from "./prompt-image-metadata.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -44,6 +44,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
  */
 type PromptSubmissionSession = {
   messages: AgentMessage[];
+  [agentSessionQueuePromptContext]: AgentSession[typeof agentSessionQueuePromptContext];
   agent: {
     state: { messages: AgentMessage[] };
     streamFn: StreamFn;
@@ -54,29 +55,37 @@ type PromptSubmissionSession = {
 
 type PromptActiveSession = (
   prompt: string,
-  options?: {
-    images?: ImageContent[];
-    preflightResult?: (submitted: boolean) => void;
-  },
+  options?: Parameters<AgentSession["prompt"]>[1],
 ) => Promise<void>;
 
 type SteeringLease = {
   leaseId: string;
   runIds: readonly string[];
+  isCurrent: () => boolean;
 };
 
 type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 
 export async function submitEmbeddedAttemptPrompt(input: {
-  attempt: Pick<EmbeddedRunAttemptParams, "sessionId" | "userTurnTranscriptRecorder">;
+  attempt: Pick<
+    EmbeddedRunAttemptParams,
+    | "promptCacheKey"
+    | "sessionId"
+    | "sessionKey"
+    | "skipPreparedUserTurnMessage"
+    | "userTurnTranscriptRecorder"
+  >;
   activeSession: PromptSubmissionSession;
+  appendOnlyRuntimeContext?: boolean;
   appendContext?: string;
   contextTokenBudget: number;
+  compactionRequestBudget?: CompactionRequestBudget;
   images: ImageContent[];
   leasedSteering?: SteeringLease;
   modelPrompt: string;
   onFinalPromptText: (prompt: string) => void;
   onSteeringAcknowledged: () => void;
+  persistToolResultProjections: () => Promise<void>;
   prependContext?: string;
   promptActiveSession: PromptActiveSession;
   runtimeContextMessage?: RuntimeContextCustomMessage;
@@ -91,37 +100,61 @@ export async function submitEmbeddedAttemptPrompt(input: {
   transcriptPrompt: string;
 }): Promise<void> {
   const { activeSession, attempt } = input;
-  const normalizedReplayMessages = normalizeAssistantReplayContent(activeSession.messages);
-  if (normalizedReplayMessages !== activeSession.messages) {
-    activeSession.agent.state.messages = normalizedReplayMessages;
-  }
+  let pendingSteering = input.leasedSteering;
+  const assertSteeringCurrent = () => {
+    if (pendingSteering && !pendingSteering.isCurrent()) {
+      throw new Error(
+        "The queued child results lost authority before requester prompt submission.",
+      );
+    }
+  };
+  assertSteeringCurrent();
+  const userTurnRecorder = attempt.userTurnTranscriptRecorder;
+  const persistedUserIdempotencyKey =
+    attempt.skipPreparedUserTurnMessage !== true && userTurnRecorder?.hasPersisted() === true
+      ? (userTurnRecorder.getPersistedMessage?.() ?? userTurnRecorder.message)?.idempotencyKey
+      : undefined;
 
   const installProviderPromptHistoryTransform = (): (() => void) => {
     const baseStreamFn = activeSession.agent.streamFn;
-    const providerPromptStreamFn = wrapStreamFnWithMessageTransform(baseStreamFn, (messages) => {
-      const providerPromptHistoryTruncation = truncateOversizedToolResultsInMessages(
-        messages,
-        input.contextTokenBudget,
-        input.toolResultMaxChars,
-        input.toolResultAggregateMaxChars,
-        input.toolResultPromptProjectionState,
-      );
-      const providerMessages =
-        providerPromptHistoryTruncation.messages !== messages
-          ? providerPromptHistoryTruncation.messages
-          : messages;
-      // Mark the current turn sent at provider dispatch so late media appends
-      // instead of rewriting its prompt-cache slot (#99495).
-      markSessionUserTurnsSent(input.sessionPromptState, providerMessages);
-      const recorder = attempt.userTurnTranscriptRecorder;
-      if (
-        recorder &&
-        hasSessionUserTurnBeenSent(input.sessionPromptState, recorder.message) !== false
-      ) {
-        recorder.markSentToProvider?.();
+    const persistThenStream: StreamFn = async (model, context, options) => {
+      await input.persistToolResultProjections();
+      options?.signal?.throwIfAborted();
+      assertSteeringCurrent();
+      const stream = await baseStreamFn(model, context, options);
+      // Pre-prompt compaction has not consumed the deferred answer.
+      if (captureCurrentPromptForModel) {
+        pendingSteering = undefined;
       }
-      return providerMessages;
-    });
+      return stream;
+    };
+    const providerPromptStreamFn = wrapStreamFnWithMessageTransform(
+      persistThenStream,
+      (messages) => {
+        const providerPromptHistoryTruncation = truncateOversizedToolResultsInMessages(
+          messages,
+          input.contextTokenBudget,
+          input.toolResultMaxChars,
+          input.toolResultAggregateMaxChars,
+          input.toolResultPromptProjectionState,
+        );
+        const providerMessages = providerPromptHistoryTruncation.messages;
+        if (providerPromptHistoryTruncation.aggregateTruncatedCount > 0) {
+          recordAggregateTruncation(attempt);
+        }
+        // Mark the current turn sent at provider dispatch so late media appends
+        // instead of rewriting its prompt-cache slot (#99495).
+        markSessionUserTurnsSent(input.sessionPromptState, providerMessages);
+        const recorder = attempt.userTurnTranscriptRecorder;
+        if (
+          recorder &&
+          hasSessionUserTurnBeenSent(input.sessionPromptState, recorder.message) !== false
+        ) {
+          recorder.markSentToProvider?.();
+        }
+        return providerMessages;
+      },
+    );
     activeSession.agent.streamFn = providerPromptStreamFn;
     return () => {
       if (activeSession.agent.streamFn === providerPromptStreamFn) {
@@ -139,7 +172,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   });
   updateActiveEmbeddedRunSnapshot(attempt.sessionId, {
     transcriptLeafId: input.transcriptLeafId,
-    messages: snapshotRecentMessages(normalizedReplayMessages),
+    messages: snapshotRecentMessages(activeSession.messages),
     inFlightPrompt: input.transcriptPrompt,
   });
 
@@ -157,25 +190,28 @@ export async function submitEmbeddedAttemptPrompt(input: {
       captureCurrentPromptForModel = true;
     }
   };
+  const promptOptions = {
+    ...(!input.runtimeOnly && input.images.length > 0 ? { images: input.images } : {}),
+    ...(persistedUserIdempotencyKey ? { persistedUserIdempotencyKey } : {}),
+    preflightResult: armModelPromptTransform,
+  };
+  attachPromptCompactionRequestBudget(promptOptions, input.compactionRequestBudget);
   const cleanupProviderPromptHistoryTransform = installProviderPromptHistoryTransform();
   try {
-    if (input.runtimeOnly) {
-      await input.promptActiveSession(input.transcriptPrompt, {
-        preflightResult: armModelPromptTransform,
-      });
-    } else {
-      const cleanupRuntimeContextMessage = installRuntimeContextMessageForPrompt({
-        session: activeSession,
-        message: input.runtimeContextMessage,
-      });
-      try {
-        await input.promptActiveSession(input.transcriptPrompt, {
-          ...(input.images.length > 0 ? { images: input.images } : {}),
-          preflightResult: armModelPromptTransform,
-        });
-      } finally {
-        cleanupRuntimeContextMessage();
-      }
+    // Persist after the user (or synthetic runtime prompt), retiring unconsumed
+    // context when preflight handles or rejects the prompt before the loop starts.
+    const cleanupRuntimeContextMessage =
+      input.appendOnlyRuntimeContext && input.runtimeContextMessage
+        ? activeSession[agentSessionQueuePromptContext](input.runtimeContextMessage)
+        : installRuntimeContextMessageForPrompt({
+            session: activeSession,
+            message: input.runtimeContextMessage,
+            persistedUserIdempotencyKey,
+          });
+    try {
+      await input.promptActiveSession(input.transcriptPrompt, promptOptions);
+    } finally {
+      cleanupRuntimeContextMessage();
     }
     if (input.leasedSteering) {
       ackPendingAgentSteeringItems(input.leasedSteering);
@@ -230,7 +266,7 @@ function hasNonEmptyContent(content: unknown): boolean {
 }
 
 /** Classifies prompt failures and performs yield or mid-turn recovery. */
-type PromptErrorAttempt = Pick<EmbeddedRunAttemptParams, "runId" | "sessionId">;
+type PromptErrorAttempt = Pick<EmbeddedRunAttemptParams, "runId" | "sessionId" | "abortSignal">;
 type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 type EmbeddedAttemptPromptErrorOutcome = {
@@ -244,7 +280,7 @@ export async function handleEmbeddedAttemptPromptError(input: {
   activeSession: AgentSession;
   attempt: PromptErrorAttempt;
   error: unknown;
-  handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => void;
+  handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => Promise<void>;
   markYieldAborted: () => void;
   releaseLeasedSteering: (error?: unknown) => void;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
@@ -263,9 +299,20 @@ export async function handleEmbeddedAttemptPromptError(input: {
       sessionId: input.attempt.sessionId,
     });
     await input.withOwnedTranscriptWrite(async () => {
-      stripSessionsYieldArtifacts(input.activeSession);
+      const transcriptRewritten = await withSessionManagerWrite(
+        input.activeSession.sessionManager,
+        () => stripSessionsYieldArtifacts(input.activeSession),
+      );
       if (input.yieldMessage) {
         await persistSessionsYieldContextMessage(input.activeSession, input.yieldMessage);
+      }
+      const target = transcriptRewritten && input.activeSession.sessionManager.getSessionTarget();
+      if (target) {
+        // Yield cleanup owns this rewrite; settle its projection before handing off the lane.
+        // The caller signal stays live during a deliberate sessions_yield provider abort.
+        const { waitForSessionTranscriptProjection } =
+          await import("../../../config/sessions/session-transcript-reconcile.js");
+        await waitForSessionTranscriptProjection(target, input.attempt.abortSignal);
       }
     });
     return {};
@@ -273,9 +320,11 @@ export async function handleEmbeddedAttemptPromptError(input: {
 
   if (isMidTurnPrecheckSignal(input.error)) {
     const request = input.error.request;
-    await input.withOwnedTranscriptWrite(() => {
-      input.handleMidTurnPrecheckRequest(request);
-    });
+    await input.withOwnedTranscriptWrite(() =>
+      withSessionManagerWrite(input.activeSession.sessionManager, () =>
+        input.handleMidTurnPrecheckRequest(request),
+      ),
+    );
     return {};
   }
 
@@ -285,68 +334,4 @@ export async function handleEmbeddedAttemptPromptError(input: {
       source: "prompt",
     },
   };
-}
-
-/** Prepares prompt-lock ownership and prompt-local images for submission. */
-type PromptExecutionAttempt = Pick<
-  EmbeddedRunAttemptParams,
-  | "config"
-  | "imageOrder"
-  | "images"
-  | "media"
-  | "model"
-  | "sessionFile"
-  | "sessionKey"
-  | "sessionTarget"
-  | "userTurnTranscriptRecorder"
->;
-type PromptImageResult = Awaited<ReturnType<typeof detectAndLoadPromptImages>>;
-
-function emptyPromptImages(): PromptImageResult {
-  return {
-    images: [],
-    imageFactIndexes: [],
-    detectedRefs: [],
-    failedMediaCount: 0,
-    loadedCount: 0,
-    skippedCount: 0,
-  };
-}
-
-export async function prepareEmbeddedAttemptPromptExecution(input: {
-  attempt: PromptExecutionAttempt;
-  effectiveFsWorkspaceOnly: boolean;
-  effectiveWorkspace: string;
-  prompt: string;
-  sandbox?: SandboxContext | null;
-  skipPromptSubmission: boolean;
-}): Promise<PromptImageResult> {
-  if (input.skipPromptSubmission) {
-    return emptyPromptImages();
-  }
-
-  const { attempt } = input;
-  const persistedMessage =
-    attempt.userTurnTranscriptRecorder?.message ??
-    (await attempt.userTurnTranscriptRecorder?.resolveMessage());
-  const persistedMedia = persistedMessage ? (readPersistedMediaFacts(persistedMessage) ?? []) : [];
-
-  return await detectAndLoadPromptImages({
-    prompt: input.prompt,
-    workspaceDir: input.effectiveWorkspace,
-    model: attempt.model,
-    existingImages: attempt.images,
-    imageOrder: attempt.imageOrder,
-    media: persistedMedia.length > 0 ? persistedMedia : attempt.media,
-    mediaImageLayout: persistedMessage
-      ? readPersistedMediaImageLayout(persistedMessage)
-      : undefined,
-    maxBytes: MAX_IMAGE_BYTES,
-    maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
-    workspaceOnly: input.effectiveFsWorkspaceOnly,
-    sandbox:
-      input.sandbox?.enabled && input.sandbox.fsBridge
-        ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
-        : undefined,
-  });
 }

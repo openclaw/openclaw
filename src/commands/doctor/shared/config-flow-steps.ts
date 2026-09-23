@@ -1,18 +1,32 @@
 // Doctor config-flow steps for legacy compatibility and unknown-key cleanup.
+import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  getDeferredPluginMigrationConfigFacts,
+  setDeferredPluginMigrationConfigFacts,
+} from "../../../config/deferred-plugin-migration-config.js";
+import { restoreEnvVarRefsFromResolved } from "../../../config/env-preserve.js";
+import { coerceConfig } from "../../../config/io.read-helpers.js";
+import { projectAuthoredAgentRosterForWrite } from "../../../config/io.write-prepare.js";
 import { formatConfigIssueLines } from "../../../config/issue-format.js";
+import { createMergePatch } from "../../../config/merge-patch.js";
+import { cloneConfigWithResolutionFacts } from "../../../config/resolution-facts.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
+import { migratePluginConfigId } from "../../../plugins/update-config.js";
 import { protectActiveAuthProfileConfig } from "../../doctor-auth-profile-config.js";
 import { stripUnknownConfigKeys } from "../../doctor-config-analysis.js";
-import type { DoctorConfigPreflightResult } from "../../doctor-config-preflight.js";
 import type { DoctorConfigMutationState } from "./config-mutation-state.js";
 import {
   classifyOtelGrpcMigrationOwnership,
   containsAuthoredInclude,
 } from "./include-migration-ownership.js";
+import type { InstalledPluginIdRecovery } from "./installed-plugin-id-recovery.js";
+import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 /** Apply legacy config migrations and update preview/fix state for doctor config flow. */
 export function applyLegacyCompatibilityStep(params: {
-  snapshot: DoctorConfigPreflightResult["snapshot"];
+  snapshot: ConfigFileSnapshot;
   state: DoctorConfigMutationState;
   shouldRepair: boolean;
   doctorFixCommand: string;
@@ -57,58 +71,46 @@ export function applyLegacyCompatibilityStep(params: {
     }
   }
   const hasAuthoredIncludes = containsAuthoredInclude(params.snapshot.parsed);
-  const migrationInput = hasAuthoredIncludes
-    ? params.snapshot.sourceConfig
-    : params.snapshot.parsed;
+  // State repairs must inspect resolved paths, not literal env templates.
   const {
     config: migrated,
     sourceConfig: migratedSource,
     changes,
+    warnings,
     partiallyValid,
-  } = migrateLegacyConfig(migrationInput, {
-    authoredRaw: params.snapshot.parsed,
-    resolvedRaw: params.snapshot.sourceConfig,
+  } = migrateLegacyConfig(params.snapshot.sourceConfig, {
+    sourceConfigBeforeMigrations: params.snapshot.sourceConfigBeforeMigrations,
+    context: {
+      authoredRaw: params.snapshot.parsed,
+      resolvedRaw: params.snapshot.sourceConfig,
+    },
   });
-  if (!migrated) {
-    return {
-      state: {
-        ...params.state,
-        pendingChanges: params.state.pendingChanges || params.snapshot.legacyIssues.length > 0,
-        fixHints: params.shouldRepair
-          ? params.state.fixHints
-          : [
-              ...params.state.fixHints,
-              `Run "${params.doctorFixCommand}" to migrate legacy config keys.`,
-            ],
-      },
-      issueLines,
-      changeLines: changes,
-    };
-  }
-
-  const migrationCandidate = hasAuthoredIncludes && migratedSource ? migratedSource : migrated;
+  const migrationCandidate = migratedSource ?? migrated;
+  // Read-time normalization still needs persistence; unresolved advice alone does not.
+  const hasLegacyChanges =
+    changes.length > 0 ||
+    !isDeepStrictEqual(
+      params.snapshot.sourceConfigBeforeMigrations ??
+        (hasAuthoredIncludes ? params.snapshot.sourceConfig : params.snapshot.parsed),
+      params.snapshot.sourceConfig,
+    );
 
   return {
     state: {
-      // Doctor should keep using the best-effort migrated shape in memory even
-      // during preview mode; confirmation only controls whether we write it.
-      // When partiallyValid, the migration succeeded but unrelated validation issues
-      // remain — still commit the migration so doctor --fix always applies safe migrations
-      // even when other problems prevent full validation from passing.
-      cfg: migrationCandidate,
-      candidate: migrationCandidate,
-      // The read path can normalize legacy config into the snapshot before
-      // migrateLegacyConfig emits concrete mutations. Legacy issues still mean
-      // the on-disk config needs a doctor --fix path.
-      pendingChanges: params.state.pendingChanges || params.snapshot.legacyIssues.length > 0,
-      fixHints: params.shouldRepair
-        ? params.state.fixHints
-        : [
-            ...params.state.fixHints,
-            `Run "${params.doctorFixCommand}" to ${partiallyValid ? "finish fixing" : "migrate"} legacy config keys.`,
-          ],
+      // Keep migrated previews in memory; confirmation controls persistence.
+      // Safe partial repairs still commit when unrelated validation issues remain.
+      ...params.state,
+      ...(migrationCandidate ? { cfg: migrationCandidate, candidate: migrationCandidate } : {}),
+      pendingChanges: params.state.pendingChanges || hasLegacyChanges,
+      fixHints:
+        params.shouldRepair || !hasLegacyChanges
+          ? params.state.fixHints
+          : [
+              ...params.state.fixHints,
+              `Run "${params.doctorFixCommand}" to ${partiallyValid ? "finish fixing" : "migrate"} legacy config keys.`,
+            ],
     },
-    issueLines,
+    issueLines: [...issueLines, ...(warnings ?? [])],
     changeLines: changes,
     partiallyValid: partiallyValid === true ? true : undefined,
   };
@@ -147,4 +149,175 @@ export function applyUnknownConfigKeyStep(params: {
     repairs: protectedAuth.repairs,
     warnings: protectedAuth.warnings,
   };
+}
+
+export type DoctorConfigReferenceSource = {
+  authored: OpenClawConfig;
+  resolved: OpenClawConfig;
+  parsed: unknown;
+  installedPluginIdRecovery?: InstalledPluginIdRecovery;
+};
+
+/** Keep the matched planning read independent of later write receipts and environment changes. */
+export function prepareDoctorConfigReferenceSource(
+  snapshot: ConfigFileSnapshot,
+): DoctorConfigReferenceSource | undefined {
+  if (!snapshot.authoredConfig || !snapshot.sourceConfigBeforeMigrations) {
+    return undefined;
+  }
+  return {
+    authored: structuredClone(snapshot.authoredConfig),
+    resolved: cloneConfigWithResolutionFacts(snapshot.sourceConfigBeforeMigrations),
+    parsed: structuredClone(snapshot.parsed),
+  };
+}
+
+/** A moved template must still have its original read-time value after migration. */
+function retainValuePreservingMigrationRefs(
+  template: unknown,
+  migratedResolved: unknown,
+  source: DoctorConfigReferenceSource,
+): unknown {
+  const values = new Map<string, unknown>();
+  const ambiguous = new Set<string>();
+  const collect = (authored: unknown, resolved: unknown): void => {
+    if (typeof authored === "string" && /\$\{[A-Z_][A-Z0-9_]*\}/.test(authored)) {
+      if (values.has(authored) && !isDeepStrictEqual(values.get(authored), resolved)) {
+        ambiguous.add(authored);
+      }
+      values.set(authored, resolved);
+    } else if (authored && typeof authored === "object") {
+      for (const [key, value] of Object.entries(authored)) {
+        collect(
+          value,
+          resolved && typeof resolved === "object"
+            ? (resolved as Record<string, unknown>)[key] // SAFETY: non-null object; indexed values remain unknown.
+            : undefined,
+        );
+      }
+    }
+  };
+  collect(source.authored, source.resolved);
+  const retain = (authored: unknown, resolved: unknown): unknown => {
+    if (typeof authored === "string" && /\$\{[A-Z_][A-Z0-9_]*\}/.test(authored)) {
+      // Exact template text identifies its read-time substitution, including escapes
+      // and composite strings. Never infer an environment from a resolved substring.
+      return values.has(authored) &&
+        !ambiguous.has(authored) &&
+        isDeepStrictEqual(values.get(authored), resolved)
+        ? authored
+        : undefined;
+    }
+    if (Array.isArray(authored)) {
+      return authored.map((value, index) =>
+        retain(value, Array.isArray(resolved) ? resolved[index] : undefined),
+      );
+    }
+    if (authored && typeof authored === "object") {
+      return Object.fromEntries(
+        Object.entries(authored).map(([key, value]) => [
+          key,
+          retain(
+            value,
+            resolved && typeof resolved === "object"
+              ? (resolved as Record<string, unknown>)[key] // SAFETY: non-null object; indexed values remain unknown.
+              : undefined,
+          ),
+        ]),
+      );
+    }
+    return authored;
+  };
+  return retain(template, migratedResolved);
+}
+
+/** Restore unchanged and moved references without substituting a later environment. */
+export function restoreDoctorConfigEnvRefs(
+  candidate: OpenClawConfig,
+  source: DoctorConfigReferenceSource | undefined,
+  explicitSetPaths?: readonly (readonly string[])[],
+  migrationOptions: {
+    appliedPluginIdMigrations?: Readonly<Record<string, string>>;
+  } = {},
+): OpenClawConfig {
+  if (!source) {
+    return candidate;
+  }
+  // Both views use the original resolved roster identity, including escaped-id facts.
+  const canonicalAuthored = projectAuthoredAgentRosterForWrite({
+    rootAuthoredConfig: source.authored,
+    sourceConfigBeforeMigrations: source.resolved,
+  });
+  const canonicalResolved = projectAuthoredAgentRosterForWrite({
+    rootAuthoredConfig: source.resolved,
+    sourceConfigBeforeMigrations: source.resolved,
+  });
+  const unchanged = restoreEnvVarRefsFromResolved(
+    candidate,
+    canonicalAuthored,
+    canonicalResolved,
+    explicitSetPaths,
+  );
+  const options = {
+    sourceConfigBeforeMigrations: source.resolved,
+    context: { authoredRaw: source.parsed, resolvedRaw: source.resolved },
+  };
+  const migratedAuthored = applyLegacyDoctorMigrations(canonicalAuthored, options);
+  const migratedResolved = applyLegacyDoctorMigrations(canonicalResolved, options);
+  const authoredView = migratedAuthored.next ?? canonicalAuthored;
+  const resolvedView = migratedResolved.next ?? canonicalResolved;
+  if (!isRecord(authoredView) || !isRecord(resolvedView)) {
+    throw new Error("Doctor reference migrations must preserve config object roots.");
+  }
+  // Snapshot records and roster/legacy projections keep object roots. Use the
+  // reader's structural typing without resolving or validating raw reference leaves.
+  const migratedAuthoredConfig = coerceConfig(authoredView);
+  const migratedResolvedConfig = coerceConfig(resolvedView);
+  // Only migration-owned destinations participate in the second pass. Unchanged policy
+  // templates must not restore retired IDs after their resolved values were canonicalized.
+  const referenceTemplate = createMergePatch(canonicalAuthored, migratedAuthoredConfig);
+  const resolvedTemplate = createMergePatch(canonicalResolved, migratedResolvedConfig);
+  const restored = restoreEnvVarRefsFromResolved(
+    unchanged,
+    retainValuePreservingMigrationRefs(referenceTemplate, resolvedTemplate, source),
+    resolvedTemplate,
+    explicitSetPaths,
+  );
+  let movedAuthored = migratedAuthoredConfig;
+  let movedResolved = migratedResolvedConfig;
+  const pluginIdMigrations = new Map(
+    Object.entries(migrationOptions.appliedPluginIdMigrations ?? {}),
+  );
+  for (const [legacyId, owner] of source.installedPluginIdRecovery ?? []) {
+    pluginIdMigrations.set(legacyId, owner.pluginId);
+  }
+  for (const [legacyId, pluginId] of pluginIdMigrations) {
+    movedAuthored = migratePluginConfigId(movedAuthored, legacyId, pluginId);
+    movedResolved = migratePluginConfigId(movedResolved, legacyId, pluginId);
+  }
+  // Only moved entry destinations carry templates. Policy IDs are canonical values,
+  // even when the old allow/deny/slot was authored through an environment reference.
+  const pluginReferences = createMergePatch(
+    migratedAuthoredConfig.plugins?.entries ?? {},
+    movedAuthored.plugins?.entries ?? {},
+  );
+  const pluginValues = createMergePatch(
+    migratedResolvedConfig.plugins?.entries ?? {},
+    movedResolved.plugins?.entries ?? {},
+  );
+  const recovered = restoreEnvVarRefsFromResolved(
+    restored,
+    { plugins: { entries: pluginReferences } },
+    { plugins: { entries: pluginValues } },
+    explicitSetPaths,
+  );
+  if (!isRecord(recovered)) {
+    throw new Error("Doctor reference restoration must preserve the config object root.");
+  }
+  const recoveredConfig = coerceConfig(recovered);
+  setDeferredPluginMigrationConfigFacts(
+    recoveredConfig,
+    getDeferredPluginMigrationConfigFacts(candidate),
+  );
+  return recoveredConfig;
 }

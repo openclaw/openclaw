@@ -1,48 +1,26 @@
 // Health gateway methods return cached or refreshed status summaries while
 // detecting stale channel runtime state against live gateway snapshots.
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { getPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { listContextEngineQuarantines } from "../../context-engine/registry.js";
+import { readGatewayMaintenanceWork } from "../../infra/gateway-active-work.js";
 import { getStatusSummary } from "../../status/summary.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
+import { buildContextEngineHealthSummary } from "../health/context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
 import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
+import { createGatewayServerActiveWorkInspectors } from "../server-active-work.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
+import type { GatewayShutdownStatus } from "../server-public.js";
 import { formatError } from "../server-utils.js";
-import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import { shouldScheduleBackgroundHealthRefresh } from "../server/health-refresh-admission.js";
+import { readGatewayProcessVitals, readGatewayWorkerPoolFacts } from "../server/process-vitals.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { respondUnavailableOnThrow } from "./response.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
-const requestRefreshStartedAt = new WeakMap<
-  GatewayRequestContext["refreshHealthSnapshot"],
-  number
->();
-
-function shouldScheduleRequestRefresh(
-  refresh: GatewayRequestContext["refreshHealthSnapshot"],
-  now: number,
-): boolean {
-  const startedAt = requestRefreshStartedAt.get(refresh);
-  if (startedAt !== undefined && now - startedAt < HEALTH_REFRESH_INTERVAL_MS) {
-    return false;
-  }
-  // Scope the throttle to the Gateway refresh owner so independent servers do
-  // not suppress each other while request bursts share one cadence.
-  requestRefreshStartedAt.set(refresh, now);
-  return true;
-}
-
-function cachedAccountForRuntimeSnapshot(params: {
-  cachedChannel: ChannelHealthSummary | undefined;
-  accountId: string | undefined;
-}): ChannelHealthSummary | undefined {
-  const accountId = params.accountId;
-  if (accountId && params.cachedChannel?.accounts?.[accountId]) {
-    return params.cachedChannel.accounts[accountId];
-  }
-  return undefined;
-}
 
 function cachedLifecycleDiffersFromRuntime(params: {
   cachedAccount: ChannelHealthSummary | undefined;
@@ -54,7 +32,7 @@ function cachedLifecycleDiffersFromRuntime(params: {
       return true;
     }
   }
-  return false;
+  return params.cachedAccount === undefined;
 }
 
 /** Checks whether cached channel health is stale against the live runtime snapshot. */
@@ -82,16 +60,19 @@ function cachedHealthDiffersFromRuntime(
       continue;
     }
     const cachedChannel = cached.channels[channelId];
+    const cachedAccounts = cachedChannel?.accounts;
+    if (
+      Object.keys(cachedAccounts ?? {}).some((accountId) => !Object.hasOwn(accounts, accountId))
+    ) {
+      return true;
+    }
     for (const [accountId, runtimeSnapshot] of Object.entries(accounts)) {
       if (!runtimeSnapshot) {
         continue;
       }
       if (
         cachedLifecycleDiffersFromRuntime({
-          cachedAccount: cachedAccountForRuntimeSnapshot({
-            cachedChannel,
-            accountId,
-          }),
+          cachedAccount: cachedAccounts?.[accountId],
           runtimeSnapshot,
         })
       ) {
@@ -100,43 +81,39 @@ function cachedHealthDiffersFromRuntime(
     }
   }
 
-  return false;
+  // Hot-unloaded plugins vanish from both runtime maps before cached health expires.
+  return Object.keys(cached.channels).some(
+    (channelId) =>
+      !Object.hasOwn(runtime.channels, channelId) &&
+      !Object.hasOwn(runtime.channelAccounts, channelId),
+  );
 }
 
 /** Merges cheap live runtime facts into a cached health summary before responding. */
-function mergeCachedHealthRuntimeState(params: {
+async function mergeCachedHealthRuntimeState(params: {
   cached: HealthSummary;
-  eventLoop?: HealthSummary["eventLoop"];
+  getEventLoopHealth?: () => HealthSummary["eventLoop"];
   configReloadHotReloadStatus?: GatewayHotReloadStatus;
-}): HealthSummary {
+}): Promise<HealthSummary> {
   const {
     contextEngines: _cachedContextEngines,
     deliveryQueues: _cachedDeliveryQueues,
+    eventLoop: _cachedEventLoop,
     ...cached
   } = params.cached;
-  // Dead-letter counts are cheap SQLite reads; recompute them like context
-  // engines so a delivery that failed after the cache was filled is not hidden
-  // for a refresh interval.
-  const deliveryQueues = buildDeliveryQueueHealthSummary();
-  const quarantinedContextEngines: NonNullable<HealthSummary["contextEngines"]>["quarantined"] = [];
-  for (const entry of listContextEngineQuarantines()) {
-    const summary: NonNullable<HealthSummary["contextEngines"]>["quarantined"][number] = {
-      engineId: entry.engineId,
-      operation: entry.operation,
-      reason: entry.reason,
-      failedAt: entry.failedAt.getTime(),
-    };
-    if (entry.owner) {
-      summary.owner = entry.owner;
-    }
-    quarantinedContextEngines.push(summary);
-  }
+  // Dead-letter counts are cheap live reads. Preserve the grouped pressure
+  // aggregate for the cache interval so routine health RPCs do not amplify it.
+  const deliveryQueues = await buildDeliveryQueueHealthSummary(
+    _cachedDeliveryQueues?.ingressPressure ?? [],
+  );
+  const contextEngines = buildContextEngineHealthSummary();
+  // A reset sampler has no current window; never revive the cached reading.
+  const eventLoop = params.getEventLoopHealth?.();
   return {
     ...cached,
-    ...(params.eventLoop ? { eventLoop: params.eventLoop } : {}),
-    ...(quarantinedContextEngines.length > 0
-      ? { contextEngines: { quarantined: quarantinedContextEngines } }
-      : {}),
+    modelRuntime: getPreparedModelRuntimeStartupStatus(),
+    ...(eventLoop ? { eventLoop } : {}),
+    ...(contextEngines ? { contextEngines } : {}),
     ...(deliveryQueues ? { deliveryQueues } : {}),
     ...(params.configReloadHotReloadStatus
       ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }
@@ -161,48 +138,72 @@ export const healthHandlers: GatewayRequestHandlers = {
           context.getRuntimeSnapshot(),
         );
       } catch {
-        cachedDiffersFromRuntime = false;
+        cachedDiffersFromRuntime = true;
       }
     }
     if (
       !wantsProbe &&
       cached &&
       !cachedDiffersFromRuntime &&
+      !isFutureDateTimestampMs(cached.ts, { nowMs: now }) &&
       now - cached.ts < HEALTH_REFRESH_INTERVAL_MS
     ) {
       respond(
         true,
-        mergeCachedHealthRuntimeState({
+        await mergeCachedHealthRuntimeState({
           cached,
-          eventLoop: context.getEventLoopHealth?.(),
+          getEventLoopHealth: context.getEventLoopHealth,
           configReloadHotReloadStatus: context.getConfigReloaderHotReloadStatus?.(),
         }),
         undefined,
         { cached: true },
       );
-      if (shouldScheduleRequestRefresh(refreshHealthSnapshot, now)) {
+      if (shouldScheduleBackgroundHealthRefresh(refreshHealthSnapshot, now)) {
         void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err: unknown) =>
           logHealth.error(`background health refresh failed: ${formatError(err)}`),
         );
       }
       return;
     }
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
-      respond(true, snap, undefined);
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+      respond(true, { ...snap, modelRuntime: getPreparedModelRuntimeStartupStatus() }, undefined);
+    });
   },
   status: async ({ respond, client, params, context }) => {
     const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const hostDesktopStatus = await context.hostDesktopService?.status();
     const status = await getStatusSummary({
       includeSensitive: scopes.includes(ADMIN_SCOPE),
       includeChannelSummary: params.includeChannelSummary !== false,
+      includeCliProjection: params.includeCliProjection === true,
+      sessionRowProjection: getSessionRowProjection(context),
+      ...(hostDesktopStatus ? { hostDesktopStatus } : {}),
     });
-    if (context.getEventLoopHealth) {
-      status.eventLoop = context.getEventLoopHealth();
-    }
-    respond(true, status, undefined);
+    const workerPools = await readGatewayWorkerPoolFacts();
+    const shutdownBudget = context.hostLifecycle?.getShutdownBudget?.();
+    const activeWork = shutdownBudget
+      ? readGatewayMaintenanceWork(createGatewayServerActiveWorkInspectors(context))
+      : undefined;
+    const shutdownStatus: GatewayShutdownStatus | undefined =
+      shutdownBudget && activeWork
+        ? {
+            ...shutdownBudget,
+            activeWork: activeWork.counts,
+            writeCustody: activeWork.writeCustody,
+          }
+        : undefined;
+    respond(
+      true,
+      {
+        ...status,
+        modelRuntime: getPreparedModelRuntimeStartupStatus(),
+        ...readGatewayProcessVitals(context.getEventLoopHealth),
+        workerPools,
+        pid: process.pid,
+        shutdownBudget: shutdownStatus,
+      },
+      undefined,
+    );
   },
 };

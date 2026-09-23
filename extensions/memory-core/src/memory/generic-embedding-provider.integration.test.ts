@@ -1,18 +1,19 @@
 // Memory Core tests cover generic embedding provider.integration plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearEmbeddingProviders,
-  clearMemoryEmbeddingProviders,
-  getActivePluginRegistry,
   listRegisteredEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviders,
   restoreRegisteredEmbeddingProviders,
-  restoreRegisteredMemoryEmbeddingProviders,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createEmbeddingProvider } from "./embeddings.js";
+import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
+import { MemoryIndexDatabase } from "./manager-database-context.js";
+import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
+import type { MemoryIndexWorkItem, MemorySemanticProviderGeneration } from "./manager-sync-ops.js";
 
 type CapturedRequest = {
   method: string | undefined;
@@ -29,10 +30,6 @@ type TestServer = {
 
 const servers: TestServer[] = [];
 let registeredEmbeddingProvidersSnapshot: ReturnType<typeof listRegisteredEmbeddingProviders>;
-let registeredMemoryEmbeddingProvidersSnapshot: ReturnType<
-  typeof listRegisteredMemoryEmbeddingProviders
->;
-let restoreActiveMemoryEmbeddingProviders: (() => void) | undefined;
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
@@ -42,7 +39,9 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 }
 
-async function startEmbeddingServer(): Promise<TestServer> {
+async function startEmbeddingServer(options?: {
+  reject?: (inputCount: number) => { status: number; body: string } | undefined;
+}): Promise<TestServer> {
   const requests: CapturedRequest[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
@@ -56,6 +55,12 @@ async function startEmbeddingServer(): Promise<TestServer> {
         });
         const input = body.input;
         const texts = Array.isArray(input) ? input : [input];
+        const rejection = options?.reject?.(texts.length);
+        if (rejection) {
+          res.writeHead(rejection.status, { "content-type": "application/json" });
+          res.end(rejection.body);
+          return;
+        }
         res.writeHead(200, { "content-type": "application/json" });
         res.end(
           JSON.stringify({
@@ -118,7 +123,7 @@ function createMemoryEmbeddingOptions(overrides?: {
       baseUrl: overrides?.baseUrl,
       apiKey: "fixture-token",
       headers: {
-        Authorization: "Bearer ignored",
+        Authorization: "Bearer destination-header",
         "x-api-key": "hidden",
         "x-deployment": "tenant-a",
       },
@@ -129,35 +134,19 @@ function createMemoryEmbeddingOptions(overrides?: {
 
 beforeEach(() => {
   registeredEmbeddingProvidersSnapshot = listRegisteredEmbeddingProviders();
-  registeredMemoryEmbeddingProvidersSnapshot = listRegisteredMemoryEmbeddingProviders();
   clearEmbeddingProviders();
-  clearMemoryEmbeddingProviders();
-
-  const activeRegistry = getActivePluginRegistry();
-  if (activeRegistry) {
-    const memoryEmbeddingProviders = activeRegistry.memoryEmbeddingProviders;
-    activeRegistry.memoryEmbeddingProviders = [];
-    restoreActiveMemoryEmbeddingProviders = () => {
-      activeRegistry.memoryEmbeddingProviders = memoryEmbeddingProviders;
-    };
-  } else {
-    restoreActiveMemoryEmbeddingProviders = undefined;
-  }
 });
 
 afterEach(async () => {
   const pendingServers = servers.splice(0);
   await Promise.all(pendingServers.map((server) => server.close()));
   restoreRegisteredEmbeddingProviders(registeredEmbeddingProvidersSnapshot);
-  restoreRegisteredMemoryEmbeddingProviders(registeredMemoryEmbeddingProvidersSnapshot);
-  restoreActiveMemoryEmbeddingProviders?.();
 });
 
-describe("memory-core generic embedding provider bridge", () => {
-  it("uses the core OpenAI-compatible provider through the generic registry and memory bridge", async () => {
+describe("memory-core generic embedding provider contract", () => {
+  it("uses the core OpenAI-compatible provider through the generic registry", async () => {
     const server = await startEmbeddingServer();
 
-    expect(listRegisteredMemoryEmbeddingProviders()).toEqual([]);
     expect(listRegisteredEmbeddingProviders()).toMatchObject([
       {
         ownerPluginId: "core",
@@ -191,18 +180,25 @@ describe("memory-core generic embedding provider bridge", () => {
     });
     expect(server.requests).toHaveLength(0);
 
-    await expect(result.provider?.embedQuery("hello")).resolves.toEqual([5, 0.5, 3]);
-    await expect(result.provider?.embedBatch(["a", "abcd"])).resolves.toEqual([
+    await expect(result.provider?.embed("hello", { inputType: "query" })).resolves.toEqual([
+      5, 0.5, 3,
+    ]);
+    await expect(
+      result.provider?.embedBatch(["a", "abcd"], { inputType: "document" }),
+    ).resolves.toEqual([
       [1, 0.5, 3],
       [4, 1.5, 3],
     ]);
     await expect(
-      result.provider?.embedBatchInputs?.([
-        {
-          text: "structured doc",
-          parts: [{ type: "text", text: "structured doc" }],
-        },
-      ]),
+      result.provider?.embedBatch(
+        [
+          {
+            text: "structured doc",
+            parts: [{ type: "text", text: "structured doc" }],
+          },
+        ],
+        { inputType: "document" },
+      ),
     ).resolves.toEqual([[14, 0.5, 3]]);
 
     expect(server.requests).toHaveLength(3);
@@ -217,7 +213,7 @@ describe("memory-core generic embedding provider bridge", () => {
       },
     });
     expect(server.requests[0]?.body).not.toHaveProperty("encoding_format");
-    expect(server.requests[0]?.headers.authorization).toBe("Bearer fixture-token");
+    expect(server.requests[0]?.headers.authorization).toBe("Bearer destination-header");
     expect(server.requests[0]?.headers["x-api-key"]).toBe("hidden");
     expect(server.requests[0]?.headers["x-deployment"]).toBe("tenant-a");
     expect(server.requests[1]?.body).toEqual({
@@ -246,5 +242,149 @@ describe("memory-core generic embedding provider bridge", () => {
       ),
     ).rejects.toThrow("Unknown memory embedding provider: openai");
     expect(server.requests).toHaveLength(0);
+  });
+});
+
+// Zhipu BigModel embedding-3 caps `input` at 64 items and rejects a larger array
+// with HTTP 400 code 1214. Memory batches are byte-budgeted, not item-counted, so
+// short chunks pack far more than 64 items into one request (issue #139040).
+const ZHIPU_INPUT_ARRAY_LIMIT = 64;
+const ZHIPU_REJECTION_BODY = JSON.stringify({
+  error: { code: "1214", message: "input array max 64" },
+});
+
+// Keep batching, splitting, retry classification, and timeout ownership real.
+function createMemoryEmbeddingOwner(params: {
+  provider: NonNullable<Awaited<ReturnType<typeof createEmbeddingProvider>>["provider"]>;
+  providerRuntime: Awaited<ReturnType<typeof createEmbeddingProvider>>["runtime"];
+  database: MemoryIndexDatabase;
+}) {
+  return Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
+    provider: params.provider,
+    providerRuntime: params.providerRuntime,
+    publishedDatabase: params.database,
+    cache: { enabled: false },
+    settings: { sync: {} },
+    markLocalEmbeddingProviderDegraded: () => {},
+    withProviderUse: async <T>(_provider: unknown, run: () => Promise<T>) => await run(),
+  }) as {
+    embedChunksInBatches: (
+      candidates: Array<MemoryIndexWorkItem & { chunk: IndexedMemoryChunk }>,
+      generation: MemorySemanticProviderGeneration,
+    ) => Promise<number[][]>;
+  };
+}
+
+async function createMemoryEmbeddingOwnerForServer(baseUrl: string, database: DatabaseSync) {
+  const created = await createEmbeddingProvider(createMemoryEmbeddingOptions({ baseUrl }));
+  const provider = created.provider;
+  if (!provider) {
+    throw new Error("expected the OpenAI-compatible embedding provider to be created");
+  }
+  const indexDatabase = new MemoryIndexDatabase(database);
+  const generation: MemorySemanticProviderGeneration = {
+    kind: "semantic",
+    provider,
+    runtime: created.runtime,
+    database: indexDatabase,
+    databaseRevision: 0,
+    cacheWritesInvalidated: false,
+    providerKey: "integration-proof",
+    identities: [],
+  };
+  return {
+    owner: createMemoryEmbeddingOwner({
+      provider,
+      providerRuntime: created.runtime,
+      database: indexDatabase,
+    }),
+    generation,
+  };
+}
+
+// Unique text lengths make each vector identify its own input, because the
+// fixture server answers with `[text.length, indexWithinRequest + 0.5, 3]`.
+function distinctCandidates(
+  count: number,
+): Array<MemoryIndexWorkItem & { chunk: IndexedMemoryChunk }> {
+  return Array.from({ length: count }, (_, index) => ({
+    chunk: {
+      text: "x".repeat(index + 1),
+      hash: `hash-${index}`,
+      startLine: index + 1,
+      endLine: index + 1,
+      importance: null,
+      triggers: null,
+      projectKey: null,
+    },
+    entry: {
+      path: `memory/chunk-${index}.md`,
+      absPath: `/fixture/memory/chunk-${index}.md`,
+      mtimeMs: 0,
+      size: index + 1,
+      hash: `hash-${index}`,
+    },
+    source: "memory",
+  }));
+}
+
+describe("memory-core embedding batch recovery over real transport", () => {
+  it("halves an oversized batch until the provider input array limit is met", async () => {
+    const server = await startEmbeddingServer({
+      reject: (inputCount) =>
+        inputCount > ZHIPU_INPUT_ARRAY_LIMIT
+          ? { status: 400, body: ZHIPU_REJECTION_BODY }
+          : undefined,
+    });
+    const database = new DatabaseSync(":memory:");
+    try {
+      const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
+        server.baseUrl,
+        database,
+      );
+      const embeddings = await owner.embedChunksInBatches(distinctCandidates(100), generation);
+
+      expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual([
+        100, 50, 50,
+      ]);
+      expect(embeddings).toEqual(
+        Array.from({ length: 100 }, (_, index) => [index + 1, (index % 50) + 0.5, 3]),
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each([
+    "input array must contain strings",
+    "input array item max length 64",
+    "input array max 64 tokens",
+    "input array max 64tokens",
+    "input array max 64.5",
+  ])("does not split a terminal provider rejection: %s", async (message) => {
+    const server = await startEmbeddingServer({
+      reject: () => ({
+        status: 400,
+        body: JSON.stringify({
+          error: { code: "1214", message },
+        }),
+      }),
+    });
+    const database = new DatabaseSync(":memory:");
+    try {
+      const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
+        server.baseUrl,
+        database,
+      );
+      await expect(
+        owner.embedChunksInBatches(distinctCandidates(100), generation),
+      ).rejects.toMatchObject({
+        code: "MEMORY_EMBEDDING_OPERATION_FAILED",
+        operation: "batch",
+      });
+      expect(server.requests).toHaveLength(1);
+    } finally {
+      database.close();
+    }
   });
 });

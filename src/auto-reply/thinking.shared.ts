@@ -5,41 +5,13 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../packages/normalization-core/src/string-coerce.js";
+import type { ThinkingLevelMap } from "../llm/types.js";
 
 export { normalizeFastMode };
 export type { FastMode };
 
 /** Canonical thinking level values accepted by chat commands and session state. */
-export type ThinkLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max"
-  | "ultra";
-export type VerboseLevel = "off" | "on" | "full";
-export type TraceLevel = "off" | "on" | "raw";
-export type ElevatedLevel = "off" | "on" | "ask" | "full";
-export type ReasoningLevel = "off" | "on" | "stream";
-type UsageDisplayLevel = "off" | "tokens" | "full";
-/** Minimal model catalog entry needed to choose thinking defaults. */
-export type ThinkingCatalogEntry = {
-  provider: string;
-  id: string;
-  api?: string;
-  reasoning?: boolean;
-  params?: Record<string, unknown>;
-  compat?: {
-    thinkingFormat?: string;
-    supportedReasoningEfforts?: readonly string[] | null;
-  } | null;
-};
-
-/** Complete canonical level set accepted by user-facing thinking controls. */
-const ALL_THINKING_LEVELS: readonly ThinkLevel[] = [
+const ALL_THINKING_LEVELS = [
   "off",
   "minimal",
   "low",
@@ -49,7 +21,37 @@ const ALL_THINKING_LEVELS: readonly ThinkLevel[] = [
   "adaptive",
   "max",
   "ultra",
-];
+] as const;
+export type ThinkLevel = (typeof ALL_THINKING_LEVELS)[number];
+export type VerboseLevel = "off" | "on" | "full";
+export type TraceLevel = "off" | "on" | "raw";
+export type ElevatedLevel = "off" | "on" | "ask" | "full";
+export type ReasoningLevel = "off" | "on" | "stream";
+type UsageDisplayLevel = "off" | "tokens" | "full";
+/** Prepared model catalog fields reused while choosing and dispatching a queued runtime. */
+export type ThinkingCatalogEntry = {
+  provider: string;
+  id: string;
+  nativeRuntime?: string;
+  api?: string;
+  baseUrl?: string;
+  contextWindow?: number;
+  contextTokens?: number;
+  reasoning?: boolean;
+  configuredReasoning?: boolean;
+  /** Concrete runtime owner of thinking policy; internal and never project to clients. */
+  thinkingPolicyProvider?: string;
+  thinkingLevelMap?: ThinkingLevelMap;
+  input?: readonly ("text" | "image" | "audio" | "video" | "document")[];
+  params?: Record<string, unknown>;
+  compat?: {
+    thinkingFormat?: string;
+    supportsReasoningEffort?: boolean;
+    supportedReasoningEfforts?: readonly string[] | null;
+    reasoningEffortMap?: Record<string, string>;
+  } | null;
+};
+
 export const THINKING_LEVELS_HELP = ALL_THINKING_LEVELS.join("|");
 export const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
 export const THINKING_LEVEL_RANKS: Record<ThinkLevel, number> = {
@@ -99,7 +101,7 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
     return "medium";
   }
-  if (["high", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
+  if (["high", "ultrathink", "thinkhardest", "highest"].includes(key)) {
     return "high";
   }
   if (["think"].includes(key)) {
@@ -115,21 +117,6 @@ export function isSessionDefaultDirectiveValue(raw?: string | null): boolean {
     return false;
   }
   return ["default", "inherit", "inherited", "clear", "reset", "unpin"].includes(key);
-}
-
-/** Chooses the default thinking level for one provider/model catalog entry. */
-export function resolveThinkingDefaultForModel(params: {
-  provider: string;
-  model: string;
-  catalog?: ThinkingCatalogEntry[];
-}): ThinkLevel {
-  const candidate = params.catalog?.find(
-    (entry) => entry.provider === params.provider && entry.id === params.model,
-  );
-  if (candidate?.reasoning) {
-    return "low";
-  }
-  return "off";
 }
 
 type OnOffFullLevel = "off" | "on" | "full";

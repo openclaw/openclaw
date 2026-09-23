@@ -1,11 +1,13 @@
 // Resolves persisted session model metadata without loading Gateway projections.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   normalizeStoredOverrideModel,
+  type ModelManifestNormalizationContext,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
@@ -14,24 +16,49 @@ import {
 
 type SessionModelEntry =
   | SessionEntry
-  | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">;
+  | Pick<
+      SessionEntry,
+      | "model"
+      | "modelProvider"
+      | "modelOverride"
+      | "providerOverride"
+      | "modelOverrideRouteResolution"
+      | "modelOverrideFallbackOriginProvider"
+      | "modelOverrideFallbackOriginModel"
+    >;
 
+/** Keep prepared host metadata outside the published session-model resolver contract. */
 export function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?: SessionModelEntry,
   agentId?: string,
   options?: { allowPluginNormalization?: boolean },
 ): { provider: string; model: string } {
+  return resolveSessionModelRefCore(cfg, entry, agentId, {
+    allowPluginNormalization: options?.allowPluginNormalization,
+  });
+}
+
+export function resolveSessionModelRefCore(
+  cfg: OpenClawConfig,
+  entry?: SessionModelEntry,
+  agentId?: string,
+  options?: ModelManifestNormalizationContext & { allowPluginNormalization?: boolean },
+): { provider: string; model: string } {
+  const overrideRouteResolution = resolveSessionModelOverrideRouteResolution(entry);
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
+    routeResolution: overrideRouteResolution,
   });
   if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
     return resolvePersistedSelectedModelRef({
       defaultProvider: normalizedOverride.providerOverride,
       overrideProvider: normalizedOverride.providerOverride,
       overrideModel: normalizedOverride.modelOverride,
+      overrideRouteResolution,
       allowPluginNormalization: options?.allowPluginNormalization,
+      manifestPlugins: options?.manifestPlugins,
     })!;
   }
   const runtimeProvider = normalizeOptionalString(entry?.modelProvider);
@@ -42,12 +69,14 @@ export function resolveSessionModelRef(
         cfg,
         agentId,
         allowPluginNormalization: options?.allowPluginNormalization,
+        manifestPlugins: options?.manifestPlugins,
       })
     : resolveConfiguredModelRef({
         cfg,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
         allowPluginNormalization: options?.allowPluginNormalization,
+        manifestPlugins: options?.manifestPlugins,
       });
 
   const persisted = resolvePersistedSelectedModelRef({
@@ -59,7 +88,9 @@ export function resolveSessionModelRef(
     runtimeModel: agentId ? undefined : runtimeModel,
     overrideProvider: normalizedOverride.providerOverride,
     overrideModel: normalizedOverride.modelOverride,
+    overrideRouteResolution,
     allowPluginNormalization: options?.allowPluginNormalization,
+    manifestPlugins: options?.manifestPlugins,
   });
   return persisted ?? resolved;
 }
@@ -69,7 +100,7 @@ export function resolveSessionModelIdentityRef(
   entry?: SessionModelEntry,
   agentId?: string,
   fallbackModelRef?: string,
-  options?: { allowPluginNormalization?: boolean },
+  options?: ModelManifestNormalizationContext & { allowPluginNormalization?: boolean },
 ): { provider?: string; model: string } {
   const runtimeModel = entry?.model?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
@@ -80,6 +111,8 @@ export function resolveSessionModelIdentityRef(
     const inferredProvider = inferUniqueProviderFromConfiguredModels({
       cfg,
       model: runtimeModel,
+      agentId,
+      manifestPlugins: options?.manifestPlugins,
     });
     if (inferredProvider) {
       return { provider: inferredProvider, model: runtimeModel };
@@ -87,6 +120,7 @@ export function resolveSessionModelIdentityRef(
     if (runtimeModel.includes("/")) {
       const parsedRuntime = parseModelRef(runtimeModel, DEFAULT_PROVIDER, {
         allowPluginNormalization: options?.allowPluginNormalization,
+        manifestPlugins: options?.manifestPlugins,
       });
       if (parsedRuntime) {
         return { provider: parsedRuntime.provider, model: parsedRuntime.model };
@@ -99,6 +133,7 @@ export function resolveSessionModelIdentityRef(
   if (fallbackRef) {
     const parsedFallback = parseModelRef(fallbackRef, DEFAULT_PROVIDER, {
       allowPluginNormalization: options?.allowPluginNormalization,
+      manifestPlugins: options?.manifestPlugins,
     });
     if (parsedFallback) {
       return { provider: parsedFallback.provider, model: parsedFallback.model };
@@ -106,14 +141,17 @@ export function resolveSessionModelIdentityRef(
     const inferredProvider = inferUniqueProviderFromConfiguredModels({
       cfg,
       model: fallbackRef,
+      agentId,
+      manifestPlugins: options?.manifestPlugins,
     });
     if (inferredProvider) {
       return { provider: inferredProvider, model: fallbackRef };
     }
     return { model: fallbackRef };
   }
-  const resolved = resolveSessionModelRef(cfg, entry, agentId, {
+  const resolved = resolveSessionModelRefCore(cfg, entry, agentId, {
     allowPluginNormalization: options?.allowPluginNormalization,
+    manifestPlugins: options?.manifestPlugins,
   });
   return { provider: resolved.provider, model: resolved.model };
 }

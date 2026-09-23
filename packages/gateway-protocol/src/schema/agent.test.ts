@@ -29,6 +29,8 @@ type AgentInternalEvent = {
   status: "ok" | "error";
   statusLabel: string;
   result: string;
+  noVisibleResult?: boolean;
+  modelRouteChange?: string;
   attachments?: unknown[];
   mediaUrls?: string[];
   replyInstruction?: string;
@@ -69,6 +71,20 @@ const musicCompletionEvent: AgentInternalEvent = {
   replyInstruction: "Deliver the generated music.",
 };
 
+/** Representative subagent completion event announced back to the requester. */
+const subagentCompletionEvent: AgentInternalEvent = {
+  type: "task_completion",
+  source: "subagent",
+  childSessionKey: "agent:main:subagent:run-1",
+  childSessionId: "run-1",
+  announceType: "subagent task",
+  taskLabel: "audit the announce path",
+  status: "ok",
+  statusLabel: "completed successfully",
+  result: "Audit finished; no findings.",
+  replyInstruction: "Deliver the child result.",
+};
+
 describe("AgentParamsSchema", () => {
   it("accepts the backend expected-session binding", () => {
     expect(
@@ -94,6 +110,25 @@ describe("AgentParamsSchema", () => {
 
   it("accepts generated music attachments on internal completion events", () => {
     const params = makeAgentParamsWithInternalEvent(musicCompletionEvent);
+
+    expect(Value.Check(AgentParamsSchema, params)).toBe(true);
+  });
+
+  it("accepts the no-output fact a subagent completion records", () => {
+    const params = makeAgentParamsWithInternalEvent({
+      ...subagentCompletionEvent,
+      result: "(no output)",
+      noVisibleResult: true,
+    });
+
+    expect(Value.Check(AgentParamsSchema, params)).toBe(true);
+  });
+
+  it("accepts a producer model-route fact on internal completion events", () => {
+    const params = makeAgentParamsWithInternalEvent({
+      ...musicCompletionEvent,
+      modelRouteChange: "Model route changed: requested/model → actual/model.",
+    });
 
     expect(Value.Check(AgentParamsSchema, params)).toBe(true);
   });
@@ -150,6 +185,23 @@ describe("MessageActionParamsSchema", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("validates closed reply routing facts", () => {
+    for (const reply of [
+      { replyToId: "message-1", source: "explicit" },
+      { replyToId: "message-1", source: "implicit", mode: "first" },
+      { replyToId: "message-1", source: "implicit", mode: "all" },
+    ]) {
+      expect(Value.Check(MessageActionParamsSchema, { ...baseParams, reply })).toBe(true);
+    }
+    for (const reply of [
+      { replyToId: "message-1", source: "explicit", mode: "off" },
+      { replyToId: "message-1", source: "implicit" },
+      { replyToId: "message-1", source: "implicit", mode: "batched" },
+    ]) {
+      expect(Value.Check(MessageActionParamsSchema, { ...baseParams, reply })).toBe(false);
+    }
   });
 });
 

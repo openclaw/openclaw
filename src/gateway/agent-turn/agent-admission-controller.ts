@@ -1,8 +1,8 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
+  isAgentRunDirectAbortReason,
 } from "../../agents/run-termination.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -28,12 +28,14 @@ import {
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 export function createAgentAdmissionController(params: {
+  assertAdmissionCurrent?: () => void;
   cfg: OpenClawConfig;
   runId: string;
   lifecycleGeneration: string;
   agentDedupeKeys: string[];
   preAcceptedReservedSessionKey?: string;
   expectedSession?: ExpectedExistingSessionConstraint;
+  admissionOwner?: symbol;
   context: AgentTurnContext;
   io: AgentTurnIo;
   dedupeLifecycle: AgentDedupeLifecycle;
@@ -66,14 +68,12 @@ export function createAgentAdmissionController(params: {
   const admissionAgentId = () => {
     const resolvedSessionKey = params.getResolvedSessionKey();
     return (
-      params.getResolvedSessionAgentId() ??
-      (resolvedSessionKey === "global"
-        ? (params.getAgentId() ?? resolveDefaultAgentId(params.getCfgForAgent() ?? params.cfg))
-        : undefined)
+      params.getResolvedSessionAgentId() ?? (resolvedSessionKey ? params.getAgentId() : undefined)
     );
   };
 
   const assertAllowed = (commitOutcome = true) => {
+    params.assertAdmissionCurrent?.();
     const resolvedSessionKey = params.getResolvedSessionKey();
     const requestedSessionKey = params.getRequestedSessionKey();
     const latest = readGatewayDedupeEntry({
@@ -86,6 +86,7 @@ export function createAgentAdmissionController(params: {
         runId: params.runId,
         sessionKey: resolvedSessionKey,
         alternateSessionKeys: [params.preAcceptedReservedSessionKey, requestedSessionKey],
+        agentId: admissionAgentId(),
       })
     ) {
       if (commitOutcome) {
@@ -151,11 +152,13 @@ export function createAgentAdmissionController(params: {
     let latestEntry = loadSessionEntry(resolvedSessionKey, {
       agentId: admissionAgent,
       clone: false,
+      projection: "list",
     }).entry;
     if (!latestEntry && requestedSessionKey && requestedSessionKey !== resolvedSessionKey) {
       latestEntry = loadSessionEntry(requestedSessionKey, {
         agentId: admissionAgent,
         clone: false,
+        projection: "list",
       }).entry;
     }
     assertExpectedExistingSession({
@@ -179,13 +182,27 @@ export function createAgentAdmissionController(params: {
     }
   };
 
-  const interrupt = () => {
+  const interrupt = (reason?: Error) => {
+    // Draining an already-stopped admission must preserve its original cancellation reason.
+    if (admittedRunAbort?.controller.signal.aborted) {
+      return undefined;
+    }
+    const stopReason = isAgentRunDirectAbortReason(reason)
+      ? "rpc"
+      : AGENT_RUN_RESTART_ABORT_STOP_REASON;
     if (admittedRunAbort?.entry) {
-      admittedRunAbort.entry.abortStopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
+      admittedRunAbort.entry.abortStopReason = stopReason;
     }
     if (admittedRunAbort) {
-      admittedRunAbort.controller.abort(createAgentRunRestartAbortError());
-      return;
+      const entry = admittedRunAbort.entry;
+      const ownsRun =
+        entry !== undefined &&
+        params.context.chatAbortControllers.get(params.runId) === entry &&
+        !entry.registrationCleanupRequested;
+      admittedRunAbort.controller.abort(
+        stopReason === "rpc" ? reason : createAgentRunRestartAbortError(),
+      );
+      return ownsRun ? { runId: params.runId } : undefined;
     }
     const reservedEntry = readGatewayDedupeEntry({
       dedupe: params.context.dedupe,
@@ -202,9 +219,10 @@ export function createAgentAdmissionController(params: {
         agentId: admissionAgentId(),
         sessionKey: params.getResolvedSessionKey(),
         runId: params.runId,
-        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+        stopReason,
       });
     }
+    return undefined;
   };
 
   const acquire = async (scope: string) => {
@@ -221,6 +239,7 @@ export function createAgentAdmissionController(params: {
       (await beginSessionWorkAdmission({
         scope,
         identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
+        ...(params.admissionOwner ? { owner: params.admissionOwner } : {}),
         assertAllowed: () => assertAllowed(false),
         revalidateAllowed: assertAllowed,
         onInterrupt: interrupt,

@@ -1,51 +1,39 @@
-// Vitest global setup builds and serves the shipped UI once per serial E2E shard.
+// All UI E2E projects provide Chromium metadata without acquiring a UI server.
 import { chromium } from "playwright";
 import type { TestProject } from "vitest/node";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
-  startBundledControlUiE2eServer,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import { createTempDirTracker } from "../helpers/temp-dir.ts";
+import { assertUiE2ePreflight } from "./vitest.ui-e2e-preflight.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
-    controlUiE2eServerBaseUrl: string | null;
+    controlUiE2eChromium: { executablePath: string; available: boolean };
+    controlUiE2eCleanup: { timeoutMs: number; pool: "forks"; isolate: true };
   }
 }
 
-export default async function setup(project: TestProject) {
-  const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-  if (!canRunPlaywrightChromium(executablePath)) {
-    project.provide("controlUiE2eServerBaseUrl", null);
-    // No-op teardown keeps both paths value-returning for Vitest's setup contract.
-    return () => {};
-  }
+const preflights = new WeakMap<TestProject, Promise<void>>();
 
-  // Local full-suite runs can fan shards into separate processes in one checkout.
-  // Keep every build out of canonical dist so those processes cannot clobber it.
-  const tempDirs = createTempDirTracker();
-  const outDir = tempDirs.make("openclaw-ui-e2e-");
-  const server = await startBundledControlUiE2eServer(outDir).catch(async (error: unknown) => {
-    try {
-      tempDirs.cleanup();
-    } catch {}
-    throw error;
-  });
-  try {
-    project.provide("controlUiE2eServerBaseUrl", server.baseUrl);
-    return async () => {
-      try {
-        await server.close();
-      } finally {
-        tempDirs.cleanup();
-      }
-    };
-  } catch (error) {
-    await server.close().catch(() => {});
-    try {
-      tempDirs.cleanup();
-    } catch {}
-    throw error;
+export default async function setup(project: TestProject) {
+  const { pool, isolate, hookTimeout: timeoutMs } = project.config;
+  if (pool !== "forks" || !isolate || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error(
+      "Control UI E2E requires isolated forks and a finite hookTimeout for owned cleanup",
+    );
   }
+  project.provide("controlUiE2eCleanup", { pool: "forks", isolate: true, timeoutMs });
+  const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+  const available = canRunPlaywrightChromium(executablePath);
+  if (available) {
+    const root = project.vitest.getRootProject();
+    let preflight = preflights.get(root);
+    if (!preflight) {
+      preflight = assertUiE2ePreflight();
+      preflights.set(root, preflight);
+    }
+    await preflight;
+  }
+  project.provide("controlUiE2eChromium", { executablePath, available });
 }

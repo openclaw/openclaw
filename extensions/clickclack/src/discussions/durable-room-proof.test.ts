@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawPluginSessionsChangedEvent, PluginRuntime } from "openclaw/plugin-sdk/core";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import { createClickClackClient } from "../http-client.js";
 import { handleClickClackInbound } from "../inbound.js";
 import { setClickClackRuntime } from "../runtime.js";
 import type { ClickClackChannel, ClickClackMessage, CoreConfig } from "../types.js";
+import { asyncDiscussionTestStore } from "./service-test-support.js";
 import { ClickClackDiscussionService } from "./service.js";
 
 type RemoteChannel = ClickClackChannel;
@@ -215,30 +216,18 @@ describe("ClickClack durable room real-behavior proof", () => {
         },
       },
     } as unknown as PluginRuntime);
+    runtime.state.openKeyedStore = <T>(
+      options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
+    ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options);
     setClickClackRuntime(runtime);
-    const eventHandlers = new Set<(event: OpenClawPluginSessionsChangedEvent) => void>();
     const service = new ClickClackDiscussionService(runtime, {
       clientFactory: (account) =>
         createClickClackClient({ baseUrl: account.apiEndpoint, token: account.token }),
       installationId: "11111111-2222-4333-8444-555555555555",
       bindingGenerationFactory: () => "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
-      gatewayEvents: {
-        onSessionsChanged(handler) {
-          eventHandlers.add(handler);
-          return () => eventHandlers.delete(handler);
-        },
-      },
       startTimer: false,
     });
     cleanups.push(async () => service.cleanup());
-    const emit = async (event: OpenClawPluginSessionsChangedEvent) => {
-      for (const handler of eventHandlers) {
-        handler(event);
-      }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 300);
-      });
-    };
 
     await service.open(sessionKey);
     const originalExternalRef = remote.channels[1]?.external_ref;
@@ -262,13 +251,13 @@ describe("ClickClack durable room real-behavior proof", () => {
     });
 
     sessionEntry = { ...sessionEntry!, archivedAt: 2 };
-    await emit({ sessionKey, reason: "archive" });
+    await service.reconcile(sessionKey);
     sessionEntry = { sessionId: "session-reset", label: "Durable proof room", updatedAt: 3 };
-    await emit({ sessionKey, reason: "reset" });
+    await service.reconcile(sessionKey);
     sessionEntry = undefined;
-    await emit({ sessionKey, reason: "delete" });
+    await service.reconcile(sessionKey);
     sessionEntry = { sessionId: "session-recreated", label: "Durable proof room", updatedAt: 4 };
-    await emit({ sessionKey, reason: "create" });
+    await service.reconcile(sessionKey);
 
     const history = await service.readLatestMessages(sessionKey, 30);
     await handleClickClackInbound({

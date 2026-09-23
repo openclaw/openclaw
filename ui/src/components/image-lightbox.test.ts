@@ -1,8 +1,25 @@
 /* @vitest-environment jsdom */
 
+import Panzoom from "@panzoom/panzoom";
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { renderChatImageLightbox } from "../pages/chat/components/chat-image-lightbox.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import type { ImageLightboxItem } from "./image-lightbox.types.ts";
+
+vi.mock("@panzoom/panzoom", () => ({
+  default: vi.fn(() => ({
+    destroy: vi.fn(),
+    reset: vi.fn(),
+    resetStyle: vi.fn(),
+    zoomIn: vi.fn(),
+    zoomOut: vi.fn(),
+    zoomToPoint: vi.fn(),
+    zoomWithWheel: vi.fn(),
+  })),
+}));
+
 import "./image-lightbox.ts";
 
 let container: HTMLDivElement;
@@ -15,7 +32,7 @@ async function renderLightbox() {
   render(
     html`<openclaw-image-lightbox
       src="data:image/png;base64,cG5n"
-      title="Generated lobster"
+      .imageTitle=${"Generated lobster"}
     ></openclaw-image-lightbox>`,
     container,
   );
@@ -71,11 +88,140 @@ describe("openclaw-image-lightbox", () => {
 
     expect(root?.querySelector<HTMLImageElement>("img")?.alt).toBe("Generated lobster");
     expect(root?.querySelector<HTMLImageElement>("img")?.src).toBe("data:image/png;base64,cG5n");
+    expect(modal.hasAttribute("title")).toBe(false);
     await vi.waitFor(() =>
       expect(root?.querySelector<HTMLAnchorElement>("a")?.href).toBe("blob:lightbox-original"),
     );
     expect(fetchImage).toHaveBeenCalledTimes(1);
-    expect(root?.querySelector<HTMLButtonElement>("button")?.hasAttribute("autofocus")).toBe(true);
+    expect(root?.querySelector<HTMLButtonElement>(".close")?.hasAttribute("autofocus")).toBe(true);
+
+    modal.imageTitle = "Renamed image";
+    await modal.updateComplete;
+    expect(root?.querySelector<HTMLImageElement>("img")?.alt).toBe("Renamed image");
+    expect(root?.querySelector("openclaw-modal-dialog")?.label).toBe(
+      "Image preview: Renamed image",
+    );
+  });
+
+  it("renders video in the shared overlay without image zoom controls", async () => {
+    render(
+      html`<openclaw-image-lightbox
+        mediaKind="video"
+        src="https://example.com/demo.mp4?playback=1"
+        originalSrc="https://example.com/demo.mp4"
+        .imageTitle=${"Demo clip"}
+      ></openclaw-image-lightbox>`,
+      container,
+    );
+    const modal = container.querySelector("openclaw-image-lightbox");
+    if (!modal) {
+      throw new Error("missing media lightbox");
+    }
+    await modal.updateComplete;
+
+    const video = modal.shadowRoot?.querySelector<HTMLVideoElement>("video");
+    expect(video?.src).toBe("https://example.com/demo.mp4?playback=1");
+    expect(video?.controls).toBe(true);
+    expect(video?.autoplay).toBe(true);
+    expect(modal.shadowRoot?.querySelector("img, .zoom-controls")).toBeNull();
+    expect(
+      modal.shadowRoot?.querySelector<HTMLButtonElement>(".close")?.getAttribute("aria-label"),
+    ).toBe("Close video preview");
+    await vi.waitFor(() =>
+      expect(modal.shadowRoot?.querySelector<HTMLAnchorElement>(".open-original")?.href).toBe(
+        "https://example.com/demo.mp4",
+      ),
+    );
+    const openOriginal = modal.shadowRoot?.querySelector<HTMLAnchorElement>(".open-original");
+    video?.focus();
+    video?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, composed: true }),
+    );
+    expect(modal.shadowRoot?.activeElement).toBe(openOriginal);
+    openOriginal?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, composed: true }),
+    );
+    expect(modal.shadowRoot?.activeElement).toBe(video);
+
+    modal.imageTitle = "Renamed video";
+    await modal.updateComplete;
+    expect(video?.getAttribute("aria-label")).toBe("Renamed video");
+    expect(modal.shadowRoot?.querySelector("openclaw-modal-dialog")?.label).toBe(
+      "Video preview: Renamed video",
+    );
+  });
+
+  it("keeps the preview and zoom until a decoded original replaces it in the open viewer", async () => {
+    const full = createDeferred<ImageLightboxItem | null>();
+    const decoded = createDeferred();
+    const decode = vi.fn(() => decoded.promise);
+    vi.stubGlobal(
+      "Image",
+      class {
+        src = "";
+        decode = decode;
+      },
+    );
+    const original = { src: "blob:original", title: "Screenshot", release: vi.fn() };
+    render(
+      renderChatImageLightbox(
+        {
+          src: "blob:preview",
+          title: "Screenshot",
+          loadFullResolution: () => full.promise,
+        },
+        () => render(nothing, container),
+      ),
+      container,
+    );
+    const modal = container.querySelector("openclaw-image-lightbox")!;
+    await modal.updateComplete;
+    const image = modal.shadowRoot!.querySelector<HTMLImageElement>("img")!;
+    expect(image.src).toBe("blob:preview");
+    expect(modal.shadowRoot!.querySelector(".open-original")).toBeNull();
+    image.dispatchEvent(new Event("load"));
+    image.dispatchEvent(new CustomEvent("panzoomchange", { detail: { scale: 2 } }));
+    await modal.updateComplete;
+
+    full.resolve(original);
+    await vi.waitFor(() => expect(decode).toHaveBeenCalledOnce());
+    expect(image.src).toBe("blob:preview");
+    decoded.resolve();
+    await vi.waitFor(() => expect(image.src).toBe("blob:original"));
+    image.dispatchEvent(new Event("load"));
+    await modal.updateComplete;
+    expect(modal.shadowRoot!.querySelector(".zoom-level")?.textContent?.trim()).toBe("200%");
+    await vi.waitFor(() =>
+      expect(modal.shadowRoot!.querySelector<HTMLAnchorElement>(".open-original")?.href).toBe(
+        "blob:original",
+      ),
+    );
+    modal.shadowRoot!.querySelector<HTMLButtonElement>(".close")!.click();
+    await vi.waitFor(() => expect(original.release).toHaveBeenCalledOnce());
+    expect(container.querySelector("openclaw-image-lightbox")).toBeNull();
+  });
+
+  it("does not preload a gallery from an update queued before detachment", async () => {
+    const { modal } = await renderLightbox();
+    const neighbor = vi.fn(async () => null);
+    modal.gallery = { index: 0, items: [async () => null, neighbor] };
+    modal.remove();
+
+    await modal.updateComplete;
+    await Promise.resolve();
+
+    expect(neighbor).not.toHaveBeenCalled();
+  });
+
+  it("ignores an image load that finishes after the viewer closes", async () => {
+    const { modal } = await renderLightbox();
+    const image = modal.shadowRoot!.querySelector<HTMLImageElement>("img")!;
+    modal.remove();
+    vi.mocked(Panzoom).mockClear();
+
+    image.dispatchEvent(new Event("load"));
+
+    expect(Panzoom).not.toHaveBeenCalled();
   });
 
   it("accepts parameters on safe raster MIME types", async () => {
@@ -85,7 +231,7 @@ describe("openclaw-image-lightbox", () => {
     render(
       html`<openclaw-image-lightbox
         src="data:image/png;charset=utf-8;base64,cG5n"
-        title="Generated lobster"
+        .imageTitle=${"Generated lobster"}
       ></openclaw-image-lightbox>`,
       container,
     );
@@ -118,7 +264,7 @@ describe("openclaw-image-lightbox", () => {
     render(
       html`<openclaw-image-lightbox
         src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'></svg>"
-        title="Untrusted SVG"
+        .imageTitle=${"Untrusted SVG"}
       ></openclaw-image-lightbox>`,
       container,
     );
@@ -133,23 +279,93 @@ describe("openclaw-image-lightbox", () => {
     expect(createObjectUrl).not.toHaveBeenCalled();
   });
 
-  it("keeps Tab focus within the lightbox actions", async () => {
-    const { modal } = await renderLightbox();
+  it("omits the original action for active blob image formats", async () => {
+    fetchImage.mockResolvedValueOnce({
+      blob: async () => new Blob(["svg"], { type: "image/svg+xml" }),
+    });
+    render(
+      html`<openclaw-image-lightbox
+        src="blob:untrusted-svg"
+        .imageTitle=${"Untrusted SVG"}
+      ></openclaw-image-lightbox>`,
+      container,
+    );
+    const modal = container.querySelector("openclaw-image-lightbox");
+    if (!modal) {
+      throw new Error("missing image lightbox");
+    }
+    await modal.updateComplete;
+
+    await vi.waitFor(() => expect(fetchImage).toHaveBeenCalledWith("blob:untrusted-svg"));
+    expect(modal.shadowRoot?.querySelector(".open-original")).toBeNull();
+    expect(createObjectUrl).not.toHaveBeenCalled();
+  });
+
+  it("keeps the original action for inert blob image formats", async () => {
+    render(
+      html`<openclaw-image-lightbox
+        src="blob:safe-png"
+        .imageTitle=${"Safe PNG"}
+      ></openclaw-image-lightbox>`,
+      container,
+    );
+    const modal = container.querySelector("openclaw-image-lightbox");
+    if (!modal) {
+      throw new Error("missing image lightbox");
+    }
+    await modal.updateComplete;
+
+    await vi.waitFor(() =>
+      expect(modal.shadowRoot?.querySelector<HTMLAnchorElement>(".open-original")?.href).toBe(
+        "blob:safe-png",
+      ),
+    );
+    expect(fetchImage).toHaveBeenCalledWith("blob:safe-png");
+    expect(createObjectUrl).not.toHaveBeenCalled();
+  });
+
+  it("gates zoom readiness and keeps Tab focus within the actions", async () => {
+    const { modal, dialogAdapter } = await renderLightbox();
     const root = modal.shadowRoot;
+    const image = root?.querySelector<HTMLImageElement>(".image");
+    const zoomIn = root?.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]');
+    expect(zoomIn?.getAttribute("aria-disabled")).toBe("true");
+    const unavailableShortcut = new KeyboardEvent("keydown", {
+      key: "+",
+      bubbles: true,
+      cancelable: true,
+    });
+    dialogAdapter.dispatchEvent(unavailableShortcut);
+    expect(unavailableShortcut.defaultPrevented).toBe(false);
+
+    image?.dispatchEvent(new Event("error"));
+    await modal.updateComplete;
+    expect(zoomIn?.getAttribute("aria-disabled")).toBe("true");
+
+    image?.dispatchEvent(new Event("load"));
+    await modal.updateComplete;
+    expect(zoomIn?.getAttribute("aria-disabled")).toBe("false");
+    const availableShortcut = new KeyboardEvent("keydown", {
+      key: "+",
+      bubbles: true,
+      cancelable: true,
+    });
+    dialogAdapter.dispatchEvent(availableShortcut);
+    expect(availableShortcut.defaultPrevented).toBe(true);
+
     await vi.waitFor(() =>
       expect(root?.querySelector<HTMLAnchorElement>(".open-original")).toBeTruthy(),
     );
     const openOriginal = root?.querySelector<HTMLAnchorElement>(".open-original");
-    const closeButton = root?.querySelector<HTMLButtonElement>(".close");
-    closeButton?.focus();
+    zoomIn?.focus();
 
-    closeButton?.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    zoomIn?.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
     expect(root?.activeElement).toBe(openOriginal);
 
     openOriginal?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }),
     );
-    expect(root?.activeElement).toBe(closeButton);
+    expect(root?.activeElement).toBe(zoomIn);
   });
 
   it("emits one close event for the close button and modal cancellation", async () => {
@@ -164,5 +380,71 @@ describe("openclaw-image-lightbox", () => {
 
     dialogAdapter.dispatchEvent(new CustomEvent("modal-cancel", { bubbles: true }));
     expect(closes).toBe(2);
+  });
+
+  it("dismisses only a pointer gesture that starts and ends on the backdrop", async () => {
+    const { modal } = await renderLightbox();
+    const stage = modal.shadowRoot?.querySelector<HTMLElement>(".stage");
+    const image = modal.shadowRoot?.querySelector<HTMLImageElement>(".image");
+    Object.defineProperty(modal.shadowRoot!, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => stage ?? null),
+    });
+    let closes = 0;
+    modal.addEventListener("image-lightbox-close", () => {
+      closes += 1;
+    });
+
+    image?.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, button: 0, isPrimary: true, pointerId: 1 }),
+    );
+    stage?.dispatchEvent(
+      new PointerEvent("pointerup", { bubbles: true, button: 0, isPrimary: true, pointerId: 1 }),
+    );
+    expect(closes).toBe(0);
+
+    stage?.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+        isPrimary: true,
+        pointerId: 2,
+      }),
+    );
+    stage?.dispatchEvent(
+      new PointerEvent("pointerup", {
+        bubbles: true,
+        button: 0,
+        clientX: 30,
+        clientY: 30,
+        isPrimary: true,
+        pointerId: 2,
+      }),
+    );
+    expect(closes).toBe(0);
+
+    stage?.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+        isPrimary: true,
+        pointerId: 3,
+      }),
+    );
+    stage?.dispatchEvent(
+      new PointerEvent("pointerup", {
+        bubbles: true,
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+        isPrimary: true,
+        pointerId: 3,
+      }),
+    );
+    expect(closes).toBe(1);
   });
 });

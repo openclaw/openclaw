@@ -13,6 +13,7 @@ import {
   withSameOriginMcpHttpHeaders,
 } from "./mcp-http-fetch.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
+import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 
 const testGlobal = globalThis as Record<string, unknown>;
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
@@ -294,7 +295,7 @@ describe("MCP HTTP fetch helpers", () => {
       authorization: string | null;
       cache: RequestCache;
       credentials: RequestCredentials;
-      keepalive: boolean;
+      keepalive: boolean | undefined;
       mode: RequestMode;
     }> = [];
     testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
@@ -318,11 +319,12 @@ describe("MCP HTTP fetch helpers", () => {
       },
     };
     const resourceUrl = "https://mcp.example.com/mcp";
+    // Removal: expect true after Bun exposes the Request.keepalive getter.
+    const expectedKeepalive = process.versions.bun ? undefined : true;
     const fetch = withMcpOAuthBearer({
       fetchFn: buildMcpHttpFetch({ resourceUrl }),
       authFetchFn: buildMcpHttpFetch({ resourceUrl }),
-      serverName: "docs",
-      resourceUrl,
+      identity: operatorMcpOAuthIdentity("docs", resourceUrl),
     });
 
     const response = await fetch(resourceUrl, {
@@ -343,7 +345,7 @@ describe("MCP HTTP fetch helpers", () => {
         authorization: "Bearer first-token",
         cache: "no-store",
         credentials: "include",
-        keepalive: true,
+        keepalive: expectedKeepalive,
         mode: "cors",
       },
       {
@@ -352,7 +354,7 @@ describe("MCP HTTP fetch helpers", () => {
         authorization: "Bearer second-token",
         cache: "no-store",
         credentials: "include",
-        keepalive: true,
+        keepalive: expectedKeepalive,
         mode: "cors",
       },
     ]);

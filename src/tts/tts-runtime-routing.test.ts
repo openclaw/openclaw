@@ -81,7 +81,19 @@ describe("TTS runtime native voice-note routing", () => {
     );
   });
 
-  it("prepares deep-merged surface config and directive inputs", () => {
+  it("uses structured speech guidance for message-tool-only replies", () => {
+    const hint = buildTtsSystemPromptHint(
+      createTtsConfig("openclaw-speech-core-structured-tts-hint-test"),
+      undefined,
+      { messageToolOnly: true },
+    );
+
+    expect(hint).toContain("message(action=send) with voiceText");
+    expect(hint).toContain("voiceProvider/voiceId");
+    expect(hint).not.toContain("[[tts:");
+  });
+
+  it("prepares deep-merged surface config and directive inputs", async () => {
     const cfg: OpenClawConfig = {
       tts: {
         provider: "mock",
@@ -95,7 +107,7 @@ describe("TTS runtime native voice-note routing", () => {
       },
     };
 
-    const prepared = prepareTtsRequest({
+    const prepared = await prepareTtsRequest({
       cfg,
       override: {
         modelOverrides: { allowProvider: true },
@@ -131,8 +143,8 @@ describe("TTS runtime native voice-note routing", () => {
     });
   });
 
-  it("sanitizes blocked override keys while preparing TTS config", () => {
-    const prepared = prepareTtsRequest({
+  it("sanitizes blocked override keys while preparing TTS config", async () => {
+    const prepared = await prepareTtsRequest({
       cfg: {
         tts: {
           provider: "mock",

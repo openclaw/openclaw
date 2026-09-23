@@ -3,16 +3,27 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { Message, Usage } from "openclaw/plugin-sdk/llm";
+import type { Message } from "openclaw/plugin-sdk/llm";
 import { afterAll, describe, expect, it } from "vitest";
+import { createReadTool } from "../agents/sessions/tools/read.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   replaceSessionEntry,
   replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
+import {
+  assistantMessage,
+  userMessage,
+  writeSimpleSessionFile,
+  writeToolCallOnlySessionFile,
+  writeToolCallSessionFile,
+} from "./export.test-helpers.js";
 import {
   TRAJECTORY_POINTER_FILE_MAX_BYTES,
   TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
@@ -29,53 +40,6 @@ function makeTempDir(): string {
   const dir = path.join(tempRoot, `case-${tempDirId++}`);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
-}
-
-const emptyUsage: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  },
-};
-
-function userMessage(content: string): Message {
-  return {
-    role: "user",
-    content,
-    timestamp: 1,
-  };
-}
-
-function assistantMessage(content: Extract<Message, { role: "assistant" }>["content"]): Message {
-  return {
-    role: "assistant",
-    content,
-    api: "openai-responses",
-    provider: "openai",
-    model: "gpt-5.4",
-    usage: emptyUsage,
-    stopReason: "stop",
-    timestamp: 2,
-  };
-}
-
-function toolResultMessage(content: Extract<Message, { role: "toolResult" }>["content"]): Message {
-  return {
-    role: "toolResult",
-    toolCallId: "call_1",
-    toolName: "read",
-    content,
-    isError: false,
-    timestamp: 3,
-  };
 }
 
 function eventTypes(events: readonly Pick<TrajectoryEvent, "type">[]): string[] {
@@ -98,38 +62,6 @@ function runtimeAttemptEvents(
     runId,
     ...(data ? { data } : {}),
   }));
-}
-
-function writeSimpleSessionFile(
-  sessionFile: string,
-  params: { userEntryTimestamp?: string | number; userMessage?: Message } = {},
-): void {
-  const header = {
-    type: "session",
-    version: 3,
-    id: "session-1",
-    timestamp: "2026-04-01T05:46:39.000Z",
-    cwd: path.dirname(sessionFile),
-  };
-  const userEntry = {
-    type: "message",
-    id: "entry-user",
-    parentId: null,
-    timestamp: params.userEntryTimestamp ?? "2026-04-01T05:46:40.000Z",
-    message: params.userMessage ?? userMessage("hello"),
-  };
-  const assistantEntry = {
-    type: "message",
-    id: "entry-assistant",
-    parentId: "entry-user",
-    timestamp: "2026-04-01T05:46:41.000Z",
-    message: assistantMessage([{ type: "text", text: "done" }]),
-  };
-  fs.writeFileSync(
-    sessionFile,
-    `${[header, userEntry, assistantEntry].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    "utf8",
-  );
 }
 
 async function exportRuntimeArtifacts(
@@ -158,94 +90,10 @@ async function exportRuntimeArtifacts(
     : undefined;
 }
 
-function writeToolCallOnlySessionFile(sessionFile: string): void {
-  const header = {
-    type: "session",
-    version: 3,
-    id: "session-1",
-    timestamp: "2026-04-01T05:46:39.000Z",
-    cwd: path.dirname(sessionFile),
-  };
-  const assistantEntry = {
-    type: "message",
-    id: "entry-assistant",
-    parentId: null,
-    timestamp: "2026-04-01T05:46:41.000Z",
-    message: assistantMessage([
-      {
-        type: "toolCall",
-        id: "call_1",
-        name: "read",
-        arguments: { filePath: "README.md" },
-      },
-    ]),
-  };
-  fs.writeFileSync(
-    sessionFile,
-    `${[header, assistantEntry].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    "utf8",
-  );
-}
-
-function writeToolCallSessionFile(sessionFile: string): void {
-  const header = {
-    type: "session",
-    version: 3,
-    id: "session-1",
-    timestamp: "2026-04-01T05:46:39.000Z",
-    cwd: path.dirname(sessionFile),
-    title: "Trajectory Test",
-  };
-  const entries = [
-    header,
-    {
-      type: "message",
-      id: "entry-user",
-      parentId: null,
-      timestamp: "2026-04-01T05:46:40.000Z",
-      message: userMessage("hello"),
-    },
-    {
-      type: "message",
-      id: "entry-tool-call",
-      parentId: "entry-user",
-      timestamp: "2026-04-01T05:46:41.000Z",
-      message: assistantMessage([
-        {
-          type: "toolCall",
-          id: "call_1",
-          name: "read",
-          arguments: {
-            filePath: path.join(path.dirname(sessionFile), "skills", "weather", "SKILL.md"),
-          },
-        },
-      ]),
-    },
-    {
-      type: "message",
-      id: "entry-tool-result",
-      parentId: "entry-tool-call",
-      timestamp: "2026-04-01T05:46:42.000Z",
-      message: toolResultMessage([{ type: "text", text: "README contents" }]),
-    },
-    {
-      type: "message",
-      id: "entry-assistant",
-      parentId: "entry-tool-result",
-      timestamp: "2026-04-01T05:46:43.000Z",
-      message: assistantMessage([{ type: "text", text: "done" }]),
-    },
-  ];
-  fs.writeFileSync(
-    sessionFile,
-    `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    "utf8",
-  );
-}
-
-afterAll(() => {
+afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 
@@ -493,6 +341,45 @@ describe("exportTrajectoryBundle", () => {
     expect(fs.existsSync(path.join(tmpDir, "trajectory", "session-1.jsonl"))).toBe(false);
   });
 
+  it("exports logical-agent runtime events from a shared physical store", async () => {
+    const tmpDir = makeTempDir();
+    const storePath = path.join(tmpDir, "shared.sqlite");
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:unrelated", storePath },
+      { sessionId: "unrelated", updatedAt: 1 },
+    );
+    const target = {
+      agentId: "ops",
+      sessionKey: "agent:ops:trace",
+      sessionId: "session-1",
+      storePath,
+    };
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    appendSqliteTrajectoryRuntimeEvents(
+      target,
+      runtimeAttemptEvents([
+        ["session.started", "ops-run"],
+        ["session.ended", "ops-run", { status: "success" }],
+      ]),
+    );
+    const bundle = await exportTrajectoryBundle({
+      outputDir: path.join(tmpDir, "bundle"),
+      sessionTarget: target,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      workspaceDir: tmpDir,
+    });
+    expect(bundle.manifest.runtimeEventCount).toBe(2);
+    expect(
+      bundle.events.filter((event) => event.source === "runtime").map((event) => event.type),
+    ).toEqual(["session.started", "session.ended"]);
+    expect(
+      bundle.events
+        .filter((event) => event.source === "runtime")
+        .every((event) => event.runId === "ops-run"),
+    ).toBe(true);
+  });
+
   it("does not synthesize prompt files from export-time fallbacks", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
@@ -544,6 +431,43 @@ describe("exportTrajectoryBundle", () => {
 
     expect(eventTypes(bundle.events)).toContain("partial-target-runtime");
     expect(bundle.manifest.sourceFiles.session).toBe("$WORKSPACE_DIR/session.jsonl");
+  });
+
+  it("keeps runtime timestamp validation on the Date.parse string contract", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    writeSimpleSessionFile(sessionFile);
+    const runtimeEvents: TrajectoryEvent[] = [
+      { ts: "2026", type: "date-compatible" },
+      { ts: "999999", type: "numeric-milliseconds-only" },
+    ].map(({ ts, type }, index) => ({
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      traceId: "session-1",
+      source: "runtime",
+      type,
+      ts,
+      seq: index + 1,
+      sourceSeq: index + 1,
+      sessionId: "session-1",
+    }));
+    fs.writeFileSync(
+      runtimeFile,
+      `${runtimeEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir: path.join(tmpDir, "bundle"),
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+      runtimeFile,
+    });
+
+    expect(eventTypes(bundle.events)).toContain("date-compatible");
+    expect(eventTypes(bundle.events)).not.toContain("numeric-milliseconds-only");
   });
 
   it("rejects an incomplete target that conflicts with a legacy marker", async () => {
@@ -726,6 +650,50 @@ describe("exportTrajectoryBundle", () => {
 
     expect(artifacts).toBeUndefined();
   });
+
+  it.each(["evidence-line-1", '{"project":"Orion","ready":true}'])(
+    "preserves paginated read evidence beginning with %s in exported trajectory events",
+    async (firstLine) => {
+      const tmpDir = makeTempDir();
+      const sessionFile = path.join(tmpDir, "session.jsonl");
+      const sourceFile = path.join(tmpDir, "evidence.txt");
+      const outputDir = path.join(tmpDir, "bundle");
+      fs.writeFileSync(
+        sourceFile,
+        `${[firstLine, ...Array.from({ length: 14 }, (_, index) => `evidence-line-${index + 2}`)].join("\n")}\n`,
+        "utf8",
+      );
+      const readResult = await createReadTool(tmpDir).execute("call_1", {
+        path: "evidence.txt",
+        offset: 1,
+        limit: 3,
+      });
+      const resultText = readResult.content.find((part) => part.type === "text")?.text;
+      expect(resultText).toContain("[12 more lines in file. Use offset=4 to continue.]");
+      writeToolCallSessionFile(sessionFile, expectDefined(resultText, "read result text"));
+
+      await exportTrajectoryBundle({
+        outputDir,
+        sessionFile,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+      });
+
+      const exportedEvents = fs
+        .readFileSync(path.join(outputDir, "events.jsonl"), "utf8")
+        .trim()
+        .split(/\r?\n/u)
+        .map((line) => JSON.parse(line) as TrajectoryEvent);
+      const toolResult = exportedEvents.find((event) => event.type === "tool.result");
+
+      expect(toolResult?.data).toMatchObject({
+        message: {
+          isError: false,
+          content: [{ type: "text", text: resultText }],
+        },
+      });
+    },
+  );
 
   it("preserves numeric transcript timestamps", async () => {
     const tmpDir = makeTempDir();
@@ -1110,6 +1078,47 @@ describe("exportTrajectoryBundle", () => {
         workspaceDir: tmpDir,
       }),
     ).rejects.toThrow(/session file is too large/u);
+  });
+
+  it("rejects oversized SQLite transcript store before parsing or creating output", async () => {
+    const tmpDir = makeTempDir();
+    const storePath = path.join(tmpDir, "sessions.json");
+    const outputDir = path.join(tmpDir, "bundle");
+    const sessionId = "session-byte-budget";
+    const sessionKey = "agent:main:session-byte-budget";
+    const oversizedContent = "x".repeat(TRAJECTORY_RUNTIME_FILE_MAX_BYTES + 1);
+
+    await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-04-01T05:46:39.000Z",
+        cwd: tmpDir,
+      },
+      {
+        type: "message",
+        id: "entry-user",
+        parentId: null,
+        timestamp: "2026-04-01T05:46:40.000Z",
+        message: userMessage(oversizedContent),
+      },
+    ]);
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId,
+          storePath,
+        }),
+        sessionId,
+        sessionKey,
+        workspaceDir: tmpDir,
+      }),
+    ).rejects.toThrow(/transcript store is too large to export/u);
+    expect(fs.existsSync(outputDir)).toBe(false);
   });
 
   it("skips malformed-but-valid runtime json rows before sorting", async () => {

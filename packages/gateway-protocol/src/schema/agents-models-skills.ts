@@ -1,11 +1,33 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { AgentDatabaseAdmissionRefusalSchema } from "./agent-database-admission.js";
 import { closedObject } from "./closed-object.js";
+import {
+  GatewayAgentRuntimeSchema,
+  GatewayThinkingLevelOptionSchema,
+} from "./model-runtime-options.js";
 import { NonEmptyString } from "./primitives.js";
+import { GitHubSetupHandleSchema } from "./secrets.js";
+import { SessionPermissionModeSchema } from "./sessions-row.js";
+
+export {
+  ModelChoiceSchema,
+  ModelRuntimeChoiceSchema,
+  ModelCatalogProviderOutcomeSchema,
+  ModelsListParamsSchema,
+  ModelsListResultSchema,
+} from "./model-catalog.js";
+export type {
+  ModelChoice,
+  ModelRuntimeChoice,
+  ModelCatalogProviderOutcome,
+  ModelsListParams,
+  ModelsListResult,
+} from "./model-catalog.js";
 
 /**
- * Agent, model, skill, and tool catalog schemas.
+ * Agent, model, skill, and effective tool schemas.
  *
  * These contracts back dashboard selectors, agent management, model catalogs,
  * skill upload/install flows, skill workshop proposals, and effective tool
@@ -13,53 +35,26 @@ import { NonEmptyString } from "./primitives.js";
  * shared by gateway RPC, CLI, and UI clients.
  */
 
-/** Model option shown in selectors and model catalog results. */
-const GatewayAgentRuntimeSchema = closedObject({
-  id: NonEmptyString,
-  fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
-  source: Type.Union([
-    Type.Literal("env"),
-    Type.Literal("agent"),
-    Type.Literal("defaults"),
-    Type.Literal("model"),
-    Type.Literal("provider"),
-    Type.Literal("implicit"),
-    Type.Literal("session"),
-    Type.Literal("session-key"),
-  ]),
-});
-
-export const ModelChoiceSchema = closedObject({
-  id: NonEmptyString,
-  name: NonEmptyString,
-  provider: NonEmptyString,
-  alias: Type.Optional(NonEmptyString),
-  available: Type.Optional(Type.Boolean()),
-  contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
-  reasoning: Type.Optional(Type.Boolean()),
-  supportsTools: Type.Optional(Type.Boolean()),
-  agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
-  apiKeySupported: Type.Optional(Type.Boolean()),
-  input: Type.Optional(
-    Type.Array(
-      Type.Union([
-        Type.Literal("text"),
-        Type.Literal("image"),
-        Type.Literal("audio"),
-        Type.Literal("video"),
-        Type.Literal("document"),
-      ]),
-    ),
-  ),
-});
-
 /** Semantic owner of an agent roster entry. */
 export const AgentKindSchema = Type.Union([Type.Literal("agent"), Type.Literal("system")]);
+
+const AgentCreatedViaSchema = Type.Union([
+  Type.Literal("operator"),
+  Type.Literal("agent"),
+  Type.Literal("claw"),
+]);
 
 /** Condensed agent record returned by list APIs. */
 export const AgentSummarySchema = closedObject({
   id: NonEmptyString,
+  /** Effective explicit utility model; absent for automatic or disabled utility routing. */
+  utilityModel: Type.Optional(NonEmptyString),
+  status: Type.Optional(Type.Literal("degraded")),
+  admissionRefusal: Type.Optional(AgentDatabaseAdmissionRefusalSchema),
   kind: Type.Optional(AgentKindSchema),
+  createdVia: Type.Optional(AgentCreatedViaSchema),
+  creatorAgentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  createdAt: Type.Optional(Type.Integer({ minimum: 0 })),
   name: Type.Optional(NonEmptyString),
   identity: Type.Optional(
     closedObject({
@@ -79,24 +74,26 @@ export const AgentSummarySchema = closedObject({
     }),
   ),
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
-  thinkingLevels: Type.Optional(
-    Type.Array(
-      closedObject({
-        id: NonEmptyString,
-        label: NonEmptyString,
-      }),
-    ),
-  ),
+  thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingOptions: Type.Optional(Type.Array(NonEmptyString)),
   thinkingDefault: Type.Optional(NonEmptyString),
+  // Configured posture for display only, never an authorization decision.
+  defaultPermissionMode: Type.Optional(SessionPermissionModeSchema),
 });
 
 /** Empty request payload for listing configured agents. */
 export const AgentsListParamsSchema = closedObject({});
 
-/** Agent list result including the default agent and session scoping mode. */
+export const AgentOwnershipSchema = Type.Union([
+  Type.Literal("sole"),
+  Type.Literal("legacy"),
+  Type.Literal("explicit"),
+]);
+
 export const AgentsListResultSchema = closedObject({
   defaultId: NonEmptyString,
+  ownership: Type.Optional(AgentOwnershipSchema),
+  selectionRequired: Type.Optional(Type.Boolean()),
   mainKey: NonEmptyString,
   scope: Type.Union([Type.Literal("per-sender"), Type.Literal("global")]),
   agents: Type.Array(AgentSummarySchema),
@@ -126,6 +123,8 @@ export const AgentsUpdateParamsSchema = closedObject({
   name: Type.Optional(NonEmptyString),
   workspace: Type.Optional(NonEmptyString),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  /** Exact catalog runtime for a model-only selection; native authentication stays with it. */
+  agentRuntime: Type.Optional(NonEmptyString),
   emoji: Type.Optional(Type.String()),
   avatar: Type.Optional(Type.String()),
 });
@@ -163,6 +162,13 @@ export const AgentsDeleteResultSchema = closedObject({
       }),
     ),
   ),
+  purgeFailed: Type.Optional(Type.Literal(true)),
+});
+
+const Sha256String = Type.String({
+  minLength: 64,
+  maxLength: 64,
+  pattern: "^[a-fA-F0-9]{64}$",
 });
 
 /** File metadata and optional content for agent-local editable files. */
@@ -176,6 +182,7 @@ export const AgentsFileEntrySchema = closedObject({
   expectedAbsent: Type.Optional(Type.Boolean()),
   size: Type.Optional(Type.Integer({ minimum: 0 })),
   updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  hash: Type.Optional(Sha256String),
   content: Type.Optional(Type.String()),
 });
 
@@ -209,6 +216,7 @@ export const AgentsFilesSetParamsSchema = closedObject({
   agentId: NonEmptyString,
   name: NonEmptyString,
   content: Type.String(),
+  expectedHash: Type.Optional(Sha256String),
 });
 
 /** Result returned after writing an editable agent file. */
@@ -219,35 +227,48 @@ export const AgentsFilesSetResultSchema = closedObject({
   file: AgentsFileEntrySchema,
 });
 
-/** Model catalog request with optional visibility scope. */
-export const ModelsListParamsSchema = closedObject({
-  includeProviderCapabilities: Type.Optional(Type.Boolean()),
-  view: Type.Optional(
-    Type.Union([
-      Type.Literal("default"),
-      Type.Literal("configured"),
-      Type.Literal("provider-config"),
-      Type.Literal("all"),
-    ]),
-  ),
-});
-
 /** Reads model-provider credential health for one configured agent. */
 export const ModelsAuthStatusParamsSchema = closedObject({
   refresh: Type.Optional(Type.Boolean()),
   agentId: Type.Optional(Type.String()),
 });
 
+/** Rebuilds Gateway auth state after a credential or selection mutation. */
+export const ModelsAuthRefreshParamsSchema = closedObject({
+  operation: Type.Union([Type.Literal("login"), Type.Literal("logout"), Type.Literal("update")]),
+  agentId: Type.Optional(Type.String()),
+});
+
+/** Saves a model-provider API key without changing model selection. */
+export const ModelsAuthSetApiKeyParamsSchema = Type.Object(
+  {
+    provider: Type.String({ pattern: "\\S" }),
+    apiKey: Type.String({ pattern: "\\S" }),
+    agentId: Type.Optional(Type.String()),
+  },
+  // Existing wire clients may send extra fields; the handler ignores them.
+  { additionalProperties: true },
+);
+
+export const ModelsAuthSetApiKeyResultSchema = closedObject({
+  provider: NonEmptyString,
+  profileId: NonEmptyString,
+  warning: Type.Optional(Type.String()),
+});
+
 /** Removes saved model-provider credentials from one configured agent. */
 export const ModelsAuthLogoutParamsSchema = closedObject({
   provider: NonEmptyString,
   profileIds: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
+  credentialType: Type.Optional(Type.Literal("api_key")),
   agentId: Type.Optional(Type.String()),
 });
 
-/** Model catalog result. */
-export const ModelsListResultSchema = closedObject({
-  models: Type.Array(ModelChoiceSchema),
+/** Sets or clears the preferred auth-profile order for one provider and agent. */
+export const ModelsAuthOrderSetParamsSchema = closedObject({
+  provider: NonEmptyString,
+  profileIds: Type.Optional(Type.Array(NonEmptyString, { minItems: 1, uniqueItems: true })),
+  agentId: Type.Optional(Type.String()),
 });
 
 /** Runs a bounded live credential probe for one model provider. */
@@ -290,6 +311,7 @@ export const ModelsProbeResultSchema = closedObject({
 /** Reads installed skill status, optionally for a selected agent. */
 export const SkillsStatusParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
 });
 
 /** Empty request payload for listing available skill bins. */
@@ -300,11 +322,6 @@ export const SkillsBinsResultSchema = closedObject({
   bins: Type.Array(NonEmptyString),
 });
 
-const Sha256String = Type.String({
-  minLength: 64,
-  maxLength: 64,
-  pattern: "^[a-fA-F0-9]{64}$",
-});
 const SkillUploadIdempotencyKeyString = Type.String({
   minLength: 1,
   maxLength: 2048,
@@ -337,6 +354,17 @@ export const SkillsUploadCommitParamsSchema = closedObject({
   sha256: Type.Optional(Sha256String),
 });
 
+/**
+ * ClawHub resolves a bare slug against every publisher, so requests that carry only the slug
+ * fail with 409 AMBIGUOUS_SKILL_SLUG once two publishers share it. Clients send the reference
+ * `skills.search` returned for the entry the operator picked.
+ */
+const CLAWHUB_SKILL_REF_DESCRIPTION =
+  "ClawHub skill reference: `@owner/slug`, `skills-sh:owner/repo/slug`, or a bare `slug` when no publisher is known.";
+
+/** Wire copy of the core trust state; this package intentionally depends on typebox only. */
+const CLAWHUB_SKILLS_SH_TRUST_STATE_VALUE = "not-scanned-by-clawhub";
+
 /** Installs a skill from legacy install id, ClawHub, or uploaded archive. */
 export const SkillsInstallParamsSchema = Type.Union([
   closedObject({
@@ -355,10 +383,9 @@ export const SkillsInstallParamsSchema = Type.Union([
   closedObject({
     agentId: Type.Optional(NonEmptyString),
     source: Type.Literal("clawhub"),
-    slug: NonEmptyString,
+    slug: Type.String({ minLength: 1, description: CLAWHUB_SKILL_REF_DESCRIPTION }),
     version: Type.Optional(NonEmptyString),
     force: Type.Optional(Type.Boolean()),
-    acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
   }),
   closedObject({
@@ -385,7 +412,7 @@ export const SkillsUpdateParamsSchema = Type.Union([
     source: Type.Literal("clawhub"),
     slug: Type.Optional(NonEmptyString),
     all: Type.Optional(Type.Boolean()),
-    acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
+    force: Type.Optional(Type.Boolean()),
   }),
 ]);
 
@@ -401,17 +428,37 @@ export const SkillsSearchResultSchema = closedObject({
     closedObject({
       score: Type.Number(),
       slug: NonEmptyString,
+      registry: NonEmptyString,
+      ownerHandle: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+      installRef: Type.String({
+        minLength: 1,
+        description:
+          "Source-qualified reference for this result. Send it as `slug` to skills.install; several publishers can share one slug.",
+      }),
+      installOnly: Type.Optional(
+        Type.Literal(true, {
+          description:
+            "Present when ClawHub serves this result install-only: offer install directly with `installRef`, because skills.detail cannot answer for it. Absence means the ordinary review-then-install flow, so results from servers that predate this field keep their existing behavior.",
+        }),
+      ),
+      trustState: Type.Optional(
+        Type.Literal(CLAWHUB_SKILLS_SH_TRUST_STATE_VALUE, {
+          description:
+            "Present when ClawHub resolves this result from a source it has not scanned.",
+        }),
+      ),
       displayName: NonEmptyString,
       summary: Type.Optional(Type.String()),
+      icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       version: Type.Optional(NonEmptyString),
       updatedAt: Type.Optional(Type.Integer()),
     }),
   ),
 });
 
-/** Reads registry detail for one skill slug. */
+/** Reads registry detail for one skill. */
 export const SkillsDetailParamsSchema = closedObject({
-  slug: NonEmptyString,
+  slug: Type.String({ minLength: 1, description: CLAWHUB_SKILL_REF_DESCRIPTION }),
 });
 
 /** Reads current security verdicts for configured skills. */
@@ -426,6 +473,7 @@ export const SkillsDetailResultSchema = closedObject({
       slug: NonEmptyString,
       displayName: NonEmptyString,
       summary: Type.Optional(Type.String()),
+      icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       tags: Type.Optional(Type.Record(NonEmptyString, Type.String())),
       channel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       isOfficial: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
@@ -696,6 +744,8 @@ const SkillProposalManifestEntrySchema = closedObject({
   createdAt: NonEmptyString,
   updatedAt: NonEmptyString,
   scanState: SkillProposalScanStateSchema,
+  revisionHash: Type.Optional(Sha256String),
+  degradedState: Type.Optional(Type.Literal("draft-missing")),
 });
 
 /** Lists skill-workshop proposals for the selected agent scope. */
@@ -708,6 +758,22 @@ export const SkillsProposalsListResultSchema = closedObject({
   schema: Type.Literal("openclaw.skill-workshop.proposals-manifest.v1"),
   updatedAt: NonEmptyString,
   proposals: Type.Array(SkillProposalManifestEntrySchema),
+  installedSkills: Type.Array(
+    closedObject({ name: NonEmptyString, skillKey: NonEmptyString, description: Type.String() }),
+  ),
+});
+
+/** Reads the current agent-owned Workshop skill, independently of its proposal history. */
+export const SkillsWorkshopReadParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  name: NonEmptyString,
+});
+
+export const SkillsWorkshopReadResultSchema = closedObject({
+  name: NonEmptyString,
+  skillKey: NonEmptyString,
+  description: Type.String(),
+  content: Type.String(),
 });
 
 /** Reads a proposal record plus editable draft/support content. */
@@ -764,7 +830,7 @@ export const SkillsProposalRequestRevisionParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   targetAgentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
-  expectedRevisionHash: Type.Optional(Sha256String),
+  expectedRevisionHash: Sha256String,
   instructions: Type.String({ minLength: 1, maxLength: 32_768 }),
   sessionKey: NonEmptyString,
   sessionId: Type.Optional(NonEmptyString),
@@ -786,7 +852,16 @@ export const SkillsProposalRequestRevisionResultSchema = Type.Object(
   { additionalProperties: true },
 );
 
-/** Shared approve/reject/quarantine action payload for one proposal. */
+/** Apply/reject payload bound to the exact proposal revision reviewed by the operator. */
+export const SkillsProposalDecisionParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  proposalId: NonEmptyString,
+  expectedRevisionHash: Sha256String,
+  correlationId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  reason: Type.Optional(Type.String()),
+});
+
+/** Quarantine payload with optional optimistic-concurrency evidence. */
 export const SkillsProposalActionParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
@@ -876,56 +951,189 @@ export const SkillsProposalApplyResultSchema = closedObject({
 /** Proposal record result returned after non-apply proposal actions. */
 export const SkillsProposalRecordResultSchema = SkillProposalRecordSchema;
 
-const SkillLifecycleStateSchema = Type.Union([
-  Type.Literal("active"),
-  Type.Literal("stale"),
-  Type.Literal("archived"),
+export {
+  SkillsCuratorStatusParamsSchema,
+  SkillsCuratorStatusResultSchema,
+  SkillsCuratorActionParamsSchema,
+  SkillsCuratorActionResultSchema,
+  SkillCuratorLiveEntrySchema,
+  SkillsCuratorLiveStatusResultSchema,
+} from "./skill-curator.js";
+
+export const GitHubIdentityScopeSchema = Type.Union([
+  Type.Literal("system"),
+  Type.Literal("agent"),
 ]);
 
-const SkillCuratorEntrySchema = closedObject({
-  skillFile: NonEmptyString,
-  skillKey: NonEmptyString,
-  skillName: NonEmptyString,
-  state: SkillLifecycleStateSchema,
-  pinned: Type.Boolean(),
-  createdAtMs: Type.Number(),
-  stateChangedAtMs: Type.Number(),
-  lastUsedAtMs: Type.Union([Type.Number(), Type.Null()]),
-  useCount: Type.Number(),
-  archivedReason: Type.Union([Type.String(), Type.Null()]),
+export const ToolsGitHubStatusParamsSchema = closedObject({
+  agentId: NonEmptyString,
+  selectedScope: GitHubIdentityScopeSchema,
 });
 
-const SkillOverlapCandidateSchema = closedObject({
-  left: NonEmptyString,
-  right: NonEmptyString,
-  score: Type.Number(),
+export const GitHubIdentitySourceSchema = Type.Union([
+  Type.Literal("system-detected"),
+  Type.Literal("system-configured"),
+  Type.Literal("agent-override"),
+]);
+
+const GitHubAuthorValueSchema = Type.String({ minLength: 1, pattern: "\\S" });
+export const GitHubAuthorSchema = closedObject({
+  name: Type.Optional(GitHubAuthorValueSchema),
+  email: Type.Optional(GitHubAuthorValueSchema),
 });
 
-/** Reads persisted skill lifecycle curation state. */
-export const SkillsCuratorStatusParamsSchema = closedObject({});
-
-export const SkillsCuratorStatusResultSchema = closedObject({
-  lastAttemptAtMs: Type.Union([Type.Number(), Type.Null()]),
-  lastSuccessAtMs: Type.Union([Type.Number(), Type.Null()]),
-  lastError: Type.Union([Type.String(), Type.Null()]),
-  counts: closedObject({
-    active: Type.Number(),
-    stale: Type.Number(),
-    archived: Type.Number(),
+export const GitHubIdentityFactsSchema = closedObject({
+  source: GitHubIdentitySourceSchema,
+  credentialKind: Type.Union([
+    Type.Literal("native"),
+    Type.Literal("managed-pat"),
+    Type.Literal("managed-oauth"),
+  ]),
+  credentialState: Type.Union([
+    Type.Literal("available"),
+    Type.Literal("unavailable"),
+    Type.Literal("configured_unavailable"),
+    Type.Literal("unverified"),
+    Type.Literal("rate_limited"),
+  ]),
+  account: Type.Union([
+    closedObject({
+      login: NonEmptyString,
+    }),
+    Type.Null(),
+  ]),
+  gitAuthor: closedObject({
+    name: Type.Union([Type.String(), Type.Null()]),
+    email: Type.Union([Type.String(), Type.Null()]),
   }),
-  skills: Type.Array(SkillCuratorEntrySchema),
-  overlaps: Type.Array(SkillOverlapCandidateSchema),
+  evidence: Type.Union([
+    Type.Literal("github-api"),
+    Type.Literal("none"),
+    Type.Literal("unverified"),
+    Type.Literal("rate-limited"),
+  ]),
+  accessExpiresAtMs: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+  refreshState: Type.Union([
+    Type.Literal("not_applicable"),
+    Type.Literal("available"),
+    Type.Literal("expired"),
+    Type.Literal("unavailable"),
+    Type.Literal("refreshing"),
+    Type.Literal("failed"),
+  ]),
+  oauthScopes: Type.Array(Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" }), {
+    maxItems: 32,
+  }),
+  repositoryGrants: Type.Literal("unknown"),
 });
 
-/** Pins, unpins, or explicitly restores one curated skill. */
-export const SkillsCuratorActionParamsSchema = closedObject({ skill: NonEmptyString });
+export const GitHubSelectedIdentitySchema = closedObject({
+  scope: GitHubIdentityScopeSchema,
+  configured: Type.Boolean(),
+  identity: Type.Union([GitHubIdentityFactsSchema, Type.Null()]),
+});
 
-export const SkillsCuratorActionResultSchema = SkillCuratorEntrySchema;
+export const ToolsGitHubStatusResultSchema = closedObject({
+  agentId: NonEmptyString,
+  selectedScope: GitHubIdentityScopeSchema,
+  selected: GitHubSelectedIdentitySchema,
+  effective: GitHubIdentityFactsSchema,
+});
 
-/** Reads the configured tool catalog for an agent. */
-export const ToolsCatalogParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  includePlugins: Type.Optional(Type.Boolean()),
+export const ToolsGitHubManagedConfigureParamsSchema = closedObject({
+  scope: GitHubIdentityScopeSchema,
+  agentId: NonEmptyString,
+  mode: Type.Literal("managed"),
+  secretName: GitHubSetupHandleSchema,
+  gitAuthor: Type.Optional(GitHubAuthorSchema),
+});
+
+export const ToolsGitHubInheritConfigureParamsSchema = closedObject({
+  scope: GitHubIdentityScopeSchema,
+  agentId: NonEmptyString,
+  mode: Type.Literal("inherit"),
+});
+
+export const ToolsGitHubConfigureParamsSchema = Type.Union([
+  ToolsGitHubManagedConfigureParamsSchema,
+  ToolsGitHubInheritConfigureParamsSchema,
+]);
+
+const GitHubDeviceRequestIdSchema = Type.String({
+  pattern: "^github-device-[a-f0-9]{32}$",
+});
+
+export const ToolsGitHubAuthorizeStartParamsSchema = closedObject({
+  scope: GitHubIdentityScopeSchema,
+  agentId: NonEmptyString,
+});
+
+export const ToolsGitHubAuthorizeStartResultSchema = closedObject({
+  requestId: GitHubDeviceRequestIdSchema,
+  userCode: Type.String({ pattern: "^[A-Z0-9]{4}-[A-Z0-9]{4}$" }),
+  verificationUri: Type.Literal("https://github.com/login/device"),
+  expiresInMs: Type.Integer({ minimum: 1, maximum: 900_000 }),
+  pollAfterMs: Type.Integer({ minimum: 1_000, maximum: 60_000 }),
+});
+
+export const ToolsGitHubAuthorizePollParamsSchema = closedObject({
+  requestId: GitHubDeviceRequestIdSchema,
+});
+
+export const ToolsGitHubAuthorizePendingResultSchema = closedObject({
+  status: Type.Literal("pending"),
+  retryAfterMs: Type.Integer({ minimum: 1, maximum: 60_000 }),
+});
+
+export const ToolsGitHubAuthorizeSlowDownResultSchema = closedObject({
+  status: Type.Literal("slow_down"),
+  retryAfterMs: Type.Integer({ minimum: 1, maximum: 60_000 }),
+});
+
+export const ToolsGitHubAuthorizeAccessDeniedResultSchema = closedObject({
+  status: Type.Literal("access_denied"),
+});
+
+export const ToolsGitHubAuthorizeExpiredResultSchema = closedObject({
+  status: Type.Literal("expired"),
+});
+
+export const ToolsGitHubAuthorizeIncorrectDeviceCodeResultSchema = closedObject({
+  status: Type.Literal("incorrect_device_code"),
+});
+
+export const ToolsGitHubAuthorizeNetworkErrorResultSchema = closedObject({
+  status: Type.Literal("network_error"),
+  retryAfterMs: Type.Integer({ minimum: 1, maximum: 60_000 }),
+});
+
+export const ToolsGitHubAuthorizeFailedResultSchema = closedObject({
+  status: Type.Literal("failed"),
+  reason: Type.Union([Type.Literal("identity_changed"), Type.Literal("setup_failed")]),
+});
+
+export const ToolsGitHubAuthorizeSuccessResultSchema = closedObject({
+  status: Type.Literal("success"),
+  githubStatus: ToolsGitHubStatusResultSchema,
+});
+
+export const ToolsGitHubAuthorizePollResultSchema = Type.Union([
+  ToolsGitHubAuthorizePendingResultSchema,
+  ToolsGitHubAuthorizeSlowDownResultSchema,
+  ToolsGitHubAuthorizeAccessDeniedResultSchema,
+  ToolsGitHubAuthorizeExpiredResultSchema,
+  ToolsGitHubAuthorizeIncorrectDeviceCodeResultSchema,
+  ToolsGitHubAuthorizeNetworkErrorResultSchema,
+  ToolsGitHubAuthorizeFailedResultSchema,
+  ToolsGitHubAuthorizeSuccessResultSchema,
+]);
+
+export const ToolsGitHubAuthorizeCancelParamsSchema = closedObject({
+  requestId: GitHubDeviceRequestIdSchema,
+});
+
+export const ToolsGitHubAuthorizeCancelResultSchema = closedObject({
+  cancelled: Type.Boolean(),
 });
 
 /** Reads the effective tool set for one session. */
@@ -947,55 +1155,6 @@ export const ToolsInvokeParamsSchema = closedObject({
    * Missing values remain delegated, and agent runtime identity wins server-side.
    */
   conversationReadOrigin: Type.Optional(Type.Literal("direct-operator")),
-});
-
-/** Tool profile shown in catalog views. */
-export const ToolCatalogProfileSchema = closedObject({
-  id: Type.Union([
-    Type.Literal("minimal"),
-    Type.Literal("coding"),
-    Type.Literal("messaging"),
-    Type.Literal("full"),
-  ]),
-  label: NonEmptyString,
-});
-
-/** Tool catalog entry before session-specific filtering is applied. */
-export const ToolCatalogEntrySchema = closedObject({
-  id: NonEmptyString,
-  label: NonEmptyString,
-  description: Type.String(),
-  source: Type.Union([Type.Literal("core"), Type.Literal("plugin")]),
-  pluginId: Type.Optional(NonEmptyString),
-  optional: Type.Optional(Type.Boolean()),
-  risk: Type.Optional(
-    Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
-  ),
-  tags: Type.Optional(Type.Array(NonEmptyString)),
-  defaultProfiles: Type.Array(
-    Type.Union([
-      Type.Literal("minimal"),
-      Type.Literal("coding"),
-      Type.Literal("messaging"),
-      Type.Literal("full"),
-    ]),
-  ),
-});
-
-/** Group of related catalog tools from core or a plugin. */
-export const ToolCatalogGroupSchema = closedObject({
-  id: NonEmptyString,
-  label: NonEmptyString,
-  source: Type.Union([Type.Literal("core"), Type.Literal("plugin")]),
-  pluginId: Type.Optional(NonEmptyString),
-  tools: Type.Array(ToolCatalogEntrySchema),
-});
-
-/** Tool catalog result for agent configuration UI. */
-export const ToolsCatalogResultSchema = closedObject({
-  agentId: NonEmptyString,
-  profiles: Type.Array(ToolCatalogProfileSchema),
-  groups: Type.Array(ToolCatalogGroupSchema),
 });
 
 /** Effective tool entry after session/profile/channel/plugin filtering. */
@@ -1101,21 +1260,38 @@ export type AgentsFilesSetParams = Static<typeof AgentsFilesSetParamsSchema>;
 export type AgentsFilesSetResult = Static<typeof AgentsFilesSetResultSchema>;
 export type AgentsListParams = Static<typeof AgentsListParamsSchema>;
 export type AgentsListResult = Static<typeof AgentsListResultSchema>;
-export type ModelChoice = Static<typeof ModelChoiceSchema>;
-export type ModelsListParams = Static<typeof ModelsListParamsSchema>;
-export type ModelsListResult = Static<typeof ModelsListResultSchema>;
+export type ModelsAuthSetApiKeyParams = Static<typeof ModelsAuthSetApiKeyParamsSchema>;
+export type ModelsAuthSetApiKeyResult = Static<typeof ModelsAuthSetApiKeyResultSchema>;
 export type ModelsAuthStatusParams = Static<typeof ModelsAuthStatusParamsSchema>;
 export type ModelsAuthLogoutParams = Static<typeof ModelsAuthLogoutParamsSchema>;
+export type ModelsAuthOrderSetParams = Static<typeof ModelsAuthOrderSetParamsSchema>;
+export type ModelsAuthRefreshParams = Static<typeof ModelsAuthRefreshParamsSchema>;
 export type AuthProbeStatus = Static<typeof AuthProbeStatusSchema>;
 export type ModelsProbeParams = Static<typeof ModelsProbeParamsSchema>;
 export type ModelsProbeTargetResult = Static<typeof ModelsProbeTargetResultSchema>;
 export type ModelsProbeResult = Static<typeof ModelsProbeResultSchema>;
 export type SkillsStatusParams = Static<typeof SkillsStatusParamsSchema>;
-export type ToolsCatalogParams = Static<typeof ToolsCatalogParamsSchema>;
-export type ToolCatalogProfile = Static<typeof ToolCatalogProfileSchema>;
-export type ToolCatalogEntry = Static<typeof ToolCatalogEntrySchema>;
-export type ToolCatalogGroup = Static<typeof ToolCatalogGroupSchema>;
-export type ToolsCatalogResult = Static<typeof ToolsCatalogResultSchema>;
+export type GitHubIdentityFacts = Static<typeof GitHubIdentityFactsSchema>;
+export type GitHubSelectedIdentity = Static<typeof GitHubSelectedIdentitySchema>;
+export type ToolsGitHubStatusParams = Static<typeof ToolsGitHubStatusParamsSchema>;
+export type ToolsGitHubStatusResult = Static<typeof ToolsGitHubStatusResultSchema>;
+export type ToolsGitHubManagedConfigureParams = Static<
+  typeof ToolsGitHubManagedConfigureParamsSchema
+>;
+export type ToolsGitHubInheritConfigureParams = Static<
+  typeof ToolsGitHubInheritConfigureParamsSchema
+>;
+export type ToolsGitHubConfigureParams = Static<typeof ToolsGitHubConfigureParamsSchema>;
+export type ToolsGitHubAuthorizeStartParams = Static<typeof ToolsGitHubAuthorizeStartParamsSchema>;
+export type ToolsGitHubAuthorizeStartResult = Static<typeof ToolsGitHubAuthorizeStartResultSchema>;
+export type ToolsGitHubAuthorizePollParams = Static<typeof ToolsGitHubAuthorizePollParamsSchema>;
+export type ToolsGitHubAuthorizePollResult = Static<typeof ToolsGitHubAuthorizePollResultSchema>;
+export type ToolsGitHubAuthorizeCancelParams = Static<
+  typeof ToolsGitHubAuthorizeCancelParamsSchema
+>;
+export type ToolsGitHubAuthorizeCancelResult = Static<
+  typeof ToolsGitHubAuthorizeCancelResultSchema
+>;
 export type ToolsEffectiveParams = Static<typeof ToolsEffectiveParamsSchema>;
 export type ToolsEffectiveEntry = Static<typeof ToolsEffectiveEntrySchema>;
 export type ToolsEffectiveGroup = Static<typeof ToolsEffectiveGroupSchema>;
@@ -1142,6 +1318,7 @@ export type SkillsProposalRequestRevisionParams = Static<
 export type SkillsProposalRequestRevisionResult = Static<
   typeof SkillsProposalRequestRevisionResultSchema
 >;
+export type SkillsProposalDecisionParams = Static<typeof SkillsProposalDecisionParamsSchema>;
 export type SkillsProposalActionParams = Static<typeof SkillsProposalActionParamsSchema>;
 export type SkillProposalEvaluation = Static<typeof SkillProposalEvaluationSchema>;
 export type SkillsProposalEvaluateParams = Static<typeof SkillsProposalEvaluateParamsSchema>;
@@ -1151,10 +1328,14 @@ export type SkillsProposalEventsListParams = Static<typeof SkillsProposalEventsL
 export type SkillsProposalEventsListResult = Static<typeof SkillsProposalEventsListResultSchema>;
 export type SkillsProposalApplyResult = Static<typeof SkillsProposalApplyResultSchema>;
 export type SkillsProposalRecordResult = Static<typeof SkillsProposalRecordResultSchema>;
-export type SkillsCuratorStatusParams = Static<typeof SkillsCuratorStatusParamsSchema>;
-export type SkillsCuratorStatusResult = Static<typeof SkillsCuratorStatusResultSchema>;
-export type SkillsCuratorActionParams = Static<typeof SkillsCuratorActionParamsSchema>;
-export type SkillsCuratorActionResult = Static<typeof SkillsCuratorActionResultSchema>;
+export type {
+  SkillsCuratorStatusParams,
+  SkillsCuratorStatusResult,
+  SkillsCuratorLiveStatusResult,
+  SkillsCuratorCompatibleStatusResult,
+  SkillsCuratorActionParams,
+  SkillsCuratorActionResult,
+} from "./skill-curator.js";
 export type SkillsSecurityVerdictsParams = Static<typeof SkillsSecurityVerdictsParamsSchema>;
 export type SkillsSecurityVerdictsResult = Static<typeof SkillsSecurityVerdictsResultSchema>;
 export type SkillsSkillCardParams = Static<typeof SkillsSkillCardParamsSchema>;

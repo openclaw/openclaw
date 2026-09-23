@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements suite runtime agent process behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -77,7 +76,10 @@ async function startAgentRun(
 ) {
   if (params.taskTracking === false) {
     const target = params.to ?? "dm:qa-operator";
-    const delivery = env.transport.buildAgentDelivery({ target });
+    const delivery = env.transport.buildAgentDelivery({
+      target,
+      ...(params.threadId ? { threadId: params.threadId } : {}),
+    });
     const started = (await env.gateway.call(
       "chat.send",
       {
@@ -87,6 +89,8 @@ async function startAgentRun(
         deliver: true,
         originatingChannel: delivery.replyChannel,
         originatingTo: delivery.replyTo,
+        // chat.send routes threads separately; omitting this replies at the conversation root.
+        originatingThreadId: delivery.threadId ?? params.threadId,
       },
       {
         timeoutMs: params.timeoutMs ?? 30_000,
@@ -98,7 +102,10 @@ async function startAgentRun(
     return started;
   }
   const target = params.to ?? "dm:qa-operator";
-  const delivery = env.transport.buildAgentDelivery({ target });
+  const delivery = env.transport.buildAgentDelivery({
+    target,
+    ...(params.threadId ? { threadId: params.threadId } : {}),
+  });
   const started = (await env.gateway.call(
     "agent",
     {
@@ -111,7 +118,9 @@ async function startAgentRun(
       to: delivery.to ?? target,
       replyChannel: delivery.replyChannel,
       replyTo: delivery.replyTo,
-      ...(params.threadId ? { threadId: params.threadId } : {}),
+      ...((delivery.threadId ?? params.threadId)
+        ? { threadId: delivery.threadId ?? params.threadId }
+        : {}),
       ...(params.provider ? { provider: params.provider } : {}),
       ...(params.model ? { model: params.model } : {}),
       ...(params.attachments ? { attachments: params.attachments } : {}),
@@ -391,6 +400,7 @@ async function runAgentPrompt(
     threadId?: string;
     provider?: string;
     model?: string;
+    taskTracking?: boolean;
     timeoutMs?: number;
     transcriptToolName?: string;
     requireSuccessfulTranscriptToolResult?: boolean;

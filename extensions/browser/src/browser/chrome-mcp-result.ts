@@ -1,12 +1,12 @@
 // Parses Chrome MCP tool results and formats redacted tool failures.
 import path from "node:path";
 import {
+  asNullableRecord,
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { toErrorObject } from "../infra/errors.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import { asRecord } from "../record-shared.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   CHROME_CONNECTION_TOOL_ERROR_RE,
@@ -28,7 +28,7 @@ function asPages(value: unknown): ChromeMcpStructuredPage[] {
   }
   const out: ChromeMcpStructuredPage[] = [];
   for (const entry of value) {
-    const record = asRecord(entry);
+    const record = asNullableRecord(entry);
     if (!record || typeof record.id !== "number") {
       continue;
     }
@@ -42,14 +42,14 @@ function asPages(value: unknown): ChromeMcpStructuredPage[] {
 }
 
 function extractStructuredContent(result: ChromeMcpToolResult): Record<string, unknown> {
-  return asRecord(result.structuredContent) ?? {};
+  return asNullableRecord(result.structuredContent) ?? {};
 }
 
 function extractTextContent(result: ChromeMcpToolResult): string[] {
   const content = Array.isArray(result.content) ? result.content : [];
   return content
     .map((entry) => {
-      const record = asRecord(entry);
+      const record = asNullableRecord(entry);
       return record && typeof record.text === "string" ? record.text : "";
     })
     .filter(Boolean);
@@ -78,19 +78,55 @@ export function extractStructuredPages(result: ChromeMcpToolResult): ChromeMcpSt
   return structured.length > 0 ? structured : extractTextPages(result);
 }
 
+function normalizeSnapshotFields(record: Record<string, unknown>): ChromeMcpSnapshotNode {
+  const snapshotValue = record.value;
+  return {
+    id: readStringValue(record.id),
+    role: readStringValue(record.role),
+    name: readStringValue(record.name),
+    ...(typeof snapshotValue === "string" ||
+    typeof snapshotValue === "number" ||
+    typeof snapshotValue === "boolean"
+      ? { value: snapshotValue }
+      : {}),
+    description: readStringValue(record.description),
+  };
+}
+
+function normalizeSnapshotNode(value: unknown): ChromeMcpSnapshotNode | null {
+  const rootRecord = asNullableRecord(value);
+  if (!rootRecord) {
+    return null;
+  }
+  const root = normalizeSnapshotFields(rootRecord);
+  const pending = [{ record: rootRecord, node: root }];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || !Array.isArray(current.record.children)) {
+      continue;
+    }
+    const children: ChromeMcpSnapshotNode[] = [];
+    for (const child of current.record.children) {
+      const record = asNullableRecord(child);
+      if (!record) {
+        continue;
+      }
+      const node = normalizeSnapshotFields(record);
+      children.push(node);
+      pending.push({ record, node });
+    }
+    current.node.children = children;
+  }
+  return root;
+}
+
 export function extractSnapshot(result: ChromeMcpToolResult): ChromeMcpSnapshotNode {
   const structured = extractStructuredContent(result);
-  const snapshot = asRecord(structured.snapshot);
+  const snapshot = normalizeSnapshotNode(structured.snapshot);
   if (!snapshot) {
     throw new Error("Chrome MCP snapshot response was missing structured snapshot data.");
   }
-  return snapshot as unknown as ChromeMcpSnapshotNode;
-}
-
-function extractJsonBlock(text: string): unknown {
-  const match = text.match(/```json\s*([\s\S]*?)\s*```/i);
-  const raw = match?.[1]?.trim() || text.trim();
-  return raw ? JSON.parse(raw) : null;
+  return snapshot;
 }
 
 function extractMessageText(result: ChromeMcpToolResult): string {
@@ -102,9 +138,30 @@ function extractMessageText(result: ChromeMcpToolResult): string {
   return blocks.find((block) => block.trim()) ?? "";
 }
 
-export function extractToolErrorMessage(result: ChromeMcpToolResult, name: string): string {
+function extractToolErrorMessage(result: ChromeMcpToolResult, name: string): string {
   const message = extractMessageText(result).trim();
   return message || `Chrome MCP tool "${name}" failed.`;
+}
+
+export function extractChromeMcpToolError(
+  result: ChromeMcpToolResult,
+  name: string,
+  args: Record<string, unknown>,
+): string | undefined {
+  if (
+    result.isError ||
+    (name === "close_page" &&
+      extractStructuredPages(result).some((page) => page.id === args.pageId))
+  ) {
+    return extractToolErrorMessage(result, name);
+  }
+  if (name !== "navigate_page") {
+    return undefined;
+  }
+  // Chrome MCP catches page.goto failures without setting isError.
+  return [extractMessageText(result), ...extractTextContent(result)]
+    .flatMap((text) => text.split(/\r?\n/))
+    .find((line) => line.startsWith("Unable to navigate in the selected page:"));
 }
 
 function formatChromeMcpEndpointForDiagnostic(browserUrl: string): string {
@@ -153,7 +210,12 @@ export function extractJsonMessage(result: ChromeMcpToolResult): unknown {
   let lastError: unknown;
   for (const candidate of candidates) {
     try {
-      return extractJsonBlock(candidate);
+      // MCP fence delimiters occupy lines; backticks inside JSON strings are data.
+      const match = candidate.match(
+        /^[\t ]*```json[\t ]*\r?\n([\s\S]*?)\r?\n[\t ]*```[\t ]*\r?$/im,
+      );
+      const json = match?.[1]?.trim() || candidate.trim();
+      return json === "undefined" ? undefined : JSON.parse(json);
     } catch (err) {
       lastError = err;
     }

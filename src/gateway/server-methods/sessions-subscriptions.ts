@@ -4,25 +4,45 @@ import {
   errorShape,
   validateSessionsMessagesSubscribeParams,
   validateSessionsMessagesUnsubscribeParams,
+  validateSessionsListParams,
   validateSessionsViewerPresenceSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { canReviewOperatorApproval } from "../operator-approval-authorization.js";
 import { APPROVALS_SCOPE } from "../operator-scopes.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import { sessionObserverScopeKey } from "../session-observer-model.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
+import { canAccessApprovalSession } from "./approval-record-lookup.js";
+import { sessionsListHandler } from "./sessions-read.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
-  "sessions.subscribe": ({ client, context, respond }) => {
+  "sessions.subscribe": async (options) => {
+    const { client, context, params, respond } = options;
+    if (!assertValidParams(params, validateSessionsListParams, "sessions.subscribe", respond)) {
+      return;
+    }
     const connId = client?.connId?.trim();
     if (connId) {
+      // Subscribe before projecting the snapshot so mutations during the read
+      // become live events; the UI queues one trailing refresh when needed.
       context.subscribeSessionEvents(connId);
     }
-    respond(true, { subscribed: Boolean(connId) }, undefined);
+    if (!connId || Object.keys(params).length === 0) {
+      respond(true, { subscribed: Boolean(connId) }, undefined);
+      return;
+    }
+    await sessionsListHandler({
+      ...options,
+      params,
+      respond: (ok, payload, error, meta) => {
+        respond(ok, ok ? { subscribed: true, list: payload } : undefined, error, meta);
+      },
+    });
   },
   "sessions.viewers.set": ({ params, client, context, respond }) => {
     if (
@@ -57,12 +77,34 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      canonicalKeys.push(resolveSessionStoreKey({ cfg, sessionKey: trimmed }));
+      const requested = resolveRequestedSessionAgentId(
+        cfg,
+        trimmed,
+        parseAgentSessionKey(trimmed) ? undefined : params.agentId,
+      );
+      if (!requested.ok) {
+        respond(false, undefined, requested.error);
+        return;
+      }
+      const canonicalKey = resolveSessionStoreKey({
+        cfg,
+        sessionKey: trimmed,
+        storeAgentId: requested.agentId,
+      });
+      canonicalKeys.push(sessionObserverScopeKey(canonicalKey, requested.agentId));
     }
     const sessionKeys = declarations.replace(connId, canonicalKeys);
     respond(true, { sessionKeys }, undefined);
   },
-  "sessions.messages.subscribe": ({ params, client, context, respond }) => {
+  "sessions.messages.subscribe": async ({
+    params,
+    client,
+    context,
+    respond,
+    sessionMutationAuthorization,
+    hasCurrentClientAuthority,
+    signal,
+  }) => {
     if (
       !assertValidParams(
         params,
@@ -91,7 +133,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
@@ -100,12 +142,9 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
     const canonicalKey = resolveSessionStoreKey({
       cfg,
       sessionKey: key,
-      ...(requestedAgentId ? { storeAgentId: requestedAgentId } : {}),
+      storeAgentId: requestedAgentId,
     });
-    const subscriptionKey = resolveSessionSubscriptionKey(
-      canonicalKey,
-      requestedAgentId ?? resolveDefaultAgentId(cfg),
-    );
+    const subscriptionKey = resolveSessionSubscriptionKey(canonicalKey, requestedAgentId);
     if (connId) {
       let approvalReplay;
       if (p.includeApprovals === true) {
@@ -117,7 +156,26 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           { includeApprovals: true, provisional: true },
         );
         try {
-          approvalReplay = context.listSessionPendingApprovals?.(subscriptionKey, client);
+          let prepared;
+          do {
+            prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
+          } while (prepared && !prepared.isCurrent());
+          approvalReplay = prepared?.replay;
+          sessionMutationAuthorization?.assertCurrent();
+          if (
+            client?.invalidated ||
+            signal?.aborted ||
+            hasCurrentClientAuthority?.() === false ||
+            !canReviewOperatorApproval(client) ||
+            !canAccessApprovalSession({
+              cfg: context.getRuntimeConfig(),
+              client,
+              sessionKey: canonicalKey,
+              agentId: requestedAgentId,
+            })
+          ) {
+            throw new Error("session approval replay authority is no longer active");
+          }
         } catch (error) {
           rollbackSubscription?.();
           context.logGateway.error(`session approval replay failed: ${String(error)}`);
@@ -176,7 +234,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
@@ -185,12 +243,9 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
     const canonicalKey = resolveSessionStoreKey({
       cfg,
       sessionKey: key,
-      ...(requestedAgentId ? { storeAgentId: requestedAgentId } : {}),
+      storeAgentId: requestedAgentId,
     });
-    const subscriptionKey = resolveSessionSubscriptionKey(
-      canonicalKey,
-      requestedAgentId ?? resolveDefaultAgentId(cfg),
-    );
+    const subscriptionKey = resolveSessionSubscriptionKey(canonicalKey, requestedAgentId);
     if (connId) {
       context.unsubscribeSessionMessageEvents(connId, subscriptionKey);
     }

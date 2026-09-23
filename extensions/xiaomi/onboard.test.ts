@@ -16,13 +16,17 @@ describe("xiaomi onboard", () => {
     const cfg = applyXiaomiConfig({});
     const provider = cfg.models?.providers?.xiaomi;
     expect(provider).toEqual(buildXiaomiProvider());
-    expect(provider?.models.map((m) => m.id)).toEqual(["mimo-v2.5", "mimo-v2.5-pro"]);
-    expect(cfg.agents?.defaults?.models?.["xiaomi/mimo-v2.5"]).toEqual({ alias: "Xiaomi" });
-    expect(cfg.agents?.defaults?.model).toEqual({ primary: "xiaomi/mimo-v2.5" });
-    expectProviderOnboardPrimaryModel({
-      applyConfig: applyXiaomiConfig,
-      modelRef: "xiaomi/mimo-v2.5",
+    expect(provider?.models.map((m) => m.id)).toEqual([
+      "mimo-v2.6-pro",
+      "mimo-v2.6-flash",
+      "mimo-v2.6-pro-ultraspeed",
+      "mimo-v2.5",
+      "mimo-v2.5-pro",
+    ]);
+    expect(cfg.agents?.defaults?.models?.["xiaomi/mimo-v2.6-pro"]).toEqual({
+      alias: "Xiaomi",
     });
+    expect(cfg.agents?.defaults?.model).toEqual({ primary: "xiaomi/mimo-v2.6-pro" });
   });
 
   it("merges Xiaomi models and keeps existing provider overrides", () => {
@@ -37,30 +41,38 @@ describe("xiaomi onboard", () => {
     });
     expect(provider?.models.map((m) => m.id)).toEqual([
       "custom-model",
+      "mimo-v2.6-pro",
+      "mimo-v2.6-flash",
+      "mimo-v2.6-pro-ultraspeed",
       "mimo-v2.5",
       "mimo-v2.5-pro",
     ]);
   });
 
-  it("adds Xiaomi Token Plan provider with a regional endpoint preset", () => {
-    const cfg = applyXiaomiTokenPlanConfig({}, "ams");
+  it("adds Xiaomi Token Plan replace rows with a regional endpoint preset", () => {
+    const cfg = applyXiaomiTokenPlanConfig({ models: { mode: "replace" } }, "ams");
     const provider = cfg.models?.providers?.["xiaomi-token-plan"];
     expect(provider).toEqual({
       ...buildXiaomiTokenPlanProvider(),
       baseUrl: "https://token-plan-ams.xiaomimimo.com/v1",
     });
-    expect(provider?.models.map((m) => m.id)).toEqual(["mimo-v2.5-pro", "mimo-v2.5"]);
-    expect(cfg.agents?.defaults?.models?.["xiaomi-token-plan/mimo-v2.5-pro"]).toEqual({
-      alias: "Xiaomi MiMo V2.5 Pro",
+    expect(provider?.models.map((m) => m.id)).toEqual([
+      "mimo-v2.6-pro",
+      "mimo-v2.6-flash",
+      "mimo-v2.5-pro",
+      "mimo-v2.5",
+    ]);
+    expect(cfg.agents?.defaults?.models?.["xiaomi-token-plan/mimo-v2.6-pro"]).toEqual({
+      alias: "Xiaomi MiMo V2.6 Pro",
     });
-    expect(cfg.agents?.defaults?.model).toEqual({ primary: "xiaomi-token-plan/mimo-v2.5-pro" });
+    expect(cfg.agents?.defaults?.model).toEqual({ primary: "xiaomi-token-plan/mimo-v2.6-pro" });
     expectProviderOnboardPrimaryModel({
       applyConfig: (config) => applyXiaomiTokenPlanConfig(config, "ams"),
-      modelRef: "xiaomi-token-plan/mimo-v2.5-pro",
+      modelRef: "xiaomi-token-plan/mimo-v2.6-pro",
     });
   });
 
-  it("merges Xiaomi Token Plan models and rewrites the selected regional base URL", () => {
+  it("preserves authored Xiaomi Token Plan models and rewrites the regional base URL", () => {
     const provider = expectProviderOnboardMergedLegacyConfig({
       applyProviderConfig: (config) => applyXiaomiTokenPlanConfig(config, "sgp"),
       providerId: "xiaomi-token-plan",
@@ -70,10 +82,20 @@ describe("xiaomi onboard", () => {
       legacyModelId: "custom-token-plan-model",
       legacyModelName: "Custom Token Plan",
     });
-    expect(provider?.models.map((m) => m.id)).toEqual([
-      "custom-token-plan-model",
-      "mimo-v2.5-pro",
-      "mimo-v2.5",
-    ]);
+    expect(provider?.models.map((m) => m.id)).toEqual(["custom-token-plan-model"]);
   });
+
+  it.each(["ams", "cn", "sgp"] as const)(
+    "leaves ordinary Token Plan %s rows runtime-owned",
+    (region) => {
+      for (const mode of [undefined, "merge"] as const) {
+        const cfg = applyXiaomiTokenPlanConfig({ models: { mode } }, region);
+        expect(cfg.models?.providers?.["xiaomi-token-plan"]?.models).toEqual([]);
+        expect(cfg.agents?.defaults?.models?.["xiaomi-token-plan/mimo-v2.6-pro"]).toEqual({
+          alias: "Xiaomi MiMo V2.6 Pro",
+        });
+        expect(applyXiaomiTokenPlanConfig(cfg, region)).toEqual(cfg);
+      }
+    },
+  );
 });

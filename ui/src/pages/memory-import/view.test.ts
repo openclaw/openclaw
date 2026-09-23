@@ -61,6 +61,7 @@ function createPlan(): NonNullable<MemoryImportProps["plan"]> {
 function createProps(overrides: Partial<MemoryImportProps> = {}): MemoryImportProps {
   return {
     connected: true,
+    canAdmin: true,
     agents: [{ id: "research", name: "Research" }],
     selectedAgentId: "research",
     plan: createPlan(),
@@ -102,6 +103,15 @@ function createProps(overrides: Partial<MemoryImportProps> = {}): MemoryImportPr
 }
 
 describe("renderMemoryImport", () => {
+  it("renders shared skeletons while the import plan is loading", () => {
+    const container = document.createElement("div");
+    render(renderMemoryImport(createProps({ loading: true, plan: null })), container);
+
+    const blocks = container.querySelectorAll(".memory-import__skeleton");
+    expect(blocks).toHaveLength(2);
+    expect([...blocks].every((block) => block.classList.contains("skeleton"))).toBe(true);
+  });
+
   beforeEach(async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     await i18n.setLocale("en");
@@ -122,6 +132,14 @@ describe("renderMemoryImport", () => {
     expect(container.textContent).toContain("Consolidated Codex memory files.");
     expect(container.textContent).not.toContain("Import Codex memory.");
     expect(container.textContent).not.toContain("private memory body");
+  });
+
+  it("hides the agent row when only one agent is configured", () => {
+    const container = document.createElement("div");
+    render(renderMemoryImport(createProps()), container);
+
+    expect(container.querySelector('openclaw-agent-select[name="memory-import-agent"]')).toBeNull();
+    expect(container.textContent).not.toContain("Destination agent");
   });
 
   it("renders the avatar agent picker and routes agent changes", async () => {
@@ -150,9 +168,7 @@ describe("renderMemoryImport", () => {
     >('openclaw-agent-select[name="memory-import-agent"]');
     await picker?.updateComplete;
     expect(picker?.options.map((option) => option.value)).toEqual(["research", "writer"]);
-    expect(picker?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
-      "🔎",
-    );
+    expect(picker?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🔎");
 
     picker?.onSelect("writer");
     expect(onSelectAgent).toHaveBeenCalledWith("writer");
@@ -275,6 +291,10 @@ describe("renderMemoryImport", () => {
     render(
       renderMemoryImport(
         createProps({
+          agents: [
+            { id: "research", name: "Research" },
+            { id: "writer", name: "Writer" },
+          ],
           pendingProviderId: "codex",
           applyingProviderId: "codex",
           onConfirmImport,

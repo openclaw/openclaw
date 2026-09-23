@@ -1,4 +1,3 @@
-// Matrix plugin module implements logging behavior.
 import { logger as matrixJsSdkRootLogger } from "matrix-js-sdk/lib/logger.js";
 import { ConsoleLogger, LogService, setMatrixConsoleLogging } from "../sdk/logger.js";
 

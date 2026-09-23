@@ -3,54 +3,28 @@
  * Keeps callers from reaching into runtime config or plugin metadata snapshot
  * plumbing directly.
  */
-import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  isCurrentPluginMetadataSnapshotRuntimeGeneration,
+} from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import type { PluginModelCatalogMetadataSnapshot } from "./plugin-model-catalog.js";
-
-function providerConfigDeclaresModel(
-  providerConfig: { models?: readonly { id?: string }[] } | undefined,
-  model: string,
-): boolean {
-  const trimmedModel = model.trim();
-  return Boolean(
-    trimmedModel &&
-    providerConfig?.models?.some((candidate) => candidate.id?.trim() === trimmedModel),
-  );
-}
-
-/** Resolves provider/model refs used to scope model catalog discovery. */
-export function resolveModelCatalogScope(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  model: string;
-}): { providerRefs: string[]; modelRefs: string[] } {
-  const provider = params.provider.trim();
-  const model = params.model.trim();
-  const providerConfig = findNormalizedProviderValue(params.cfg?.models?.providers, provider);
-  const modelRefs = providerConfigDeclaresModel(providerConfig, model)
-    ? [provider && model ? `${provider}/${model}` : model]
-    : [provider && model ? `${provider}/${model}` : model, model];
-  // Scope ordering feeds deterministic discovery and prompt/cache inputs.
-  return {
-    providerRefs: normalizeUniqueSingleOrTrimmedStringList([provider, providerConfig?.api]),
-    modelRefs: normalizeUniqueSingleOrTrimmedStringList(modelRefs),
-  };
-}
 
 /** Resolve the workspace directory model discovery should use for agent scope. */
 export function resolveModelWorkspaceDir(
   cfg: OpenClawConfig | undefined,
   explicitWorkspaceDir: string | undefined,
+  agentId?: string,
 ): string | undefined {
   if (explicitWorkspaceDir !== undefined || !cfg) {
     return explicitWorkspaceDir;
   }
-  return resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  // The caller may already own an authorized agent; reuse it instead of
+  // re-resolving a default, which throws on multi-agent configs.
+  return resolveAgentWorkspaceDir(cfg, agentId ?? resolveDefaultAgentId(cfg));
 }
 
 /**
@@ -72,6 +46,18 @@ export function resolveModelPluginMetadataSnapshot(params: {
   }
   const env = params.env ?? process.env;
   try {
+    if (!params.config && params.useRuntimeConfig) {
+      const current = getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
+        allowSynchronousPolicyRead: false,
+        env,
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      });
+      // An admitted runtime already owns discovery; mutable snapshots still need config checks.
+      if (current && isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
+        return current;
+      }
+    }
     const config = params.config ?? (params.useRuntimeConfig ? getRuntimeConfig() : undefined);
     return (
       // Current snapshots are already lifecycle-owned; discovery should reuse

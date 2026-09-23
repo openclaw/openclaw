@@ -10,6 +10,7 @@ import {
 } from "./agent-tools-parameter-schema.js";
 import type { OpenAIToolProjection } from "./openai-tool-projection.js";
 import { findOpenAIStrictSchemaViolations } from "./openai-tool-schema-compat.js";
+import { createToolSchemaNormalizationCache } from "./tool-schema-normalization-cache.js";
 
 export { findOpenAIStrictSchemaViolations } from "./openai-tool-schema-compat.js";
 
@@ -25,7 +26,9 @@ type ToolSchemaCompatInput = {
 };
 
 const MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;
-let strictOpenAISchemaCache = new WeakMap<object, Array<{ key: string; value: unknown }>>();
+const strictOpenAISchemaCache = createToolSchemaNormalizationCache<unknown>(
+  MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA,
+);
 
 function resolveToolSchemaModelCompat(
   compat: ToolSchemaCompatInput | null | undefined,
@@ -57,26 +60,6 @@ function resolveStrictOpenAISchemaCacheKey(
   ]);
 }
 
-function readCachedStrictOpenAISchema(schema: object, key: string): unknown {
-  return strictOpenAISchemaCache.get(schema)?.find((entry) => entry.key === key)?.value;
-}
-
-function rememberStrictOpenAISchema(schema: object, key: string, value: unknown): unknown {
-  const entries = strictOpenAISchemaCache.get(schema) ?? [];
-  strictOpenAISchemaCache.set(
-    schema,
-    [{ key, value }, ...entries.filter((entry) => entry.key !== key)].slice(
-      0,
-      MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA,
-    ),
-  );
-  return value;
-}
-
-export function clearOpenAIToolSchemaCacheForTest(): void {
-  strictOpenAISchemaCache = new WeakMap();
-}
-
 /** Normalizes a tool parameter schema into the OpenAI strict JSON-schema subset. */
 export function normalizeStrictOpenAIJsonSchema(
   schema: unknown,
@@ -92,11 +75,11 @@ export function normalizeStrictOpenAIJsonSchema(
     );
   }
   const cacheKey = resolveStrictOpenAISchemaCacheKey(modelCompat);
-  const cached = readCachedStrictOpenAISchema(schemaInput, cacheKey);
+  const cached = strictOpenAISchemaCache.get(schemaInput, cacheKey);
   if (cached !== undefined) {
     return cached;
   }
-  return rememberStrictOpenAISchema(
+  return strictOpenAISchemaCache.remember(
     schemaInput,
     cacheKey,
     // Cache by input object and compatibility key so repeated inventory generation preserves object
@@ -126,15 +109,16 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number
 
   const record = schema as Record<string, unknown>;
   let changed = false;
-  const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(record)) {
-    const next = normalizeStrictOpenAIJsonSchemaRecursive(
-      value,
-      key === "properties" ? depth : depth + 1,
-    );
-    normalized[key] = next;
-    changed ||= next !== value;
-  }
+  const normalized = Object.fromEntries<unknown>(
+    Object.entries(record).map(([key, value]) => {
+      const next = normalizeStrictOpenAIJsonSchemaRecursive(
+        value,
+        key === "properties" ? depth : depth + 1,
+      );
+      changed ||= next !== value;
+      return [key, next];
+    }),
+  );
 
   if (normalized.type === "object") {
     const properties =

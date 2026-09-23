@@ -1,50 +1,21 @@
+import type {
+  ChannelIngressResolver,
+  CreateChannelIngressResolverParams,
+  ResolveChannelMessageIngressParams,
+  ResolveStableChannelMessageIngressParams,
+  ResolvedChannelMessageIngress,
+} from "../channels/message-access/runtime-types.js";
+import {
+  createChannelIngressPolicyResolver,
+  resolveChannelIngressPolicy,
+  resolveStableChannelIngressPolicy,
+} from "../channels/message-access/runtime.js";
 /**
  * High-level runtime resolver for inbound channel access decisions.
  *
- * Channel plugins should use this subpath for new receive paths. It accepts
- * platform facts, raw allowlists, route descriptors, command facts, and access
- * group config, then returns sender/route/command/activation projections plus
- * the ordered ingress graph.
+ * New receive paths use runtime.channel.inbound.ingress. This subpath retains
+ * released resolver adapters alongside identity, policy, and monitor helpers.
  */
-export {
-  channelIngressRoutes,
-  createChannelIngressResolver,
-  defineStableChannelIngressIdentity,
-  readChannelIngressStoreAllowFromForDmPolicy,
-  resolveChannelMessageIngress,
-  resolveStableChannelMessageIngress,
-} from "../channels/message-access/index.js";
-export { resolveChannelImplicitMentions } from "../config/implicit-mentions.js";
-export type {
-  AccessGroupMembershipFact,
-  ChannelIngressDecision,
-  ChannelIngressAccessGroupMembershipResolver,
-  ChannelIngressCommandPresetInput,
-  ChannelIngressConfigInput,
-  ChannelIngressEventInput,
-  ChannelIngressEventPresetInput,
-  ChannelIngressIdentityDescriptor,
-  ChannelIngressIdentityAlias,
-  ChannelIngressIdentityField,
-  ChannelIngressIdentitySubjectInput,
-  ChannelIngressIdentifierKind,
-  ChannelIngressPolicyInput,
-  ChannelIngressRouteAccess,
-  ChannelIngressRouteDescriptor,
-  ChannelIngressResolver,
-  ChannelIngressResolverMessageParams,
-  ChannelIngressStateInput,
-  ChannelIngressState,
-  ChannelMessageIngressCommandInput,
-  CreateChannelIngressResolverParams,
-  IngressReasonCode,
-  ResolvedChannelMessageIngress,
-  ResolveChannelMessageIngressParams,
-  ResolveStableChannelMessageIngressParams,
-  StableChannelIngressIdentityParams,
-} from "../channels/message-access/index.js";
-export type { ResolvedChannelImplicitMentions } from "../config/implicit-mentions.js";
-
 import {
   createChannelIngressMonitor,
   type ChannelIngressMonitorDrainOptions,
@@ -53,6 +24,115 @@ import {
   type ChannelIngressMonitorPayloadCodec,
   type CreateChannelIngressMonitorOptions,
 } from "../channels/message/ingress-monitor.js";
+import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
+import {
+  getPluginInstanceOwner,
+  getPluginValueInstance,
+  type PluginInstanceHandle,
+} from "../plugins/plugin-instance-scope.js";
+import { getPluginRecordRegistry } from "../plugins/registry-lifecycle.js";
+export { channelIngressRoutes } from "../channels/message-access/runtime.js";
+export {
+  meetsIdentifierAuthentication,
+  type IdentifierAuthentication,
+} from "../channels/message-access/identifier-authentication.js";
+export {
+  defineStableChannelIngressIdentity,
+  identityEntryAuthenticationClassifier,
+} from "../channels/message-access/runtime-identity.js";
+export { readChannelIngressStoreAllowFromForDmPolicy } from "../channels/message-access/store-allow-from.js";
+export { resolveChannelImplicitMentions } from "../config/implicit-mentions.js";
+export type {
+  ChannelIngressAccessGroupMembershipResolver,
+  ChannelIngressCommandPresetInput,
+  ChannelIngressConfigInput,
+  ChannelIngressContextBinding,
+  ChannelIngressEventPresetInput,
+  ChannelIngressIdentityDescriptor,
+  ChannelIngressIdentityAlias,
+  ChannelIngressIdentityField,
+  ChannelIngressIdentitySubjectInput,
+  ChannelIngressRouteAccess,
+  ChannelIngressRouteDescriptor,
+  ChannelIngressResolver,
+  ChannelIngressResolverMessageParams,
+  ChannelMessageIngressCommandInput,
+  CreateChannelIngressResolverParams,
+  ResolvedChannelMessageIngress,
+  ResolveChannelMessageIngressParams,
+  ResolveStableChannelMessageIngressParams,
+  StableChannelIngressIdentityParams,
+} from "../channels/message-access/runtime-types.js";
+export type {
+  AccessGroupMembershipFact,
+  ChannelIngressDecision,
+  ChannelIngressEventInput,
+  ChannelIngressIdentifierKind,
+  ChannelIngressPolicyInput,
+  ChannelIngressState,
+  ChannelIngressStateInput,
+  IngressReasonCode,
+} from "../channels/message-access/types.js";
+export type { ResolvedChannelImplicitMentions } from "../config/implicit-mentions.js";
+
+function currentIngressInstance(): PluginInstanceHandle | undefined {
+  const instance = pluginInstanceInvocation.getStore()?.instance;
+  const owner = instance && getPluginInstanceOwner(instance);
+  return owner?.instance?.hasActiveCall && owner.instance === instance && !owner.revoked
+    ? owner.instance
+    : undefined;
+}
+
+function registeredIngress(instance: PluginInstanceHandle | undefined, channelId: string) {
+  const owner = instance?.owner;
+  if (!instance?.hasActiveCall || instance.lifecycle.signal.aborted || !owner || owner.revoked) {
+    return undefined;
+  }
+  const registry = getPluginRecordRegistry(owner.registry, owner.record);
+  const registration = registry.channels.find(
+    (entry) =>
+      entry.pluginId === owner.record.id &&
+      entry.plugin.id === channelId.trim() &&
+      getPluginValueInstance(entry.plugin) === instance,
+  );
+  return registration?.captureReadAuthority?.()?.()
+    ? registration.resolveChannelRuntime?.().inbound.ingress
+    : undefined;
+}
+
+/** Retain the creating instance when adapting a released reusable resolver. */
+export function createChannelIngressResolver(
+  base: CreateChannelIngressResolverParams,
+): ChannelIngressResolver {
+  // Registration may precede channel publication. Retain the creating instance,
+  // never whichever plugin happens to invoke this resolver later.
+  const instance = currentIngressInstance();
+  const policy = createChannelIngressPolicyResolver(base);
+  const resolve = () => registeredIngress(instance, base.channelId)?.createResolver(base) ?? policy;
+  return {
+    message: (params) => resolve().message(params),
+    command: (params) => resolve().command(params),
+    event: (params) => resolve().event(params),
+  };
+}
+
+/** Preserve the released helper's trusted attribution within its managed callback. */
+export async function resolveChannelMessageIngress(
+  params: ResolveChannelMessageIngressParams,
+): Promise<ResolvedChannelMessageIngress> {
+  const ingress = registeredIngress(currentIngressInstance(), params.channelId);
+  return await (ingress ? ingress.resolve(params) : resolveChannelIngressPolicy(params));
+}
+
+/** Preserve the released stable-identity helper through the same ingress owner. */
+export async function resolveStableChannelMessageIngress(
+  params: ResolveStableChannelMessageIngressParams,
+): Promise<ResolvedChannelMessageIngress> {
+  const ingress = registeredIngress(currentIngressInstance(), params.channelId);
+  return await (ingress
+    ? ingress.resolveStable(params)
+    : resolveStableChannelIngressPolicy(params));
+}
 
 type ChannelIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
@@ -62,7 +142,13 @@ type StandardRawEventAdmission<TInspection> =
   | { kind: "durable" | (null extends TInspection ? "ignored" : never) };
 type StandardRawEventIngressOptions<TRaw, TMetadata, TInspection> = Omit<
   CreateChannelIngressMonitorOptions<TRaw, string, StandardRawEventPayload, TMetadata>,
-  "admissionMode" | "drain" | "inspect" | "payload" | "pollIntervalMs" | "retention"
+  | "admissionMode"
+  | "drain"
+  | "inspect"
+  | "inspectAsync"
+  | "payload"
+  | "pollIntervalMs"
+  | "retention"
 > & {
   inspect: (raw: TRaw) => TInspection;
   payload: Omit<
@@ -128,26 +214,76 @@ export function fanInChannelIngressLifecycles(
   lifecycle: ChannelIngressLifecycle | undefined;
   settle: () => Promise<void>;
   abandon: (error?: unknown) => Promise<void>;
+  cancel: () => Promise<void>;
 } {
   const lifecycles = inputs.filter((lifecycle) => lifecycle !== undefined);
   const first = lifecycles[0];
   if (!first) {
-    return { lifecycle: undefined, settle: async () => {}, abandon: async () => {} };
+    return {
+      lifecycle: undefined,
+      settle: async () => {},
+      abandon: async () => {},
+      cancel: async () => {},
+    };
   }
 
   let handedOff = false;
+  // Set once every claim has reached a terminal disposition. A consumer that
+  // wraps this lifecycle abandons through onAbandoned rather than the abandon
+  // helper below, so without this the claims a rejected adoption already
+  // released would be settled a second time and consume a second retry.
+  let settledAll = false;
+  const settleOnce = async (run: () => Promise<void>) => {
+    if (settledAll) {
+      return;
+    }
+    settledAll = true;
+    await run();
+  };
+  const fanOut = async (
+    invoke: (lifecycle: ChannelIngressLifecycle) => void | Promise<void>,
+    targets: readonly ChannelIngressLifecycle[] = lifecycles,
+  ) => {
+    await Promise.all(targets.map(async (lifecycle) => await invoke(lifecycle)));
+  };
+  const abandonAll = () => settleOnce(() => fanOut((lifecycle) => lifecycle.onAbandoned()));
+  const failEach = (targets: readonly ChannelIngressLifecycle[], error: unknown) =>
+    fanOut(
+      (lifecycle) => (lifecycle.onFailed ? lifecycle.onFailed(error) : lifecycle.onAbandoned()),
+      targets,
+    );
+  const failAll = (error: unknown) => settleOnce(() => failEach(lifecycles, error));
+  // Adoption runs in claim order so each durable source settles in the order it
+  // was taken. Handoff is already marked by the time this runs, so a caller's
+  // abandon after a rejection here is a no-op; release the claim that threw and
+  // every claim after it instead of leaving them held until recovery.
   const adoptAll = async () => {
-    for (const lifecycle of lifecycles) {
-      await lifecycle.onAdopted();
+    for (const [index, lifecycle] of lifecycles.entries()) {
+      try {
+        await lifecycle.onAdopted();
+      } catch (error) {
+        // Callers match the adoption error itself (isIngressAdoptionLostError),
+        // so a failing release must not replace it.
+        await Promise.allSettled([settleOnce(() => failEach(lifecycles.slice(index), error))]);
+        throw error;
+      }
     }
   };
-  const abandonAll = async () => {
-    await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onAbandoned()));
-  };
-  const failAll = async (error: unknown) => {
-    await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onFailed?.(error)));
-  };
-
+  const supportsCancellation = lifecycles.every((lifecycle) => lifecycle.onCancelled !== undefined);
+  const deferredHeartbeatIntervals = lifecycles
+    .map((lifecycle) => lifecycle.deferredHeartbeatIntervalMs)
+    .filter(
+      (interval): interval is number =>
+        interval !== undefined && Number.isFinite(interval) && interval > 0,
+    );
+  // Omit aggregate cancellation unless every durable source supports it. Callers
+  // can then use settle/abandon without an acknowledged-but-unsettled claim.
+  const cancelAll = () =>
+    settleOnce(() =>
+      fanOut((lifecycle) =>
+        lifecycle.onCancelled ? lifecycle.onCancelled() : lifecycle.onAbandoned(),
+      ),
+    );
   return {
     lifecycle: {
       abortSignal:
@@ -164,6 +300,14 @@ export function fanInChannelIngressLifecycles(
           lifecycle.onDeferred();
         }
       },
+      onDeferredHeartbeat: () => {
+        for (const lifecycle of lifecycles) {
+          lifecycle.onDeferredHeartbeat?.();
+        }
+      },
+      ...(deferredHeartbeatIntervals.length > 0
+        ? { deferredHeartbeatIntervalMs: Math.min(...deferredHeartbeatIntervals) }
+        : {}),
       onAdoptionFinalizing: () => {
         for (const lifecycle of lifecycles) {
           lifecycle.onAdoptionFinalizing();
@@ -173,6 +317,14 @@ export function fanInChannelIngressLifecycles(
         handedOff = true;
         await failAll(error);
       },
+      ...(supportsCancellation
+        ? {
+            onCancelled: async () => {
+              handedOff = true;
+              await cancelAll();
+            },
+          }
+        : {}),
       onAbandoned: async () => {
         handedOff = true;
         await abandonAll();
@@ -181,14 +333,24 @@ export function fanInChannelIngressLifecycles(
     // A gated or deliberately skipped turn still consumed every source claim.
     settle: async () => {
       if (!handedOff) {
-        await adoptAll();
+        // Mark before adopting, matching onAdopted: a rejection partway has
+        // already released the rest, so a later abandon must stay a no-op.
         handedOff = true;
+        await adoptAll();
       }
     },
-    abandon: async (_error?: unknown) => {
+    abandon: async (error?: unknown) => {
       if (!handedOff) {
         handedOff = true;
-        await abandonAll();
+        await (error === undefined ? abandonAll() : failAll(error));
+      }
+    },
+    // Source-compatible lifecycles predate onCancelled. Settle each source through
+    // its strongest release callback so mixed fan-in cannot strand a durable claim.
+    cancel: async () => {
+      if (!handedOff) {
+        handedOff = true;
+        await cancelAll();
       }
     },
   };

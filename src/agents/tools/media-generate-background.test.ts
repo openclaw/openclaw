@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   IMAGE_GENERATION_TASK_KIND,
   MUSIC_GENERATION_TASK_KIND,
@@ -21,19 +22,13 @@ import {
 
 vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskDeliveryRuntimeMocks);
-vi.mock("../subagent-announce-delivery.js", () => announceDeliveryMocks);
+vi.mock("../subagents/announce/subagent-announce-delivery.js", () => announceDeliveryMocks);
 
 const {
-  createImageGenerationTaskRun,
-  createMusicGenerationTaskRun,
-  createVideoGenerationTaskRun,
-  failVideoGenerationTaskRun,
   imageGenerationTaskLifecycle,
   musicGenerationTaskLifecycle,
-  recordImageGenerationTaskProgress,
-  recordMusicGenerationTaskProgress,
-  recordVideoGenerationTaskProgress,
   videoGenerationTaskLifecycle,
+  runMediaGenerationTask,
 } = await import("./media-generate-background.js");
 
 describe("image generate background helpers", () => {
@@ -50,7 +45,7 @@ describe("image generate background helpers", () => {
       taskId: "task-123",
     });
 
-    const handle = createImageGenerationTaskRun({
+    const handle = imageGenerationTaskLifecycle.createTaskRun({
       sessionKey: "agent:main:discord:direct:123",
       requesterOrigin: {
         channel: "discord",
@@ -75,7 +70,7 @@ describe("image generate background helpers", () => {
   });
 
   it("records task progress updates", () => {
-    recordImageGenerationTaskProgress({
+    imageGenerationTaskLifecycle.recordTaskProgress({
       handle: {
         taskId: "task-123",
         runId: "tool:image_generate:abc",
@@ -160,15 +155,6 @@ function getDeliveredInternalEvents(): Array<Record<string, unknown>> {
   return params.internalEvents as Array<Record<string, unknown>>;
 }
 
-function expectReplyInstructionContains(text: string) {
-  const event = getDeliveredInternalEvents().find(
-    (item) => typeof item.replyInstruction === "string" && item.replyInstruction.includes(text),
-  );
-  if (!event) {
-    throw new Error(`Expected reply instruction containing ${text}`);
-  }
-}
-
 // Music background tests cover task-run creation, progress recording, and
 // completion delivery through the durable requester-agent handoff.
 describe("music generate background helpers", () => {
@@ -185,7 +171,7 @@ describe("music generate background helpers", () => {
       taskId: "task-123",
     });
 
-    const handle = createMusicGenerationTaskRun({
+    const handle = musicGenerationTaskLifecycle.createTaskRun({
       sessionKey: "agent:main:discord:direct:123",
       requesterOrigin: {
         channel: "discord",
@@ -210,7 +196,7 @@ describe("music generate background helpers", () => {
   });
 
   it("records task progress updates", () => {
-    recordMusicGenerationTaskProgress({
+    musicGenerationTaskLifecycle.recordTaskProgress({
       handle: {
         taskId: "task-123",
         runId: "tool:music_generate:abc",
@@ -246,29 +232,58 @@ describe("music generate background helpers", () => {
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
-  it("tells channel completion agents to follow the visible-reply contract", async () => {
-    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-      delivered: true,
-      path: "direct",
-    });
-    const completion = createMediaCompletionFixture({
-      runId: "tool:music_generate:abc",
-      taskLabel: "night-drive synthwave",
-      result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
-      mediaUrls: ["/tmp/generated-night-drive.mp3"],
-    });
+  it.each([
+    "agent:main:discord:direct:123",
+    "agent:main:discord:channel:C123",
+    "agent:main:whatsapp:123@g.us",
+  ])(
+    "gives %s tool-agnostic visible-reply guidance with every generated attachment",
+    async (requesterSessionKey) => {
+      announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+        delivered: true,
+        path: "direct",
+      });
+      const attachments = [
+        {
+          type: "audio" as const,
+          path: "/tmp/generated-night-drive.mp3",
+          mimeType: "audio/mpeg",
+          name: "night-drive.mp3",
+        },
+        {
+          type: "image" as const,
+          path: "/tmp/generated-night-drive-cover.png",
+          mimeType: "image/png",
+          name: "night-drive-cover.png",
+        },
+      ];
+      const completion = createMediaCompletionFixture({
+        runId: "tool:music_generate:abc",
+        taskLabel: "night-drive synthwave",
+        result: "Generated a track and cover art.",
+      });
 
-    await musicGenerationTaskLifecycle.wakeTaskCompletion({
-      ...completion,
-      handle: {
-        ...completion.handle,
-        requesterSessionKey: "agent:main:discord:channel:C123",
-      },
-    });
+      await musicGenerationTaskLifecycle.wakeTaskCompletion({
+        ...completion,
+        attachments,
+        handle: {
+          ...completion.handle,
+          requesterSessionKey,
+        },
+      });
 
-    expectReplyInstructionContains("visible-reply contract");
-    expectReplyInstructionContains("final-reply MEDIA lines");
-  });
+      const event = getDeliveredInternalEvents().at(0);
+      expect(event?.attachments).toEqual(attachments);
+      const replyInstruction = String(event?.replyInstruction);
+      expect(replyInstruction).toContain("current visible-reply contract");
+      expect(replyInstruction).toContain("short user-facing caption");
+      expect(replyInstruction).toContain("every structured generated attachment from this event");
+      expect(replyInstruction).toContain("Keep internal task/session details private");
+      expect(replyInstruction).not.toContain('message(action="send")');
+      expect(replyInstruction).not.toContain("NO_REPLY");
+      expect(replyInstruction).not.toContain("MEDIA:");
+    },
+  );
 
   it("keeps failed completion notices in the durable agent-loop handoff", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
@@ -294,33 +309,6 @@ describe("music generate background helpers", () => {
     expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
-
-  it.each(["agent:main:discord:guild-123:channel-456", "agent:main:whatsapp:123@g.us"])(
-    "warns legacy group/channel completion agents for %s",
-    async (requesterSessionKey) => {
-      announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-        delivered: true,
-        path: "direct",
-      });
-      const completion = createMediaCompletionFixture({
-        runId: "tool:music_generate:abc",
-        taskLabel: "night-drive synthwave",
-        result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
-        mediaUrls: ["/tmp/generated-night-drive.mp3"],
-      });
-
-      await musicGenerationTaskLifecycle.wakeTaskCompletion({
-        ...completion,
-        handle: {
-          ...completion.handle,
-          requesterSessionKey,
-        },
-      });
-
-      expectReplyInstructionContains("visible-reply contract");
-      expectReplyInstructionContains("final-reply MEDIA lines");
-    },
-  );
 });
 
 // Video generation background tests cover detached task lifecycle, keepalive
@@ -345,7 +333,7 @@ describe("video generate background helpers", () => {
       taskId: "task-123",
     });
 
-    const handle = createVideoGenerationTaskRun({
+    const handle = videoGenerationTaskLifecycle.createTaskRun({
       sessionKey: "agent:main:discord:direct:123",
       requesterOrigin: {
         channel: "discord",
@@ -367,7 +355,7 @@ describe("video generate background helpers", () => {
   });
 
   it("records task progress updates", () => {
-    recordVideoGenerationTaskProgress({
+    videoGenerationTaskLifecycle.recordTaskProgress({
       handle: {
         taskId: "task-123",
         runId: "tool:video_generate:abc",
@@ -389,7 +377,7 @@ describe("video generate background helpers", () => {
       taskId: "task-123",
     });
 
-    const handle = createVideoGenerationTaskRun({
+    const handle = videoGenerationTaskLifecycle.createTaskRun({
       sessionKey: "agent:main:discord:channel:123",
       prompt: "friendly lobster surfing",
       providerId: "fal",
@@ -402,14 +390,14 @@ describe("video generate background helpers", () => {
     expect(getAgentRunContext(handle.runId)?.sessionKey).toBe("agent:main:discord:channel:123");
 
     const beforeProgress = Date.now();
-    recordVideoGenerationTaskProgress({
+    videoGenerationTaskLifecycle.recordTaskProgress({
       handle,
       progressSummary: "Generating video",
     });
 
     expect(getAgentRunContext(handle.runId)?.lastActiveAt).toBeGreaterThanOrEqual(beforeProgress);
 
-    failVideoGenerationTaskRun({
+    videoGenerationTaskLifecycle.failTaskRun({
       handle,
       error: new Error("provider failed"),
     });
@@ -478,5 +466,77 @@ describe("video generate background helpers", () => {
 
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
     expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
+    const replyInstruction = String(getDeliveredInternalEvents().at(0)?.replyInstruction);
+    expect(replyInstruction).toContain("current visible-reply contract");
+    expect(replyInstruction).toContain("concise user-facing failure");
+    expect(replyInstruction).toContain("Keep internal task/session details private");
+    expect(replyInstruction).toContain("do not copy the internal event text verbatim");
+    expect(replyInstruction).not.toContain('message(action="send")');
+    expect(replyInstruction).not.toContain("NO_REPLY");
+    expect(replyInstruction).not.toContain("MEDIA:");
   });
+});
+
+describe("media task failure resource cleanup", () => {
+  it.each(["admission", "generation"] as const)(
+    "awaits cleanup and retains both errors after %s fails",
+    async (phase) => {
+      const error = new Error(phase);
+      const cleanupError = new Error("cleanup failed");
+      const cleanupStarted = createDeferredCore();
+      const finishCleanup = createDeferredCore();
+      const release = vi.fn(async () => {
+        cleanupStarted.resolve();
+        await finishCleanup.promise;
+        throw cleanupError;
+      });
+      const lifecycle = {
+        createTaskRun: vi.fn(() => {
+          if (phase === "admission") {
+            throw error;
+          }
+          return null;
+        }),
+        recordTaskProgress: vi.fn(),
+        completeTaskRun: vi.fn(),
+        failTaskRun: vi.fn(),
+        wakeTaskCompletion: vi.fn(async () => ({ status: "delivered" as const })),
+      };
+      const run = vi.fn(async () => {
+        throw error;
+      });
+      const scheduleBackgroundWork = vi.fn();
+      const observed = vi.fn();
+      const outcome = runMediaGenerationTask({
+        lifecycle,
+        generationLabel: "image",
+        prompt: "synthetic cleanup proof",
+        requestKey: "cleanup-proof",
+        scheduleBackgroundWork,
+        onFailure: vi.fn(),
+        resources: {
+          run: async <T>(work: () => T | Promise<T>) => await work(),
+          release,
+        },
+        run,
+      }).catch(observed);
+      await cleanupStarted.promise;
+      expect(observed).not.toHaveBeenCalled();
+      expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
+      finishCleanup.resolve();
+      await outcome;
+      expect(release).toHaveBeenCalledOnce();
+      expect(observed).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: `Media ${phase} and cleanup failed`,
+          errors: [error, cleanupError],
+          cause: error,
+        }),
+      );
+      expect(run).toHaveBeenCalledTimes(phase === "generation" ? 1 : 0);
+      expect(lifecycle.failTaskRun).toHaveBeenCalledTimes(phase === "generation" ? 1 : 0);
+      expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
+      expect(scheduleBackgroundWork).not.toHaveBeenCalled();
+    },
+  );
 });

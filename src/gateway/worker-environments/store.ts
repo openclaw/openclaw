@@ -1,1089 +1,586 @@
-import { isAbsolute } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import type { Insertable, Selectable, Updateable } from "kysely";
 import {
-  type WorkerAdmissionHandshake,
-  WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
-  WORKER_PROTOCOL_MAX_FEATURES,
-  WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerOperationAdmission,
+} from "../../infra/sqlite-worker-operation-admission.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
+  registerOpenClawStateDatabaseAsyncResource,
+  registerOpenClawStateDatabaseLifecycleListener,
+} from "../../state/openclaw-state-db-cache.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
+import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import {
+  isPreparedReservationWithinCapacity,
+  preparedCapacityFromReservations,
+  selectPreparedEnvironmentReservations,
+} from "./prepared-environment-store.js";
+import type { WorkerEnvironmentSessionIdentity } from "./session-attachment.js";
+import { workerEnvironmentProjections } from "./store-projection.js";
+import { normalizeCredentialHash, requireWorkerEnvironmentString } from "./store-validation.js";
 import type {
-  WorkerDesktopEndpoint,
-  WorkerProfile,
-  WorkerSshEndpoint,
-} from "../../plugins/types.js";
-import { isValidSecretRef } from "../../secrets/ref-contract.js";
-import type {
-  DB as StateDatabase,
-  WorkerEnvironmentCredentials,
-  WorkerEnvironmentSshFallbackPorts,
-  WorkerEnvironments,
-} from "../../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import type { WorkerCredentialRecord } from "./credential.js";
-import {
-  canTransitionWorkerEnvironment,
-  parseWorkerEnvironmentState,
-  workerEnvironmentStateRequiresLease,
-  type WorkerEnvironmentLeasedState,
-  type WorkerEnvironmentState,
-  type WorkerEnvironmentUnleasedState,
-} from "./state.js";
+  WorkerEnvironmentWorkerOperations,
+  WorkerEnvironmentFacts,
+  WorkerEnvironmentCommitAdmission,
+  WorkerEnvironmentMutationMethods,
+  WorkerEnvironmentPruneCursor,
+  WorkerEnvironmentPrunePage,
+} from "./store-worker-contract.js";
+import type { WorkerEnvironmentPruneInput } from "./store-write-types.js";
 
-type WorkerEnvironmentProfileSnapshot = WorkerProfile;
-type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
-type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake;
-type WorkerEnvironmentTeardownTerminalState = "destroyed" | "failed";
-type RecordIdentity = { environmentId: string; providerId: string; profileId: string };
-type RecordBase = RecordIdentity & {
-  profileSnapshot: WorkerEnvironmentProfileSnapshot;
-  provisionOperationId: string;
-  sharedHost: boolean | null;
-  desktop: WorkerDesktopEndpoint | null;
-  bootstrapReceipt: WorkerEnvironmentBootstrapReceipt | null;
-  ownerEpoch: number;
-  teardownTerminalState: WorkerEnvironmentTeardownTerminalState | null;
-  attachedSessionIds: string[];
-  lastError: string | null;
-} & { createdAtMs: number; updatedAtMs: number; stateChangedAtMs: number } & {
-  idleSinceAtMs: number | null;
-  destroyRequestedAtMs: number | null;
-};
-type Ssh = WorkerEnvironmentSshEndpoint;
-type UnleasedRecord = { state: WorkerEnvironmentUnleasedState; leaseId: null; sshEndpoint: null };
-type LeasedRecord = { state: WorkerEnvironmentLeasedState; leaseId: string; sshEndpoint: Ssh };
-export type WorkerEnvironmentRecord = RecordBase & (UnleasedRecord | LeasedRecord);
-export class WorkerSessionAlreadyAttachedError extends Error {
-  constructor(
-    readonly sessionId: string,
-    readonly environmentId: string,
-  ) {
-    super(`Session ${sessionId} is already attached to worker environment ${environmentId}`);
-  }
+export { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
+export { normalizeWorkerSshEndpoint } from "./store-validation.js";
+export type {
+  PreparedEnvironmentPlacementBinding,
+  PreparedEnvironmentSelection,
+  WorkerEnvironmentRecord,
+} from "./environment-record.js";
+export type { WorkerEnvironmentTransitionPatch } from "./store-write-types.js";
+
+type Input<Method extends keyof WorkerEnvironmentMutationMethods> = Parameters<
+  WorkerEnvironmentMutationMethods[Method]
+>[0];
+type Operations = WorkerEnvironmentWorkerOperations;
+
+// Native receipts originate in this store's worker; a failed result delivery still owns its facts.
+function isInventoryFacts(value: unknown): value is WorkerEnvironmentFacts {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.ids) &&
+    value.ids.every((id) => typeof id === "string") &&
+    Array.isArray(value.environments) &&
+    Array.isArray(value.credentials) &&
+    Array.isArray(value.attachments)
+  );
 }
-export type WorkerEnvironmentTransitionPatch = {
-  leaseId?: string | null;
-  sshEndpoint?: WorkerEnvironmentSshEndpoint | null;
-  sharedHost?: boolean;
-  desktop?: WorkerDesktopEndpoint | null;
-  bootstrapReceipt?: WorkerEnvironmentBootstrapReceipt;
-  attachedSessionIds?: readonly string[];
-  lastError?: string | null;
-  credential?: CredentialInput;
-};
-type WorkerDb = Pick<
-  StateDatabase,
-  | "worker_environment_credentials"
-  | "worker_environment_ssh_fallback_ports"
-  | "worker_environments"
-  | "worker_transcript_commit_heads"
->;
-type Row = Selectable<WorkerEnvironments>;
-type RowWithFallbackPort = Row & { ssh_fallback_port: number | null };
-type RowUpdate = Updateable<WorkerEnvironments>;
-type SshFallbackPortInsert = Insertable<WorkerEnvironmentSshFallbackPorts>;
-type CredentialRow = Selectable<WorkerEnvironmentCredentials>;
-type CredentialInsert = Insertable<WorkerEnvironmentCredentials>;
-type CredentialInput = {
-  credentialHash: string;
-  sessionId: string | null;
-  rpcSetVersion: number;
-  expiresAtMs: number;
-};
-type IntentInput = RecordIdentity & {
-  profileSnapshot: WorkerEnvironmentProfileSnapshot;
-  provisionOperationId: string;
-};
-type TransitionInput = {
-  environmentId: string;
-  from: WorkerEnvironmentState;
-  to: WorkerEnvironmentState;
-  expectedOwnerEpoch?: number;
-  patch?: WorkerEnvironmentTransitionPatch;
-};
-const TERMINAL_STATES: WorkerEnvironmentState[] = ["destroyed", "failed", "orphaned"];
-const WORKER_BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
-const MAX_HOST_KEY_LENGTH = 16_384;
-const MAX_SSH_FALLBACK_PORTS = 10;
-const ensuredWorkerEnvironmentDatabases = new WeakSet<DatabaseSync>();
-const WORKER_ENVIRONMENT_SSH_FALLBACK_PORTS_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (
-  environment_id TEXT NOT NULL,
-  position INTEGER NOT NULL CHECK (position >= 0 AND position <= 9),
-  port INTEGER NOT NULL CHECK (port >= 1 AND port <= 65535),
-  PRIMARY KEY (environment_id, position),
-  UNIQUE (environment_id, port),
-  FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
-) STRICT;
-`;
-const WORKER_CREDENTIAL_HASH_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
-const OPENSSH_HOST_KEY_TYPE_PATTERN =
-  /^(?:ssh|ecdsa-sha2|sk-(?:ssh|ecdsa-sha2))-[A-Za-z0-9@._+-]+$/u;
-const OPENSSH_HOST_KEY_DATA_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/u;
-function required(value: unknown, field: string): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`Worker environment ${field} must be a non-empty string`);
-  }
-  return value.trim();
-}
-function normalizeOpenSshHostKey(value: unknown): string {
-  if (
-    typeof value !== "string" ||
-    value.length > MAX_HOST_KEY_LENGTH ||
-    value.includes("\n") ||
-    value.includes("\r")
-  ) {
-    throw new Error("Worker environment SSH host key must be one OpenSSH public-key line");
-  }
-  const tokens = value.trim().split(/\s+/u);
-  const [algorithm, encodedKey] = tokens;
-  if (
-    tokens.length !== 2 ||
-    !algorithm ||
-    !encodedKey ||
-    !OPENSSH_HOST_KEY_TYPE_PATTERN.test(algorithm) ||
-    !OPENSSH_HOST_KEY_DATA_PATTERN.test(encodedKey) ||
-    encodedKey.length % 4 !== 0
-  ) {
-    throw new Error("Worker environment SSH host key must use OpenSSH public-key format");
-  }
-  return `${algorithm} ${encodedKey}`;
-}
-function teardownTerminalStateFrom(
-  value: string | null,
-): WorkerEnvironmentTeardownTerminalState | null {
-  if (value === null || value === "destroyed" || value === "failed") {
-    return value;
-  }
-  throw new Error("Worker environment teardown terminal state is invalid");
-}
-function normalizeBootstrapReceipt(value: {
-  bundleHash: unknown;
-  openclawVersion: unknown;
-  protocolFeatures: unknown;
-}): WorkerEnvironmentBootstrapReceipt {
-  const bundleHash = required(value.bundleHash, "bootstrap bundle hash");
-  if (!WORKER_BUNDLE_HASH_PATTERN.test(bundleHash)) {
-    throw new Error("Worker environment bootstrap bundle hash must be lowercase SHA-256 hex");
-  }
-  if (!Array.isArray(value.protocolFeatures)) {
-    throw new Error("Worker environment bootstrap protocol features must be an array");
-  }
-  if (
-    value.protocolFeatures.length > WORKER_PROTOCOL_MAX_FEATURES ||
-    value.protocolFeatures.some(
-      (feature) =>
-        typeof feature !== "string" || feature.trim().length > WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
+
+function isCommitAdmission(value: unknown): value is WorkerEnvironmentCommitAdmission {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (fact) =>
+        isRecord(fact) &&
+        typeof fact.environmentId === "string" &&
+        typeof fact.recordAuthority === "string" &&
+        typeof fact.transferAuthority === "string",
     )
-  ) {
-    throw new Error("Worker environment bootstrap protocol features exceed admission limits");
-  }
-  return {
-    bundleHash,
-    openclawVersion: required(value.openclawVersion, "bootstrap OpenClaw version"),
-    protocolFeatures: normalizeSortedUniqueTrimmedStringList(value.protocolFeatures),
-  };
-}
-function normalizeCredentialHash(value: unknown): string {
-  const credentialHash = required(value, "credential hash");
-  if (!WORKER_CREDENTIAL_HASH_PATTERN.test(credentialHash)) {
-    throw new Error("Worker credential hash must be a SHA-256 base64url digest");
-  }
-  return credentialHash;
-}
-function normalizeSessionId(value: unknown): string | null {
-  if (value === null) {
-    return null;
-  }
-  const sessionId = required(value, "credential session id");
-  if (sessionId.length > WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH) {
-    throw new Error("Worker credential session id exceeds the admission limit");
-  }
-  return sessionId;
-}
-function normalizeAttachedSessionIds(value: unknown): string[] {
-  const sessionIds = normalizeSortedUniqueTrimmedStringList(value);
-  for (const sessionId of sessionIds) {
-    if (sessionId.length > WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH) {
-      throw new Error("Worker environment attached session id exceeds the admission limit");
-    }
-  }
-  return sessionIds;
-}
-function assertCredentialSessionBinding(
-  attachedSessionIds: readonly string[],
-  sessionId: string | null,
-): void {
-  if (sessionId !== (attachedSessionIds[0] ?? null)) {
-    throw new Error("Worker credential session does not match the environment attachment");
-  }
-}
-function normalizeRpcSetVersion(value: unknown): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 1) {
-    throw new Error("Worker credential RPC-set version must be a positive safe integer");
-  }
-  return value as number;
-}
-function normalizeExpiry(value: unknown): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    throw new Error("Worker credential expiry must be a non-negative safe integer");
-  }
-  return value as number;
-}
-export function normalizeWorkerSshEndpoint(value: Ssh): Ssh {
-  const host = required(value.host, "SSH host");
-  const user = required(value.user, "SSH user");
-  const hostKey = normalizeOpenSshHostKey(value.hostKey);
-  if (!Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65_535) {
-    throw new Error("Worker environment SSH port must be an integer from 1 through 65535");
-  }
-  if (!isValidSecretRef(value.keyRef)) {
-    throw new Error("Worker environment SSH key must be a canonical SecretRef");
-  }
-  if (value.fallbackPorts !== undefined && !Array.isArray(value.fallbackPorts)) {
-    throw new Error("Worker environment SSH fallback ports must be an array");
-  }
-  const seen = new Set([value.port]);
-  const fallbackPorts: number[] = [];
-  for (const port of value.fallbackPorts ?? []) {
-    if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
-      throw new Error(
-        "Worker environment SSH fallback ports must be integers from 1 through 65535",
-      );
-    }
-    if (!seen.has(port)) {
-      seen.add(port);
-      fallbackPorts.push(port);
-    }
-  }
-  if (fallbackPorts.length > MAX_SSH_FALLBACK_PORTS) {
-    throw new Error(
-      `Worker environment SSH fallback ports cannot exceed ${MAX_SSH_FALLBACK_PORTS}`,
-    );
-  }
-  return {
-    host,
-    port: value.port,
-    ...(fallbackPorts.length > 0 ? { fallbackPorts } : {}),
-    user,
-    hostKey,
-    keyRef: { ...value.keyRef },
-  };
-}
-export function normalizeWorkerDesktopEndpoint(
-  value: WorkerDesktopEndpoint,
-): WorkerDesktopEndpoint {
-  if (!isRecord(value) || value.protocol !== "rfb") {
-    throw new Error('Worker environment desktop protocol must be "rfb"');
-  }
-  if (!Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65_535) {
-    throw new Error("Worker environment desktop port must be an integer from 1 through 65535");
-  }
-  const passwordFilePath = value.passwordFilePath;
-  if (
-    passwordFilePath !== undefined &&
-    (typeof passwordFilePath !== "string" || !isAbsolute(passwordFilePath))
-  ) {
-    throw new Error("Worker environment desktop password file path must be absolute");
-  }
-  return {
-    protocol: "rfb",
-    port: value.port,
-    ...(passwordFilePath === undefined ? {} : { passwordFilePath }),
-  };
-}
-function endpointFrom(row: Row, fallbackPorts: readonly number[]): Ssh | null {
-  const {
-    ssh_host: host,
-    ssh_port: port,
-    ssh_user: user,
-    ssh_host_key: hostKey,
-    ssh_key_ref_json: encoded,
-  } = row;
-  if (host === null || port === null || user === null || hostKey === null || encoded === null) {
-    return null;
-  }
-  return normalizeWorkerSshEndpoint({
-    host,
-    port,
-    ...(fallbackPorts.length > 0 ? { fallbackPorts } : {}),
-    user,
-    hostKey,
-    keyRef: JSON.parse(encoded) as Ssh["keyRef"],
-  });
-}
-function desktopFrom(row: Row): WorkerDesktopEndpoint | null {
-  return row.desktop_json === null
-    ? null
-    : normalizeWorkerDesktopEndpoint(JSON.parse(row.desktop_json) as WorkerDesktopEndpoint);
-}
-function bootstrapReceiptFrom(row: Row): WorkerEnvironmentBootstrapReceipt | null {
-  const {
-    bootstrap_bundle_hash: bundleHash,
-    bootstrap_openclaw_version: openclawVersion,
-    bootstrap_protocol_features_json: encodedFeatures,
-  } = row;
-  if (bundleHash === null && openclawVersion === null && encodedFeatures === null) {
-    return null;
-  }
-  if (bundleHash === null || openclawVersion === null || encodedFeatures === null) {
-    throw new Error("Worker environment bootstrap receipt is incomplete");
-  }
-  return normalizeBootstrapReceipt({
-    bundleHash,
-    openclawVersion,
-    protocolFeatures: JSON.parse(encodedFeatures) as unknown,
-  });
-}
-function assertShape(
-  state: WorkerEnvironmentState,
-  leaseId: string | null,
-  sshEndpoint: Ssh | null,
-  desktop: WorkerDesktopEndpoint | null,
-  bootstrapReceipt: WorkerEnvironmentBootstrapReceipt | null,
-  attachedSessionIds: readonly string[],
-): void {
-  if (workerEnvironmentStateRequiresLease(state)) {
-    if (!leaseId) {
-      throw new Error(`Worker environment state ${state} requires a provider lease`);
-    }
-    if (!sshEndpoint) {
-      throw new Error("Worker environment provider lease requires an SSH endpoint reference");
-    }
-  } else if (leaseId || sshEndpoint || desktop) {
-    throw new Error(`Worker environment state ${state} cannot retain a provider lease`);
-  }
-  if (state === "bootstrapping" && bootstrapReceipt) {
-    throw new Error("Bootstrapping worker environment cannot retain a stale bootstrap receipt");
-  }
-  if (state === "attached" && attachedSessionIds.length !== 1) {
-    throw new Error("Attached worker environment requires exactly one session id");
-  }
-  if (state !== "attached" && attachedSessionIds.length !== 0) {
-    throw new Error("Only an attached worker environment may retain a session id");
-  }
-}
-function nextOwnerEpoch(ownerEpoch: number): number {
-  const next = ownerEpoch + 1;
-  if (!Number.isSafeInteger(next)) {
-    throw new Error("Worker environment owner epoch is exhausted");
-  }
-  return next;
-}
-function nextGlobalOwnerEpoch(db: DatabaseSync): number {
-  // Transcript commit identity is (session, epoch, seq), so an ownership
-  // generation may never be reused when a session moves between environments.
-  const latestEnvironment = executeSqliteQueryTakeFirstSync(
-    db,
-    query(db)
-      .selectFrom("worker_environments")
-      .select(({ fn }) => fn.max<number>("owner_epoch").as("owner_epoch")),
   );
-  const latestTranscriptCommit = executeSqliteQueryTakeFirstSync(
-    db,
-    query(db)
-      .selectFrom("worker_transcript_commit_heads")
-      .select(({ fn }) => fn.max<number>("run_epoch").as("run_epoch")),
-  );
-  return nextOwnerEpoch(
-    Math.max(latestEnvironment?.owner_epoch ?? 0, latestTranscriptCommit?.run_epoch ?? 0),
-  );
-}
-function fromRow(row: Row, fallbackPorts: readonly number[]): WorkerEnvironmentRecord {
-  const record = {
-    environmentId: row.environment_id,
-    providerId: row.provider_id,
-    profileId: row.profile_id,
-    profileSnapshot: JSON.parse(row.profile_snapshot_json) as WorkerEnvironmentProfileSnapshot,
-    provisionOperationId: row.provision_operation_id,
-    sharedHost: row.shared_host === null ? null : row.shared_host === 1,
-    leaseId: row.lease_id,
-    sshEndpoint: endpointFrom(row, fallbackPorts),
-    desktop: desktopFrom(row),
-    bootstrapReceipt: bootstrapReceiptFrom(row),
-    ownerEpoch: row.owner_epoch,
-    teardownTerminalState: teardownTerminalStateFrom(row.teardown_terminal_state),
-    state: parseWorkerEnvironmentState(row.state),
-    attachedSessionIds: normalizeAttachedSessionIds(
-      JSON.parse(row.attached_session_ids_json) as unknown,
-    ),
-    createdAtMs: row.created_at_ms,
-    updatedAtMs: row.updated_at_ms,
-    stateChangedAtMs: row.state_changed_at_ms,
-    idleSinceAtMs: row.idle_since_at_ms,
-    destroyRequestedAtMs: row.destroy_requested_at_ms,
-    lastError: row.last_error,
-  };
-  assertShape(
-    record.state,
-    record.leaseId,
-    record.sshEndpoint,
-    record.desktop,
-    record.bootstrapReceipt,
-    record.attachedSessionIds,
-  );
-  return record as WorkerEnvironmentRecord;
-}
-function credentialFromRow(row: CredentialRow): WorkerCredentialRecord {
-  return {
-    environmentId: row.environment_id,
-    credentialHash: normalizeCredentialHash(row.credential_hash),
-    bundleHash: row.bundle_hash,
-    sessionId: row.session_id,
-    rpcSetVersion: row.rpc_set_version,
-    ownerEpoch: row.owner_epoch,
-    expiresAtMs: row.expires_at_ms,
-    deliveredAtMs: row.delivered_at_ms,
-  };
-}
-const json = (value: unknown) => JSON.stringify(value) as string;
-const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkerDb>(db);
-function environmentRows(db: DatabaseSync) {
-  return query(db)
-    .selectFrom("worker_environments")
-    .leftJoin(
-      "worker_environment_ssh_fallback_ports",
-      "worker_environment_ssh_fallback_ports.environment_id",
-      "worker_environments.environment_id",
-    )
-    .selectAll("worker_environments")
-    .select("worker_environment_ssh_fallback_ports.port as ssh_fallback_port");
-}
-function recordsFromRows(rows: readonly RowWithFallbackPort[]): WorkerEnvironmentRecord[] {
-  const grouped = new Map<string, { ports: number[]; row: Row }>();
-  for (const row of rows) {
-    const current = grouped.get(row.environment_id);
-    if (current) {
-      if (row.ssh_fallback_port !== null) {
-        current.ports.push(row.ssh_fallback_port);
-      }
-      continue;
-    }
-    grouped.set(row.environment_id, {
-      ports: row.ssh_fallback_port === null ? [] : [row.ssh_fallback_port],
-      row,
-    });
-  }
-  return Array.from(grouped.values(), ({ row, ports }) => fromRow(row, ports));
-}
-function find(db: DatabaseSync, environmentId: string) {
-  const rows = executeSqliteQuerySync(
-    db,
-    environmentRows(db)
-      .where("worker_environments.environment_id", "=", environmentId)
-      .orderBy("worker_environment_ssh_fallback_ports.position"),
-  ).rows;
-  return recordsFromRows(rows)[0];
-}
-function findCredential(db: DatabaseSync, environmentId: string) {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    query(db)
-      .selectFrom("worker_environment_credentials")
-      .selectAll()
-      .where("environment_id", "=", environmentId),
-  );
-  return row ? credentialFromRow(row) : undefined;
-}
-function findCredentialByHash(db: DatabaseSync, credentialHash: string) {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    query(db)
-      .selectFrom("worker_environment_credentials")
-      .selectAll()
-      .where("credential_hash", "=", credentialHash),
-  );
-  return row ? credentialFromRow(row) : undefined;
-}
-function getRequired(db: DatabaseSync, environmentId: string) {
-  const record = find(db, environmentId);
-  if (!record) {
-    throw new Error(`Unknown worker environment: ${environmentId}`);
-  }
-  return record;
-}
-function updateRow(db: DatabaseSync, id: string, state: WorkerEnvironmentState, values: RowUpdate) {
-  const result = executeSqliteQuerySync(
-    db,
-    query(db)
-      .updateTable("worker_environments")
-      .set(values)
-      .where("environment_id", "=", id)
-      .where("state", "=", state),
-  );
-  if (result.numAffectedRows !== 1n) {
-    throw new Error(`Worker environment ${id} changed during update`);
-  }
-}
-function update(db: DatabaseSync, id: string, state: WorkerEnvironmentState, values: RowUpdate) {
-  updateRow(db, id, state, values);
-  return getRequired(db, id);
-}
-function replaceSshFallbackPorts(
-  db: DatabaseSync,
-  environmentId: string,
-  ports: readonly number[],
-): void {
-  executeSqliteQuerySync(
-    db,
-    query(db)
-      .deleteFrom("worker_environment_ssh_fallback_ports")
-      .where("environment_id", "=", environmentId),
-  );
-  if (ports.length === 0) {
-    return;
-  }
-  const rows: SshFallbackPortInsert[] = ports.map((port, position) => ({
-    environment_id: environmentId,
-    position,
-    port,
-  }));
-  executeSqliteQuerySync(
-    db,
-    query(db).insertInto("worker_environment_ssh_fallback_ports").values(rows),
-  );
-}
-function revokeCredential(db: DatabaseSync, environmentId: string): void {
-  executeSqliteQuerySync(
-    db,
-    query(db)
-      .deleteFrom("worker_environment_credentials")
-      .where("environment_id", "=", environmentId),
-  );
-}
-function upsertCredential(db: DatabaseSync, credential: CredentialInsert): void {
-  executeSqliteQuerySync(
-    db,
-    query(db)
-      .insertInto("worker_environment_credentials")
-      .values(credential)
-      .onConflict((conflict) =>
-        conflict.column("environment_id").doUpdateSet({
-          credential_hash: credential.credential_hash,
-          bundle_hash: credential.bundle_hash,
-          session_id: credential.session_id,
-          rpc_set_version: credential.rpc_set_version,
-          owner_epoch: credential.owner_epoch,
-          expires_at_ms: credential.expires_at_ms,
-          delivered_at_ms: credential.delivered_at_ms,
-        }),
-      ),
-  );
-}
-function credentialInsert(params: {
-  input: CredentialInput;
-  environmentId: string;
-  bundleHash: string;
-  attachedSessionIds: readonly string[];
-  ownerEpoch: number;
-  nowMs: number;
-}): CredentialInsert {
-  const sessionId = normalizeSessionId(params.input.sessionId);
-  assertCredentialSessionBinding(params.attachedSessionIds, sessionId);
-  const expiresAtMs = normalizeExpiry(params.input.expiresAtMs);
-  if (expiresAtMs <= params.nowMs) {
-    throw new Error("Worker credential expiry must be in the future");
-  }
-  return {
-    environment_id: params.environmentId,
-    credential_hash: normalizeCredentialHash(params.input.credentialHash),
-    bundle_hash: params.bundleHash,
-    session_id: sessionId,
-    rpc_set_version: normalizeRpcSetVersion(params.input.rpcSetVersion),
-    owner_epoch: params.ownerEpoch,
-    expires_at_ms: expiresAtMs,
-    delivered_at_ms: null,
-  };
-}
-function listRows(db: DatabaseSync, reconcile: boolean): WorkerEnvironmentRecord[] {
-  const base = environmentRows(db);
-  const filtered = reconcile
-    ? base.where("worker_environments.state", "not in", TERMINAL_STATES)
-    : base;
-  const ordered = reconcile ? filtered.orderBy("worker_environments.provider_id") : filtered;
-  const rows = executeSqliteQuerySync(
-    db,
-    ordered
-      .orderBy("worker_environments.created_at_ms")
-      .orderBy("worker_environments.environment_id")
-      .orderBy("worker_environment_ssh_fallback_ports.position"),
-  ).rows;
-  return recordsFromRows(rows);
 }
 
-function compareAttachmentAuthority(
-  left: WorkerEnvironmentRecord,
-  right: WorkerEnvironmentRecord,
-): number {
-  if (left.ownerEpoch !== right.ownerEpoch) {
-    return left.ownerEpoch > right.ownerEpoch ? -1 : 1;
+registerOpenClawStateDatabaseLifecycleListener((event) => {
+  if (event.kind !== "opened") {
+    workerEnvironmentProjections.invalidate(event.identity, event.path);
   }
-  if (left.stateChangedAtMs !== right.stateChangedAtMs) {
-    return left.stateChangedAtMs > right.stateChangedAtMs ? -1 : 1;
-  }
-  if (left.environmentId === right.environmentId) {
-    return 0;
-  }
-  return left.environmentId < right.environmentId ? -1 : 1;
-}
+});
 
-function reconcileAttachedSessionOwners(db: DatabaseSync, nowMs: number): void {
-  const ownersBySession = new Map<string, WorkerEnvironmentRecord[]>();
-  for (const record of listRows(db, false)) {
-    if (record.state !== "attached") {
-      continue;
-    }
-    const sessionId = record.attachedSessionIds[0];
-    if (!sessionId) {
-      continue;
-    }
-    const owners = ownersBySession.get(sessionId) ?? [];
-    owners.push(record);
-    ownersBySession.set(sessionId, owners);
-  }
-  for (const owners of ownersBySession.values()) {
-    if (owners.length < 2) {
-      continue;
-    }
-    const [, ...duplicates] = owners.toSorted(compareAttachmentAuthority);
-    for (const duplicate of duplicates) {
-      // Repair multiple owners admitted before attachment uniqueness.
-      // Demotion fences the loser before startup snapshots it.
-      update(db, duplicate.environmentId, "attached", {
-        owner_epoch: nextGlobalOwnerEpoch(db),
-        state: "idle",
-        attached_session_ids_json: json([]),
-        updated_at_ms: nowMs,
-        state_changed_at_ms: nowMs,
-        idle_since_at_ms: nowMs,
-      });
-      revokeCredential(db, duplicate.environmentId);
-    }
-  }
-}
-
-export function createWorkerEnvironmentStore(
+export async function createWorkerEnvironmentStore(
   options: { database?: OpenClawStateDatabase; now?: () => number } = {},
 ) {
-  const database = options.database ?? openOpenClawStateDatabase();
-  if (!ensuredWorkerEnvironmentDatabases.has(database.db)) {
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        // sqlite-allow-raw -- feature-local additive schema DDL; rows use Kysely below.
-        db.exec(WORKER_ENVIRONMENT_SSH_FALLBACK_PORTS_SCHEMA_SQL);
-      },
-      { database },
-      { operationLabel: "worker-environments.ssh-fallback-ports.schema.ensure" },
-    );
-    ensuredWorkerEnvironmentDatabases.add(database.db);
-  }
-  const path = database.path;
+  const context = captureOpenClawStateWorkerContext(
+    options.database ? { path: options.database.path } : {},
+  );
+  const pathname = context.admission.databasePath;
   const now = options.now ?? Date.now;
-  const read = () => openOpenClawStateDatabase({ path }).db;
-  const write = <T>(operation: (db: DatabaseSync) => T): T =>
-    runOpenClawStateWriteTransaction(({ db }) => operation(db), { path });
-  write((db) => reconcileAttachedSessionOwners(db, now()));
-  const writeCredential = (
-    input: CredentialInput & {
-      environmentId: string;
-      expectedOwnerEpoch: number;
-    },
-  ): WorkerCredentialRecord => {
-    const environmentId = required(input.environmentId, "id");
-    return write((db) => {
-      const current = getRequired(db, environmentId);
-      if (current.ownerEpoch !== input.expectedOwnerEpoch) {
-        throw new Error(`Worker environment ${environmentId} owner epoch changed`);
-      }
-      if (current.state !== "ready" && current.state !== "idle" && current.state !== "attached") {
-        throw new Error(`Cannot mint worker credential in state ${current.state}`);
-      }
-      if (current.destroyRequestedAtMs !== null) {
-        throw new Error("Cannot mint worker credential after destroy is requested");
-      }
-      if (!current.bootstrapReceipt) {
-        throw new Error("Worker environment has no admitted bootstrap identity");
-      }
-      const updatedAtMs = now();
-      const ownerEpoch = Math.max(1, current.ownerEpoch);
-      if (ownerEpoch !== current.ownerEpoch) {
-        update(db, environmentId, current.state, {
-          owner_epoch: ownerEpoch,
-          updated_at_ms: updatedAtMs,
-        });
-      }
-      upsertCredential(
-        db,
-        credentialInsert({
-          input,
-          environmentId,
-          bundleHash: current.bootstrapReceipt.bundleHash,
-          attachedSessionIds: current.attachedSessionIds,
-          ownerEpoch,
-          nowMs: updatedAtMs,
-        }),
-      );
-      const credential = findCredential(db, environmentId);
-      if (!credential) {
-        throw new Error("Worker credential persistence failed");
-      }
-      return credential;
-    });
+  const owner = workerEnvironmentProjections.acquire(() => context.admission.identity);
+  const releaseOwner = owner.retain();
+  const revocationSubscriptions = new Set<() => void>();
+  const operations = new Set<Promise<unknown>>();
+  let closed = false;
+  let closing: Promise<void> | undefined;
+  const assertActive = () => {
+    if (closed || !owner.active) {
+      throw new Error("Worker environment inventory has closed");
+    }
+    context.admission.assertCurrent();
   };
-  return {
-    createIntent(input: IntentInput): WorkerEnvironmentRecord {
-      const environmentId = required(input.environmentId, "id");
-      const createdAtMs = now();
-      return write((db) => {
-        executeSqliteQuerySync(
-          db,
-          query(db)
-            .insertInto("worker_environments")
-            .values({
-              environment_id: environmentId,
-              provider_id: required(input.providerId, "provider id"),
-              profile_id: required(input.profileId, "profile id"),
-              profile_snapshot_json: json(input.profileSnapshot),
-              provision_operation_id: required(
-                input.provisionOperationId,
-                "provision operation id",
-              ),
-              lease_id: null,
-              shared_host: null,
-              ssh_host: null,
-              ssh_port: null,
-              ssh_user: null,
-              ssh_host_key: null,
-              ssh_key_ref_json: null,
-              desktop_json: null,
-              bootstrap_bundle_hash: null,
-              bootstrap_openclaw_version: null,
-              bootstrap_protocol_features_json: null,
-              owner_epoch: 0,
-              teardown_terminal_state: null,
-              state: "requested",
-              created_at_ms: createdAtMs,
-              updated_at_ms: createdAtMs,
-              state_changed_at_ms: createdAtMs,
-              idle_since_at_ms: null,
-              destroy_requested_at_ms: null,
-              last_error: null,
-            }),
+  const read = <T>(operation: () => T): T => {
+    assertActive();
+    return operation();
+  };
+  async function snapshot(ids?: readonly string[]) {
+    const reply = await executeExistingOpenClawStateRead(
+      { path: pathname },
+      { type: "workerEnvironments.snapshot", ids },
+    );
+    assertActive();
+    if (!reply || !reply.ok || reply.type !== "workerEnvironments.snapshot") {
+      throw new Error("Worker environment inventory could not be read");
+    }
+    return reply.facts;
+  }
+  function track<T>(operation: Promise<T>): Promise<T> {
+    operations.add(operation);
+    void operation.then(
+      () => operations.delete(operation),
+      () => operations.delete(operation),
+    );
+    return operation;
+  }
+  async function reconcilePending() {
+    for (const recovery of owner.pendingReconciliations()) {
+      try {
+        assertActive();
+        const revision = owner.nextSequence();
+        const facts = await snapshot(recovery.ids);
+        owner.install(facts, revision, false);
+        owner.release(recovery.token);
+        if (
+          recovery.revocationId &&
+          !facts.credentials.some(
+            (credential) => credential.environmentId === recovery.revocationId,
+          )
+        ) {
+          owner.publishCredentialRevoked(recovery.revocationId);
+        }
+        sessionChanges.emit({ all: true, scope: "worker-environments" });
+      } catch (error) {
+        throw new AggregateError(
+          [recovery.error, error],
+          "Worker environment mutation failed and inventory reconciliation failed",
+          { cause: error },
         );
-        return getRequired(db, environmentId);
-      });
-    },
-    get: (environmentId: string) => find(read(), required(environmentId, "id")),
-    getCredential: (environmentId: string) => findCredential(read(), required(environmentId, "id")),
-    findCredentialByHash: (credentialHash: string) =>
-      findCredentialByHash(read(), normalizeCredentialHash(credentialHash)),
-    list: (): WorkerEnvironmentRecord[] => listRows(read(), false),
-    listForReconcile: (): WorkerEnvironmentRecord[] => listRows(read(), true),
-    reconcileSharedHost(input: {
-      environmentId: string;
-      state: WorkerEnvironmentState;
-      leaseId: string;
-      sharedHost: boolean;
-    }): WorkerEnvironmentRecord {
-      const environmentId = required(input.environmentId, "id");
-      const leaseId = required(input.leaseId, "lease id");
-      return write((db) => {
-        const current = getRequired(db, environmentId);
-        if (current.state !== input.state || current.leaseId !== leaseId) {
-          throw new Error(`Worker environment ${environmentId} lease changed during inspection`);
-        }
-        if (current.sharedHost === input.sharedHost) {
-          return current;
-        }
-        // Provider inspection owns facts that may predate their durable column. Persist an
-        // explicit value before tunnel startup so upgraded leases cannot keep stale isolation.
-        return update(db, environmentId, current.state, {
-          shared_host: input.sharedHost ? 1 : 0,
-          updated_at_ms: now(),
-        });
-      });
-    },
-    requestDestroy(input: {
-      environmentId: string;
-      state: WorkerEnvironmentState;
-      terminalState?: WorkerEnvironmentTeardownTerminalState;
-      lastError?: string;
-    }) {
-      const environmentId = required(input.environmentId, "id");
-      return write((db) => {
-        const current = getRequired(db, environmentId);
-        if (current.state !== input.state) {
-          throw new Error(`Worker environment ${environmentId} changed before destroy request`);
-        }
-        if (current.destroyRequestedAtMs !== null) {
-          return current;
-        }
-        const requestedAtMs = now();
-        const terminalState = input.terminalState ?? "destroyed";
-        return update(db, environmentId, input.state, {
-          updated_at_ms: requestedAtMs,
-          destroy_requested_at_ms: requestedAtMs,
-          teardown_terminal_state: terminalState,
-          ...(input.lastError === undefined
-            ? {}
-            : { last_error: required(input.lastError, "last error") }),
-        });
-      });
-    },
-    transition(input: TransitionInput): WorkerEnvironmentRecord {
-      const { from, to, patch = {} } = input;
-      if (!canTransitionWorkerEnvironment(from, to)) {
-        throw new Error(`Illegal worker environment transition: ${from} -> ${to}`);
       }
-      const environmentId = required(input.environmentId, "id");
-      const updatedAtMs = now();
-      return write((db) => {
-        const current = getRequired(db, environmentId);
-        if (current.state !== from) {
-          throw new Error(
-            `Worker environment ${environmentId} state conflict: expected ${from}, found ${current.state}`,
-          );
+    }
+  }
+  function mutate<Key extends keyof Operations>(
+    type: Key,
+    input: Operations[Key]["input"],
+    ids: readonly string[],
+    assertCurrent: () => void = () => {},
+    revocationId?: string,
+  ): Promise<Operations[Key]["output"]["result"]> {
+    assertActive();
+    if (closing) {
+      throw new Error("Worker environment inventory is closing");
+    }
+    const captured = structuredClone(input);
+    const operation = owner.enqueue(async () => {
+      await reconcilePending();
+      const token = {};
+      let admission: SqliteWorkerOperationAdmission | undefined;
+      let commitSequence: number | undefined;
+      let committedIds = ids;
+      let revocationPublished = false;
+      const publishRevocation = () => {
+        if (revocationId === undefined || revocationPublished) {
+          return;
         }
+        revocationPublished = true;
+        owner.publishCredentialRevoked(revocationId);
+      };
+      const check = () =>
+        owner.withAdmission(token, () => {
+          assertActive();
+          assertCurrent();
+        });
+      check();
+      try {
+        return await runOpenClawStateWorkerOperation(
+          context,
+          async (scope) => {
+            const receipt = await scope.execute({ type, input: captured });
+            if (commitSequence === undefined) {
+              throw new Error("Worker environment mutation has no commit admission");
+            }
+            owner.install(receipt.facts, commitSequence, false);
+            owner.release(token);
+            publishRevocation();
+            if (receipt.changed) {
+              sessionChanges.emit({ all: true, scope: "worker-environments" });
+            }
+            return receipt.result;
+          },
+          {
+            assertCurrent: check,
+            requireStateLifecycle: true,
+            createAdmission: () => {
+              let stage: "transaction" | "commit" = "transaction";
+              admission = createSqliteWorkerOperationAdmission((request, grant) => {
+                if (request.stage !== stage) {
+                  throw new Error("Worker environment write admission is out of order");
+                }
+                check();
+                if (request.stage === "commit") {
+                  if (!isCommitAdmission(request.facts)) {
+                    throw new Error("Worker inventory commit lacks affected authority facts");
+                  }
+                  committedIds = request.facts.map((fact) => fact.environmentId);
+                  owner.fence(request.facts, token);
+                }
+                if (!grant()) {
+                  throw new Error("Worker environment mutation admission expired");
+                }
+                if (request.stage === "commit") {
+                  commitSequence = owner.nextSequence();
+                }
+                stage = "commit";
+              });
+              return { nativeLocations: [pathname], admission };
+            },
+          },
+        );
+      } catch (error) {
+        const nativeCommit = admission?.committed;
+        const settlement = admission?.settlement;
+        const committedReceipt = nativeCommit ?? settlement?.committed;
+        const committed = committedReceipt?.facts;
         if (
-          input.expectedOwnerEpoch !== undefined &&
-          current.ownerEpoch !== input.expectedOwnerEpoch
+          isRecord(committed) &&
+          isInventoryFacts(committed.facts) &&
+          commitSequence !== undefined
         ) {
-          throw new Error(`Worker environment ${environmentId} owner epoch changed`);
-        }
-        if (to === "attached" && current.destroyRequestedAtMs !== null) {
-          throw new Error("Cannot attach worker after destroy is requested");
-        }
-        // Terminal bootstrap failure is valid only after the service proves teardown;
-        // explicit clearing prevents the state row from silently losing a paid lease.
-        const clearsLeaseAfterTeardownFailure = to === "failed" && from === "destroying";
-        if (
-          clearsLeaseAfterTeardownFailure &&
-          (current.destroyRequestedAtMs === null || current.teardownTerminalState !== "failed")
+          owner.install(committed.facts, commitSequence, false);
+          owner.release(token);
+          publishRevocation();
+          if (committed.changed === true) {
+            sessionChanges.emit({ all: true, scope: "worker-environments" });
+          }
+        } else if (
+          commitSequence !== undefined &&
+          !(settlement?.kind === "completed" && !committedReceipt)
         ) {
-          throw new Error("Failed bootstrap transition requires durable provider teardown intent");
-        }
-        if (
-          clearsLeaseAfterTeardownFailure &&
-          (patch.leaseId !== null || patch.sshEndpoint !== null)
-        ) {
-          throw new Error(
-            "Failed bootstrap transition requires explicit lease clearing after provider teardown",
+          // Retain only facts about settled writes, so another live facade can retry the read.
+          owner.retainReconciliation(
+            token,
+            committedIds,
+            error,
+            revocationPublished ? undefined : revocationId,
           );
+          await reconcilePending();
         }
-        const leaseId =
-          patch.leaseId === undefined
-            ? current.leaseId
-            : patch.leaseId === null
-              ? null
-              : required(patch.leaseId, "lease id");
-        if (current.leaseId && leaseId !== current.leaseId && !clearsLeaseAfterTeardownFailure) {
-          throw new Error("Worker environment provider lease id is immutable once persisted");
+        owner.release(token);
+        throw error;
+      } finally {
+        if (commitSequence === undefined) {
+          owner.release(token);
         }
-        const sshEndpoint =
-          patch.sshEndpoint === undefined
-            ? current.sshEndpoint
-            : patch.sshEndpoint === null
-              ? null
-              : normalizeWorkerSshEndpoint(patch.sshEndpoint);
-        const sharedHost = leaseId === null ? null : (patch.sharedHost ?? current.sharedHost);
-        const desktop =
-          leaseId === null
-            ? null
-            : patch.desktop === undefined
-              ? current.desktop
-              : patch.desktop === null
-                ? null
-                : normalizeWorkerDesktopEndpoint(patch.desktop);
-        const acceptsBootstrapReceipt = from === "bootstrapping" && to === "ready";
-        if (patch.bootstrapReceipt !== undefined && !acceptsBootstrapReceipt) {
-          throw new Error("Bootstrap receipt can only be recorded when a worker becomes ready");
+      }
+    });
+    return track(operation);
+  }
+  const close = () =>
+    (closing ??= (async () => {
+      await Promise.allSettled(operations);
+      closed = true;
+      for (const unsubscribe of revocationSubscriptions) {
+        unsubscribe();
+      }
+      revocationSubscriptions.clear();
+      unregister();
+      if (releaseOwner()) {
+        workerEnvironmentProjections.remove(owner);
+      }
+    })());
+  const unregister = registerOpenClawStateDatabaseAsyncResource({
+    close: async (identity) => {
+      if (!identity || identity.key === context.admission.identity.key) {
+        await close();
+      }
+    },
+  });
+  try {
+    await mutate("workerEnvironments.initialize", { nowMs: options.now?.() }, []);
+    // First creation publishes its physical identity through the captured admission.
+    workerEnvironmentProjections.get(context.admission.identity);
+    // Hydration joins writer publication; native commits invalidate an in-flight snapshot.
+    await owner.enqueue(async () => {
+      for (;;) {
+        const version = owner.version();
+        const facts = await snapshot();
+        if (owner.version() !== version) {
+          continue;
         }
-        if (acceptsBootstrapReceipt && patch.bootstrapReceipt === undefined) {
-          throw new Error("Ready worker transition requires a bootstrap receipt");
+        owner.install(facts, owner.nextSequence(), false);
+        break;
+      }
+    });
+  } catch (error) {
+    await close();
+    throw error;
+  }
+  let reservationVersion = -1;
+  let reservations: ReturnType<typeof selectPreparedEnvironmentReservations> = [];
+  const prepared = () => {
+    if (reservationVersion !== owner.version()) {
+      reservations = selectPreparedEnvironmentReservations(owner.preparedRecords());
+      reservationVersion = owner.version();
+    }
+    return reservations;
+  };
+  const ready = async () => {
+    assertActive();
+    for (;;) {
+      await owner.ready();
+      assertActive();
+      if (!owner.hasPendingReconciliation()) {
+        return;
+      }
+      await track(owner.enqueue(reconcilePending));
+    }
+  };
+  const store = {
+    close,
+    ready,
+    async hasSessionAttachment(environmentId: string): Promise<boolean> {
+      await ready();
+      return read(() =>
+        owner.hasSessionAttachment(requireWorkerEnvironmentString(environmentId, "id")),
+      );
+    },
+    inventoryVersion: () => read(owner.version),
+    get: (id: string) => read(() => owner.get(requireWorkerEnvironmentString(id, "id"))),
+    list: () => read(() => owner.list()),
+    listForReconcile: () => read(() => owner.list(true)),
+    getCredential: (id: string) =>
+      read(() => owner.credential(requireWorkerEnvironmentString(id, "id"))),
+    findCredentialByHash: (hash: string) =>
+      read(() => owner.credentialByHash(normalizeCredentialHash(hash))),
+    getTransferOwner: (id: string) =>
+      read(() => owner.transferOwner(requireWorkerEnvironmentString(id, "id"))),
+    hasNodeEnrollmentOwner: (nodeId: string) => read(() => owner.hasNodeEnrollmentOwner(nodeId)),
+    hasPendingNodeEnrollmentSetup: (setup: string, device: string) =>
+      read(() => owner.hasPendingNodeEnrollmentSetup(setup, device)),
+    preparedCapacity: (input: Parameters<typeof preparedCapacityFromReservations>[1]) =>
+      read(() => preparedCapacityFromReservations(prepared(), input)),
+    isPreparedIntentWithinCapacity: (
+      input: Parameters<typeof isPreparedReservationWithinCapacity>[1],
+    ) =>
+      read(() => {
+        owner.get(input.environmentId);
+        return isPreparedReservationWithinCapacity(prepared(), input);
+      }),
+    getSessionAttachmentRecord: (id: string) => read(() => owner.attachment(id)),
+    listSessionAttachmentRecords: () => read(() => owner.attachments()),
+    findSessionAttachmentRecord(
+      input: Pick<WorkerEnvironmentSessionIdentity, "agentId" | "sessionKey">,
+    ) {
+      assertActive();
+      const rows = owner
+        .attachments()
+        .filter(
+          (row) =>
+            row.agentId === input.agentId &&
+            row.sessionKey === input.sessionKey &&
+            row.closedAtMs === null,
+        );
+      return rows.length === 1 ? owner.attachment(rows[0]!.sessionId) : undefined;
+    },
+    onCredentialRevoked(listener: (id: string) => void) {
+      assertActive();
+      const unsubscribe = owner.onCredentialRevoked(listener);
+      revocationSubscriptions.add(unsubscribe);
+      return () => {
+        unsubscribe();
+        revocationSubscriptions.delete(unsubscribe);
+      };
+    },
+    createIntent: (input: Input<"createIntent">, assertCurrent?: () => void) =>
+      mutate(
+        "workerEnvironments.createIntent",
+        { input, nowMs: options.now?.() },
+        [input.environmentId],
+        assertCurrent,
+      ),
+    ensureNodeEnrollment: (input: string) =>
+      mutate("workerEnvironments.ensureNodeEnrollment", { input, nowMs: options.now?.() }, [input]),
+    async revokeEnvironmentCredential(
+      input: string,
+      opts: {
+        fenceWorkspaceTransfers?: boolean;
+        expectedOwnerEpoch?: number;
+        assertCurrent?: () => void;
+      } = {},
+    ) {
+      const environmentId = requireWorkerEnvironmentString(input, "id");
+      await mutate(
+        "workerEnvironments.revokeEnvironmentCredential",
+        {
+          input: { environmentId, expectedOwnerEpoch: opts.expectedOwnerEpoch },
+          nowMs: options.now?.(),
+        },
+        [environmentId],
+        opts.assertCurrent,
+        opts.fenceWorkspaceTransfers ? environmentId : undefined,
+      );
+    },
+    reconcileSharedHost: (input: Input<"reconcileSharedHost">) =>
+      mutate("workerEnvironments.reconcileSharedHost", { input, nowMs: options.now?.() }, [
+        input.environmentId,
+      ]),
+    adoptProvisionCleanupFailure: (input: Input<"adoptProvisionCleanupFailure">) =>
+      mutate("workerEnvironments.adoptProvisionCleanupFailure", { input, nowMs: options.now?.() }, [
+        input.environmentId,
+      ]),
+    requestDestroy({ assertCurrent, ...input }: Input<"requestDestroy">) {
+      return mutate(
+        "workerEnvironments.requestDestroy",
+        { input, nowMs: options.now?.() },
+        [input.environmentId],
+        assertCurrent,
+      );
+    },
+    refreshBootstrapReceipt({ assertCurrent, ...input }: Input<"refreshBootstrapReceipt">) {
+      return mutate(
+        "workerEnvironments.refreshBootstrapReceipt",
+        { input, nowMs: options.now?.() },
+        [input.environmentId],
+        assertCurrent,
+      );
+    },
+    transition({ assertCurrent, placementBinding, ...input }: Input<"transition">) {
+      const binding = placementBinding
+        ? (({ assertCurrent: _guard, ...facts }) => facts)(placementBinding)
+        : undefined;
+      return mutate(
+        "workerEnvironments.transition",
+        { input: { ...input, placementBinding: binding }, nowMs: options.now?.() },
+        [input.environmentId],
+        () => {
+          assertCurrent?.();
+          placementBinding?.assertCurrent();
+        },
+      );
+    },
+    renewCredential({ assertCurrent, ...input }: Input<"renewCredential">) {
+      return mutate(
+        "workerEnvironments.renewCredential",
+        { input, nowMs: options.now?.() },
+        [input.environmentId],
+        assertCurrent,
+      );
+    },
+    markCredentialDelivered({ assertCurrent, ...input }: Input<"markCredentialDelivered">) {
+      return mutate(
+        "workerEnvironments.markCredentialDelivered",
+        { input, nowMs: options.now?.() },
+        [input.environmentId],
+        assertCurrent,
+      );
+    },
+    recordError({ assertCurrent, ...input }: Input<"recordError">) {
+      return mutate(
+        "workerEnvironments.recordError",
+        { input, nowMs: options.now?.() },
+        [input.environmentId],
+        assertCurrent,
+      );
+    },
+    ensurePreparedIntent({ assertCurrent, ...input }: Input<"ensurePreparedIntent">) {
+      return mutate(
+        "workerEnvironments.ensurePreparedIntent",
+        { input, nowMs: options.now?.() },
+        owner
+          .list()
+          .filter((row) => row.preparation !== null)
+          .map((row) => row.environmentId)
+          .concat(input.intent.environmentId),
+        assertCurrent,
+      );
+    },
+    requestPreparedDestroy({ assertCurrent, ...input }: Input<"requestPreparedDestroy">) {
+      return mutate(
+        "workerEnvironments.requestPreparedDestroy",
+        { input, nowMs: options.now?.() },
+        [input.environmentId],
+        assertCurrent,
+      );
+    },
+    createSessionAttachmentIntent(
+      input: Input<"createSessionAttachmentIntent">,
+      assertCurrent: () => void,
+    ) {
+      return mutate(
+        "workerEnvironments.createSessionAttachmentIntent",
+        { input, nowMs: options.now?.() },
+        [input.environmentId],
+        assertCurrent,
+      );
+    },
+    closeSessionAttachment(input: string, assertCurrent: () => void = () => {}) {
+      return mutate(
+        "workerEnvironments.closeSessionAttachment",
+        { input, nowMs: options.now?.() },
+        [],
+        assertCurrent,
+      );
+    },
+    cancelSessionAttachmentReservation(input: Input<"cancelSessionAttachmentReservation">) {
+      return mutate(
+        "workerEnvironments.cancelSessionAttachmentReservation",
+        { input, nowMs: options.now?.() },
+        [input.environmentId],
+      );
+    },
+    touchSessionAttachment(input: Input<"touchSessionAttachment">, assertCurrent: () => void) {
+      return mutate(
+        "workerEnvironments.touchSessionAttachment",
+        { input, nowMs: options.now?.() },
+        [input.environmentId],
+        assertCurrent,
+      );
+    },
+    async pruneTerminalEnvironments(input: WorkerEnvironmentPruneInput = {}) {
+      assertActive();
+      const nowMs = input.nowMs ?? now();
+      const canPruneDemand = input.canPruneDemand;
+      const approved: WorkerEnvironmentPrunePage["candidates"] = [];
+      let cursor: WorkerEnvironmentPruneCursor | undefined;
+      for (;;) {
+        const reply = await executeExistingOpenClawStateRead(
+          { path: pathname },
+          {
+            type: "workerEnvironments.pruneCandidates",
+            input: { nowMs, limit: input.limit, cursor },
+          },
+        );
+        assertActive();
+        if (!reply || !reply.ok || reply.type !== "workerEnvironments.pruneCandidates") {
+          throw new Error("Worker environment retention candidates could not be read");
         }
-        const acceptsAttachedCredential = to === "attached";
-        const acceptsCredential = acceptsBootstrapReceipt || acceptsAttachedCredential;
-        if (patch.credential !== undefined && !acceptsCredential) {
-          throw new Error("Worker credential cannot be minted during this transition");
-        }
-        if (acceptsCredential && patch.credential === undefined) {
-          throw new Error(
-            `${to === "ready" ? "Ready" : "Attached"} worker transition requires a worker credential`,
-          );
-        }
-        // Rebootstrap invalidates the old admission proof before remote mutation;
-        // a crash therefore resumes in bootstrapping instead of advertising stale readiness.
-        const clearsBootstrapReceipt =
-          to === "bootstrapping" && (from === "ready" || from === "idle");
-        const bootstrapReceipt = clearsBootstrapReceipt
-          ? null
-          : patch.bootstrapReceipt === undefined
-            ? current.bootstrapReceipt
-            : normalizeBootstrapReceipt(patch.bootstrapReceipt);
-        if (acceptsCredential && !bootstrapReceipt) {
-          throw new Error(
-            `${to === "ready" ? "Ready" : "Attached"} worker requires bootstrap proof`,
-          );
-        }
-        const attachedSessionIds =
-          to !== "attached"
-            ? []
-            : patch.attachedSessionIds === undefined
-              ? current.attachedSessionIds
-              : normalizeAttachedSessionIds(patch.attachedSessionIds);
-        assertShape(to, leaseId, sshEndpoint, desktop, bootstrapReceipt, attachedSessionIds);
-        const [attachedSessionId] = attachedSessionIds;
-        if (to === "attached" && attachedSessionId) {
-          // Change session ownership atomically with worker state.
-          const existingOwner = listRows(db, false).find(
-            (record) =>
-              record.environmentId !== environmentId &&
-              record.state === "attached" &&
-              record.attachedSessionIds[0] === attachedSessionId,
-          );
-          if (existingOwner) {
-            throw new WorkerSessionAlreadyAttachedError(
-              attachedSessionId,
-              existingOwner.environmentId,
-            );
+        const page = reply.page;
+        for (const candidate of page.candidates) {
+          if (canPruneDemand?.(candidate.record, nowMs) ?? true) {
+            approved.push(candidate);
+          }
+          if (approved.length === page.limit) {
+            break;
           }
         }
-        const revokesCredential =
-          clearsBootstrapReceipt ||
-          to === "attached" ||
-          (from === "attached" && to === "idle") ||
-          to === "draining" ||
-          to === "destroyed" ||
-          to === "failed" ||
-          to === "orphaned";
-        const ownerEndingTransition =
-          (from === "ready" || from === "idle" || from === "attached") &&
-          (to === "bootstrapping" ||
-            (from === "attached" && to === "idle") ||
-            to === "draining" ||
-            to === "destroyed" ||
-            to === "failed" ||
-            to === "orphaned");
-        const ownerEpoch = acceptsBootstrapReceipt
-          ? Math.max(1, current.ownerEpoch)
-          : acceptsAttachedCredential || ownerEndingTransition
-            ? nextGlobalOwnerEpoch(db)
-            : current.ownerEpoch;
-        updateRow(db, environmentId, from, {
-          lease_id: leaseId,
-          shared_host: sharedHost === null ? null : sharedHost ? 1 : 0,
-          ssh_host: sshEndpoint?.host ?? null,
-          ssh_port: sshEndpoint?.port ?? null,
-          ssh_user: sshEndpoint?.user ?? null,
-          ssh_host_key: sshEndpoint?.hostKey ?? null,
-          ssh_key_ref_json: sshEndpoint ? json(sshEndpoint.keyRef) : null,
-          desktop_json: desktop ? json(desktop) : null,
-          bootstrap_bundle_hash: bootstrapReceipt?.bundleHash ?? null,
-          bootstrap_openclaw_version: bootstrapReceipt?.openclawVersion ?? null,
-          bootstrap_protocol_features_json: bootstrapReceipt
-            ? json(bootstrapReceipt.protocolFeatures)
-            : null,
-          owner_epoch: ownerEpoch,
-          state: to,
-          attached_session_ids_json: json(attachedSessionIds),
-          updated_at_ms: updatedAtMs,
-          state_changed_at_ms: updatedAtMs,
-          idle_since_at_ms: to === "idle" ? updatedAtMs : null,
-          last_error: "lastError" in patch ? patch.lastError?.trim() || null : null,
-        });
-        if (patch.sshEndpoint !== undefined) {
-          replaceSshFallbackPorts(db, environmentId, sshEndpoint?.fallbackPorts ?? []);
+        if (approved.length === page.limit || !page.nextCursor) {
+          break;
         }
-        if (revokesCredential) {
-          revokeCredential(db, environmentId);
-        }
-        if (patch.credential && bootstrapReceipt) {
-          upsertCredential(
-            db,
-            credentialInsert({
-              input: patch.credential,
-              environmentId,
-              bundleHash: bootstrapReceipt.bundleHash,
-              attachedSessionIds,
-              ownerEpoch,
-              nowMs: updatedAtMs,
-            }),
-          );
-        }
-        return getRequired(db, environmentId);
-      });
-    },
-    renewCredential(
-      input: CredentialInput & {
-        environmentId: string;
-        expectedOwnerEpoch: number;
-      },
-    ): WorkerCredentialRecord {
-      return writeCredential(input);
-    },
-    markCredentialDelivered(input: {
-      environmentId: string;
-      credentialHash: string;
-      ownerEpoch: number;
-      sessionId: string | null;
-      deliveredAtMs: number;
-    }): void {
-      const environmentId = required(input.environmentId, "id");
-      return write((db) => {
-        const environment = getRequired(db, environmentId);
-        const credential = findCredential(db, environmentId);
-        if (
-          !credential ||
-          (environment.state !== "ready" &&
-            environment.state !== "idle" &&
-            environment.state !== "attached") ||
-          environment.destroyRequestedAtMs !== null ||
-          credential.credentialHash !== normalizeCredentialHash(input.credentialHash) ||
-          credential.ownerEpoch !== input.ownerEpoch ||
-          environment.ownerEpoch !== input.ownerEpoch ||
-          credential.sessionId !== normalizeSessionId(input.sessionId)
-        ) {
-          throw new Error(`Worker environment ${environmentId} credential changed`);
-        }
-        const deliveredAtMs = normalizeExpiry(input.deliveredAtMs);
-        if (deliveredAtMs >= credential.expiresAtMs) {
-          throw new Error("Expired worker credential cannot be marked delivered");
-        }
-        const result = executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable("worker_environment_credentials")
-            .set({ delivered_at_ms: deliveredAtMs })
-            .where("environment_id", "=", environmentId)
-            .where("credential_hash", "=", credential.credentialHash)
-            .where("owner_epoch", "=", credential.ownerEpoch),
+        cursor = page.nextCursor;
+      }
+      if (!approved.length) {
+        return 0;
+      }
+      const demandChanged = new Error("Worker environment demand changed during retention");
+      try {
+        return await mutate(
+          "workerEnvironments.pruneTerminalEnvironments",
+          {
+            input: { approved: approved.map((candidate) => candidate.observed) },
+            nowMs: options.now?.(),
+          },
+          approved.map((candidate) => candidate.observed.environment_id),
+          () => {
+            for (const candidate of approved) {
+              if (!(canPruneDemand?.(candidate.record, nowMs) ?? true)) {
+                throw demandChanged;
+              }
+            }
+          },
         );
-        if (result.numAffectedRows !== 1n) {
-          throw new Error(`Worker environment ${environmentId} credential changed`);
+      } catch (error) {
+        if (error === demandChanged) {
+          return 0;
         }
-      });
-    },
-    recordError(input: { environmentId: string; state: WorkerEnvironmentState; error: string }) {
-      return write((db) =>
-        update(db, required(input.environmentId, "id"), input.state, {
-          updated_at_ms: now(),
-          last_error: required(input.error, "last error"),
-        }),
-      );
+        throw error;
+      }
     },
   };
+  return store;
 }
-
-export type WorkerEnvironmentStore = ReturnType<typeof createWorkerEnvironmentStore>;
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+export type WorkerEnvironmentStore = Awaited<ReturnType<typeof createWorkerEnvironmentStore>>;

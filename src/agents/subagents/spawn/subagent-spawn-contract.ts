@@ -1,4 +1,5 @@
 import type { FastMode } from "../../../shared/fast-mode.js";
+import type { SpawnedToolContext } from "../../spawned-context.js";
 import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
@@ -29,6 +30,7 @@ export type SpawnSubagentParams = {
   context?: SpawnSubagentContextMode;
   lightContext?: boolean;
   expectsCompletionMessage?: boolean;
+  completionTarget?: "parent";
   attachments?: Array<{
     name: string;
     content: string;
@@ -38,11 +40,15 @@ export type SpawnSubagentParams = {
   attachMountPath?: string;
 };
 
-export type SpawnSubagentContext = {
+export type SpawnSubagentContext = SpawnedToolContext & {
+  onSpawnEffectsStart?: () => void;
   agentSessionKey?: string;
   requesterTurnRunId?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
   completionOwnerKey?: string;
+  /** Active requester sandbox classification, preserved separately from the durable lineage key.
+   * Hidden native spawn derives sandbox admission from this when set, mirroring visible/ACP paths. */
+  sandboxed?: boolean;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
@@ -50,25 +56,20 @@ export type SpawnSubagentContext = {
   currentMessagingTarget?: string;
   currentChannelId?: string;
   currentMessageId?: string | number;
-  agentGroupId?: string | null;
-  agentGroupChannel?: string | null;
-  agentGroupSpace?: string | null;
-  agentMemberRoleIds?: string[];
   requesterAgentIdOverride?: string;
-  /** Explicit workspace directory for subagent to inherit (optional). */
-  workspaceDir?: string;
-  inheritedToolAllowlist?: string[];
-  inheritedToolDenylist?: string[];
   requesterRunId?: string;
+  /** Private invocation fence, consumed only before registration transfers ownership. */
+  assertActive?: () => void;
 };
 
 export type SpawnSubagentResult = {
-  status: "accepted" | "forbidden" | "error";
   childSessionKey?: string;
   sessionKey?: string;
   runId?: string;
   mode?: SpawnSubagentMode;
   taskName?: string;
+  expectsCompletionMessage?: boolean;
+  completionTarget?: "parent";
   note?: string;
   /** Fully resolved model ref applied to the spawned child session. */
   resolvedModel?: string;
@@ -82,4 +83,7 @@ export type SpawnSubagentResult = {
     files: Array<{ name: string; bytes: number; sha256: string }>;
     relDir: string;
   };
-};
+} & (
+  | { status: "accepted"; context: SpawnSubagentContextMode }
+  | { status: "forbidden" | "error"; context?: never }
+);

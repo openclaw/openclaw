@@ -4,57 +4,19 @@ import path from "node:path";
 // Covers message-action media hydration, sandbox path normalization,
 // attachments, and channel/plugin media source aliases.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
-import { loadWebMedia } from "../../media/web-media.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { runMessageAction } from "./message-action-runner.js";
+import {
+  messageActionRunnerMocks as channelResolutionMocks,
+  createWorkspaceMediaTestPlugin,
+  resetMessageActionMediaMocks,
+  runMessageAction,
+  setMessageActionTestPlugin as setTestPlugin,
+} from "./message-action-runner.test-helpers.js";
 
-const channelResolutionMocks = vi.hoisted(() => ({
-  resolveOutboundChannelPlugin: vi.fn(),
-  executeSendAction: vi.fn(),
-  executePollAction: vi.fn(),
-}));
-
-vi.mock("./channel-resolution.js", () => ({
-  normalizeDeliverableOutboundChannel: (value?: string | null) =>
-    typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined,
-  resolveOutboundChannelPlugin: channelResolutionMocks.resolveOutboundChannelPlugin,
-  resetOutboundChannelResolutionStateForTest: vi.fn(),
-}));
-
-vi.mock("./outbound-send-service.js", () => ({
-  executeSendAction: channelResolutionMocks.executeSendAction,
-  executePollAction: channelResolutionMocks.executePollAction,
-}));
-
-vi.mock("./outbound-session.js", () => ({
-  ensureOutboundSessionEntry: vi.fn(async () => undefined),
-  resolveOutboundSessionRoute: vi.fn(async () => null),
-}));
-
-vi.mock("./message-action-threading.js", async () => {
-  const { createOutboundThreadingMock } =
-    await import("./message-action-threading.test-helpers.js");
-  return createOutboundThreadingMock();
-});
-
-vi.mock("../../media/web-media.js", async () => {
-  const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
-    "../../media/web-media.js",
-  );
-  return {
-    ...actual,
-    loadWebMedia: vi.fn(actual.loadWebMedia),
-  };
-});
+const maybeIt = process.platform === "win32" ? it.skip : it;
 
 const workspaceConfig = {
   channels: {
@@ -64,10 +26,6 @@ const workspaceConfig = {
     },
   },
 } as OpenClawConfig;
-
-function setTestPlugin(plugin: ChannelPlugin, pluginId: string) {
-  setActivePluginRegistry(createTestRegistry([{ pluginId, source: "test", plugin }]));
-}
 
 function firstMockArg(
   mock: { mock: { calls: readonly unknown[][] } },
@@ -101,6 +59,7 @@ const runDrySend = (params: {
   cfg: OpenClawConfig;
   actionParams: Record<string, unknown>;
   sandboxRoot?: string;
+  sandboxContainerWorkdir?: string;
 }) =>
   runMessageAction({
     cfg: params.cfg,
@@ -108,93 +67,16 @@ const runDrySend = (params: {
     params: params.actionParams as never,
     dryRun: true,
     sandboxRoot: params.sandboxRoot,
+    sandboxContainerWorkdir: params.sandboxContainerWorkdir,
   });
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
-let actualLoadWebMedia: typeof loadWebMedia;
-
-const workspacePlugin: ChannelPlugin = {
-  ...createChannelTestPluginBase({
-    id: "workspace",
-    label: "Workspace",
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: (cfg) => cfg.channels?.workspace ?? {},
-      isConfigured: async (account) =>
-        typeof (account as { botToken?: unknown }).botToken === "string" &&
-        (account as { botToken?: string }).botToken!.trim() !== "" &&
-        typeof (account as { appToken?: unknown }).appToken === "string" &&
-        (account as { appToken?: string }).appToken!.trim() !== "",
-    },
-  }),
-  outbound: {
-    deliveryMode: "direct",
-    resolveTarget: ({ to }) => {
-      const trimmed = to?.trim() ?? "";
-      if (!trimmed) {
-        return {
-          ok: false,
-          error: new Error("missing target for workspace"),
-        };
-      }
-      return { ok: true, to: trimmed };
-    },
-    sendText: async () => ({ channel: "workspace", messageId: "msg-test" }),
-    sendMedia: async () => ({ channel: "workspace", messageId: "msg-test" }),
-  },
-};
+const workspacePlugin = createWorkspaceMediaTestPlugin();
 
 describe("runMessageAction media behavior", () => {
   beforeEach(async () => {
-    actualLoadWebMedia ??= (
-      await vi.importActual<typeof import("../../media/web-media.js")>("../../media/web-media.js")
-    ).loadWebMedia;
-    vi.restoreAllMocks();
-    vi.clearAllMocks();
-    channelResolutionMocks.resolveOutboundChannelPlugin.mockReset();
-    channelResolutionMocks.resolveOutboundChannelPlugin.mockImplementation(
-      ({ channel }: { channel: string }) =>
-        getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
-    );
-    channelResolutionMocks.executeSendAction.mockReset();
-    channelResolutionMocks.executeSendAction.mockImplementation(
-      async ({
-        ctx,
-        to,
-        message,
-        mediaUrl,
-        mediaUrls,
-      }: {
-        ctx: { channel: string; dryRun: boolean };
-        to: string;
-        message: string;
-        mediaUrl?: string;
-        mediaUrls?: string[];
-      }) => ({
-        handledBy: "core" as const,
-        payload: {
-          channel: ctx.channel,
-          to,
-          message,
-          mediaUrl,
-          mediaUrls,
-          dryRun: ctx.dryRun,
-        },
-        sendResult: {
-          channel: ctx.channel,
-          messageId: "msg-test",
-          ...(mediaUrl ? { mediaUrl } : {}),
-          ...(mediaUrls ? { mediaUrls } : {}),
-        },
-      }),
-    );
-    channelResolutionMocks.executePollAction.mockReset();
-    channelResolutionMocks.executePollAction.mockImplementation(async () => {
-      throw new Error("executePollAction should not run in media tests");
-    });
-    vi.mocked(loadWebMedia).mockReset();
-    vi.mocked(loadWebMedia).mockImplementation(actualLoadWebMedia);
+    await resetMessageActionMediaMocks();
   });
   it("forwards asVoice from send actions into core delivery", async () => {
     setTestPlugin(workspacePlugin, "workspace");
@@ -232,7 +114,7 @@ describe("runMessageAction media behavior", () => {
     expect(requireRecord(sendArgs.ctx).idempotencyKey).toBe(
       "run-1:message-tool:send-1:fingerprint",
     );
-    expect(requireRecord(sendArgs.ctx).plugin).toBe(workspacePlugin);
+    expect(requireRecord(sendArgs.ctx).channelPlugin).toBe(workspacePlugin);
     expect(channelResolutionMocks.resolveOutboundChannelPlugin).toHaveBeenCalledTimes(1);
   });
 
@@ -342,7 +224,10 @@ describe("runMessageAction media behavior", () => {
     });
   });
 
-  it("sends structured attachments as media urls", async () => {
+  it.each([
+    { name: "Docker", containerWorkdir: "/workspace" },
+    { name: "OpenShell", containerWorkdir: "/sandbox" },
+  ])("sends structured $name sandbox attachments as media urls", async ({ containerWorkdir }) => {
     setTestPlugin(workspacePlugin, "workspace");
 
     await withSandbox(async (sandboxDir) => {
@@ -352,9 +237,13 @@ describe("runMessageAction media behavior", () => {
           channel: "workspace",
           target: "12345678",
           message: "track ready",
-          attachments: [{ path: "./song.mp3" }, { filePath: "/workspace/cover.png" }],
+          attachments: [
+            { path: "./song.mp3" },
+            { filePath: `file://${containerWorkdir}/cover.png` },
+          ],
         },
         sandboxRoot: sandboxDir,
+        sandboxContainerWorkdir: containerWorkdir,
       });
 
       expect(result.kind).toBe("send");
@@ -403,4 +292,125 @@ describe("runMessageAction media behavior", () => {
       ]);
     });
   });
+
+  maybeIt.each([
+    { name: "Docker", containerWorkdir: "/workspace" },
+    { name: "OpenShell", containerWorkdir: "/sandbox" },
+  ])(
+    "dedupes resolved $name media while retaining first-entry metadata",
+    async ({ containerWorkdir }) => {
+      setTestPlugin(workspacePlugin, "workspace");
+
+      await withSandbox(async (sandboxDir) => {
+        await runDrySend({
+          cfg: workspaceConfig,
+          actionParams: {
+            channel: "workspace",
+            target: "12345678",
+            message: "attachments ready",
+            media: `file://${containerWorkdir}/assets/photo.png`,
+            filename: "first.png",
+            contentType: "image/png",
+            mediaUrls: [
+              ` file://${containerWorkdir}/assets/photo.png `,
+              `${containerWorkdir}/assets/photo.png`,
+              "buffer://message-send/attachment",
+              " ",
+            ],
+            attachments: [
+              {
+                path: `${containerWorkdir}/assets/photo.png`,
+                name: "later.bin",
+                mimeType: "application/octet-stream",
+                type: "file",
+              },
+              {
+                path: `${containerWorkdir}/last.txt`,
+                name: "last.txt",
+                mimeType: "text/plain",
+                type: "file",
+              },
+            ],
+          },
+          sandboxRoot: ` ${sandboxDir} `,
+          sandboxContainerWorkdir: containerWorkdir,
+        });
+
+        expect(channelResolutionMocks.executeSendAction).toHaveBeenCalledTimes(1);
+        const sendArgs = firstMockArg(
+          channelResolutionMocks.executeSendAction,
+          "executeSendAction",
+        );
+        const mediaUrls = [
+          path.join(sandboxDir, "assets", "photo.png"),
+          "buffer://message-send/attachment",
+          path.join(sandboxDir, "last.txt"),
+        ];
+        expect(sendArgs.mediaUrls).toEqual(mediaUrls);
+        expect(requireRecord(sendArgs.payload).mediaUrls).toEqual(mediaUrls);
+        expect(requireRecord(sendArgs.payload).attachments).toEqual([
+          { path: mediaUrls[0], type: "file", name: "first.png", mimeType: "image/png" },
+          { path: mediaUrls[1] },
+          { path: mediaUrls[2], type: "file", name: "last.txt", mimeType: "text/plain" },
+        ]);
+      });
+    },
+  );
+
+  it.each([
+    { name: "omitted", sandboxRoot: undefined },
+    { name: "blank", sandboxRoot: "   " },
+  ])("preserves ordered remote media when the sandbox root is $name", async ({ sandboxRoot }) => {
+    setTestPlugin(workspacePlugin, "workspace");
+    const mediaUrls = [
+      "https://example.com/first.png?sig=1",
+      "http://example.com/second.png",
+      "mxc://matrix.org/opaque-media",
+      "buffer://message-send/attachment",
+    ];
+
+    await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "12345678",
+        message: "attachments ready",
+        mediaUrls: [` ${mediaUrls[0]} `, mediaUrls[0], ...mediaUrls.slice(1), " "],
+      },
+      sandboxRoot,
+    });
+
+    expect(channelResolutionMocks.executeSendAction).toHaveBeenCalledTimes(1);
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+    expect(sendArgs.mediaUrls).toEqual(mediaUrls);
+    expect(requireRecord(sendArgs.payload).mediaUrls).toEqual(mediaUrls);
+    expect(requireRecord(sendArgs.payload)).not.toHaveProperty("attachments");
+  });
+
+  it.each([false, true])(
+    "rejects a later invalid media hint before any dispatch (sandbox=%s)",
+    async (sandboxed) => {
+      setTestPlugin(workspacePlugin, "workspace");
+      await withSandbox(async (sandboxDir) => {
+        await expect(
+          runDrySend({
+            cfg: workspaceConfig,
+            actionParams: {
+              channel: "workspace",
+              target: "12345678",
+              message: "must not send partially",
+              mediaUrls: [
+                "https://example.com/first.png",
+                " data:text/plain;base64,QQ== ",
+                "https://example.com/last.png",
+              ],
+            },
+            sandboxRoot: sandboxed ? sandboxDir : undefined,
+          }),
+        ).rejects.toThrow("data: URLs are not supported for media. Use buffer instead.");
+        expect(channelResolutionMocks.executeSendAction).not.toHaveBeenCalled();
+        expect(channelResolutionMocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+      });
+    },
+  );
 });

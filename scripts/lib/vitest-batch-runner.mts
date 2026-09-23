@@ -1,18 +1,25 @@
-// Runs grouped Vitest batches through the repo pnpm wrapper.
+// Runs grouped batches through the repository's installed Vitest entrypoint.
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { spawnPnpmRunner } from "../pnpm-runner.mts";
-import {
-  createVitestProcessCompletion,
-  installVitestProcessGroupCleanup,
-  shouldUseDetachedVitestProcessGroup,
-} from "../vitest-process-group.mts";
+import { assertTestHomeSelection, type TestHomeSelection } from "../../test/test-home-policy.mts";
+import { installVitestProcessGroupCleanup } from "../vitest-process-group.mts";
+import { resolveVitestCliEntry } from "./vitest-build-prerequisites.mts";
+import { resolveExplicitVitestMode } from "./vitest-cli-mode.mts";
+import { resolveVitestHomeSelection } from "./vitest-home-selection.mts";
+import { resolveVitestNodeArgs } from "./vitest-process-env.mts";
+import { exitVitestBySignal, spawnOwnedVitestProcess } from "./vitest-process.mts";
+import type { VitestReportOutcome } from "./vitest-report-owner.mts";
+import { resolveVitestTestCommand } from "./vitest-test-runtime.mts";
+import { createVitestWorkerRun } from "./vitest-worker-run.mts";
 
 export type VitestBatchRunParams = {
   args: string[];
   config: string;
   env?: NodeJS.ProcessEnv;
+  // Owner-generated report configs retain their validated original selection.
+  homeMode?: TestHomeSelection;
   targets: string[];
+  onComplete?: (outcome: VitestReportOutcome) => void;
 };
 
 const scriptFile = fileURLToPath(import.meta.url);
@@ -23,48 +30,85 @@ const repoRoot = path.resolve(scriptDir, "../..");
  * Runs one Vitest batch and forwards process-group cleanup signals.
  */
 export async function runVitestBatch(params: VitestBatchRunParams): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    let forwardedSignal: NodeJS.Signals | undefined;
-    const detached = shouldUseDetachedVitestProcessGroup();
-    const child = spawnPnpmRunner({
+  const env = params.env ?? process.env;
+  const homeMode =
+    params.homeMode ??
+    resolveVitestHomeSelection(["--config", params.config, ...params.args, ...params.targets], {
       cwd: repoRoot,
-      detached,
-      env: params.env,
-      pnpmArgs: buildVitestBatchPnpmArgs(params),
-      stdio: "inherit",
+      env,
     });
-    const teardownChildCleanup = installVitestProcessGroupCleanup({
+  assertTestHomeSelection(env, homeMode);
+  const testCommand = resolveVitestTestCommand(
+    [
+      ...resolveVitestNodeArgs(env),
+      resolveVitestCliEntry({ env }),
+      "run",
+      "--config",
+      params.config,
+      ...params.args,
+      ...params.targets,
+    ],
+    env,
+  );
+  const workers =
+    resolveExplicitVitestMode(["run", ...params.args]) === "watch"
+      ? undefined
+      : createVitestWorkerRun(env);
+  if (workers) {
+    const cliIndex = testCommand.args.findIndex((arg) => path.basename(arg) === "vitest.mjs");
+    testCommand.args.splice(
+      cliIndex,
+      0,
+      path.join(repoRoot, "scripts/lib/vitest-worker-bootstrap.mts"),
+      workers.descriptor.directory,
+    );
+  }
+  let interrupted: NodeJS.Signals | undefined;
+  const onSignal = (signal: NodeJS.Signals) => {
+    interrupted ??= signal;
+  };
+  // Artifact verification can outlive the child's signal handlers.
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  let outcome: VitestReportOutcome;
+  try {
+    // Match project runs: native workers borrow this invocation's prepared source,
+    // rather than compiling the application independently inside every worker.
+    const { child, completion } = spawnOwnedVitestProcess({
+      homeMode,
+      ...testCommand,
+      options: {
+        cwd: repoRoot,
+        env,
+        stdio: workers ? ["inherit", "inherit", "inherit", "ipc"] : "inherit",
+      },
+    });
+    const cleanup = installVitestProcessGroupCleanup({
       child,
       forceSignal: "SIGKILL",
       forceSignalDelayMs: 100,
-      onSignal(signal: NodeJS.Signals) {
-        forwardedSignal ??= signal;
-      },
     });
-    const completion = createVitestProcessCompletion({ child, detached }).finally(
-      teardownChildCleanup,
-    );
-
-    completion.then((result) => {
-      const { code, signal } = result;
-      if (forwardedSignal) {
-        process.kill(process.pid, forwardedSignal);
-        return;
+    try {
+      const { code, signal } = await (workers ? workers.borrow(child, completion) : completion);
+      interrupted ??= cleanup.getForwardedSignal() ?? signal ?? undefined;
+      outcome = { code: code ?? 1, signal: interrupted ?? null };
+    } finally {
+      cleanup.teardown();
+    }
+  } finally {
+    try {
+      await workers?.dispose();
+    } finally {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      if (interrupted && !params.onComplete) {
+        await exitVitestBySignal(interrupted);
       }
-      if (signal) {
-        process.kill(process.pid, signal);
-        return;
-      }
-      resolve(code ?? 1);
-    }, reject);
-  });
-}
-
-/**
- * Builds pnpm arguments for a Vitest batch run.
- */
-export function buildVitestBatchPnpmArgs(params: VitestBatchRunParams): string[] {
-  return ["exec", "vitest", "run", "--config", params.config, ...params.args, ...params.targets];
+    }
+  }
+  outcome.signal = interrupted ?? outcome.signal;
+  params.onComplete?.(outcome);
+  return outcome.code;
 }
 
 /**

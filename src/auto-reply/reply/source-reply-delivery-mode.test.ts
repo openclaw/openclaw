@@ -31,6 +31,25 @@ function expectPolicyFields(
 }
 
 describe("resolveSourceReplyDeliveryMode", () => {
+  it("keeps progress refresh replies, hooks and typing silent without changing session reply mode", () => {
+    const policy = resolveSourceReplyVisibilityPolicy({
+      cfg: emptyConfig,
+      ctx: {
+        Provider: "webchat",
+        Surface: "webchat",
+        InputProvenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
+      },
+      sendPolicy: "allow",
+    });
+    expect(policy).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+      sessionStableSourceReplyDeliveryMode: "automatic",
+      suppressDelivery: true,
+      suppressHookUserDelivery: true,
+      suppressHookReplyLifecycle: true,
+      suppressTyping: true,
+    });
+  });
   it("defaults source replies to automatic delivery outside ambient room events", () => {
     expect(resolveSourceReplyDeliveryMode({ cfg: emptyConfig, ctx: { ChatType: "channel" } })).toBe(
       "automatic",
@@ -435,6 +454,40 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
       );
     },
   );
+
+  it("keeps the stable mode tool-only under a sender-scoped message denial", () => {
+    // A sender-scoped denial downgrades the sender's effective delivery, but
+    // the session-stable mode feeds CLI binding facts shared by sender-less
+    // synthetic turns; downgrading it too splits the policy hash and resets
+    // the CLI session on chat<->heartbeat transitions.
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: globalToolOnlyReplyConfig,
+        ctx: { ChatType: "direct" },
+        sendPolicy: "allow",
+        messageToolAvailable: false,
+        sessionStableMessageToolAvailable: true,
+      }),
+      {
+        sourceReplyDeliveryMode: "automatic",
+        sessionStableSourceReplyDeliveryMode: "message_tool_only",
+      },
+    );
+    // Without a sender-independent verdict, the stable mode still follows the
+    // turn's availability (session-wide denials downgrade both).
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: globalToolOnlyReplyConfig,
+        ctx: { ChatType: "direct" },
+        sendPolicy: "allow",
+        messageToolAvailable: false,
+      }),
+      {
+        sourceReplyDeliveryMode: "automatic",
+        sessionStableSourceReplyDeliveryMode: "automatic",
+      },
+    );
+  });
 
   it("suppresses automatic source delivery for opted-in message-tool group turns without suppressing typing", () => {
     expectPolicyFields(

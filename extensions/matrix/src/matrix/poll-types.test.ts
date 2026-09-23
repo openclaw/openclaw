@@ -67,6 +67,40 @@ describe("parsePollStartContent", () => {
 
     expect(parsed?.maxSelections).toBe(2);
   });
+
+  it("drops malformed answers instead of throwing on sender-controlled content", () => {
+    const malformed: Array<[string, unknown]> = [
+      ["answers is a string", { question: { "m.text": "Q?" }, answers: "nope" }],
+      ["answers entries null", { question: { "m.text": "Q?" }, answers: [null] }],
+      [
+        "answer id non-string",
+        { question: { "m.text": "Q?" }, answers: [{ id: 42, "m.text": "a" }] },
+      ],
+      [
+        "question text non-string",
+        { question: { "m.text": 42 }, answers: [{ id: "a1", "m.text": "a" }] },
+      ],
+      [
+        "answer text non-string",
+        { question: { "m.text": "Q?" }, answers: [{ id: "a1", "m.text": 42 }] },
+      ],
+    ];
+    for (const [label, poll] of malformed) {
+      expect(() => parsePollStart({ "m.poll.start": poll } as never), label).not.toThrow();
+      expect(parsePollStart({ "m.poll.start": poll } as never), label).toBeNull();
+    }
+  });
+
+  it("keeps well-formed answers when other entries are malformed", () => {
+    const parsed = parsePollStart({
+      "m.poll.start": {
+        question: { "m.text": "Lunch?" },
+        answers: [null, { id: "a1", "m.text": "Yes" }, { id: 42, "m.text": "dropped" }],
+      },
+    } as never);
+
+    expect(parsed?.answers).toEqual([{ id: "a1", text: "Yes" }]);
+  });
 });
 
 describe("buildPollStartContent", () => {
@@ -176,6 +210,44 @@ describe("buildPollResultsSummary", () => {
       { id: "a2", text: "Sushi", votes: 1 },
     ]);
     expect(summary?.totalVotes).toBe(2);
+  });
+
+  it.each([
+    { name: "nonfinite closing times", endTimes: [Number.NaN], closed: false },
+    { name: "the earliest finite closing time", endTimes: [1, -0], closed: true },
+  ])("preserves vote ordering with $name", ({ endTimes, closed }) => {
+    const votes: Array<[string, number | undefined, string]> = [
+      ["$z", Number.NaN, "answer2"],
+      ["$a", undefined, "answer1"],
+      ["$after", 0.5, "answer1"],
+      ["$equal", 0, "answer2"],
+      ["$before", -0.5, "answer1"],
+    ];
+    const summary = buildPollResultsSummary({
+      pollEventId: "$poll",
+      roomId: "!room:example.org",
+      sender: "@alice:example.org",
+      senderName: "Alice",
+      content: buildPollStartContent({ question: "Lunch?", options: ["Pizza", "Sushi"] }),
+      relationEvents: [
+        ...endTimes.map((origin_server_ts, index) => ({
+          event_id: "$end" + index,
+          sender: "@alice:example.org",
+          type: "m.poll.end",
+          origin_server_ts,
+        })),
+        ...votes.map(([event_id, origin_server_ts, answer]) => ({
+          event_id,
+          sender: "@bob:example.org",
+          type: "m.poll.response",
+          origin_server_ts,
+          content: buildPollResponseContent("$poll", [answer]),
+        })),
+      ],
+    });
+
+    expect(summary?.entries.map(({ votes: voteCount }) => voteCount)).toEqual([0, 1]);
+    expect(summary?.closed).toBe(closed);
   });
 
   it("formats disclosed poll results with vote totals", () => {

@@ -33,6 +33,8 @@ describe("route-args", () => {
         "--deep",
         "--all",
         "--usage",
+        "--agent",
+        "beta",
         "--timeout",
         "5000",
       ]),
@@ -41,10 +43,12 @@ describe("route-args", () => {
       deep: true,
       all: true,
       usage: true,
+      agent: "beta",
       verbose: false,
       timeoutMs: 5000,
     });
     expect(parseStatusRouteArgs(["node", "openclaw", "status", "--timeout"])).toBeNull();
+    expect(parseStatusRouteArgs(["node", "openclaw", "status", "--agent"])).toBeNull();
   });
 
   it("defers status/health --timeout with a present-but-invalid value to Commander", () => {
@@ -87,6 +91,17 @@ describe("route-args", () => {
     expect(parseStatusRouteArgs(["node", "openclaw", "status"])).toMatchObject({
       timeoutMs: undefined,
     });
+  });
+
+  it("defers command options placed before status or health to Commander", () => {
+    expect(parseStatusRouteArgs(["node", "openclaw", "--json", "status"])).toBeNull();
+    expect(parseHealthRouteArgs(["node", "openclaw", "--json", "health"])).toBeNull();
+    expect(parseHealthRouteArgs(["node", "openclaw", "--verbose", "health"])).toBeNull();
+    expect(parseHealthRouteArgs(["node", "openclaw", "--timeout=5000", "health"])).toBeNull();
+    expect(parseHealthRouteArgs(["node", "openclaw", "--timeout", "5000", "health"])).toBeNull();
+    expect(
+      parseStatusRouteArgs(["node", "openclaw", "--profile", "work", "status", "--json"]),
+    ).toMatchObject({ json: true });
   });
 
   it.each([
@@ -150,6 +165,36 @@ describe("route-args", () => {
       parse: parseAgentsListRouteArgs,
       argv: ["node", "openclaw", "agents", "--wat"],
     },
+    {
+      name: "config get empty excess operand",
+      parse: parseConfigGetRouteArgs,
+      argv: ["node", "openclaw", "config", "get", "gateway.port", ""],
+    },
+    {
+      name: "config get unknown flag after an empty operand",
+      parse: parseConfigGetRouteArgs,
+      argv: ["node", "openclaw", "config", "get", "gateway.port", "", "--unknown"],
+    },
+    {
+      name: "config get extra path after an empty operand",
+      parse: parseConfigGetRouteArgs,
+      argv: ["node", "openclaw", "config", "get", "gateway.port", "", "gateway.bind"],
+    },
+    {
+      name: "config unset empty excess operand",
+      parse: parseConfigUnsetRouteArgs,
+      argv: ["node", "openclaw", "config", "unset", "gateway.port", "", "--dry-run"],
+    },
+    {
+      name: "health empty excess operand",
+      parse: parseHealthRouteArgs,
+      argv: ["node", "openclaw", "health", ""],
+    },
+    {
+      name: "agents list empty excess operand",
+      parse: parseAgentsListRouteArgs,
+      argv: ["node", "openclaw", "agents", "list", ""],
+    },
   ])("defers unsupported routed argv: $name", ({ parse, argv }) => {
     expect(parse(argv)).toBeNull();
   });
@@ -178,10 +223,10 @@ describe("route-args", () => {
         "list",
         "--json",
       ]),
-    ).toEqual({ json: true, bindings: false });
+    ).toEqual({ json: true, bindings: false, tree: false });
     expect(
       parseAgentsListRouteArgs(["node", "openclaw", "agents", "--json", "--bindings"]),
-    ).toEqual({ json: true, bindings: true });
+    ).toEqual({ json: true, bindings: true, tree: false });
   });
 
   it("parses gateway status route args and rejects probe-only ssh flags", () => {
@@ -328,14 +373,24 @@ describe("route-args", () => {
     expect(parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent"])).toBeNull();
     expect(parseSessionsRouteArgs(["node", "openclaw", "sessions", "--limit"])).toBeNull();
     expect(
-      parseAgentsListRouteArgs(["node", "openclaw", "agents", "list", "--json", "--bindings"]),
+      parseAgentsListRouteArgs([
+        "node",
+        "openclaw",
+        "agents",
+        "list",
+        "--json",
+        "--bindings",
+        "--tree",
+      ]),
     ).toEqual({
       json: true,
       bindings: true,
+      tree: true,
     });
     expect(parseAgentsListRouteArgs(["node", "openclaw", "agents"])).toEqual({
       json: false,
       bindings: false,
+      tree: false,
     });
   });
 

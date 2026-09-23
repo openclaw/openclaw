@@ -1,5 +1,6 @@
 // Persists pairing challenges and approved channel account bindings in shared SQLite state.
 import crypto from "node:crypto";
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
@@ -18,7 +19,7 @@ import {
   sqliteOptionsForEnv,
   writeChannelPairingStateToDatabase,
 } from "./pairing-store-sqlite.js";
-import type { PairingChannel } from "./pairing-store.types.js";
+import type { PairingChannel, PairingRequestRecord } from "./pairing-store.types.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -26,13 +27,7 @@ const PAIRING_CODE_MAX_ATTEMPTS = 500;
 export const CHANNEL_PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
 export const CHANNEL_PAIRING_PENDING_MAX = 3;
 
-export type PairingRequest = {
-  id: string;
-  code: string;
-  createdAt: string;
-  lastSeenAt: string;
-  meta?: Record<string, string>;
-};
+export type PairingRequest = PairingRequestRecord;
 
 /** Stable opaque id for approving a request without exposing its human pairing code. */
 export function resolveChannelPairingRequestId(
@@ -47,17 +42,9 @@ export function resolveChannelPairingRequestId(
     .slice(0, 32);
 }
 
-function parseTimestamp(value: string | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
 function isExpired(entry: PairingRequest, nowMs: number): boolean {
-  const createdAt = parseTimestamp(entry.createdAt);
-  return createdAt === null || nowMs - createdAt > CHANNEL_PAIRING_PENDING_TTL_MS;
+  const createdAt = parseDateStringTimestampMs(entry.createdAt);
+  return createdAt === undefined || nowMs - createdAt > CHANNEL_PAIRING_PENDING_TTL_MS;
 }
 
 function pruneExpiredRequests(reqs: PairingRequest[], nowMs: number) {
@@ -74,7 +61,9 @@ function pruneExpiredRequests(reqs: PairingRequest[], nowMs: number) {
 }
 
 function resolveLastSeenAt(entry: PairingRequest): number {
-  return parseTimestamp(entry.lastSeenAt) ?? parseTimestamp(entry.createdAt) ?? 0;
+  return (
+    parseDateStringTimestampMs(entry.lastSeenAt) ?? parseDateStringTimestampMs(entry.createdAt) ?? 0
+  );
 }
 
 function normalizePairingAccountId(accountId?: string): string {
@@ -177,14 +166,12 @@ function readAllowFromState(channel: PairingChannel, env: NodeJS.ProcessEnv, acc
   return (readChannelPairingState(channel, env).allowFrom?.[resolvedAccountId] ?? []).slice();
 }
 
-async function updateAllowFromStoreEntry(params: {
-  channel: PairingChannel;
-  entry: string | number;
-  accountId?: string;
-  env?: NodeJS.ProcessEnv;
-  pairingAdapter?: ChannelPairingAdapter;
-  apply: (current: string[], normalized: string) => string[] | null;
-}): Promise<{ changed: boolean; allowFrom: string[] }> {
+async function updateAllowFromStoreEntry(
+  params: AllowFromStoreEntryUpdateParams & {
+    apply: (current: string[], normalized: string) => string[] | null;
+  },
+): Promise<{ changed: boolean; allowFrom: string[] }> {
+  const assertCurrent = params.assertCurrent;
   const env = params.env ?? process.env;
   const accountId = resolveAllowFromAccountId(params.accountId);
   const normalized = normalizeAllowFromInput(params.channel, params.entry, params.pairingAdapter);
@@ -200,6 +187,7 @@ async function updateAllowFromStoreEntry(params: {
     }
     state.allowFrom ??= {};
     state.allowFrom[accountId] = next;
+    assertCurrent?.();
     writeChannelPairingStateToDatabase(database, params.channel, state);
     return { changed: true, allowFrom: next };
   }, sqliteOptionsForEnv(env));
@@ -227,6 +215,7 @@ type AllowFromStoreEntryUpdateParams = {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
   pairingAdapter?: ChannelPairingAdapter;
+  assertCurrent?: () => void;
 };
 
 export async function addChannelAllowFromStoreEntry(

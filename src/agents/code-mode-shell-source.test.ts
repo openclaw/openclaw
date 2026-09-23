@@ -43,6 +43,9 @@ describe("isShellLikeCodeModeSource", () => {
     'GREETING="hello world" npm test',
     "GREETING='hello world' ./gradlew test",
     "EMPTY= npm test",
+    String.raw`A="\\" ls "file" argument`,
+    String.raw`A="\\" B='a b' ls "file" argument`,
+    "A=\\😀\r\n  ls -1",
     "// inspect the workspace\npwd",
     "/* inspect the workspace */ pwd;",
     "// use a clean environment\nNODE_ENV=test npm test",
@@ -183,34 +186,37 @@ describe("isShellLikeCodeModeSource", () => {
     "export * from './types';",
     "export interface Result { value: number }",
     "export enum Color { Red, Green }",
-    'const result = await tools.callValue("openclaw:core:exec", { command: "ls" }); return result;',
-    'return await tools.callValue("openclaw:core:read", { path: "/workspace" });',
-    "console.log(await tools.callValue('openclaw:core:read', { path: '/workspace' }));",
+    'const result = await exec({ command: "ls" }); return result;',
+    'return await read({ path: "/workspace" });',
+    "console.log(await read({ path: '/workspace' }));",
     "// shell documentation: ls /workspace\nreturn 7;",
     "// shell documentation: ls /workspace\nconst answer = 7; return answer;",
     "/* typed module */ export interface Result { value: number }",
-  ])("preserves the JavaScript or TypeScript source %j", (source) => {
+  ])("does not misclassify source as a shell command %j", (source) => {
     expect(isShellLikeCodeModeSource(source)).toBe(false);
   });
 
   it.each([
-    {
-      source: "node -1; var node: number = 7;",
-      preparedSource: "node -1; var node = 7;",
-    },
-    {
-      source: "node --version; var node: number = 2, version = 1;",
-      preparedSource: "node--; version; var node = 2, version = 1;",
-    },
-  ])("preserves transpiled command-like TypeScript: $source", ({ source, preparedSource }) => {
-    expect(isShellLikeCodeModeSource(source, preparedSource)).toBe(false);
+    ["repeated quotes", `A=${'""'.repeat(22)}`],
+    ["escaped quotes", `A="${'\\"'.repeat(32_000)}`],
+  ])("classifies an unfinished assignment with %s promptly", (_name, source) => {
+    const started = performance.now();
+    expect(isShellLikeCodeModeSource(source)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it("classifies a long chain of assignments without rescanning each suffix", () => {
+    const source = `${"A=x ".repeat(32_000)}ls -1`;
+    const started = performance.now();
+    expect(isShellLikeCodeModeSource(source)).toBe(true);
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 
   it("explains how to execute a real catalog tool without retrying shell source", () => {
-    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("JavaScript or TypeScript");
+    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("JavaScript");
     expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("not shell");
-    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("tools.callValue");
-    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("ALL_TOOLS");
+    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("enabled async tool global");
+    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("catalog.search(query)");
     expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("Do not retry");
   });
 });

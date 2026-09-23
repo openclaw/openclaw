@@ -1,8 +1,8 @@
 // Zalo tests cover actions plugin behavior.
 import http from "node:http";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { zaloMessageActions } from "./actions.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 
 describe("zaloMessageActions.describeMessageTool", () => {
   it("honors the selected Zalo account during discovery", () => {
@@ -104,6 +104,7 @@ describe("zaloMessageActions.handleAction", () => {
     });
     const { port } = server.address() as { port: number };
     vi.stubEnv("ZALO_API_URL", `http://127.0.0.1:${port}/zalo/`);
+    const assertDirectAdapterHandoff = vi.fn();
 
     try {
       const result = await handleAction({
@@ -123,6 +124,7 @@ describe("zaloMessageActions.handleAction", () => {
           },
         },
         accountId: "default",
+        assertDirectAdapterHandoff,
       });
 
       expect(result.details).toEqual({
@@ -141,6 +143,7 @@ describe("zaloMessageActions.handleAction", () => {
           }),
         },
       ]);
+      expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();
     } finally {
       await new Promise<void>((resolve) => {
         server.close(() => resolve());

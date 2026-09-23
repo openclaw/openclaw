@@ -41,11 +41,10 @@ export type ProviderResolveDynamicModelContext = {
 };
 
 /**
- * Optional async warm-up for dynamic model resolution.
+ * Optional async preparation for dynamic model resolution.
  *
- * Called only from async model resolution paths, before retrying
- * `resolveDynamicModel`. This is the place to refresh caches or fetch provider
- * metadata over the network.
+ * Called only from async model resolution paths. Providers can return the
+ * requested model directly or refresh reusable metadata before the sync retry.
  */
 export type ProviderPrepareDynamicModelContext = ProviderResolveDynamicModelContext;
 
@@ -151,6 +150,8 @@ export type ProviderPreparedRuntimeAuth = {
  * token blob, read a legacy credential file, or pick between aliases).
  */
 export type ProviderResolveUsageAuthContext = {
+  /** Cancel provider-owned work when the usage collection deadline expires. */
+  signal?: AbortSignal;
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -165,7 +166,10 @@ export type ProviderResolveUsageAuthContext = {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;
   }) => Promise<string[]>;
-  resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderUsageAuthToken | null>;
+  resolveOAuthToken: (params?: {
+    provider?: string;
+    excludeProfileIds?: string[];
+  }) => Promise<ProviderUsageAuthToken | null>;
 };
 
 export type ProviderUsageAuthToken = {
@@ -201,6 +205,8 @@ export type ProviderResolvedUsageAuth = ProviderUsageAuthToken | { handled: true
  * owns the provider-specific HTTP request + response normalization.
  */
 export type ProviderFetchUsageSnapshotContext = {
+  /** Custom transports must preserve this signal; fetchFn already includes it. */
+  signal?: AbortSignal;
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -260,7 +266,7 @@ export type ProviderExtraParamsForTransportContext = Omit<
   "extraParams"
 > & {
   model?: ProviderRuntimeModel;
-  transport?: "sse" | "websocket" | "auto";
+  transport?: "sse" | "websocket" | "websocket-cached" | "auto";
   extraParams: Record<string, unknown>;
 };
 

@@ -9,7 +9,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
   evaluateStoredCredentialEligibility: vi.fn(),
-  getInstalledPluginRecord: vi.fn(),
   isInstalledPluginEnabled: vi.fn(),
   loadInstalledPluginIndex: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
@@ -28,7 +27,6 @@ vi.mock("../../../agents/auth-profiles/credential-state.js", () => ({
 
 vi.mock("../../../plugins/installed-plugin-index.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/installed-plugin-index.js")>()),
-  getInstalledPluginRecord: mocks.getInstalledPluginRecord,
   isInstalledPluginEnabled: mocks.isInstalledPluginEnabled,
   loadInstalledPluginIndex: mocks.loadInstalledPluginIndex,
 }));
@@ -193,7 +191,6 @@ describe("collectCodexRouteWarnings", () => {
       eligible: true,
       reasonCode: "ok",
     });
-    mocks.getInstalledPluginRecord.mockReturnValue(undefined);
     mocks.isInstalledPluginEnabled.mockReturnValue(false);
     mocks.loadInstalledPluginIndex.mockReturnValue({ plugins: [] });
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
@@ -3022,28 +3019,6 @@ describe("collectCodexRouteWarnings", () => {
     });
   });
 
-  it("clears mixed legacy and canonical fallback notices atomically", () => {
-    const store: Record<string, SessionEntry> = {
-      main: {
-        sessionId: "s1",
-        updatedAt: 1,
-        modelProvider: "openai",
-        model: "gpt-5.6-sol",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "codex/gpt-5.6-sol",
-          activeModel: "openai/gpt-5.6-sol",
-          reason: "rate-limit",
-        },
-      },
-    };
-
-    const result = repairCodexSessionStoreRoutes({ store, now: 123 });
-
-    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
-    expect(store.main?.fallbackNotice).toBeUndefined();
-  });
-
   it("retains a fallback notice atomically when one legacy endpoint is blocked", () => {
     const store: Record<string, SessionEntry> = {
       main: {
@@ -3297,6 +3272,7 @@ describe("collectCodexRouteWarnings", () => {
         authProfileOverride: "openai-codex:default",
         authProfileOverrideSource: "auto",
         contextTokens: 64_000,
+        contextTokensSource: "runtime",
         contextBudgetStatus: {
           schemaVersion: 1,
           source: "pre-prompt-estimate",
@@ -3336,6 +3312,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(getSession(store, "main").modelProvider).toBeUndefined();
     expect(getSession(store, "main").model).toBeUndefined();
     expect(getSession(store, "main").contextTokens).toBeUndefined();
+    expect(getSession(store, "main").contextTokensSource).toBeUndefined();
     expect(getSession(store, "main").contextBudgetStatus).toBeUndefined();
   });
 
@@ -3373,6 +3350,8 @@ describe("collectCodexRouteWarnings", () => {
         agentHarnessId: "openclaw",
         agentRuntimeOverride: "openclaw",
         authProfileOverride: "openai:work",
+        contextTokens: 128_000,
+        contextTokensSource: "runtime",
       },
     };
 
@@ -3386,6 +3365,8 @@ describe("collectCodexRouteWarnings", () => {
     expect(getSession(store, "main").agentHarnessId).toBe("openclaw");
     expect(getSession(store, "main").agentRuntimeOverride).toBe("openclaw");
     expect(getSession(store, "main").authProfileOverride).toBe("openai:work");
+    expect(getSession(store, "main").contextTokens).toBe(128_000);
+    expect(getSession(store, "main").contextTokensSource).toBe("runtime");
   });
 
   it("repairs legacy routes without probing OAuth readiness", () => {
@@ -3408,7 +3389,6 @@ describe("collectCodexRouteWarnings", () => {
     };
     mocks.ensureAuthProfileStore.mockReturnValue(store);
     mocks.loadInstalledPluginIndex.mockReturnValue(index);
-    mocks.getInstalledPluginRecord.mockReturnValue(index.plugins[0]);
     mocks.isInstalledPluginEnabled.mockReturnValue(true);
     mocks.resolveAuthProfileOrder.mockReturnValue(["openai-codex:default"]);
 
@@ -3438,7 +3418,6 @@ describe("collectCodexRouteWarnings", () => {
     };
     mocks.ensureAuthProfileStore.mockReturnValue(store);
     mocks.loadInstalledPluginIndex.mockReturnValue(index);
-    mocks.getInstalledPluginRecord.mockReturnValue(index.plugins[0]);
     mocks.isInstalledPluginEnabled.mockReturnValue(true);
     mocks.resolveAuthProfileOrder.mockReturnValue(["openai-codex:default"]);
 

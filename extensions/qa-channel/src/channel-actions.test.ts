@@ -74,10 +74,12 @@ describe("qa-channel direct message actions", () => {
       const threadPayload = extractToolPayload(threadResult) as {
         thread: { id: string; title: string };
         target: string;
+        threadId: string;
       };
       expect(threadPayload.thread.id).toMatch(/^thread-/);
       expect(threadPayload.thread.title).toBe("QA thread");
-      expect(threadPayload.target).toContain(threadPayload.thread.id);
+      expect(threadPayload.target).toBe("channel:qa-room");
+      expect(threadPayload.threadId).toBe(threadPayload.thread.id);
 
       const replyResult = await handleAction({
         channel: "qa-channel",
@@ -86,6 +88,7 @@ describe("qa-channel direct message actions", () => {
         accountId: "default",
         params: {
           target: threadPayload.target,
+          threadId: threadPayload.threadId,
           message: "thread reply",
           text: "ignored legacy reply",
         },
@@ -111,6 +114,7 @@ describe("qa-channel direct message actions", () => {
         accountId: "default",
         params: {
           to: threadPayload.target,
+          threadId: threadPayload.threadId,
           messageId: outbound.id,
           emoji: "white_check_mark",
         },
@@ -123,6 +127,7 @@ describe("qa-channel direct message actions", () => {
         accountId: "default",
         params: {
           target: threadPayload.target,
+          threadId: threadPayload.threadId,
           messageId: outbound.id,
           message: "message (edited)",
           text: "ignored legacy edit",
@@ -136,6 +141,7 @@ describe("qa-channel direct message actions", () => {
         accountId: "default",
         params: {
           to: threadPayload.target,
+          threadId: threadPayload.threadId,
           messageId: outbound.id,
         },
       });
@@ -165,6 +171,7 @@ describe("qa-channel direct message actions", () => {
         accountId: "default",
         params: {
           to: threadPayload.target,
+          threadId: threadPayload.threadId,
           messageId: outbound.id,
         },
       });
@@ -188,7 +195,7 @@ describe("qa-channel direct message actions", () => {
         cfg,
         accountId: "default",
         params: {
-          target: "channel:canonical-room",
+          target: "channel:canonical/room",
           to: "channel:legacy-to-room",
           channelId: "legacy-channel-id-room",
           threadName: "Canonical target thread",
@@ -197,10 +204,12 @@ describe("qa-channel direct message actions", () => {
       const threadPayload = extractToolPayload(threadResult) as {
         thread: { id: string; conversationId: string };
         target: string;
+        threadId: string;
       };
 
-      expect(threadPayload.thread.conversationId).toBe("canonical-room");
-      expect(threadPayload.target).toBe(`thread:canonical-room/${threadPayload.thread.id}`);
+      expect(threadPayload.thread.conversationId).toBe("canonical/room");
+      expect(threadPayload.target).toBe("channel:canonical/room");
+      expect(threadPayload.threadId).toBe(threadPayload.thread.id);
 
       const replyResult = await handleAction({
         channel: "qa-channel",
@@ -209,17 +218,63 @@ describe("qa-channel direct message actions", () => {
         accountId: "default",
         params: {
           target: threadPayload.target,
+          threadId: threadPayload.threadId,
           channelId: "legacy-reply-room",
           message: "canonical target reply",
         },
       });
       expect(extractToolPayload(replyResult)).toMatchObject({
         message: {
-          conversation: { id: "canonical-room", kind: "channel" },
+          conversation: { id: "canonical/room", kind: "channel" },
           text: "canonical target reply",
           threadId: threadPayload.thread.id,
         },
       });
+    } finally {
+      await bus.stop();
+    }
+  });
+
+  it("preserves versioned direct and escaped group targets through message actions", async () => {
+    installQaChannelTestRegistry();
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+
+    try {
+      const cfg = createQaChannelConfig(bus.baseUrl);
+      const handleAction = requireQaActionHandler();
+      const cases = [
+        {
+          target: "thread:/v1/dm/Alice/Topic",
+          conversation: { id: "Alice", kind: "direct" },
+          threadId: "Topic",
+        },
+        {
+          target: "thread:/v1/group/Room%2FOne/Topic%2FTwo",
+          conversation: { id: "Room/One", kind: "group" },
+          threadId: "Topic/Two",
+        },
+      ] as const;
+
+      for (const testCase of cases) {
+        const result = await handleAction({
+          channel: "qa-channel",
+          action: "send",
+          cfg,
+          accountId: "default",
+          params: {
+            target: testCase.target,
+            message: "versioned target",
+          },
+        });
+        expect(extractToolPayload(result)).toMatchObject({
+          message: {
+            conversation: testCase.conversation,
+            text: "versioned target",
+            threadId: testCase.threadId,
+          },
+        });
+      }
     } finally {
       await bus.stop();
     }
@@ -246,6 +301,7 @@ describe("qa-channel direct message actions", () => {
       const threadPayload = extractToolPayload(threadResult) as {
         thread: { id: string; title: string };
         target: string;
+        threadId: string;
       };
       expect(threadPayload.thread.title).toBe("Legacy thread");
 
@@ -279,6 +335,7 @@ describe("qa-channel direct message actions", () => {
         accountId: "default",
         params: {
           to: threadPayload.target,
+          threadId: threadPayload.threadId,
           messageId: outbound.id,
           text: "legacy edit",
         },

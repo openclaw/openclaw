@@ -5,6 +5,7 @@ import {
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   createSetupTranslator,
+  patchTopLevelChannelConfigSection,
   setSetupChannelEnabled,
   type ChannelSetupAdapter,
   type ChannelSetupWizard,
@@ -124,19 +125,12 @@ export function createMSTeamsSetupWizardBase(): Pick<
       }
 
       if (appId && appPassword && tenantId) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            msteams: {
-              ...next.channels?.msteams,
-              enabled: true,
-              appId,
-              appPassword,
-              tenantId,
-            },
-          },
-        };
+        next = patchTopLevelChannelConfigSection({
+          cfg: next,
+          channel,
+          enabled: true,
+          patch: { appId, appPassword, tenantId },
+        });
       }
 
       return { cfg: next, accountId: DEFAULT_ACCOUNT_ID };

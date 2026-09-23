@@ -2,17 +2,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import JSZip from "jszip";
 import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
   expectInstallUsesIgnoreScripts,
   expectIntegrityDriftRejected,
   expectUnsupportedNpmSpec,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
-import { isAddressInUseError } from "./gmail-watcher-errors.js";
+import { createZipBuffer, createZipHookPackBuffer } from "./install-archive.test-support.js";
 
 type InstallHooksFromPath = typeof import("./install.js").installHooksFromPath;
 
@@ -121,6 +119,7 @@ function writeHookPackManifest(params: {
   pkgDir: string;
   hooks: string[];
   dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
   extensions?: string[];
 }) {
   fs.writeFileSync(
@@ -133,17 +132,10 @@ function writeHookPackManifest(params: {
         ...(params.extensions ? { extensions: params.extensions } : {}),
       },
       ...(params.dependencies ? { dependencies: params.dependencies } : {}),
+      ...(params.optionalDependencies ? { optionalDependencies: params.optionalDependencies } : {}),
     }),
     "utf-8",
   );
-}
-
-async function createZipBuffer(entries: Array<{ path: string; contents: string }>) {
-  const zip = new JSZip();
-  for (const entry of entries) {
-    zip.file(entry.path, entry.contents);
-  }
-  return Buffer.from(await zip.generateAsync({ type: "nodebuffer", compression: "STORE" }));
 }
 
 function writeHookPackFiles(params: {
@@ -152,10 +144,14 @@ function writeHookPackFiles(params: {
   hookName: string;
   hookDescription: string;
   heading: string;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
 }) {
   writeHookPackManifest({
     pkgDir: params.pkgDir,
     hooks: [`./hooks/${params.hookName}`],
+    dependencies: params.dependencies,
+    optionalDependencies: params.optionalDependencies,
   });
   const hookDir = path.join(params.pkgDir, "hooks", params.hookName);
   fs.mkdirSync(hookDir, { recursive: true });
@@ -178,38 +174,6 @@ function writeHookPackFiles(params: {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
   manifest.name = params.packageName;
   fs.writeFileSync(manifestPath, JSON.stringify(manifest), "utf-8");
-}
-
-async function createZipHookPackBuffer(params: {
-  packageName: string;
-  hookName: string;
-  hookDescription: string;
-  heading: string;
-}) {
-  const packageJson = JSON.stringify({
-    name: params.packageName,
-    version: "0.0.1",
-    openclaw: { hooks: [`./hooks/${params.hookName}`] },
-  });
-  return createZipBuffer([
-    { path: "package/package.json", contents: packageJson },
-    {
-      path: `package/hooks/${params.hookName}/HOOK.md`,
-      contents: [
-        "---",
-        `name: ${params.hookName}`,
-        `description: ${params.hookDescription}`,
-        'metadata: {"openclaw":{"events":["command:new"]}}',
-        "---",
-        "",
-        `# ${params.heading}`,
-      ].join("\n"),
-    },
-    {
-      path: `package/hooks/${params.hookName}/handler.ts`,
-      contents: "export default async () => {};\n",
-    },
-  ]);
 }
 
 async function createTarGzHookPackBuffer(params: {
@@ -286,20 +250,19 @@ describe("installHooksFromPath archives", () => {
       name: "zip",
       fileName: "traversal.zip",
       contents: zipTraversalBuffer,
-      expectedDetail: "archive entry",
     },
     {
       name: "tar",
       fileName: "traversal.tar",
       contents: tarTraversalBuffer,
-      expectedDetail: "escapes destination",
     },
   ])("rejects $name archives with traversal entries", async (tc) => {
-    const { result } = await installArchiveFixture({
+    const { fixture, result } = await installArchiveFixture({
       fileName: tc.fileName,
       contents: tc.contents,
     });
-    expectInstallFailureContains(result, ["failed to extract archive", tc.expectedDetail]);
+    expectInstallFailureContains(result, ["failed to extract archive", "ArchiveSecurityError"]);
+    expect(fs.existsSync(fixture.hooksDir)).toBe(false);
   });
 
   it.each([
@@ -390,45 +353,73 @@ describe("installHooksFromPath", () => {
     }
   });
 
-  it("uses --ignore-scripts for dependency install", async () => {
-    const workDir = makeTempDir();
-    const stateDir = makeTempDir();
-    const pkgDir = path.join(workDir, "package");
-    fs.mkdirSync(path.join(pkgDir, "hooks", "one-hook"), { recursive: true });
-    writeHookPackManifest({
-      pkgDir,
-      hooks: ["./hooks/one-hook"],
-      dependencies: { "left-pad": "1.3.0" },
-    });
-    fs.writeFileSync(
-      path.join(pkgDir, "hooks", "one-hook", "HOOK.md"),
-      [
-        "---",
-        "name: one-hook",
-        "description: One hook",
-        'metadata: {"openclaw":{"events":["command:new"]}}',
-        "---",
-        "",
-        "# One Hook",
-      ].join("\n"),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pkgDir, "hooks", "one-hook", "handler.ts"),
-      "export default async () => {};\n",
-      "utf-8",
-    );
+  it.each(["dependencies", "optionalDependencies"] as const)(
+    "installs %s with lifecycle scripts disabled",
+    async (dependencyField) => {
+      const workDir = makeTempDir();
+      const stateDir = makeTempDir();
+      const pkgDir = path.join(workDir, "package");
+      fs.mkdirSync(pkgDir, { recursive: true });
+      writeHookPackFiles({
+        pkgDir,
+        packageName: "@openclaw/test-hooks",
+        hookName: "one-hook",
+        hookDescription: "One hook",
+        heading: "One Hook",
+        [dependencyField]: { "left-pad": "1.3.0" },
+      });
 
-    const run = runCommandWithTimeoutMock;
-    await expectInstallUsesIgnoreScripts({
-      run,
-      install: async () =>
-        await installHooksFromPath({
-          path: pkgDir,
-          hooksDir: path.join(stateDir, "hooks"),
-        }),
-    });
-  });
+      const run = runCommandWithTimeoutMock;
+      await expectInstallUsesIgnoreScripts({
+        run,
+        install: async () =>
+          await installHooksFromPath({
+            path: pkgDir,
+            hooksDir: path.join(stateDir, "hooks"),
+          }),
+      });
+    },
+  );
+
+  it.each(["install", "update"] as const)(
+    "preserves the declared OpenClaw dependency during %s",
+    async (mode) => {
+      const pkgDir = makeTempDir();
+      const hooksDir = path.join(makeTempDir(), "hooks");
+      writeHookPackFiles({
+        pkgDir,
+        packageName: "@openclaw/test-hooks",
+        hookName: "one-hook",
+        hookDescription: "One hook",
+        heading: "One Hook",
+        dependencies: { openclaw: ">=2026.4.5" },
+      });
+      if (mode === "update") {
+        fs.mkdirSync(path.join(hooksDir, "test-hooks"), { recursive: true });
+      }
+      runCommandWithTimeoutMock.mockImplementation(async (_argv, optionsOrTimeout) => {
+        const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
+        if (!cwd) {
+          throw new Error("expected staged hook install cwd");
+        }
+        const manifest = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"));
+        expect(manifest.dependencies?.openclaw).toBe(">=2026.4.5");
+        return {
+          stdout: "",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      });
+
+      const result = await installHooksFromPath({ path: pkgDir, hooksDir, mode });
+
+      expect(result.ok).toBe(true);
+      expect(runCommandWithTimeoutMock).toHaveBeenCalled();
+    },
+  );
 
   it("installs a single hook directory", async () => {
     const stateDir = makeTempDir();
@@ -931,9 +922,6 @@ describe("installHooksFromNpmSpec", () => {
         async (
           params: Parameters<typeof hookInstallRuntime.installFromValidatedNpmSpecArchive>[0],
         ) => {
-          expect(
-            (params.archiveInstallParams as Record<string, unknown>).dangerouslyForceUnsafeInstall,
-          ).toBeUndefined();
           expect(params.archiveInstallParams).toEqual(
             expect.objectContaining({
               installPolicyRequest: {
@@ -1020,10 +1008,21 @@ describe("installHooksFromNpmSpec", () => {
     expect(result.npmResolution?.integrity).toBe("sha512-hook-test");
     expect(fs.existsSync(path.join(result.targetDir, "hooks", "one-hook", "HOOK.md"))).toBe(true);
 
-    expectSingleNpmPackIgnoreScriptsCall({
-      calls: run.mock.calls as Array<[unknown, unknown]>,
-      expectedSpec: "@openclaw/test-hooks@0.0.1",
-    });
+    expect(run).toHaveBeenCalledExactlyOnceWith(
+      [
+        "npm",
+        "pack",
+        "@openclaw/test-hooks@0.0.1",
+        "--ignore-scripts",
+        "--json",
+        "--dry-run=false",
+        `--pack-destination=${packTmpDir}`,
+      ],
+      expect.objectContaining({
+        cwd: packTmpDir,
+        env: expect.objectContaining({ NPM_CONFIG_IGNORE_SCRIPTS: "true" }),
+      }),
+    );
 
     expect(packTmpDir).not.toBe("");
     expect(fs.existsSync(packTmpDir)).toBe(false);
@@ -1076,15 +1075,5 @@ describe("installHooksFromNpmSpec", () => {
       expect(result.error).toContain("prerelease version 0.0.2-beta.1");
       expect(result.error).toContain('"@openclaw/test-hooks@beta"');
     }
-  });
-});
-
-describe("gmail watcher", () => {
-  it("detects address already in use errors", () => {
-    expect(isAddressInUseError("listen tcp 127.0.0.1:8788: bind: address already in use")).toBe(
-      true,
-    );
-    expect(isAddressInUseError("EADDRINUSE: address already in use")).toBe(true);
-    expect(isAddressInUseError("some other error")).toBe(false);
   });
 });

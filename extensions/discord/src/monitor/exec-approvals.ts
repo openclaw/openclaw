@@ -1,4 +1,3 @@
-// Discord plugin module implements exec approvals behavior.
 import { ButtonStyle } from "discord-api-types/v10";
 import {
   resolveApprovalOverGateway,
@@ -15,6 +14,10 @@ import {
   DISCORD_APPROVAL_ALLOWED_MENTIONS,
   formatDiscordApprovalDisplayValue,
 } from "../approval-message-safety.js";
+import {
+  discordApprovalMessageUpdates,
+  hasDiscordApprovalControl,
+} from "../approval-message-updates.js";
 import { getDiscordExecApprovalApprovers } from "../exec-approvals.js";
 import {
   Button,
@@ -32,6 +35,7 @@ type ExecApprovalButtonContext = {
     approvalId: string,
     approvalKind: PendingApprovalView["approvalKind"],
     decision: ExecApprovalDecision,
+    senderId: string,
   ) => Promise<ExecApprovalResolveResult>;
 };
 
@@ -141,6 +145,7 @@ class ExecApprovalButton extends Button {
       parsed.approvalId,
       parsed.approvalKind,
       parsed.action,
+      userId,
     );
     if (!result.ok) {
       try {
@@ -157,15 +162,24 @@ class ExecApprovalButton extends Button {
     const terminalLabel = resolveTerminalLabel(result.resolution.approval);
     let terminalized = false;
     try {
-      // Always terminalize the clicked message. Generic forwarding has no native
-      // delivery receipt, and native event/local updates may safely race.
-      await interaction.editReply(
-        buildTerminalPayload({
-          approval: result.resolution.approval,
-          applied: result.resolution.applied,
-        }),
-      );
-      terminalized = true;
+      if (interaction.message) {
+        terminalized = await discordApprovalMessageUpdates.enqueue(
+          interaction.message.id,
+          async () => {
+            // A native application update may have finished while resolution was awaited.
+            if (!hasDiscordApprovalControl(await interaction.fetchReply(), parsed)) {
+              return false;
+            }
+            await interaction.editReply(
+              buildTerminalPayload({
+                approval: result.resolution.approval,
+                applied: result.resolution.applied,
+              }),
+            );
+            return true;
+          },
+        );
+      }
     } catch {}
     if (!terminalized || !result.resolution.applied) {
       try {
@@ -197,7 +211,7 @@ export function createDiscordExecApprovalButtonContext(params: {
         accountId: params.accountId,
         configOverride: params.config,
       }),
-    resolveApproval: async (approvalId, approvalKind, decision) => {
+    resolveApproval: async (approvalId, approvalKind, decision, senderId) => {
       try {
         const resolution = await resolveApprovalOverGateway({
           cfg: params.cfg,
@@ -205,7 +219,8 @@ export function createDiscordExecApprovalButtonContext(params: {
           approvalKind,
           decision,
           channel: "discord",
-          senderId: params.accountId,
+          accountId: params.accountId,
+          senderId,
           gatewayUrl: params.gatewayUrl,
         });
         return { ok: true, resolution };

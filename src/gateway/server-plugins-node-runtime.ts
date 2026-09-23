@@ -1,13 +1,181 @@
+import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../infra/node-commands.js";
+import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
-import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
+import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
+import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
+import { getInProcessGatewayRequestContext } from "./server-plugin-in-process-dispatch.js";
 
-export function hasInProcessGatewayContext(): boolean {
-  return Boolean(getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext());
+export function hasInProcessGatewayContext(
+  resolveGatewayContext?: GatewayContextResolver,
+): boolean {
+  return Boolean(getInProcessGatewayRequestContext(resolveGatewayContext));
 }
 
-export function projectGatewayRuntimeNodes(nodes: unknown[]): unknown[] {
-  const context = getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext();
+/** Opens one lifecycle-fenced binary channel through the canonical node invocation owner. */
+export async function openGatewayNodeDuplex(options: {
+  params: Parameters<PluginRuntime["nodes"]["openDuplex"]>[0];
+  invokeNode: (
+    params: Parameters<PluginRuntime["nodes"]["invoke"]>[0],
+    stream?: GatewayNodeInvokeStream,
+    signal?: AbortSignal,
+  ) => Promise<unknown>;
+  resolveGatewayContext?: GatewayContextResolver;
+  runtimeLifetime?: AbortSignal;
+}): ReturnType<PluginRuntime["nodes"]["openDuplex"]> {
+  const { params, resolveGatewayContext, runtimeLifetime, invokeNode } = options;
+  const scope = getPluginRuntimeGatewayRequestScope();
+  if (!scope?.pluginId?.trim()) {
+    throw new Error("Plugin node duplex commands require an active owning plugin identity.");
+  }
+  const registry = scope.pluginRegistry;
+  const record = registry?.plugins.find((entry) => entry.id === scope.pluginId);
+  const registrations = registry?.nodeHostCommands.filter(
+    (entry) => entry.command.command === params.command,
+  );
+  if (
+    !registry ||
+    !record ||
+    registrations?.length !== 1 ||
+    registrations[0]?.pluginId !== scope.pluginId ||
+    (registrations[0]?.command.duplex !== true && registrations[0]?.command.duplex !== "optional")
+  ) {
+    throw new Error(
+      `Node command "${params.command}" must be registered exactly once by plugin "${scope.pluginId}" and declare duplex: true or "optional".`,
+    );
+  }
+  const isPluginCurrent = capturePluginLifecycleAuthority(registry, record, {
+    scopedRuntime: true,
+  });
+  const callerIdentity = scope.client?.internal?.agentRuntimeIdentity;
+  const context = getInProcessGatewayRequestContext(resolveGatewayContext);
+  if (!context?.nodeRegistry) {
+    throw new Error("Plugin node duplex commands require an active Gateway node registry.");
+  }
+  return await openOwnedGatewayNodeDuplex({
+    params,
+    invokeNode,
+    context,
+    signal: AbortSignal.any(
+      [runtimeLifetime, getPluginInstance(record)?.lifecycle.signal, params.signal].filter(
+        (candidate): candidate is AbortSignal => candidate !== undefined,
+      ),
+    ),
+    assertCurrent() {
+      if (
+        isPluginCurrent?.() !== true ||
+        (resolveGatewayContext && resolveGatewayContext() !== context) ||
+        (callerIdentity && context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true)
+      ) {
+        throw new Error("Plugin Gateway runtime authority is no longer current.");
+      }
+    },
+  });
+}
+
+/** Shared framing for an already-admitted caller or service; never establishes authority. */
+export async function openOwnedGatewayNodeDuplex(options: {
+  params: Parameters<PluginRuntime["nodes"]["openDuplex"]>[0];
+  invokeNode: Parameters<typeof openGatewayNodeDuplex>[0]["invokeNode"];
+  context: GatewayRequestContext;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+}): ReturnType<PluginRuntime["nodes"]["openDuplex"]> {
+  const { params, invokeNode, context } = options;
+  const controller = new AbortController();
+  const signal = AbortSignal.any([controller.signal, options.signal]);
+  let invokeId: string | undefined;
+  let framedReady = false;
+  const ready = createDeferredCore();
+  const assertRuntimeCurrent = () => {
+    try {
+      signal.throwIfAborted();
+      options.assertCurrent();
+    } catch (error) {
+      controller.abort(error);
+      throw error;
+    }
+  };
+  const isRuntimeCurrent = () => {
+    try {
+      assertRuntimeCurrent();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  assertRuntimeCurrent();
+  const endpoint = createNodeDuplexEndpoint({
+    requireReady: true,
+    maxMessageBytes: params.maxMessageBytes,
+    maxOutstandingDeliveryBytes: params.maxOutstandingDeliveryBytes,
+    sendFrame(frame) {
+      assertRuntimeCurrent();
+      if (!invokeId || !framedReady) {
+        throw new Error("Node duplex command is not ready for binary messages.");
+      }
+      context.nodeRegistry.sendInvokeInput(invokeId, frame);
+    },
+    onReady() {
+      if (!invokeId) {
+        throw new Error("Node duplex command announced readiness before its dispatch.");
+      }
+      framedReady = true;
+      ready.resolve();
+    },
+    onError: (error) => controller.abort(error),
+  });
+  const onAbort = () => endpoint.close();
+  signal.addEventListener("abort", onAbort, { once: true });
+  const closed = invokeNode(
+    params,
+    {
+      onProgress: (chunk) => {
+        assertRuntimeCurrent();
+        endpoint.receive(chunk);
+      },
+      onDispatchReady: (id) => {
+        assertRuntimeCurrent();
+        invokeId = id;
+      },
+      isRuntimeCurrent,
+      idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
+    },
+    signal,
+  )
+    .then(async (result) => {
+      if (!invokeId || !framedReady) {
+        throw new Error("Node command completed without opening a ready duplex invocation.");
+      }
+      await endpoint.drain();
+      return result;
+    })
+    .finally(() => {
+      signal.removeEventListener("abort", onAbort);
+      endpoint.close();
+      controller.abort(new Error("Node duplex command has closed."));
+    });
+  void closed.catch(ready.reject);
+  await ready.promise;
+  return {
+    send: (message) => endpoint.send(message),
+    onMessage: (listener) => {
+      assertRuntimeCurrent();
+      return endpoint.onMessage(listener);
+    },
+    closed,
+    close: () => controller.abort(new Error("Node duplex channel closed by its caller.")),
+  };
+}
+
+export function projectGatewayRuntimeNodes(
+  nodes: unknown[],
+  context: GatewayRequestContext | undefined,
+): unknown[] {
   return nodes.map((node) => {
     if (
       !node ||
@@ -38,4 +206,24 @@ export function projectGatewayRuntimeNodes(nodes: unknown[]): unknown[] {
     );
     return Object.assign({}, nodeRecord, { invocableCommands });
   });
+}
+
+// Extracted from the plugin runtime assembler to keep server-plugins.ts within the
+// max-lines boundary; mirrors createGatewayNodesRuntime/createGatewaySubagentRuntime.
+// The gateway context is optional (absent outside an in-process Gateway) and the
+// dispatcher enforces isolation + email content wrapping, so this only forwards the
+// host-bound plugin id.
+export function createGatewayHooksRuntime(
+  resolveGatewayContext?: GatewayContextResolver,
+): PluginRuntime["hooks"] {
+  return {
+    dispatchHookAgentTurn: async (params) => {
+      const pluginId = getPluginRuntimeGatewayRequestScope()?.pluginId;
+      const gatewayContext = resolveGatewayContext?.();
+      if (!pluginId || !gatewayContext?.dispatchHookAgentTurn) {
+        throw new Error("Plugin hook runtime requires an active Gateway and plugin identity.");
+      }
+      return await gatewayContext.dispatchHookAgentTurn(pluginId, params);
+    },
+  };
 }

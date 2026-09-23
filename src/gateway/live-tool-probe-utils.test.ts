@@ -225,9 +225,9 @@ describe("live tool probe utils", () => {
         expected: false,
       },
       {
-        name: "retries mistral nonce marker echoes without parsed values",
+        name: "retries mistral marker echoes without parsed values",
         params: {
-          text: "nonceA= nonceB=",
+          text: "testMarkerA= testMarkerB=",
           nonceA: "nonce-a",
           nonceB: "nonce-b",
           provider: "mistral",

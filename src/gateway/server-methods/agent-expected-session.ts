@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   consumeSessionWorkAdmissionHandoff,
+  type SessionWorkAdmissionInterrupt,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 
@@ -69,7 +70,7 @@ export function assertExpectedExistingSession(params: {
 export function consumeExpectedSessionWorkAdmission(params: {
   constraint?: ExpectedExistingSessionConstraint;
   identities: Iterable<string | undefined>;
-  onInterrupt: () => void;
+  onInterrupt: SessionWorkAdmissionInterrupt;
   scope: string;
 }): SessionWorkAdmissionLease | undefined {
   const handoffId = params.constraint?.handoffId;

@@ -1,5 +1,5 @@
 // Provider entry tests cover provider plugin entry contracts and catalog integration.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { capturePluginRegistration } from "../plugins/captured-registration.js";
 import type { ProviderCatalogContext } from "../plugins/types.js";
@@ -86,6 +86,58 @@ async function captureProviderEntry(params: {
 }
 
 describe("defineSingleProviderPluginEntry", () => {
+  it("keeps static catalog registration independent of live discovery", async () => {
+    const liveCatalog = {
+      provider: { baseUrl: "https://api.demo.test/v1", models: [createModel("live", "Live")] },
+    };
+    const buildLiveCatalog = vi.fn(async () => liveCatalog);
+    const loadLiveCatalog = vi.fn(() => ({
+      buildOpenAICompatibleProviderCatalog: buildLiveCatalog,
+    }));
+    vi.doMock("../agents/provider-attribution.js", () => {
+      throw new Error("Static provider entry loaded transport policy");
+    });
+    vi.doMock("./provider-catalog-live-runtime.js", loadLiveCatalog);
+    vi.resetModules();
+    try {
+      const { defineSingleProviderPluginEntry: defineColdEntry } =
+        await import("./provider-entry.js");
+      const entry = defineColdEntry({
+        id: "demo",
+        name: "Demo Provider",
+        description: "Demo provider plugin",
+        manifest: createProviderManifest(),
+        provider: {
+          label: "Demo",
+          docsPath: "/providers/demo",
+          aliases: ["demo-alias"],
+          catalog: { liveModelDiscovery: true },
+        },
+      });
+      const provider = capturePluginRegistration(entry).providers[0];
+      const context = createCatalogContext();
+      await expect(provider?.staticCatalog?.run(context)).resolves.toMatchObject({
+        provider: { models: [createModel("default", "Default")] },
+      });
+      await expect(provider?.catalog?.run({ ...context, providerIds: [] })).resolves.toBeNull();
+      expect(loadLiveCatalog).not.toHaveBeenCalled();
+
+      const scopedContext = { ...context, providerIds: ["demo-alias"] };
+      await expect(provider?.catalog?.run(scopedContext)).resolves.toBe(liveCatalog);
+      expect(buildLiveCatalog).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          ctx: scopedContext,
+          providerId: "demo",
+          providerAliases: ["demo-alias"],
+        }),
+      );
+    } finally {
+      vi.doUnmock("../agents/provider-attribution.js");
+      vi.doUnmock("./provider-catalog-live-runtime.js");
+      vi.resetModules();
+    }
+  });
+
   it("derives API-key auth and static and live model catalogs from the provider manifest", async () => {
     const manifest = createProviderManifest();
     const entry = defineSingleProviderPluginEntry({
@@ -137,34 +189,96 @@ describe("defineSingleProviderPluginEntry", () => {
     ]);
   });
 
-  it("preserves manifest-owned onboarding scope and assistant metadata", () => {
-    const manifest = createProviderManifest();
+  it("gates generated catalogs by canonical and alias provider identities before auth", async () => {
     const entry = defineSingleProviderPluginEntry({
       id: "demo",
       name: "Demo Provider",
       description: "Demo provider plugin",
-      manifest: {
-        ...manifest,
-        providerAuthChoices: [
-          {
-            ...manifest.providerAuthChoices[0]!,
-            assistantPriority: 4,
-            assistantVisibility: "manual-only",
-            onboardingFeatured: true,
-            onboardingScopes: ["text-inference", "music-generation"],
-          },
-        ],
+      manifest: createProviderManifest(),
+      provider: {
+        label: "Demo",
+        docsPath: "/providers/demo",
+        aliases: ["demo-alias"],
+        catalog: {},
       },
-      provider: { label: "Demo", docsPath: "/providers/demo", catalog: {} },
     });
+    const provider = capturePluginRegistration(entry).providers[0];
+    let resolveProviderApiKeyCalls = 0;
+    const resolveProviderApiKey = () => {
+      resolveProviderApiKeyCalls += 1;
+      return { apiKey: "test-key" };
+    };
+    const context = { ...createCatalogContext(), resolveProviderApiKey };
 
-    expect(capturePluginRegistration(entry).providers[0]?.auth[0]?.wizard).toMatchObject({
-      assistantPriority: 4,
-      assistantVisibility: "manual-only",
-      onboardingFeatured: true,
-      onboardingScopes: ["text-inference", "music-generation"],
-    });
+    await expect(
+      provider?.catalog?.run({ ...context, providerIds: ["demo-alias"] }),
+    ).resolves.toMatchObject({ provider: { apiKey: "test-key" } });
+
+    resolveProviderApiKeyCalls = 0;
+    await expect(
+      provider?.catalog?.run({ ...context, providerIds: ["other"] }),
+    ).resolves.toBeNull();
+    await expect(provider?.catalog?.run({ ...context, providerIds: [] })).resolves.toBeNull();
+    expect(resolveProviderApiKeyCalls).toBe(0);
   });
+
+  it("accepts an alias scope for generated live model discovery", async () => {
+    const entry = defineSingleProviderPluginEntry({
+      id: "demo",
+      name: "Demo Provider",
+      description: "Demo provider plugin",
+      provider: {
+        label: "Demo",
+        docsPath: "/providers/demo",
+        aliases: ["demo-alias"],
+        catalog: {
+          liveModelDiscovery: true,
+          buildProvider: () => ({
+            baseUrl: "not-a-url",
+            api: "openai-completions",
+            models: [],
+          }),
+        },
+      },
+    });
+    const provider = capturePluginRegistration(entry).providers[0];
+
+    await expect(
+      provider?.catalog?.run({ ...createCatalogContext(), providerIds: ["demo-alias"] }),
+    ).resolves.toMatchObject({ provider: { apiKey: "test-key" } });
+  });
+
+  it.each(["manual-only", "detected-only"] as const)(
+    "preserves manifest-owned onboarding scope and %s assistant metadata",
+    (assistantVisibility) => {
+      const manifest = createProviderManifest();
+      const entry = defineSingleProviderPluginEntry({
+        id: "demo",
+        name: "Demo Provider",
+        description: "Demo provider plugin",
+        manifest: {
+          ...manifest,
+          providerAuthChoices: [
+            {
+              ...manifest.providerAuthChoices[0]!,
+              assistantPriority: 4,
+              assistantVisibility,
+              onboardingFeatured: true,
+              onboardingScopes: ["text-inference", "music-generation"],
+            },
+          ],
+        },
+        provider: { label: "Demo", docsPath: "/providers/demo", catalog: {} },
+      });
+
+      expect(capturePluginRegistration(entry).providers[0]?.auth[0]?.wizard).toMatchObject({
+        assistantPriority: 4,
+        assistantVisibility,
+        onboardingFeatured: true,
+        onboardingScopes: ["text-inference", "music-generation"],
+      });
+    },
+  );
 
   it("creates registration-scoped provider state for provider factories", () => {
     let registrations = 0;
@@ -200,21 +314,21 @@ describe("defineSingleProviderPluginEntry", () => {
 
   it("merges manifest onboarding metadata with provider-owned wizard model policies", () => {
     const manifest = createProviderManifest();
+    const manifestChoice = {
+      ...manifest.providerAuthChoices[0]!,
+      assistantPriority: 4,
+      modelTarget: "utility",
+      assistantVisibility: "manual-only",
+      onboardingFeatured: true,
+      onboardingScopes: ["text-inference", "music-generation"],
+    };
     const entry = defineSingleProviderPluginEntry({
       id: "demo",
       name: "Demo Provider",
       description: "Demo provider plugin",
       manifest: {
         ...manifest,
-        providerAuthChoices: [
-          {
-            ...manifest.providerAuthChoices[0]!,
-            assistantPriority: 4,
-            assistantVisibility: "manual-only",
-            onboardingFeatured: true,
-            onboardingScopes: ["text-inference", "music-generation"],
-          },
-        ],
+        providerAuthChoices: [manifestChoice],
       },
       provider: {
         label: "Demo",
@@ -237,6 +351,7 @@ describe("defineSingleProviderPluginEntry", () => {
       groupLabel: "Demo providers",
       groupHint: "Manifest-owned setup",
       assistantPriority: 4,
+      modelTarget: "utility",
       assistantVisibility: "manual-only",
       onboardingFeatured: true,
       onboardingScopes: ["text-inference", "music-generation"],
@@ -547,12 +662,29 @@ describe("defineSingleProviderPluginEntry", () => {
   });
 
   it("skips unreadable provider catalog model rows while preserving healthy siblings", async () => {
-    const models = Object.defineProperty([createModel("mock-model", "Mock Model")], "1", {
-      enumerable: true,
-      get() {
-        throw new Error("fuzzplugin provider model row read failed");
+    const unreadableModel = Object.defineProperty(
+      createModel("broken-model", "Broken Model"),
+      "id",
+      {
+        get() {
+          throw new Error("fuzzplugin model id read failed");
+        },
       },
-    });
+    );
+    const models = Object.defineProperty(
+      [
+        createModel("mock-model", "Mock Model"),
+        { id: "id-only" } as ModelDefinitionConfig,
+        unreadableModel,
+      ],
+      "3",
+      {
+        enumerable: true,
+        get() {
+          throw new Error("fuzzplugin provider model row read failed");
+        },
+      },
+    );
     const entry = defineSingleProviderPluginEntry({
       id: "mockplugin",
       name: "Mock Provider",
@@ -581,6 +713,13 @@ describe("defineSingleProviderPluginEntry", () => {
         provider: "mockplugin",
         model: "mock-model",
         label: "Mock Model",
+        source: "live",
+      },
+      {
+        kind: "text",
+        provider: "mockplugin",
+        model: "id-only",
+        label: "id-only",
         source: "live",
       },
     ]);

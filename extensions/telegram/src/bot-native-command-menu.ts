@@ -1,4 +1,3 @@
-// Telegram plugin module implements bot native command menu behavior.
 import { createHash } from "node:crypto";
 import type { Bot } from "grammy";
 import type { LanguageCode } from "grammy/types";
@@ -45,6 +44,9 @@ type TelegramPluginCommandSpec = {
   description: unknown;
   descriptionLocalizations?: Record<string, string>;
 };
+
+type TelegramSelectedPluginMenuCommand<TSpec extends TelegramPluginCommandSpec> =
+  TelegramMenuCommand & { spec: TSpec };
 
 const TELEGRAM_COMMAND_MENU_SCOPES: readonly TelegramCommandMenuScope[] = [
   { label: "default" },
@@ -182,12 +184,17 @@ function formatTelegramCommandRetrySuccessLog(params: {
   );
 }
 
-export function buildPluginTelegramMenuCommands(params: {
-  specs: TelegramPluginCommandSpec[];
+export function buildPluginTelegramMenuCommands<TSpec extends TelegramPluginCommandSpec>(params: {
+  specs: readonly TSpec[];
   existingCommands: Set<string>;
-}): { commands: TelegramMenuCommand[]; issues: string[] } {
+}): {
+  commands: TelegramMenuCommand[];
+  selectedCommands: TelegramSelectedPluginMenuCommand<TSpec>[];
+  issues: string[];
+} {
   const { specs, existingCommands } = params;
   const commands: TelegramMenuCommand[] = [];
+  const selectedCommands: TelegramSelectedPluginMenuCommand<TSpec>[] = [];
   const issues: string[] = [];
   const pluginCommandNames = new Set<string>();
 
@@ -238,14 +245,20 @@ export function buildPluginTelegramMenuCommands(params: {
     }
     pluginCommandNames.add(normalized);
     existingCommands.add(normalized);
-    const menuCommand: TelegramMenuCommand = { command: normalized, description };
+    const menuCommand: TelegramSelectedPluginMenuCommand<TSpec> = {
+      command: normalized,
+      description,
+      spec,
+    };
     if (spec.descriptionLocalizations) {
       menuCommand.descriptionLocalizations = spec.descriptionLocalizations;
     }
-    commands.push(menuCommand);
+    const { spec: _spec, ...displayCommand } = menuCommand;
+    commands.push(displayCommand);
+    selectedCommands.push(menuCommand);
   }
 
-  return { commands, issues };
+  return { commands, selectedCommands, issues };
 }
 
 export function buildCappedTelegramMenuCommands(params: {

@@ -27,12 +27,14 @@ non-thinking prefill remains available.
 
 ## Install plugin
 
-Install the official plugin, then restart Gateway:
+Install the official plugin:
 
 ```bash
 openclaw plugins install @openclaw/cloudflare-ai-gateway-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
@@ -73,7 +75,7 @@ openclaw gateway restart
 For scripted or CI setups, pass all values on the command line:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice cloudflare-ai-gateway-api-key \
   --cloudflare-ai-gateway-account-id "your-account-id" \

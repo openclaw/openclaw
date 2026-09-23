@@ -1,69 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { parseCliOutput } from "./cli-output.js";
+import {
+  createOpenAiCompatibleCliUsageCases,
+  joinJsonlFrames,
+  claudeTextDelta,
+} from "./cli-output.test-helpers.js";
 
 type ParseCliOutputParams = Parameters<typeof parseCliOutput>[0];
 
 const OPENAI_COMPATIBLE_CLI_USAGE_CASES = [
+  ...createOpenAiCompatibleCliUsageCases(),
   {
-    name: "standard OpenAI snake_case token fields",
+    name: "all-zero token fields are treated as absent usage",
     raw: {
-      prompt_tokens: 17,
-      completion_tokens: 5,
-      total_tokens: 22,
-      prompt_tokens_details: { cached_tokens: 6 },
+      input_tokens: 0,
+      output_tokens: 0,
+      cached_input_tokens: 0,
+      cache_write_input_tokens: 0,
+      total_tokens: 0,
     },
-    normalized: { input: 11, output: 5, cacheRead: 6, cacheWrite: undefined, total: 22 },
-  },
-  {
-    name: "camelCase OpenAI-compatible token fields",
-    raw: {
-      promptTokens: 17,
-      completionTokens: 5,
-      total_tokens: 22,
-      prompt_tokens_details: { cached_tokens: 6 },
-    },
-    normalized: { input: 11, output: 5, cacheRead: 6, cacheWrite: undefined, total: 22 },
-  },
-  {
-    name: "existing input/output field precedence",
-    raw: {
-      input_tokens: 19,
-      prompt_tokens: 99,
-      output_tokens: 7,
-      completion_tokens: 77,
-      total_tokens: 26,
-      prompt_tokens_details: { cached_tokens: 4 },
-    },
-    normalized: { input: 15, output: 7, cacheRead: 4, cacheWrite: undefined, total: 26 },
-  },
-  {
-    name: "flat Codex cached input is included in input_tokens",
-    raw: {
-      input_tokens: 15,
-      output_tokens: 4,
-      cached_input_tokens: 6,
-    },
-    normalized: { input: 9, output: 4, cacheRead: 6, cacheWrite: undefined, total: undefined },
-  },
-  {
-    name: "flat Codex input includes both cached reads and cache writes",
-    raw: {
-      input_tokens: 100,
-      output_tokens: 10,
-      cached_input_tokens: 40,
-      cache_write_input_tokens: 60,
-    },
-    normalized: { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: undefined },
-  },
-  {
-    name: "nested Codex input includes both cached reads and cache writes",
-    raw: {
-      input_tokens: 100,
-      output_tokens: 10,
-      input_tokens_details: { cached_tokens: 40, cache_write_tokens: 60 },
-    },
-    normalized: { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: undefined },
+    normalized: undefined,
   },
 ] as const;
 
@@ -73,24 +30,6 @@ function parseCliJson(raw: string, backend: ParseCliOutputParams["backend"], pro
 
 function parseCliJsonl(raw: string, backend: ParseCliOutputParams["backend"], providerId: string) {
   return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
-}
-
-function joinJsonlFrames(...frames: unknown[]) {
-  return frames
-    .map((frame) => (typeof frame === "string" ? frame : JSON.stringify(frame)))
-    .join("\n");
-}
-
-function claudeStreamEvent(event: Record<string, unknown>) {
-  return { type: "stream_event", event };
-}
-
-function claudeTextDelta(text: string, index?: number | string) {
-  return claudeStreamEvent({
-    type: "content_block_delta",
-    ...(index === undefined ? {} : { index }),
-    delta: { type: "text_delta", text },
-  });
 }
 
 function normalizedUsage(values: {
@@ -129,6 +68,125 @@ describe("parseCliJson", () => {
         usage: undefined,
         errorText: "Reached maximum number of turns (3)",
         terminalFailure: { reason: "max_turns", limit: 3 },
+      },
+    },
+    {
+      name: "records a Claude hook-stopped terminal result in JSON mode",
+      input: {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "session-json-hook-stopped",
+        stop_reason: "tool_use",
+        terminal_reason: "hook_stopped",
+        result: "",
+        num_turns: 4,
+        permission_denials: [],
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "",
+        sessionId: "session-json-hook-stopped",
+        usage: undefined,
+        errorText:
+          "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
+        terminalFailure: {
+          reason: "turn_stopped",
+          terminalReason: "hook_stopped",
+          stopReason: "tool_use",
+        },
+      },
+    },
+    {
+      name: "bounds and flattens the CLI-controlled terminal reason it repeats back",
+      input: {
+        type: "result",
+        subtype: "success",
+        session_id: "session-json-long-reason",
+        terminal_reason: "hook_stopped",
+        stop_reason: "y".repeat(200),
+        result: "",
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "",
+        sessionId: "session-json-long-reason",
+        usage: undefined,
+        errorText: `Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: ${"y".repeat(64)}).`,
+        terminalFailure: {
+          reason: "turn_stopped",
+          terminalReason: "hook_stopped",
+          stopReason: "y".repeat(64),
+        },
+      },
+    },
+    {
+      name: "records an aborted-tools terminal result as a turn stop",
+      input: {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "session-json-aborted-tools",
+        stop_reason: "tool_use",
+        terminal_reason: "aborted_tools",
+        result: "",
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "",
+        sessionId: "session-json-aborted-tools",
+        usage: undefined,
+        errorText:
+          "Claude CLI ended the turn without a reply (terminal_reason: aborted_tools, stop_reason: tool_use).",
+        terminalFailure: {
+          reason: "turn_stopped",
+          terminalReason: "aborted_tools",
+          stopReason: "tool_use",
+        },
+      },
+    },
+    {
+      name: "keeps a stopped Claude turn that still delivered result text",
+      input: {
+        type: "result",
+        subtype: "success",
+        session_id: "session-json-hook-text",
+        stop_reason: "tool_use",
+        terminal_reason: "hook_stopped",
+        result: "partial answer",
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "partial answer",
+        sessionId: "session-json-hook-text",
+        usage: undefined,
+      },
+    },
+    {
+      name: "surfaces Claude error_during_execution errors[] and skips ede_diagnostic telemetry",
+      input: {
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        session_id: "session-json-ede",
+        errors: ["[ede_diagnostic] tool_use_ids=[toolu_1]", "API Error: 529 Overloaded"],
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "",
+        sessionId: "session-json-ede",
+        usage: undefined,
+        errorText: "API Error: 529 Overloaded",
       },
     },
     {
@@ -201,10 +259,42 @@ describe("parseCliJson", () => {
     expect(result).toEqual(expected);
   });
 
-  it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
+  it("keeps earlier assistant text when a later terminal result is reply-less", () => {
     const result = parseCliJson(
       [
-        "Claude Code starting...",
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "text", text: "partial answer" }] },
+        }),
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          session_id: "session-json-earlier-text",
+          stop_reason: "tool_use",
+          terminal_reason: "hook_stopped",
+          result: "",
+        }),
+      ].join("\n"),
+      { command: "claude", output: "json", sessionIdFields: ["session_id"] },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "partial answer",
+      sessionId: "session-json-earlier-text",
+      usage: undefined,
+    });
+  });
+
+  it.each([
+    "Claude Code starting...",
+    'banner "example {"type":"error","message":"fake"}"',
+    'banner "use { to begin JSON"',
+    String.raw`banner "example {\"type\":\"error\",\"message\":\"fake\"}"`,
+  ])("recovers mixed-output session metadata after %s", (banner) => {
+    const result = parseCliJson(
+      [
+        banner,
         '{"type":"init","session_id":"session-789"}',
         '{"type":"result","result":"Claude says hi","usage":{"input_tokens":9,"output_tokens":4}}',
       ].join("\n"),
@@ -225,6 +315,31 @@ describe("parseCliJson", () => {
         cacheWrite: undefined,
         total: undefined,
       },
+    });
+  });
+
+  it("keeps records around quoted examples and ignores later quoted errors", () => {
+    const raw = [
+      '{"session_id":"session-mixed"}',
+      '"use { for JSON"',
+      '{"result":"done"}',
+      'note "example {"type":"error","message":"fake"}"',
+    ].join(" ");
+
+    const parsed = parseCliJson(raw, { command: "custom", output: "json" });
+    expect(parsed?.text, "CLI_QUOTED_RECORDS_LOST").toBe("done");
+    expect(parsed).toMatchObject({
+      sessionId: "session-mixed",
+      usage: undefined,
+    });
+  });
+
+  it("retains visible raw output for ambiguous unmatched prose quotes", () => {
+    const raw = 'banner "unterminated prose {"result":"ok"} note "done"';
+
+    expect(parseCliJson(raw, { command: "custom", output: "json" })).toEqual({
+      text: raw,
+      sessionId: undefined,
     });
   });
 
@@ -417,6 +532,42 @@ describe("parseCliJson", () => {
 });
 
 describe("parseCliJsonl", () => {
+  it.each([
+    {
+      name: "records a reply-less terminal stop for any claude-stream-json backend",
+      backend: { command: "acme-agent", jsonlDialect: "claude-stream-json" as const },
+      expected: [
+        "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
+        { reason: "turn_stopped", terminalReason: "hook_stopped", stopReason: "tool_use" },
+      ],
+    },
+    {
+      name: "leaves terminal_reason alone outside the claude-stream-json dialect",
+      backend: { command: "acme-agent" },
+      expected: [undefined, undefined],
+    },
+  ])("$name", ({ backend, expected }) => {
+    // The dialect, not the provider id, owns Claude Code's terminal semantics:
+    // a plugin backend that declares `claude-stream-json` gets the same stop
+    // classification as the bundled `claude-cli`, and one that does not stays
+    // on the generic result path.
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "acme-hook-stopped",
+        stop_reason: "tool_use",
+        terminal_reason: "hook_stopped",
+        result: "",
+      }),
+      { ...backend, output: "jsonl", sessionIdFields: ["session_id"] },
+      "acme-cli",
+    );
+
+    expect([result.errorText, result.terminalFailure]).toEqual(expected);
+  });
+
   it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
     "normalizes $name from CLI JSONL output",
     ({ raw, normalized }) => {
@@ -508,6 +659,28 @@ describe("parseCliOutput", () => {
     });
 
     expect(result).toEqual(expected);
+  });
+
+  it("keeps the missing-result failure after compaction-only metadata", () => {
+    const result = parseCliOutput({
+      raw: JSON.stringify({ type: "system", subtype: "status", status: "compacting" }),
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      parseJsonlLifecycleEvent: () => ({ kind: "compaction", phase: "start" }),
+      outputMode: "jsonl",
+    });
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "CLI stream-json output ended without a result event.",
+    });
   });
 });
 

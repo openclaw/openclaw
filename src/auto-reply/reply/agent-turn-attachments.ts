@@ -41,6 +41,15 @@ function hasInboundHistoryMedia(ctx: MsgContext): boolean {
   );
 }
 
+/** Current-turn image indexes already represented by media-understanding text. */
+export function collectDescribedImageAttachmentIndexes(ctx: MsgContext): Set<number> {
+  return new Set(
+    ctx.MediaUnderstanding?.filter((output) => output.kind === "image.description").map(
+      (output) => output.attachmentIndex,
+    ) ?? [],
+  );
+}
+
 /** Resolves image attachments for the current agent turn and recent image history. */
 export async function resolveAgentTurnAttachments(params: {
   ctx: MsgContext;
@@ -95,6 +104,9 @@ export async function resolveAgentTurnAttachments(params: {
       cfg: params.cfg,
       ctx: params.ctx,
     }),
+    // The scoped root set is authoritative: merging sessionless defaults back in would restore
+    // the shared workspace/sandbox parents for sandboxed sessions.
+    includeDefaultLocalPathRoots: false,
   });
   const results: AgentTurnAttachment[] = [];
   const resultIndexes: number[] = [];
@@ -141,16 +153,21 @@ export async function resolveAgentTurnAttachments(params: {
     }
   };
 
+  const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
   let currentImageResolved = false;
-  const hasCurrentMedia = currentAttachments.length > 0;
   const hasCurrentImageCandidate = currentAttachments.some(runtime.isImageAttachment);
   for (const attachment of currentAttachments) {
+    if (describedImageIndexes.has(attachment.index) && runtime.isImageAttachment(attachment)) {
+      // A described image satisfies this turn without rehydrating it or reviving image history.
+      currentImageResolved = true;
+      continue;
+    }
     currentImageResolved = (await resolveImageAttachment(attachment)) || currentImageResolved;
   }
   if (
     includeRecentHistoryImages &&
     !currentImageResolved &&
-    (!hasCurrentMedia || hasCurrentImageCandidate)
+    (currentAttachments.length === 0 || hasCurrentImageCandidate)
   ) {
     // History images are only used when the current turn did not already provide an image.
     for (const attachment of historyAttachments) {

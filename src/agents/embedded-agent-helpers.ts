@@ -28,26 +28,18 @@ export {
 } from "./embedded-agent-helpers/image-errors.js";
 export { classifyProviderRuntimeFailureKind } from "./embedded-agent-helpers/provider-runtime-failure.js";
 export type { ProviderRuntimeFailureKind } from "./embedded-agent-helpers/provider-runtime-failure.js";
-export {
-  BILLING_ERROR_USER_MESSAGE,
-  formatBillingErrorMessage,
-  formatRateLimitOrOverloadedErrorCopy,
-  getApiErrorPayloadFingerprint,
-  isRawApiErrorPayload,
-} from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+export { formatBillingErrorMessage, getApiErrorPayloadFingerprint } from "./failover/user-copy.js";
 export {
   formatRawAssistantErrorForUi,
   parseApiErrorInfo,
 } from "../shared/assistant-error-format.js";
 export {
   classifyFailoverReason,
-  isAuthErrorMessage,
   isCloudCodeAssistFormatError,
   isContextOverflowError,
   isFailoverErrorMessage,
-  isGenericUnknownStreamErrorMessage,
   isLikelyContextOverflowError,
-  isTransientHttpError,
+  isProviderRequestSizeCeilingError,
   isTimeoutErrorMessage,
 } from "./failover/classify.js";
 export type { FailoverReason } from "./failover/signal.js";
@@ -55,7 +47,7 @@ export { sanitizeGoogleTurnOrdering } from "./embedded-agent-helpers/google.js";
 
 export {
   downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
+  dropStaleOpenAIReasoning,
   normalizeOpenAIResponsesToolCallIds,
 } from "./embedded-agent-helpers/openai.js";
 export { sanitizeSessionMessagesImages } from "./embedded-agent-helpers/images.js";

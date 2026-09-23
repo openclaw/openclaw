@@ -24,16 +24,27 @@ export {
   DEFAULT_WAIT_TIMEOUT_MS,
   type QaBusWaitMatch,
 } from "./src/bus-waiters.js";
-export { isQaLabCliAvailable, registerQaLabCli } from "./src/cli.js";
 export { createQaRunnerRuntime } from "./src/harness-runtime.js";
+export { createQaEvidenceInvocation } from "./src/evidence-invocation.js";
 export {
+  buildQaOccurrenceEvidenceSummary,
   buildScriptEvidenceSummary,
+  getEffectiveQaEvidenceEntries,
+  projectQaEvidenceScenarioOutcomes,
   QA_EVIDENCE_FILENAME,
+  type QaEvidenceAssertion,
+  type QaEvidenceIdentity,
+  type QaEvidenceOccurrence,
   type QaEvidencePackageSource,
+  type QaEvidenceScenarioOutcome,
   type QaEvidenceStatus,
+  type QaEvidenceSummaryEntry,
   type QaEvidenceSummaryJson,
+  type QaEvidenceSummaryV3Entry,
+  type QaEvidenceSummaryV3Json,
   validateQaEvidenceSummaryJson,
 } from "./src/evidence-summary.js";
+export { splitQaModelRef } from "./src/model-selection.js";
 export type { QaProviderMode } from "./src/providers/index.js";
 export {
   type QaLabLatestReport,
@@ -100,20 +111,16 @@ export {
 } from "./src/self-check.js";
 export { runQaE2eSelfCheck, runQaLabSelfCheck } from "./src/self-check-runner.js";
 export {
-  testing,
-  testing as __testing,
-  buildQaRuntimeEnv,
   type QaCliBackendAuthMode,
   type QaGatewayChildListeningContext,
   type QaGatewayChildCommand,
   type QaGatewayChildStateMutationContext,
-  resolveQaControlUiRoot,
-  resolveQaGatewayChildProviderMode,
-  startQaGatewayChild,
+  createQaGatewayChild,
+  type QaGatewayChild,
+  type QaGatewayStopResult,
 } from "./src/gateway-child.js";
 export {
   buildQaSuiteSummaryJson,
-  qaSuiteProgressTesting,
   type QaSuiteResult,
   type QaSuiteRunParams,
   type QaSuiteScenarioResult,
@@ -123,3 +130,4 @@ export {
   runQaFlowSuite,
 } from "./src/suite.js";
 export { runQaSuite, type QaSuiteRuntimeResult } from "./src/suite-launch.runtime.js";
+export { captureQaEvidenceSourceIdentity } from "./src/evidence-environment.js";

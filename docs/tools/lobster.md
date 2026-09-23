@@ -68,16 +68,25 @@ With Lobster, the same job is one call that halts for approval and resumes:
 
 ## How it works
 
-OpenClaw runs Lobster workflows **in-process** using the bundled
-`@clawdbot/lobster` package as an embedded runner. No external `lobster`
-subprocess is spawned; the tool call returns a JSON envelope directly. If the
-pipeline halts for approval, the envelope carries a resume token (or a short
-approval ID) so you can continue later.
+The separately installed official `@openclaw/lobster` plugin runs Lobster
+workflows **in-process** using its embedded `@clawdbot/lobster` runtime. No
+external `lobster` subprocess is spawned; the tool call returns a JSON envelope
+directly. If the pipeline halts for approval, the envelope carries a resume
+token (or a short approval ID) so you can continue later.
 
 ## Enable
 
-Lobster is an **optional** plugin tool, not enabled by default. It ships
-bundled, so no separate install step is required - just allow the tool:
+Lobster is an **optional** plugin tool, not installed or enabled by default.
+Install the official plugin:
+
+```bash
+openclaw plugins install @openclaw/lobster
+```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
+
+Then allow the tool globally:
 
 ```json
 {
@@ -178,7 +187,7 @@ For a **structured LLM step** inside a workflow, enable the optional
 
 ### Important limitation: embedded Lobster vs `openclaw.invoke`
 
-The bundled Lobster plugin runs workflows **in-process** inside the gateway.
+The installed Lobster plugin runs workflows **in-process** inside the gateway.
 In that embedded mode, `openclaw.invoke` does **not** automatically inherit a
 gateway URL/auth context for nested OpenClaw CLI tool calls.
 
@@ -191,6 +200,16 @@ openclaw.invoke --tool llm-task --action json --args-json '{ ... }'
 Use the example below only when running the **standalone Lobster CLI** in an
 environment where `openclaw.invoke` is already configured with the correct
 gateway/auth context.
+
+For `openclaw.invoke` and `clawd.invoke`, ambient `OPENCLAW_TOKEN` or
+`CLAWD_TOKEN` credentials are accepted only for `localhost`, `127.0.0.1`, or
+`[::1]` destinations. To send credentials to another HTTP(S) endpoint, pass
+`--token` explicitly. This rule also applies to embedded workflows that
+explicitly configure a remote connection. This command argument is the remote
+Gateway credential, not the Lobster tool's approval-resume `token` parameter.
+If an invocation times out or fails after dispatch,
+Lobster does not retry it automatically, because the Gateway may already have
+performed the action.
 
 ```lobster
 openclaw.invoke --tool llm-task --action json --args-json '{
@@ -297,7 +316,7 @@ Run a workflow file with args:
 | `pipeline`       | required    | Inline pipeline string, or a path ending in `.lobster`/`.yaml`/`.yml`/`.json` for a workflow file.           |
 | `cwd`            | gateway cwd | Relative working directory; must resolve inside the gateway working directory (absolute paths are rejected). |
 | `timeoutMs`      | `20000`     | Aborts the run if exceeded.                                                                                  |
-| `maxStdoutBytes` | `512000`    | Aborts the run if captured stdout or stderr exceeds this size.                                               |
+| `maxStdoutBytes` | `512000`    | Aborts if captured stdout, stderr, or the embedded JSON result exceeds this size.                            |
 | `argsJson`       | -           | JSON string of args for a workflow file (ignored for inline pipelines).                                      |
 
 ### `resume`
@@ -319,11 +338,26 @@ run returned. `approve` is required.
 Passing `flowControllerId` and `flowGoal` on `run` (or `flowId` and
 `flowExpectedRevision` on `resume`) drives the call through the plugin
 runtime's managed [Task Flow](/automation/taskflow) API instead of returning
-a bare envelope: OpenClaw creates or resumes a durable flow record, applies the
-Lobster envelope to it (`waiting` on approval, `succeeded`/`failed` on
-completion), and returns `{ ok, envelope, flow, mutation }`. This mode requires
-a bound Task Flow runtime and is intended for plugin/controller code that needs
-durable flow state across gateway restarts, not typical ad hoc agent use.
+a bare envelope: OpenClaw creates or resumes a durable flow record and applies
+the Lobster outcome to it (`waiting` on approval, `succeeded`/`failed`/`cancelled`
+on completion). The tool returns the envelope fields at the top level, alongside
+`flow` and `mutation`. Check `mutation.applied` for a successful state transition
+and carry forward **`mutation.flow.revision`**; top-level `flow` is the snapshot
+from before that transition. Cancellation instead reports `mutation.cancelled`.
+A workflow error is surfaced as a tool error after an attempted flow failure;
+inspect the persisted flow rather than assuming the failure write succeeded.
+
+This mode requires a non-sandboxed tool context with a bound session. It records
+a managed flow, not detached ACP/subagent tasks for each shell step. Flow state
+persists in OpenClaw SQLite; Lobster's approval checkpoint is separate and must
+also remain available for resume. After a restart, inspect the latest flow and
+explicitly resume it with `flowId`, its current `flowExpectedRevision`, and the
+user's `approve` decision. Omit `token` and `approvalId` to recover the saved
+checkpoint from that flow; explicit credentials must match it. Finished or
+cancelled flows and stale revisions are rejected before workflow execution.
+Neither Task Flow nor a skill automatically replays arbitrary JavaScript. See
+[Task Flow](/automation/taskflow) for the runnable examples and child-linking
+contract.
 
 ## Output envelope
 
@@ -350,13 +384,6 @@ small JSON files under the Lobster state directory (`~/.lobster/state` by
 default, override with `LOBSTER_STATE_DIR`); the token itself only encodes a
 pointer to that state, not the full pipeline state.
 
-## OpenProse
-
-OpenProse pairs well with Lobster: use `/prose` to orchestrate multi-agent
-prep, then run a Lobster pipeline for deterministic approvals. If a Prose
-program needs Lobster, allow the `lobster` tool for sub-agents via
-`tools.subagents.tools`. See [OpenProse](/prose).
-
 ## Safety
 
 - **Local in-process only** - workflows execute inside the gateway process; no
@@ -372,6 +399,7 @@ program needs Lobster, allow the `lobster` tool for sub-agents via
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | `lobster runtime timed out`                                   | Pipeline exceeded `timeoutMs`. Increase it or split the pipeline.                |
 | `lobster stdout exceeded maxStdoutBytes` (or `stderr`)        | Captured output exceeded the cap. Raise `maxStdoutBytes` or reduce output.       |
+| `lobster runtime result exceeded maxStdoutBytes`              | The JSON result exceeded the cap. Raise `maxStdoutBytes` or reduce output.       |
 | `run --args-json must be valid JSON`                          | `argsJson` (workflow-file runs) failed to parse. Fix the JSON string.            |
 | `lobster runtime failed` (or another `runtime_error` message) | The embedded runtime returned an error envelope. Check gateway logs for details. |
 
@@ -397,3 +425,4 @@ not.
 
 - [Automation](/automation) - all automation mechanisms
 - [Tools Overview](/tools) - all available agent tools
+- [Lobster plugin reference](/plugins/reference/lobster) - manifest, config, and tool reference for the plugin

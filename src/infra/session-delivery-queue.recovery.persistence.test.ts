@@ -1,32 +1,42 @@
 // Covers real session-delivery retry failures against the persistent SQLite queue.
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
-  drainPendingSessionDeliveries,
+  drainPendingSessionDelivery,
+  recoverPendingSessionDeliveries,
+} from "./session-delivery-queue-recovery.js";
+import {
   enqueueSessionDelivery,
   loadPendingSessionDeliveries,
-  recoverPendingSessionDeliveries,
-} from "./session-delivery-queue.js";
+} from "./session-delivery-queue-storage.js";
+import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
 
 describe("session-delivery recovery persistence", () => {
   it.each(["startup", "targeted drain"] as const)(
     "surfaces real SQLite retry-persistence failures during %s recovery",
     async (mode) => {
-      await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      await withSessionDeliveryQueue(async (tempDir, queueContext) => {
         const id = await enqueueSessionDelivery(
           {
             kind: "systemEvent",
             sessionKey: "agent:main:main",
-            text: "recover after storage is writable",
+            text: "recover after retry writes are allowed",
           },
-          tempDir,
+          queueContext,
         );
         const { db } = openOpenClawStateDatabase({
           env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
         });
         const deliver = vi.fn(async () => {
-          db.exec("PRAGMA query_only = ON");
+          // An ordinary schema trigger is visible to the worker's existing connection.
+          db.exec(`
+            CREATE TRIGGER main.reject_session_delivery_retry
+            BEFORE UPDATE ON delivery_queue_entries
+            WHEN OLD.queue_name = 'session' AND OLD.id = '${id.replaceAll("'", "''")}'
+            BEGIN
+              SELECT RAISE(ABORT, 'synthetic session delivery retry write failure');
+            END;
+          `);
           throw new Error("session delivery interrupted");
         });
         const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -34,23 +44,22 @@ describe("session-delivery recovery persistence", () => {
         try {
           const recovery =
             mode === "startup"
-              ? recoverPendingSessionDeliveries({ deliver, stateDir: tempDir, log })
-              : drainPendingSessionDeliveries({
-                  drainKey: "test-read-only-retry-persistence",
-                  logLabel: "test read-only retry persistence",
+              ? recoverPendingSessionDeliveries({ deliver, queueContext, log })
+              : drainPendingSessionDelivery({
+                  id,
+                  logLabel: "test rejected retry persistence",
                   deliver,
-                  stateDir: tempDir,
+                  queueContext,
                   log,
-                  selectEntry: (entry) => ({ match: entry.id === id }),
                 });
 
-          await expect(recovery).rejects.toThrow(/readonly/iu);
+          await expect(recovery).rejects.toThrow("synthetic session delivery retry write failure");
         } finally {
-          db.exec("PRAGMA query_only = OFF");
+          db.exec("DROP TRIGGER IF EXISTS main.reject_session_delivery_retry");
         }
 
         expect(deliver).toHaveBeenCalledTimes(1);
-        const [pending] = await loadPendingSessionDeliveries(tempDir);
+        const [pending] = await loadPendingSessionDeliveries(queueContext);
         expect(pending).toEqual(expect.objectContaining({ id, retryCount: 0 }));
         expect(pending?.lastAttemptAt).toBeUndefined();
 
@@ -58,12 +67,12 @@ describe("session-delivery recovery persistence", () => {
         await expect(
           recoverPendingSessionDeliveries({
             deliver: retryDelivery,
-            stateDir: tempDir,
+            queueContext,
             log,
           }),
         ).resolves.toMatchObject({ recovered: 1 });
         expect(retryDelivery).toHaveBeenCalledTimes(1);
-        expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
+        expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
       });
     },
   );

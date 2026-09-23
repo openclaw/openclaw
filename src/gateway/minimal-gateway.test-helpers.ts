@@ -1,11 +1,17 @@
 // Minimal Gateway websocket test helpers.
 // Provides small fake-server frames plus an isolated real-Gateway boundary harness.
+import fs from "node:fs";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocket, type WebSocketServer } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import type { OpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { stateDirGatewayFixtureEntrypoint } from "../cli/cli-entrypoint.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { toAgentRequestSessionKey } from "../routing/session-key.js";
-import { getFreePort } from "../test-utils/ports.js";
 
 type MinimalGatewayRequestFrame = {
   type?: string;
@@ -40,7 +46,7 @@ export function buildMinimalGatewayHelloOkPayload(params?: {
   connId?: string;
   methods?: string[];
   snapshot?: Record<string, unknown>;
-  auth?: { role: string; scopes: string[] };
+  auth?: { role: string; scopes: string[]; deviceToken?: string };
   policy?: {
     maxPayload: number;
     maxBufferedBytes: number;
@@ -77,111 +83,186 @@ export async function closeMinimalGatewayServer(wss: WebSocketServer): Promise<v
   });
 }
 
-export async function startMinimalRealGateway(
-  sessions: Array<{
-    agentId: string;
-    key: string;
-    visibility?: import("../config/sessions.js").SessionEntry["visibility"];
-  }> = [],
-) {
-  const [bootstrap, profiles, sessionStore, testState] = await Promise.all([
-    import("../infra/device-bootstrap.js"),
-    import("../shared/device-bootstrap-profile.js"),
-    import("../config/sessions/session-accessor.sqlite-entry.js"),
-    import("../test-utils/openclaw-test-state.js"),
-  ]);
-  const token = "minimal-real-gateway-token";
-  const state = await testState.createOpenClawTestState({
-    env: {
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-    },
-  });
-  const sessionListRequests: Record<string, unknown>[] = [];
-  const hellos: unknown[] = [];
-  const connectFailures: unknown[] = [];
+type MinimalGatewaySession = {
+  agentId: string;
+  key: string;
+  visibility?: import("../config/sessions.js").SessionEntry["visibility"];
+};
+
+type MinimalGatewayObservation = {
+  method: "sessions.list" | "sessions.resolve";
+  params: Record<string, unknown>;
+};
+
+export async function startMinimalRealGateway(options: {
+  sessions?: MinimalGatewaySession[];
+  signal?: AbortSignal;
+  registerCleanup: (cleanup: () => Promise<void>) => unknown;
+}) {
+  const lifetime = createFixtureLifetime();
+  const cancellation = new AbortController();
+  const abort = () => cancellation.abort(options.signal?.reason);
+  options.signal?.addEventListener("abort", abort, { once: true });
+  if (options.signal?.aborted) {
+    abort();
+  }
   const clients: WebSocket[] = [];
-  let server: Awaited<ReturnType<(typeof import("./server.js"))["startGatewayServer"]>> | undefined;
-  let port = await getFreePort();
-  while (port === 18789) {
-    port = await getFreePort();
-  }
-  try {
-    for (const session of sessions) {
-      await sessionStore.upsertSqliteSessionEntry(
-        {
-          agentId: session.agentId,
-          sessionKey: toAgentRequestSessionKey(session.key)!,
-          storePath: path.join(state.agentDir(session.agentId), "openclaw-agent.sqlite"),
-        },
-        { sessionId: session.key, updatedAt: Date.now(), visibility: session.visibility },
-      );
-    }
-    const methods = await import("./server-methods.js");
-    const original = methods.coreGatewayHandlers["sessions.list"]!;
-    methods.coreGatewayHandlers["sessions.list"] = async (options) => {
-      sessionListRequests.push(options.params as Record<string, unknown>);
-      return await original(options);
-    };
-    const gateway = await import("./server.js");
-    server = await gateway
-      .startGatewayServer(port, {
-        auth: { mode: "token", token },
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-      })
-      .finally(() => (methods.coreGatewayHandlers["sessions.list"] = original));
-  } catch (error) {
-    await state.cleanup();
-    throw error;
-  }
   const dropConnections = () => clients.forEach((client) => client.terminate());
-  return {
-    url: `ws://127.0.0.1:${port}`,
-    token,
-    sessionListRequests,
-    hellos,
-    connectFailures,
-    connectBootstrap: async (mismatched = false) => {
-      const helpers = await import("./test-helpers.js");
-      const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-      clients.push(ws);
-      const bootstrapToken = (
-        await bootstrap.issueDeviceBootstrapToken({
-          baseDir: state.stateDir,
-          profile: profiles.NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-        })
-      ).token;
-      const response = await helpers.connectReq(ws, {
-        bootstrapToken,
-        ...(mismatched ? { deviceToken: "mismatched-device-token" } : {}),
-        skipDefaultAuth: true,
-        role: "node",
-        scopes: [],
-        client: { id: "node-host", version: "test", platform: "test", mode: "node" },
-        deviceIdentityPath: state.statePath(`device-${mismatched ? "bad" : "ok"}.sqlite`),
-        timeoutMs: 2_000,
+  let instance: OpenClawTestInstance | undefined;
+  let startupSettled: Promise<void> = Promise.resolve();
+  let closing: Promise<void> | undefined;
+  const close = () => {
+    if (closing) {
+      return closing;
+    }
+    cancellation.abort(new Error("Minimal Gateway fixture is closing"));
+    closing = (async () => {
+      const cleanup = lifetime.verifyCleanup(async () => {
+        await startupSettled;
+        dropConnections();
+        await instance?.cleanup();
       });
-      (response.ok ? hellos : connectFailures).push(
-        response.ok ? response.payload : response.error,
-      );
-      return response;
-    },
-    dropConnections,
-    close: async () => {
-      dropConnections();
       try {
-        await server!.close();
+        await runQaGatewayFixture(
+          () => cleanup,
+          () => lifetime.cleanup(),
+        );
       } finally {
-        await state.cleanup();
+        options.signal?.removeEventListener("abort", abort);
       }
-    },
+    })();
+    return closing;
   };
+  // Cancellation can finish the test wrapper before acquisition returns a handle.
+  options.registerCleanup(close);
+  const startup = lifetime.run(async () => {
+    cancellation.signal.throwIfAborted();
+    const { createOpenClawTestInstance } =
+      await import("../../test/helpers/openclaw-test-instance.js");
+    const entrypoint = resolveRuntimeWorkerUrl(stateDirGatewayFixtureEntrypoint);
+    const gateway = await createOpenClawTestInstance({
+      name: "minimal-real-gateway",
+      entrypoint: [...resolveRuntimeWorkerArgv(entrypoint), "--minimal-real-gateway"],
+      gatewayCommandPrefix: [process.execPath],
+      gatewayToken: "minimal-real-gateway-token",
+      signal: cancellation.signal,
+      verifyCleanup: lifetime.verifyCleanup,
+      config: { hooks: { enabled: false } },
+      env: {
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      },
+    });
+    instance = gateway;
+    gateway.state.applyEnv();
+    const requestLog = gateway.state.path("gateway-requests.jsonl");
+    fs.writeFileSync(requestLog, "");
+    gateway.env.OPENCLAW_GATEWAY_PORT = String(gateway.port);
+    gateway.env.OPENCLAW_TEST_GATEWAY_TOKEN = gateway.gatewayToken;
+    gateway.env.OPENCLAW_TEST_GATEWAY_REQUEST_LOG = requestLog;
+    const sessions = options.sessions ?? [];
+    if (sessions.length > 0) {
+      const { upsertSessionEntryCore } =
+        await import("../config/sessions/session-accessor.sqlite-entry.js");
+      for (const session of sessions) {
+        cancellation.signal.throwIfAborted();
+        await upsertSessionEntryCore(
+          {
+            agentId: session.agentId,
+            sessionKey: toAgentRequestSessionKey(session.key)!,
+            storePath: path.join(gateway.state.agentDir(session.agentId), "openclaw-agent.sqlite"),
+          },
+          { sessionId: session.key, updatedAt: Date.now(), visibility: session.visibility },
+        );
+      }
+    }
+    await gateway.startGateway();
+    const readRequests = (method: MinimalGatewayObservation["method"]) =>
+      fs
+        .readFileSync(requestLog, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .flatMap((line) => {
+          // This synthetic test log is emitted by the prepared fixture before the real RPC returns.
+          const observation: unknown = JSON.parse(line);
+          if (
+            !isRecord(observation) ||
+            (observation.method !== "sessions.list" && observation.method !== "sessions.resolve") ||
+            !isRecord(observation.params)
+          ) {
+            throw new Error("Invalid synthetic Gateway request observation");
+          }
+          return observation.method === method ? [observation.params] : [];
+        });
+    const issueNodeBootstrapToken = () =>
+      lifetime.run(async () => {
+        cancellation.signal.throwIfAborted();
+        const [bootstrap, profiles] = await Promise.all([
+          import("../infra/device-bootstrap.js"),
+          import("../shared/device-bootstrap-profile.js"),
+        ]);
+        cancellation.signal.throwIfAborted();
+        return (
+          await bootstrap.issueDeviceBootstrapToken({
+            baseDir: gateway.stateDir,
+            profile: profiles.NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          })
+        ).token;
+      });
+    const hellos: unknown[] = [];
+    const connectFailures: unknown[] = [];
+    return {
+      url: gateway.url,
+      token: gateway.gatewayToken,
+      get sessionListRequests() {
+        return readRequests("sessions.list");
+      },
+      get sessionResolveRequests() {
+        return readRequests("sessions.resolve");
+      },
+      hellos,
+      connectFailures,
+      issueNodeBootstrapToken,
+      createDeviceIdentity: (label: string) =>
+        lifetime.run(async () => {
+          cancellation.signal.throwIfAborted();
+          const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+          cancellation.signal.throwIfAborted();
+          return loadOrCreateDeviceIdentity({
+            path: gateway.state.statePath(`device-${label}.sqlite`),
+          });
+        }),
+      connectBootstrap: (mismatched = false) =>
+        lifetime.run(async () => {
+          const helpers = await import("./test-helpers.js");
+          const bootstrapToken = await issueNodeBootstrapToken();
+          cancellation.signal.throwIfAborted();
+          const ws = new WebSocket(gateway.url);
+          clients.push(ws);
+          helpers.trackConnectChallengeNonce(ws);
+          const response = await helpers.connectReq(ws, {
+            bootstrapToken,
+            ...(mismatched ? { deviceToken: "mismatched-device-token" } : {}),
+            skipDefaultAuth: true,
+            role: "node",
+            scopes: [],
+            client: { id: "node-host", version: "test", platform: "test", mode: "node" },
+            deviceIdentityPath: gateway.state.statePath(
+              `device-${mismatched ? "bad" : "ok"}.sqlite`,
+            ),
+            timeoutMs: 2_000,
+          });
+          (response.ok ? hellos : connectFailures).push(
+            response.ok ? response.payload : response.error,
+          );
+          return response;
+        }),
+      dropConnections,
+      close,
+    };
+  });
+  startupSettled = startup.then(
+    () => undefined,
+    () => undefined,
+  );
+  return await startup;
 }

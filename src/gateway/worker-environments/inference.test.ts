@@ -5,8 +5,17 @@ import type {
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { parseApiErrorInfo } from "../../shared/assistant-error-format.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { handleChatAbortRequestWithLifecycle } from "../server-methods/chat-abort-handler.js";
+import {
+  createActiveRun,
+  createChatAbortContext,
+  invokeChatAbortHandler,
+} from "../server-methods/chat.abort.test-helpers.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
-import type { WorkerInferenceSessionDrain } from "./inference-control-internal.js";
+import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
 import {
   createWorkerInferenceManager,
@@ -19,17 +28,6 @@ function waitForFast<T>(
   options: { timeout?: number; interval?: number } = {},
 ) {
   return vi.waitFor(callback, { interval: 1, ...options });
-}
-
-function beginSessionDrain(
-  manager: ReturnType<typeof createWorkerInferenceManager>,
-  sessionId: string,
-): WorkerInferenceSessionDrain {
-  return (
-    manager as typeof manager & {
-      beginSessionDrain(sessionId: string): WorkerInferenceSessionDrain;
-    }
-  ).beginSessionDrain(sessionId);
 }
 
 const REQUEST: WorkerInferenceStartParams = {
@@ -47,6 +45,13 @@ const IDENTITY: WorkerConnectionIdentity = {
   bundleHash: "b",
   sessionId: REQUEST.sessionId,
   runId: REQUEST.runId,
+  turnClaim: {
+    sessionId: REQUEST.sessionId,
+    claimId: "claim-r",
+    runId: REQUEST.runId,
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: "w", ownerEpoch: REQUEST.runEpoch },
+  },
   ownerEpoch: REQUEST.runEpoch,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
@@ -83,6 +88,20 @@ const CANCEL = {
   runId: REQUEST.runId,
   turnId: REQUEST.turnId,
 };
+
+function identityFor(request: WorkerInferenceStartParams): WorkerConnectionIdentity {
+  return {
+    ...IDENTITY,
+    sessionId: request.sessionId,
+    runId: request.runId,
+    turnClaim: {
+      ...IDENTITY.turnClaim!,
+      sessionId: request.sessionId,
+      runId: request.runId,
+      claimId: `claim-${request.runId}`,
+    },
+  };
+}
 
 type Manager = ReturnType<typeof createWorkerInferenceManager>;
 type StartOverrides = {
@@ -130,10 +149,218 @@ function accept(manager: Manager, overrides: StartOverrides = {}, launch = true)
 }
 
 function makeManager(execute: WorkerInferenceExecutor, store = createMemoryStore()) {
-  return createWorkerInferenceManager({ execute, store, now: () => 0 });
+  return createWorkerInferenceManager({ execute, store });
 }
 
 describe("worker inference manager", () => {
+  it.each(["session", "environment"] as const)(
+    "%s cancellation does not adopt a successor admitted by terminal delivery",
+    async (kind) => {
+      const instance = makeManager(async () => DONE);
+      const frames: WorkerInferenceTerminalFrame[] = [];
+      const replacementRequest = { ...REQUEST, turnId: "successor-turn" };
+      const successor = createSink("successor");
+      accept(
+        instance,
+        {
+          sink: {
+            connectionId: "original",
+            send: (frame) => {
+              if (frame.event !== "worker.inference.terminal") {
+                return;
+              }
+              frames.push(frame);
+              accept(instance, { request: replacementRequest, sink: successor.sink }, false);
+            },
+          },
+        },
+        false,
+      );
+      try {
+        if (kind === "session") {
+          expect(instance.cancelSession(REQUEST.sessionId)).toEqual([REQUEST.runId]);
+        } else {
+          instance.cancelEnvironment(IDENTITY.environmentId);
+        }
+        expect(frames).toHaveLength(1);
+        expect(frames[0]?.payload.turnId).toBe(REQUEST.turnId);
+        expect(terminalFrames(successor.frames)).toEqual([]);
+        expect(instance.hasSession(REQUEST.sessionId, REQUEST.runId)).toBe(true);
+      } finally {
+        await instance.stop();
+      }
+    },
+  );
+
+  it("records accepted worker cancellation and never adopts its callback's successor", async () => {
+    const instance = makeManager(async () => DONE);
+    const successor = createSink("successor");
+    let current = true;
+    accept(
+      instance,
+      {
+        sink: {
+          connectionId: "original",
+          send: (frame) => {
+            if (frame.event !== "worker.inference.terminal") {
+              return;
+            }
+            current = false;
+            accept(
+              instance,
+              {
+                request: { ...REQUEST, turnId: "successor-turn" },
+                sink: successor.sink,
+              },
+              false,
+            );
+          },
+        },
+      },
+      false,
+    );
+    const captured = instance.captureSessionCancellation(REQUEST.sessionId);
+    const committed: string[] = [];
+    try {
+      expect(
+        captured.cancel({
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("source revoked");
+            }
+          },
+          onCancelled: (runId) => committed.push(runId),
+        }),
+      ).toEqual([REQUEST.runId]);
+      expect(committed).toEqual([REQUEST.runId]);
+      expect(terminalFrames(successor.frames)).toEqual([]);
+      expect(captured.cancel()).toEqual([]);
+      expect(instance.hasSession(REQUEST.sessionId, REQUEST.runId)).toBe(true);
+    } finally {
+      await instance.stop();
+    }
+  });
+
+  it.each([false, true])(
+    "Gateway Stop retains original worker registration and authority (explicit=%s)",
+    async (explicit) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        for (const change of ["none", "replacement", "revocation"] as const) {
+          const key = "agent:main:main";
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: key },
+            {
+              sessionId: explicit ? "requested-session" : REQUEST.sessionId,
+              updatedAt: 1,
+            },
+          );
+          const signals: AbortSignal[] = [];
+          const instance = makeManager(({ signal }) => {
+            signals.push(signal);
+            return new Promise((resolve) => {
+              signal.addEventListener("abort", () => resolve(ERROR), { once: true });
+            });
+          });
+          const workerService = {};
+          registerWorkerInferenceSessionControl(workerService, {
+            beginDrain: instance.beginSessionDrain,
+            captureCancel: instance.captureSessionCancellation,
+          });
+          const original = createSink();
+          const successor = createSink("successor");
+          accept(instance, { sink: original.sink });
+          let current = true;
+          const parent = createActiveRun(explicit ? "agent:main:other" : key, {
+            sessionId: REQUEST.sessionId,
+            agentId: "main",
+            owner: { connId: "worker-owner" },
+          });
+          parent.controller.signal.addEventListener(
+            "abort",
+            () => {
+              if (change === "revocation") {
+                current = false;
+              }
+              if (change === "replacement") {
+                instance.cancelSession(REQUEST.sessionId, REQUEST.runId);
+                accept(
+                  instance,
+                  {
+                    request: { ...REQUEST, turnId: "successor-turn" },
+                    sink: successor.sink,
+                  },
+                  false,
+                );
+              }
+            },
+            { once: true },
+          );
+          const context = createChatAbortContext({
+            chatAbortControllers: new Map([[REQUEST.runId, parent]]),
+            workerEnvironmentService: workerService,
+          });
+          try {
+            await waitForFast(() => expect(signals).toHaveLength(1));
+            const stopped = invokeChatAbortHandler({
+              handler: (options) =>
+                handleChatAbortRequestWithLifecycle({
+                  ...options,
+                  hasCurrentClientAuthority: () => current,
+                }),
+              context,
+              request: { sessionKey: key, ...(explicit ? { runId: REQUEST.runId } : {}) },
+              client: { connId: "worker-owner", connect: { scopes: ["operator.admin"] } },
+            });
+            if (change === "revocation") {
+              await expect(stopped).rejects.toThrow("requester authority changed");
+            } else {
+              const response = await stopped;
+              expect(response.mock.calls[0]?.[1]).toMatchObject({
+                aborted: true,
+                runIds: [REQUEST.runId],
+              });
+            }
+            expect(parent.controller.signal.aborted).toBe(true);
+            expect(signals[0]?.aborted).toBe(change !== "revocation");
+            expect(instance.hasSession(REQUEST.sessionId, REQUEST.runId)).toBe(change !== "none");
+            expect(terminalFrames(original.frames)).toHaveLength(change === "revocation" ? 0 : 1);
+            expect(terminalFrames(successor.frames)).toEqual([]);
+          } finally {
+            await instance.stop();
+          }
+        }
+      });
+    },
+  );
+
+  it("persists and replays a bounded executor failure without repeating inference", async () => {
+    const execute = vi.fn<WorkerInferenceExecutor>(async () => {
+      throw Object.assign(new Error("Upstream unavailable"), { status: 503, code: "server_error" });
+    });
+    let stored: WorkerInferenceTerminalOutcome | undefined;
+    const store = createMemoryStore();
+    store.begin = () => (stored ? { kind: "replay", outcome: stored } : { kind: "claimed" });
+    store.complete = (input) => (stored = input.outcome);
+    const instance = makeManager(execute, store);
+    const sink = createSink();
+    accept(instance, { sink: sink.sink });
+    await waitForFast(() => expect(terminalFrames(sink.frames)).toHaveLength(1));
+    const outcome = terminalFrames(sink.frames)[0]?.payload.outcome;
+    if (outcome?.type !== "error") {
+      throw new Error("expected failed inference terminal");
+    }
+    expect(parseApiErrorInfo(outcome.message)).toMatchObject({
+      httpCode: "503",
+      code: "server_error",
+      message: "Upstream unavailable",
+    });
+    const replay = createSink("replay");
+    expect(accept(instance, { sink: replay.sink }).result.status).toBe("replayed");
+    expect(terminalFrames(replay.frames)[0]?.payload.outcome).toEqual(outcome);
+    expect(execute).toHaveBeenCalledOnce();
+    await instance.stop();
+  });
+
   it("rejects oversized and concurrent turns", async () => {
     const store = createMemoryStore();
     const execute = vi.fn<WorkerInferenceExecutor>(async () => ERROR);
@@ -151,10 +378,11 @@ describe("worker inference manager", () => {
     });
     const sink = createSink();
     accept(instance, { sink: sink.sink });
+    const competing = { ...REQUEST, runId: "run-b", turnId: "turn-b" };
     expect(
       instance.start({
-        identity: IDENTITY,
-        request: { ...REQUEST, runId: "run-b", turnId: "turn-b" },
+        identity: identityFor(competing),
+        request: competing,
         sink: createSink().sink,
       }),
     ).toEqual({ ok: false, reason: "invalid-context" });
@@ -190,7 +418,8 @@ describe("worker inference manager", () => {
       });
     }
     expect(signals[0]?.aborted).toBe(true);
-    accept(instance, { request: { ...REQUEST, runId: "new-run", turnId: "new-turn" } });
+    const nextRequest = { ...REQUEST, runId: "new-run", turnId: "new-turn" };
+    accept(instance, { identity: identityFor(nextRequest), request: nextRequest });
     await waitForFast(() => expect(signals).toHaveLength(2));
     expect(instance.cancelSession(REQUEST.sessionId, "new-run")).toEqual(["new-run"]);
     expect(signals[1]?.aborted).toBe(true);
@@ -204,12 +433,14 @@ describe("worker inference manager", () => {
     accept(instance);
     await waitForFast(() => expect(execute).toHaveBeenCalledOnce());
 
-    const drain = beginSessionDrain(instance, REQUEST.sessionId);
+    const drain = instance.beginSessionDrain(REQUEST.sessionId);
     expect(drain.hasWork()).toBe(true);
+    const replacementRequest = { ...REQUEST, runId: "replacement", turnId: "replacement" };
+    const replacementIdentity = identityFor(replacementRequest);
     expect(
       instance.start({
-        identity: IDENTITY,
-        request: { ...REQUEST, runId: "replacement", turnId: "replacement" },
+        identity: replacementIdentity,
+        request: replacementRequest,
         sink: createSink().sink,
       }),
     ).toEqual({ ok: false, reason: "cancelled" });
@@ -220,8 +451,8 @@ describe("worker inference manager", () => {
     drain.release();
     expect(
       instance.start({
-        identity: IDENTITY,
-        request: { ...REQUEST, runId: "replacement", turnId: "replacement" },
+        identity: replacementIdentity,
+        request: replacementRequest,
         sink: createSink().sink,
       }),
     ).toMatchObject({ ok: true });
@@ -237,7 +468,7 @@ describe("worker inference manager", () => {
     const instance = makeManager(async () => await pending.promise, store);
     accept(instance);
 
-    const drain = beginSessionDrain(instance, REQUEST.sessionId);
+    const drain = instance.beginSessionDrain(REQUEST.sessionId);
     pending.resolve(ERROR);
     await expect(drain.drained).rejects.toThrow("terminal persistence failed");
     drain.release();
@@ -262,7 +493,6 @@ describe("worker inference manager", () => {
         return pending.promise;
       },
       store,
-      now: () => 0,
       streamMaxBytes: 2_048,
     });
     const sink = createSink();
@@ -273,7 +503,8 @@ describe("worker inference manager", () => {
         reason: "provider-error",
       }),
     );
-    accept(instance, { request: { ...REQUEST, runId: "retry-run", turnId: "retry-turn" } });
+    const retryRequest = { ...REQUEST, runId: "retry-run", turnId: "retry-turn" };
+    accept(instance, { identity: identityFor(retryRequest), request: retryRequest });
     const replay = createSink("replay");
     expect(accept(instance, { sink: replay.sink }).result.status).toBe("replayed");
     expect(terminalFrames(replay.frames)[0]?.payload.outcome).toEqual(ERROR);

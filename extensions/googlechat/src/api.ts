@@ -1,4 +1,5 @@
 // Googlechat API module exposes the plugin public contract.
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -24,6 +25,21 @@ const GOOGLECHAT_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const GOOGLECHAT_ERROR_BODY_MAX_BYTES = 16 * 1024;
 const GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB = 20;
 const GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES = GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB * 1024 * 1024;
+
+type GoogleChatRequestHooks = Pick<
+  ChannelMessageActionContext,
+  "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
+>;
+
+export class GoogleChatApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "GoogleChatApiError";
+  }
+}
 
 function resolveGoogleChatMediaTimeoutMs(maxBytes?: number): number {
   if (!maxBytes) {
@@ -63,15 +79,17 @@ const headersToObject = (headers?: HeadersInit): Record<string, string> =>
       ? Object.fromEntries(headers)
       : headers || {};
 
-async function withGoogleChatResponse<T>(params: {
-  account: ResolvedGoogleChatAccount;
-  url: string;
-  init?: RequestInit;
-  auditContext: string;
-  errorPrefix?: string;
-  timeoutMs?: number;
-  handleResponse: (response: Response) => Promise<T>;
-}): Promise<T> {
+async function withGoogleChatResponse<T>(
+  params: GoogleChatRequestHooks & {
+    account: ResolvedGoogleChatAccount;
+    url: string;
+    init?: RequestInit;
+    auditContext: string;
+    errorPrefix?: string;
+    timeoutMs?: number;
+    handleResponse: (response: Response) => Promise<T>;
+  },
+): Promise<T> {
   const {
     account,
     url,
@@ -80,8 +98,16 @@ async function withGoogleChatResponse<T>(params: {
     errorPrefix = "Google Chat API",
     timeoutMs = GOOGLECHAT_API_TIMEOUT_MS,
     handleResponse,
+    assertDirectAdapterHandoff,
+    onPlatformSendDispatch,
   } = params;
+  assertDirectAdapterHandoff?.();
   const token = await getGoogleChatAccessToken(account);
+  if (onPlatformSendDispatch) {
+    // Preparatory reads never mark a recipient-visible send as dispatched.
+    assertDirectAdapterHandoff?.();
+    await onPlatformSendDispatch();
+  }
   const { response, release } = await fetchWithSsrFGuard({
     url,
     init: {
@@ -93,11 +119,16 @@ async function withGoogleChatResponse<T>(params: {
     },
     auditContext,
     timeoutMs,
+    // The guard checks again after network preparation and on each redirect.
+    beforeRequest: assertDirectAdapterHandoff,
   });
   try {
     if (!response.ok) {
       const text = await readGoogleChatErrorResponse(response, errorPrefix);
-      throw new Error(`${errorPrefix} ${response.status}: ${text || response.statusText}`);
+      throw new GoogleChatApiError(
+        response.status,
+        `${errorPrefix} ${response.status}: ${text || response.statusText}`,
+      );
     }
     return await handleResponse(response);
   } finally {
@@ -114,8 +145,10 @@ async function fetchJson<T>(
   account: ResolvedGoogleChatAccount,
   url: string,
   init: RequestInit,
+  hooks?: GoogleChatRequestHooks,
 ): Promise<T> {
   return await withGoogleChatResponse({
+    ...hooks,
     account,
     url,
     init: {
@@ -195,13 +228,15 @@ function isUsableGoogleChatThreadName(thread: string, space: string): boolean {
   return /^spaces\/[^/]+\/threads\/[^/]+$/.test(thread) && thread.startsWith(`${space}/threads/`);
 }
 
-export async function sendGoogleChatMessage(params: {
-  account: ResolvedGoogleChatAccount;
-  space: string;
-  text?: string;
-  thread?: string;
-  cardsV2?: GoogleChatCardV2[];
-}): Promise<{ messageName?: string; threadName?: string } | null> {
+export async function sendGoogleChatMessage(
+  params: GoogleChatRequestHooks & {
+    account: ResolvedGoogleChatAccount;
+    space: string;
+    text?: string;
+    thread?: string;
+    cardsV2?: GoogleChatCardV2[];
+  },
+): Promise<{ messageName?: string; threadName?: string } | null> {
   const { account, space, text, thread, cardsV2 } = params;
   const usableThread = thread && isUsableGoogleChatThreadName(thread, space) ? thread : undefined;
   if (
@@ -226,10 +261,15 @@ export async function sendGoogleChatMessage(params: {
     urlObj.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
   }
   const url = urlObj.toString();
-  const result = await fetchJson<{ name?: string; thread?: { name?: string } }>(account, url, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
+  const result = await fetchJson<{ name?: string; thread?: { name?: string } }>(
+    account,
+    url,
+    { method: "POST", body: JSON.stringify(body) },
+    {
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+      onPlatformSendDispatch: params.onPlatformSendDispatch,
+    },
+  );
   return result ? { messageName: result.name, threadName: result.thread?.name } : null;
 }
 
@@ -284,13 +324,17 @@ export async function downloadGoogleChatMedia(params: {
 export async function findGoogleChatDirectMessage(params: {
   account: ResolvedGoogleChatAccount;
   userName: string;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<GoogleChatSpace | null> {
   const { account, userName } = params;
   const url = new URL(`${CHAT_API_BASE}/spaces:findDirectMessage`);
   url.searchParams.set("name", userName);
-  return await fetchJson<GoogleChatSpace>(account, url.toString(), {
-    method: "GET",
-  });
+  return await fetchJson<GoogleChatSpace>(
+    account,
+    url.toString(),
+    { method: "GET" },
+    { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff },
+  );
 }
 
 export async function getGoogleChatSpace(params: {

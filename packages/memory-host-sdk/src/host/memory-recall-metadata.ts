@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { INVALID_PROJECT_ANNOTATION_KEY } from "./internal.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./openclaw-runtime-kysely.js";
+import type { MemoryEntryProvenance, MemoryOriginClass, MemorySessionKind } from "./types.js";
 
 type MemoryRecallMetadataDatabase = {
   memory_index_chunks: {
@@ -17,26 +18,96 @@ type MemoryRecallMetadataDatabase = {
     triggers: string | null;
     project_key: string | null;
   };
+  memory_index_chunk_provenance: {
+    chunk_id: string;
+    origin_class: MemoryOriginClass;
+    session_kind: MemorySessionKind;
+    observed_at: number;
+    supersedes_key: string | null;
+  };
 };
+
+const MEMORY_ORIGIN_CLASSES: ReadonlySet<string> = new Set([
+  "owner",
+  "agent",
+  "untrusted",
+  "system",
+]);
+const MEMORY_SESSION_KINDS: ReadonlySet<string> = new Set([
+  "interactive",
+  "cron",
+  "heartbeat",
+  "subagent",
+  "unknown",
+]);
+
+function decodeChunkProvenance(row: {
+  origin_class: unknown;
+  session_kind: unknown;
+  observed_at: unknown;
+  supersedes_key: unknown;
+}): MemoryEntryProvenance | undefined {
+  if (
+    typeof row.origin_class !== "string" ||
+    !MEMORY_ORIGIN_CLASSES.has(row.origin_class) ||
+    typeof row.session_kind !== "string" ||
+    !MEMORY_SESSION_KINDS.has(row.session_kind) ||
+    typeof row.observed_at !== "number"
+  ) {
+    return undefined;
+  }
+  return {
+    // SAFETY: Membership in the closed origin-class set is validated above.
+    originClass: row.origin_class as MemoryOriginClass,
+    // SAFETY: Membership in the closed session-kind set is validated above.
+    sessionKind: row.session_kind as MemorySessionKind,
+    observedAt: row.observed_at,
+    ...(typeof row.supersedes_key === "string" && row.supersedes_key.trim()
+      ? { supersedesKey: row.supersedes_key }
+      : {}),
+  };
+}
 
 export function readMemoryRecallMetadata(db: DatabaseSync, ids: readonly string[]) {
   if (ids.length === 0) {
     return new Map<
       string,
-      { importance: number | null; triggers: string | null; project_key: string | null }
+      Omit<MemoryRecallMetadataDatabase["memory_index_chunk_recall_metadata"], "chunk_id"> & {
+        id: string;
+        provenance?: MemoryEntryProvenance;
+      }
     >();
   }
   const query = getNodeSqliteKysely<MemoryRecallMetadataDatabase>(db)
     .selectFrom("memory_index_chunks as chunk")
     .leftJoin("memory_index_chunk_recall_metadata as metadata", "metadata.chunk_id", "chunk.id")
+    .leftJoin("memory_index_chunk_provenance as provenance", "provenance.chunk_id", "chunk.id")
     .select([
       "chunk.id as id",
       "metadata.importance as importance",
       "metadata.triggers as triggers",
       "metadata.project_key as project_key",
+      "provenance.origin_class as origin_class",
+      "provenance.session_kind as session_kind",
+      "provenance.observed_at as observed_at",
+      "provenance.supersedes_key as supersedes_key",
     ])
     .where("chunk.id", "in", [...ids]);
-  return new Map(executeSqliteQuerySync(db, query).rows.map((row) => [row.id, row]));
+  return new Map(
+    executeSqliteQuerySync(db, query).rows.map((row) => {
+      const provenance = decodeChunkProvenance(row);
+      return [
+        row.id,
+        {
+          id: row.id,
+          importance: row.importance,
+          triggers: row.triggers,
+          project_key: row.project_key,
+          ...(provenance ? { provenance } : {}),
+        },
+      ];
+    }),
+  );
 }
 
 export function readCuratedMemoryTriggerCandidates(
@@ -81,6 +152,7 @@ function readCuratedMemoryCandidates(params: {
   const active = params.activeProjectKeys
     ? new Set(params.activeProjectKeys.map((key) => key.trim()).filter(Boolean))
     : undefined;
+  const projectKeyPrefilter = active && active.size <= 64 ? [...active] : undefined;
   const results: ReturnType<typeof readCuratedCandidateBatch> = [];
   let cursor: { importance: number | null; path: string; id: string } | undefined;
   const batchSize = Math.max(64, limit);
@@ -93,6 +165,7 @@ function readCuratedMemoryCandidates(params: {
       cursor,
       requireProject: params.requireProject,
       requireTriggers: params.requireTriggers,
+      projectKeyPrefilter,
     });
     if (rows.length === 0) {
       break;
@@ -133,10 +206,12 @@ function readCuratedCandidateBatch(params: {
   cursor?: { importance: number | null; path: string; id: string };
   requireProject: boolean;
   requireTriggers: boolean;
+  projectKeyPrefilter?: readonly string[];
 }) {
   let query = getNodeSqliteKysely<MemoryRecallMetadataDatabase>(params.db)
     .selectFrom("memory_index_chunks as chunk")
     .leftJoin("memory_index_chunk_recall_metadata as metadata", "metadata.chunk_id", "chunk.id")
+    .innerJoin("memory_index_chunk_provenance as provenance", "provenance.chunk_id", "chunk.id")
     .select([
       "chunk.id as id",
       "chunk.path as path",
@@ -147,14 +222,33 @@ function readCuratedCandidateBatch(params: {
       "metadata.importance as importance",
       "metadata.triggers as triggers",
       "metadata.project_key as project_key",
+      "provenance.origin_class as origin_class",
+      "provenance.session_kind as session_kind",
+      "provenance.observed_at as observed_at",
+      "provenance.supersedes_key as supersedes_key",
     ])
     .where("chunk.source", "=", "memory")
-    .where("chunk.path", "in", ["MEMORY.md", "USER.md"]);
+    .where("chunk.path", "in", ["MEMORY.md", "USER.md"])
+    .where("provenance.origin_class", "in", ["owner", "agent"]);
   if (params.requireProject) {
     query = query.where("metadata.project_key", "is not", null);
   }
   if (params.requireTriggers) {
     query = query.where("metadata.triggers", "is not", null);
+  }
+  const projectKeyPrefilter = params.projectKeyPrefilter;
+  if (projectKeyPrefilter && (params.cursor || projectKeyPrefilter.length === 0)) {
+    // Without active keys only global rows are eligible. Nonempty key sets keep
+    // the first batch free of substring checks until it proves insufficient.
+    // Matching rows still need exact split/trimmed-key checks in JS.
+    query = query.where((eb) =>
+      eb.or([
+        eb("metadata.project_key", "is", null),
+        ...projectKeyPrefilter.map((key) =>
+          eb(eb.fn<number>("instr", [eb.ref("metadata.project_key"), eb.val(key)]), ">", 0),
+        ),
+      ]),
+    );
   }
   if (params.cursor) {
     const cursor = params.cursor;

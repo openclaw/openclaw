@@ -1,21 +1,27 @@
 /** Top-level doctor command wrapper, including post-upgrade probe mode. */
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { resolveSessionStoreTargets } from "../config/sessions/targets.js";
-import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
+import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
-import {
-  isDestructiveDoctorSessionSqliteMode,
-  withDoctorSqliteMaintenanceLock,
-} from "./doctor-sqlite-maintenance-lock.js";
+import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 
-function resolveExplicitSessionSqliteMaintenancePaths(options: DoctorOptions): string[] {
+async function resolveExplicitSessionSqliteMaintenancePaths(
+  options: DoctorOptions,
+): Promise<string[]> {
   if (!options.sessionSqliteStore) {
     return [];
   }
+  const [
+    { resolveSessionStoreTargets },
+    { resolveSqliteTargetFromSessionStorePath },
+    { resolveSqliteDatabaseFilePaths },
+  ] = await Promise.all([
+    import("../config/sessions/targets.js"),
+    import("../config/sessions/session-sqlite-target.js"),
+    import("../infra/sqlite-files.js"),
+  ]);
   const requestedAgentId = normalizeAgentId(options.sessionSqliteAgent ?? LEGACY_IMPLICIT_AGENT_ID);
   // Explicit path mode intentionally bypasses runtime config. Resolve through
   // the same selector as the migration so ownership checks cover exact targets.
@@ -28,25 +34,24 @@ function resolveExplicitSessionSqliteMaintenancePaths(options: DoctorOptions): s
     },
     { env: process.env },
   );
-  const protectedPaths = new Set<string>();
+  const protectedPaths: string[] = [];
   for (const target of targets) {
-    protectedPaths.add(target.storePath);
     const sqlitePath = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
     }).path;
-    if (sqlitePath) {
-      for (const databasePath of resolveSqliteDatabaseFilePaths(sqlitePath)) {
-        protectedPaths.add(databasePath);
-      }
-    }
+    protectedPaths.push(target.storePath, ...resolveSqliteDatabaseFilePaths(sqlitePath));
   }
-  return [...protectedPaths];
+  return [...new Set(protectedPaths)];
 }
 
 /** Runs doctor or the post-upgrade probe submode using the provided runtime. */
-export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOptions): Promise<void> {
+export async function doctorCommand(
+  runtime?: RuntimeEnv,
+  options?: DoctorOptions,
+  databasePreflight?: DoctorDatabasePreflight,
+): Promise<void> {
+  const outputRuntime = runtime ?? defaultRuntime;
   if (options?.stateSqlite) {
-    const outputRuntime = runtime ?? defaultRuntime;
     const { runDoctorStateSqliteCompact } = await import("./doctor-state-sqlite-compact.js");
     const report = await runDoctorStateSqliteCompact();
     if (options.json) {
@@ -62,30 +67,40 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
       );
       outputRuntime.log(`- integrity-check=${report.integrityCheck}, path=${report.path}`);
     }
-    outputRuntime.exit(0);
-    return;
+    exitCliAfterOutput(outputRuntime, 0);
   }
   if (options?.sessionSqlite) {
-    const outputRuntime = runtime ?? defaultRuntime;
     const sessionSqliteMode = options.sessionSqlite;
-    const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
-    const runSessionSqlite = async () =>
-      await runDoctorSessionSqlite({
-        mode: sessionSqliteMode,
-        ...(options.sessionSqliteStore ? { store: options.sessionSqliteStore } : {}),
-        ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),
-        ...(options.sessionSqliteAllAgents ? { allAgents: true } : {}),
-      });
-    const report = isDestructiveDoctorSessionSqliteMode(sessionSqliteMode)
-      ? await withDoctorSqliteMaintenanceLock({
-          env: process.env,
-          operation: `session SQLite ${sessionSqliteMode}`,
-          ...(options.sessionSqliteStore
-            ? { protectedPaths: resolveExplicitSessionSqliteMaintenancePaths(options) }
-            : {}),
-          run: runSessionSqlite,
-        })
-      : await runSessionSqlite();
+    const { countBlockingSessionSqliteIssues } = await import("./doctor-session-sqlite-types.js");
+    const { isDestructiveDoctorSessionSqliteMode, withDoctorSqliteMaintenanceLock } =
+      await import("./doctor-sqlite-maintenance-lock.js");
+    const { runDoctorSessionSqlite, reconcileDoctorSessionSqlitePublication } =
+      await import("./doctor-session-sqlite.js");
+    const { withArtifactPreservingStateReads } =
+      await import("../state/openclaw-state-db-readonly.js");
+    const sessionSqliteOptions = {
+      mode: sessionSqliteMode,
+      ...(options.sessionSqliteStore ? { store: options.sessionSqliteStore } : {}),
+      ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),
+      ...(options.sessionSqliteAllAgents ? { allAgents: true } : {}),
+    };
+    const runSessionSqlite = async () => await runDoctorSessionSqlite(sessionSqliteOptions);
+    const reconcileHardlink = (filePath: string) =>
+      reconcileDoctorSessionSqlitePublication(sessionSqliteOptions, filePath);
+    // Custom-target discovery can create a missing shared WAL before maintenance admission.
+    const report = await withArtifactPreservingStateReads(async () =>
+      isDestructiveDoctorSessionSqliteMode(sessionSqliteMode)
+        ? await withDoctorSqliteMaintenanceLock({
+            env: process.env,
+            operation: `session SQLite ${sessionSqliteMode}`,
+            ...(options.sessionSqliteStore
+              ? { protectedPaths: await resolveExplicitSessionSqliteMaintenancePaths(options) }
+              : {}),
+            ...(sessionSqliteMode !== "compact" ? { reconcileHardlink } : {}),
+            run: runSessionSqlite,
+          })
+        : await runSessionSqlite(),
+    );
     if (sessionSqliteMode === "recover" && options.sessionSqliteGithubIssue === true) {
       await maybeCreateSessionSqliteGithubIssue(outputRuntime, report, options);
     }
@@ -104,7 +119,6 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
       }
       if (report.supportIssue) {
         outputRuntime.log(`- support-issue-report=${report.supportIssue.bodyPath ?? "inline"}`);
-        outputRuntime.log(`- support-issue-url=${report.supportIssue.url}`);
       }
       for (const target of report.targets) {
         outputRuntime.log(
@@ -135,12 +149,16 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
         }
       }
     }
-    outputRuntime.exit(report.totals.issues > 0 ? 1 : 0);
-    return;
+    const hasBlockingIssues = report.targets.some(
+      (target) => countBlockingSessionSqliteIssues(target) > 0,
+    );
+    exitCliAfterOutput(outputRuntime, hasBlockingIssues ? 1 : 0);
   }
   if (options?.postUpgrade) {
-    const outputRuntime = runtime ?? defaultRuntime;
-    const report = await runPostUpgradeProbes({});
+    const { runPostUpgradeProbes } = await import("./doctor-post-upgrade.js");
+    const { readSourceConfigBestEffort } = await import("../config/io.runtime.js");
+    const config = await readSourceConfigBestEffort();
+    const report = await runPostUpgradeProbes({ updateChannel: config.update?.channel });
     if (options.json) {
       writeRuntimeJson(outputRuntime, report);
     } else {
@@ -152,11 +170,10 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
       }
     }
     const hasError = report.findings.some((f) => f.level === "error");
-    outputRuntime.exit(hasError ? 1 : 0);
-    return;
+    exitCliAfterOutput(outputRuntime, hasError ? 1 : 0);
   }
   const doctorHealth = await import("../flows/doctor-health.js");
-  await doctorHealth.doctorCommand(runtime, options);
+  await doctorHealth.runDoctorHealthFlow(runtime, options, undefined, databasePreflight);
 }
 
 async function maybeCreateSessionSqliteGithubIssue(
@@ -165,14 +182,17 @@ async function maybeCreateSessionSqliteGithubIssue(
   options: DoctorOptions,
 ): Promise<void> {
   const shouldLog = options.json !== true;
-  if (!report.supportIssue) {
+  const supportIssue = report.supportIssue;
+  if (!supportIssue) {
     if (shouldLog) {
       runtime.log("session-sqlite recover: no support issue payload was generated");
     }
     return;
   }
+  const { resolveDoctorRepairMode } = await import("./doctor-repair-mode.js");
+  const canPrompt = options.json !== true && resolveDoctorRepairMode(options).canPrompt;
   let approved = options.yes === true;
-  if (!approved && options.nonInteractive !== true && options.json !== true) {
+  if (canPrompt) {
     const { promptYesNo } = await import("../cli/prompt.js");
     approved = await promptYesNo(
       "Create a GitHub issue in openclaw/openclaw with the sanitized recovery report?",
@@ -180,29 +200,165 @@ async function maybeCreateSessionSqliteGithubIssue(
     );
   }
   if (!approved) {
-    report.supportIssue.github = { status: "skipped" };
+    const message = canPrompt
+      ? "GitHub issue creation skipped: confirmation was declined."
+      : "GitHub issue creation skipped: noninteractive recovery requires --yes.";
+    supportIssue.github = { message, status: "skipped" };
     if (shouldLog) {
-      runtime.log("session-sqlite recover: GitHub issue creation skipped");
+      runtime.log(`session-sqlite recover: ${message}`);
     }
     return;
   }
-  const { createSessionSqliteGithubIssue } =
-    await import("./doctor-session-sqlite-github-issue.js");
-  const created = createSessionSqliteGithubIssue(report.supportIssue);
-  if (created.ok) {
-    report.supportIssue.github = { status: "created", url: created.url };
-    if (shouldLog) {
-      runtime.log(`session-sqlite recover: created GitHub issue ${created.url}`);
-    }
+  const manifestPath = report.migrationRun?.manifestPath;
+  if (!manifestPath) {
+    setSessionSqliteGithubIssueFailure(
+      runtime,
+      supportIssue,
+      shouldLog,
+      "GitHub issue creation is unavailable because its private retry receipt could not be prepared.",
+    );
     return;
   }
-  report.supportIssue.github = {
-    fallbackUrl: created.fallbackUrl,
-    message: created.message,
-    status: "failed",
-  };
+  const { prepareGithubIssue, reconcileGithubIssue, submitGithubIssue } =
+    await import("../infra/github-issue.js");
+  const { claimSessionSqliteMigrationGithubIssue, clearSessionSqliteMigrationGithubIssueClaim } =
+    await import("./doctor-session-sqlite-failure.js");
+  const prepared = prepareGithubIssue({ body: supportIssue.body, title: supportIssue.title });
+  let claim: ReturnType<typeof claimSessionSqliteMigrationGithubIssue>;
+  try {
+    claim = await withSessionSqliteGithubIssueReceipt(manifestPath, (authority) =>
+      claimSessionSqliteMigrationGithubIssue(
+        manifestPath,
+        { marker: prepared.marker, title: prepared.title },
+        authority,
+      ),
+    );
+  } catch {
+    claim = undefined;
+  }
+  if (!claim) {
+    setSessionSqliteGithubIssueFailure(
+      runtime,
+      supportIssue,
+      shouldLog,
+      "GitHub issue creation is unavailable because its private retry receipt could not be saved.",
+    );
+    return;
+  }
+  supportIssue.title = claim.issue.title;
+  const claimedIssue = prepareGithubIssue({ body: supportIssue.body, title: claim.issue.title });
+  if (claimedIssue.marker !== claim.issue.marker) {
+    setSessionSqliteGithubIssueFailure(
+      runtime,
+      supportIssue,
+      shouldLog,
+      "GitHub issue creation is unavailable because its private retry receipt is inconsistent.",
+    );
+    return;
+  }
+  if (claim.status === "existing") {
+    const reconciled = await reconcileGithubIssue(claimedIssue).catch(() => ({
+      status: "unavailable" as const,
+    }));
+    if (reconciled.status === "created") {
+      setSessionSqliteGithubIssueCreated(runtime, supportIssue, shouldLog, reconciled.url);
+      return;
+    }
+    setSessionSqliteGithubIssueFailure(
+      runtime,
+      supportIssue,
+      shouldLog,
+      "A prior GitHub issue handoff may already have created this report; no duplicate was opened.",
+    );
+    return;
+  }
+  const created = await submitGithubIssue(claimedIssue).catch(() => ({
+    reason: "creation-outcome-unknown" as const,
+    status: "outcome-unknown" as const,
+  }));
+  if (created.status === "created") {
+    setSessionSqliteGithubIssueCreated(runtime, supportIssue, shouldLog, created.url);
+    return;
+  }
+  if (created.status === "outcome-unknown") {
+    setSessionSqliteGithubIssueFailure(
+      runtime,
+      supportIssue,
+      shouldLog,
+      "GitHub issue creation outcome is unknown; no duplicate was opened.",
+    );
+    return;
+  }
+  if (created.status === "fallback-unavailable") {
+    await withSessionSqliteGithubIssueReceipt(manifestPath, (authority) =>
+      clearSessionSqliteMigrationGithubIssueClaim(manifestPath, claimedIssue.marker, authority),
+    ).catch(() => false);
+    setSessionSqliteGithubIssueFailure(
+      runtime,
+      supportIssue,
+      shouldLog,
+      "GitHub issue creation is unavailable, and this report is too large for a safe browser fallback.",
+    );
+    return;
+  }
+  const message =
+    created.reason === "cli-unavailable"
+      ? "GitHub CLI is unavailable."
+      : created.reason === "authentication-unavailable"
+        ? "GitHub authentication is unavailable."
+        : "GitHub issue creation is unavailable.";
+  const { detectBrowserOpenSupport, openUrl } = await import("../infra/browser-open.js");
+  const browserSupport = await detectBrowserOpenSupport().catch(() => ({ ok: false }));
+  const opened = browserSupport.ok ? await openUrl(created.url).catch(() => false) : false;
+  if (!browserSupport.ok) {
+    await withSessionSqliteGithubIssueReceipt(manifestPath, (authority) =>
+      clearSessionSqliteMigrationGithubIssueClaim(manifestPath, claimedIssue.marker, authority),
+    ).catch(() => false);
+  }
+  supportIssue.github = { message, status: "failed" };
   if (shouldLog) {
-    runtime.log(`session-sqlite recover: GitHub issue creation unavailable: ${created.message}`);
-    runtime.log(`session-sqlite recover: prefilled issue URL ${created.fallbackUrl}`);
+    runtime.log(`session-sqlite recover: ${message}`);
+    runtime.log(
+      opened
+        ? "session-sqlite recover: opened the sanitized fallback in your browser"
+        : "session-sqlite recover: browser handoff unavailable; the sanitized report remains available in the recovery result",
+    );
+  }
+}
+
+async function withSessionSqliteGithubIssueReceipt<T>(
+  manifestPath: string,
+  run: (authority: DoctorSqliteMaintenanceAuthority) => Promise<T> | T,
+): Promise<T> {
+  const { withDoctorSqliteMaintenanceLock } = await import("./doctor-sqlite-maintenance-lock.js");
+  return await withDoctorSqliteMaintenanceLock({
+    env: process.env,
+    operation: "session SQLite GitHub issue receipt",
+    protectedPaths: [manifestPath],
+    run,
+  });
+}
+
+function setSessionSqliteGithubIssueCreated(
+  runtime: RuntimeEnv,
+  issue: NonNullable<DoctorSessionSqliteReport["supportIssue"]>,
+  shouldLog: boolean,
+  url: string,
+): void {
+  issue.github = { status: "created", url };
+  if (shouldLog) {
+    runtime.log(`session-sqlite recover: created GitHub issue ${url}`);
+  }
+}
+
+function setSessionSqliteGithubIssueFailure(
+  runtime: RuntimeEnv,
+  issue: NonNullable<DoctorSessionSqliteReport["supportIssue"]>,
+  shouldLog: boolean,
+  message: string,
+): void {
+  issue.github = { message, status: "failed" };
+  if (shouldLog) {
+    runtime.log(`session-sqlite recover: ${message}`);
   }
 }

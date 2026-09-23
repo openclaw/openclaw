@@ -1,13 +1,12 @@
-// Telegram plugin module implements channel.setup behavior.
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import type { ResolvedTelegramAccount } from "./accounts.js";
 import type { TelegramProbe } from "./probe.js";
 import { telegramSetupContract } from "./setup-core.js";
+import { createTelegramSetupPluginBase } from "./setup-plugin.js";
 import { telegramSetupWizard } from "./setup-surface.js";
-import { createTelegramPluginBase } from "./shared.js";
 
 export const telegramSetupPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
-  ...createTelegramPluginBase({
+  ...createTelegramSetupPluginBase({
     setupWizard: telegramSetupWizard,
     setupContract: telegramSetupContract,
   }),

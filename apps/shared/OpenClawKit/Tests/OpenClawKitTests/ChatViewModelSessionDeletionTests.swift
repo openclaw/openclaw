@@ -95,7 +95,7 @@ struct ChatViewModelSessionDeletionTests {
         }
     }
 
-    @Test func `deleting the canonical selected global row treats its alias as active`() async throws {
+    @Test func `deleting an ordinary qualified global row preserves the bare global conversation`() async throws {
         let transport = DeleteSessionTestTransport()
         let vm = OpenClawChatViewModel(
             sessionKey: "global",
@@ -111,9 +111,7 @@ struct ChatViewModelSessionDeletionTests {
         try await waitUntil("delete reaches transport") {
             await MainActor.run { transport.deletedKeys == ["agent:ops:global"] }
         }
-        try await waitUntil("alias fallback switch to main") {
-            await MainActor.run { vm.sessionKey == "main" }
-        }
+        #expect(await MainActor.run { vm.sessionKey == "global" })
     }
 
     @Test func `deleting an inactive session keeps the active one`() async throws {

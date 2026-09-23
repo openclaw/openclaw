@@ -4,16 +4,46 @@ import {
   type ParsedIpAddress,
 } from "@openclaw/net-policy/ip";
 
-export function normalizeLowercaseStringOrEmpty(value: unknown): string {
+export function normalizeGatewayErrorText(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
-export function isSensitiveUrlQueryParamName(key: string): boolean {
+function isSensitiveUrlQueryParamName(key: string): boolean {
   return /(?:token|password|secret|key|auth|credential)/iu.test(key);
 }
 
-export function normalizeFingerprint(fingerprint: string | undefined): string {
-  return (fingerprint ?? "").replaceAll(":", "").trim().toLowerCase();
+export function isGatewayClientStoppedError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message === "gateway client stopped" || message === "Error: gateway client stopped";
+}
+
+export function formatGatewayClientErrorForLog(err: unknown): string {
+  const redactedUrlLikeString = String(err)
+    .replace(/\/\/([^@/?#\s]+)@/g, "//***:***@")
+    .replace(/(Authorization:\s*Bearer\s+)[^\s]+/giu, "$1***")
+    .replace(/([?&])([^=&\s]+)=([^&#\s"'<>)]*)/g, (match, prefix: string, key: string) =>
+      isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
+    );
+  return redactedUrlLikeString;
+}
+
+const SHA256_HEX_FINGERPRINT = /^[a-fA-F0-9]{64}$/u;
+const SHA256_COLON_FINGERPRINT = /^(?:[a-fA-F0-9]{2}:){31}[a-fA-F0-9]{2}$/u;
+
+export function normalizeTlsFingerprint(fingerprint: string | undefined): string {
+  const value = (fingerprint ?? "").trim().replace(/^sha256:/iu, "");
+  if (SHA256_HEX_FINGERPRINT.test(value)) {
+    return value.toLowerCase();
+  }
+  return SHA256_COLON_FINGERPRINT.test(value) ? value.replaceAll(":", "").toLowerCase() : "";
+}
+
+export function requireTlsFingerprint(fingerprint: string): string {
+  const normalized = normalizeTlsFingerprint(fingerprint);
+  if (!normalized) {
+    throw new Error("Invalid TLS fingerprint; expected a SHA-256 certificate fingerprint.");
+  }
+  return normalized;
 }
 
 export function parseHostForAddressChecks(

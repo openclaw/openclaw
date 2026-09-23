@@ -1,24 +1,52 @@
 /**
  * Early gateway startup helper tests.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as gatewayWork from "../process/gateway-work-admission.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { getDetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime.js";
+import { getTaskById } from "../tasks/task-registry.js";
+import { createTaskFixture } from "../tasks/task-registry.test-support.js";
+import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "../tasks/task-runtime.test-helpers.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
+import { runGatewayCloseSteps } from "./server-shutdown.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 type StartGatewayDiscovery = typeof import("./server-discovery-runtime.js").startGatewayDiscovery;
 
 const mocks = vi.hoisted(() => ({
   getMachineDisplayName: vi.fn(async () => "Test Machine"),
-  startGatewayDiscovery: vi.fn<StartGatewayDiscovery>(async () => ({ bonjourStop: null })),
+  startGatewayDiscovery: vi.fn<StartGatewayDiscovery>(async () => ({
+    update: async () => {},
+    stop: async () => {},
+  })),
   setSkillsRemoteRegistry: vi.fn(),
   primeRemoteSkillsCache: vi.fn(),
   refreshRemoteBinsForConnectedNodes: vi.fn(),
   registerSkillsChangeListener: vi.fn(),
+  closeSkillsWatchers: vi.fn(),
   skillsChangeUnsub: vi.fn(),
   ensureContextWindowCacheLoaded: vi.fn(),
   ensureTaskRuntimeStateReady: vi.fn(),
   configureTaskRegistryMaintenance: vi.fn(),
   startTaskRegistryMaintenance: vi.fn(),
   getInspectableActiveTaskRestartBlockers: vi.fn(),
+  startGatewayMaintenanceTimers: vi.fn(() => ({
+    startMediaCleanup: vi.fn(),
+    stopMediaCleanup: vi.fn(async () => "drained" as const),
+    stopPeriodicTasks: vi.fn(async () => {}),
+    skillUsageCleanup: vi.fn(async () => {}),
+  })),
+}));
+
+vi.mock("./server-maintenance.js", () => ({
+  startGatewayMaintenanceTimers: mocks.startGatewayMaintenanceTimers,
 }));
 
 vi.mock("../infra/machine-name.js", () => ({
@@ -37,23 +65,26 @@ vi.mock("../skills/runtime/remote.js", () => ({
 
 vi.mock("../skills/runtime/refresh.js", () => ({
   registerSkillsChangeListener: mocks.registerSkillsChangeListener,
+  closeSkillsWatchers: mocks.closeSkillsWatchers,
 }));
 
 vi.mock("../agents/context.js", () => ({
   ensureContextWindowCacheLoaded: mocks.ensureContextWindowCacheLoaded,
 }));
 
-vi.mock("../tasks/runtime-internal.js", () => ({
+vi.mock("../tasks/runtime-internal.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tasks/runtime-internal.js")>()),
   ensureTaskRuntimeStateReady: mocks.ensureTaskRuntimeStateReady,
 }));
 
-vi.mock("../tasks/task-registry.maintenance.js", () => ({
+vi.mock("../tasks/task-registry.maintenance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tasks/task-registry.maintenance.js")>()),
   configureTaskRegistryMaintenance: mocks.configureTaskRegistryMaintenance,
   startTaskRegistryMaintenance: mocks.startTaskRegistryMaintenance,
   getInspectableActiveTaskRestartBlockers: mocks.getInspectableActiveTaskRestartBlockers,
 }));
 
-import { startGatewayEarlyRuntime, startGatewayPluginDiscovery } from "./server-startup-early.js";
+import { startGatewayEarlyRuntime } from "./server-startup-early.js";
 
 type StartGatewayEarlyRuntimeInput = Parameters<typeof startGatewayEarlyRuntime>[0];
 
@@ -72,6 +103,7 @@ function earlyRuntimeInput(
   });
   return {
     minimalTestGateway: true,
+    isClosing: () => false,
     cfgAtStart: {} as never,
     port: 18_789,
     gatewayTls: { enabled: false },
@@ -80,6 +112,11 @@ function earlyRuntimeInput(
     log,
     logDiscovery: log,
     nodeRegistry: {} as never,
+    swapDiscovery: () => null,
+    pluginRuntimeClaim: createGatewayPluginRuntimeGeneration({
+      getServices: () => null,
+      setServices: () => {},
+    }).currentClaim(),
     ...maintenanceState,
     skillsRefreshDelayMs: 30_000,
     getSkillsRefreshTimer: () => null,
@@ -93,11 +130,12 @@ describe("startGatewayEarlyRuntime", () => {
   beforeEach(() => {
     mocks.getMachineDisplayName.mockClear();
     mocks.startGatewayDiscovery.mockClear();
-    mocks.startGatewayDiscovery.mockResolvedValue({ bonjourStop: null });
+    mocks.startGatewayDiscovery.mockResolvedValue({ update: async () => {}, stop: async () => {} });
     mocks.setSkillsRemoteRegistry.mockReset();
     mocks.primeRemoteSkillsCache.mockReset();
     mocks.refreshRemoteBinsForConnectedNodes.mockReset();
     mocks.registerSkillsChangeListener.mockReset();
+    mocks.closeSkillsWatchers.mockReset();
     mocks.registerSkillsChangeListener.mockReturnValue(mocks.skillsChangeUnsub);
     mocks.skillsChangeUnsub.mockReset();
     mocks.ensureContextWindowCacheLoaded.mockReset();
@@ -107,6 +145,7 @@ describe("startGatewayEarlyRuntime", () => {
     mocks.startTaskRegistryMaintenance.mockReset();
     mocks.getInspectableActiveTaskRestartBlockers.mockReset();
     mocks.getInspectableActiveTaskRestartBlockers.mockReturnValue([]);
+    mocks.startGatewayMaintenanceTimers.mockClear();
   });
 
   it("does not eagerly start the MCP loopback server", async () => {
@@ -114,6 +153,32 @@ describe("startGatewayEarlyRuntime", () => {
 
     expect(earlyRuntime).not.toHaveProperty("mcpServer");
   });
+
+  it.each([false, true])(
+    "starts maintenance only while its Gateway is open (closesDuringImport=%s)",
+    async (closesDuringImport) => {
+      let closing = false;
+      const earlyRuntime = await startGatewayEarlyRuntime(
+        earlyRuntimeInput({ minimalTestGateway: false, isClosing: () => closing }),
+      );
+      try {
+        const starting = earlyRuntime.startMaintenance({});
+        closing = closesDuringImport;
+        const maintenance = await starting;
+
+        expect(mocks.startGatewayMaintenanceTimers).toHaveBeenCalledTimes(
+          closesDuringImport ? 0 : 1,
+        );
+        if (closesDuringImport) {
+          expect(maintenance).toBeNull();
+        } else {
+          expect(maintenance).toBe(mocks.startGatewayMaintenanceTimers.mock.results[0]?.value);
+        }
+      } finally {
+        await earlyRuntime.skillsChangeUnsub();
+      }
+    },
+  );
 
   it("wires non-minimal skills runtime through lazy startup imports", async () => {
     const nodeRegistry = { node: { id: "node" } };
@@ -142,9 +207,69 @@ describe("startGatewayEarlyRuntime", () => {
     expect(mocks.registerSkillsChangeListener).toHaveBeenCalledTimes(1);
     expect(earlyRuntime.getActiveTaskCount()).toBe(1);
 
-    earlyRuntime.skillsChangeUnsub();
+    await earlyRuntime.skillsChangeUnsub();
     expect(mocks.skillsChangeUnsub).toHaveBeenCalledTimes(1);
+    expect(mocks.closeSkillsWatchers).toHaveBeenCalledTimes(1);
   });
+
+  it.each([false, true])(
+    "stops acquired discovery exactly once after later startup failure (cleanup rejects: %s)",
+    async (cleanupRejects) => {
+      const startupError = new Error("remote skills registry failed");
+      const cleanupError = new Error("discovery cleanup failed");
+      const stopDiscovery = vi.fn(async () => {
+        if (cleanupRejects) {
+          throw cleanupError;
+        }
+      });
+      const owner: { current: Awaited<ReturnType<StartGatewayDiscovery>> | null } = {
+        current: null,
+      };
+      const swapDiscovery = (next: typeof owner.current) => {
+        const previous = owner.current;
+        owner.current = next;
+        return previous;
+      };
+      mocks.startGatewayDiscovery.mockResolvedValueOnce({
+        update: async () => {},
+        stop: stopDiscovery,
+      });
+      mocks.setSkillsRemoteRegistry.mockImplementationOnce(() => {
+        throw startupError;
+      });
+      const onCleanupError = vi.fn();
+
+      const startup = startGatewayEarlyRuntime(
+        earlyRuntimeInput({ minimalTestGateway: false, swapDiscovery }),
+      ).catch(async (error: unknown) => {
+        await runGatewayCloseSteps({
+          owner: {
+            connectionWork: { drain: async () => {} },
+            stopConnectionDependentSidecars: () => {},
+            stopRegisteredGatewayLifetimeSidecars: async () => await swapDiscovery(null)?.stop(),
+            stopRegisteredPostReadySidecars: () => {},
+            runClosePrelude: () => {},
+            sealAndJoinRegisteredSidecarStops: () => {},
+          },
+          close: async () => await swapDiscovery(null)?.stop(),
+          onError: onCleanupError,
+        });
+        throw error;
+      });
+
+      if (cleanupRejects) {
+        await expect(startup).rejects.toMatchObject({
+          name: "AggregateError",
+          errors: [expect.objectContaining({ cause: cleanupError })],
+        });
+      } else {
+        await expect(startup).rejects.toBe(startupError);
+      }
+      expect(stopDiscovery).toHaveBeenCalledOnce();
+      expect(owner.current).toBeNull();
+      expect(onCleanupError).toHaveBeenCalledTimes(cleanupRejects ? 1 : 0);
+    },
+  );
 
   it("broadcasts remote-node skill invalidations to operator clients", async () => {
     const broadcast = vi.fn();
@@ -208,7 +333,10 @@ describe("startGatewayEarlyRuntime", () => {
   });
 
   it("fails before discovery and task maintenance when task state cannot restore", async () => {
-    mocks.ensureTaskRuntimeStateReady.mockImplementationOnce(() => {
+    const stopDiscovery = vi.fn(async () => {});
+    const swapDiscovery = vi.fn(() => null);
+    mocks.startGatewayDiscovery.mockResolvedValue({ update: async () => {}, stop: stopDiscovery });
+    mocks.ensureTaskRuntimeStateReady.mockImplementationOnce(async () => {
       throw new Error("task-flow registry restore failed");
     });
 
@@ -216,40 +344,46 @@ describe("startGatewayEarlyRuntime", () => {
       startGatewayEarlyRuntime(
         earlyRuntimeInput({
           minimalTestGateway: false,
+          swapDiscovery,
         }),
       ),
     ).rejects.toThrow("task-flow registry restore failed");
 
     expect(mocks.startGatewayDiscovery).not.toHaveBeenCalled();
+    expect(swapDiscovery).not.toHaveBeenCalled();
+    expect(stopDiscovery).not.toHaveBeenCalled();
     expect(mocks.configureTaskRegistryMaintenance).not.toHaveBeenCalled();
     expect(mocks.startTaskRegistryMaintenance).not.toHaveBeenCalled();
   });
 
   it("starts discovery with the current plugin registry services", async () => {
     const stop = vi.fn(async () => {});
-    mocks.startGatewayDiscovery.mockResolvedValueOnce({ bonjourStop: stop } as never);
+    const discovery = { update: async () => {}, stop };
+    mocks.startGatewayDiscovery.mockResolvedValueOnce(discovery);
+    const swapDiscovery = vi.fn(() => null);
     const service = {
       pluginId: "bonjour",
       service: { id: "bonjour", advertise: vi.fn() },
     };
 
-    await expect(
-      startGatewayPluginDiscovery({
-        minimalTestGateway: false,
-        cfgAtStart: { discovery: { mdns: { mode: "full" } } } as never,
-        port: 19_001,
-        gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
-        gatewayDirectReachable: true,
-        tailscaleMode: "serve" as never,
-        logDiscovery: {
-          info: () => {},
-          warn: () => {},
-        },
-        pluginRegistry: {
-          gatewayDiscoveryServices: [service],
-        } as never,
-      }),
-    ).resolves.toBe(stop);
+    const input = earlyRuntimeInput({
+      minimalTestGateway: false,
+      swapDiscovery,
+      cfgAtStart: { discovery: { mdns: { mode: "full" } } } as never,
+      port: 19_001,
+      gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
+      gatewayDirectReachable: true,
+      tailscaleMode: "serve" as never,
+      logDiscovery: {
+        info: () => {},
+        warn: () => {},
+      },
+      pluginRegistry: {
+        gatewayDiscoveryServices: [service],
+      } as never,
+    });
+    await startGatewayEarlyRuntime(input);
+    expect(swapDiscovery).toHaveBeenCalledWith(discovery);
 
     const [discoveryParams] = mocks.startGatewayDiscovery.mock.calls.at(-1) ?? [];
     if (discoveryParams === undefined) {
@@ -260,7 +394,121 @@ describe("startGatewayEarlyRuntime", () => {
     expect(discoveryParams.gatewayTls).toEqual({ enabled: true, fingerprintSha256: "abc123" });
     expect(discoveryParams.gatewayDirectReachable).toBe(true);
     expect(discoveryParams.tailscaleMode).toBe("serve");
-    expect(discoveryParams.mdnsMode).toBe("full");
+    expect(discoveryParams.discovery?.mdns?.mode).toBe("full");
     expect(discoveryParams.gatewayDiscoveryServices).toEqual([service]);
+    expect(discoveryParams.pluginRuntimeClaim).toBe(input.pluginRuntimeClaim);
   });
+});
+
+describe("early startup task maintenance", () => {
+  let maintenance: typeof import("../tasks/task-registry.maintenance.js");
+
+  beforeEach(async () => {
+    const tasks = await vi.importActual<typeof import("../tasks/runtime-internal.js")>(
+      "../tasks/runtime-internal.js",
+    );
+    maintenance = await vi.importActual<typeof import("../tasks/task-registry.maintenance.js")>(
+      "../tasks/task-registry.maintenance.js",
+    );
+    mocks.ensureTaskRuntimeStateReady.mockImplementation(tasks.ensureTaskRuntimeStateReady);
+    mocks.configureTaskRegistryMaintenance.mockImplementation(
+      maintenance.configureTaskRegistryMaintenance,
+    );
+    mocks.startTaskRegistryMaintenance.mockImplementation(maintenance.startTaskRegistryMaintenance);
+    mocks.setSkillsRemoteRegistry.mockReset();
+    mocks.registerSkillsChangeListener.mockReturnValue(() => {});
+  });
+
+  afterEach(async () => {
+    await maintenance.stopTaskRegistryMaintenance();
+    vi.useRealTimers();
+    resetDetachedTaskLifecycleRuntimeForTests();
+    maintenance.configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    await drainGlobalSingletonLifecycleState("close");
+  });
+  it.each([false, true])(
+    "preserves copied tasks only in an update canary (updateCanary: %s)",
+    async (updateCanary) => {
+      await withStateDirEnv("openclaw-canary-tasks-", async () => {
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        vi.useFakeTimers();
+        const recoverTask = vi.fn(async () => ({ recovered: false }));
+        setDetachedTaskLifecycleRuntime({
+          ...getDetachedTaskLifecycleRuntime(),
+          tryRecoverTaskBeforeMarkLost: recoverTask,
+        });
+        const staleAt = Date.now() - 45 * 60_000;
+        const copiedTask = createTaskFixture("cli", {
+          task: "Synthetic copied task",
+          runId: "canary-copied-run",
+          lastEventAt: staleAt,
+          notifyPolicy: "silent",
+        });
+        const expiredTask = createTaskFixture("cli", {
+          task: "Synthetic expired task",
+          status: "succeeded",
+          lastEventAt: staleAt,
+          cleanupAfter: staleAt,
+          notifyPolicy: "silent",
+        });
+        const recentTask = createTaskFixture("cli", {
+          task: "Synthetic task within recovery grace",
+          runId: "canary-recent-run",
+          lastEventAt: Date.now() - 4 * 60_000,
+          notifyPolicy: "silent",
+        });
+        const earlyRuntime = await startGatewayEarlyRuntime(
+          earlyRuntimeInput({ minimalTestGateway: false, updateCanary }),
+        );
+        const scheduledSweeps: Promise<unknown>[] = [];
+        const runRootWork = gatewayWork.runWithGatewayIndependentRootWorkAdmission;
+        const rootWork = vi
+          .spyOn(gatewayWork, "runWithGatewayIndependentRootWorkAdmission")
+          .mockImplementation((run, origin, signal) => {
+            const pending = runRootWork(run, origin, signal);
+            if (origin === "tasks:maintenance") {
+              scheduledSweeps.push(pending);
+            }
+            return pending;
+          });
+        try {
+          // Exercise both the startup sweep and the recurring maintenance sweep.
+          let expectedSweeps = 0;
+          for (const elapsedMs of [5_000, 60_000]) {
+            await vi.advanceTimersByTimeAsync(elapsedMs);
+            if (!updateCanary) {
+              expectedSweeps += 1;
+            }
+            expect(scheduledSweeps).toHaveLength(expectedSweeps);
+            await Promise.all(scheduledSweeps);
+            if (updateCanary) {
+              expect(getTaskById(copiedTask.taskId)).toEqual(copiedTask);
+              expect(getTaskById(expiredTask.taskId)).toEqual(expiredTask);
+              expect(getTaskById(recentTask.taskId)).toEqual(recentTask);
+              expect(recoverTask).not.toHaveBeenCalled();
+            } else {
+              expect(getTaskById(copiedTask.taskId)?.status).toBe("lost");
+              expect(getTaskById(expiredTask.taskId)).toBeUndefined();
+              expect(getTaskById(recentTask.taskId)?.status).toBe(
+                elapsedMs === 5_000 ? "running" : "lost",
+              );
+              expect(recoverTask).toHaveBeenCalledTimes(elapsedMs === 5_000 ? 1 : 2);
+            }
+          }
+        } finally {
+          await maintenance.stopTaskRegistryMaintenance();
+          try {
+            await Promise.allSettled(scheduledSweeps);
+            await earlyRuntime.skillsChangeUnsub();
+          } finally {
+            rootWork.mockRestore();
+            vi.useRealTimers();
+          }
+        }
+      });
+    },
+  );
 });

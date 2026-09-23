@@ -3,6 +3,7 @@ import {
   clearLiveCatalogCacheForTests,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BASETEN_DEFAULT_MODEL_REF,
@@ -11,6 +12,7 @@ import {
   projectBasetenLiveModels,
   resolveBasetenDynamicModel,
 } from "./models.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const TEST_VALUE = "fixture";
 
@@ -72,10 +74,35 @@ describe("Baseten model catalog", () => {
         supportsStrictMode: true,
         supportsTools: true,
         supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+        supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
         maxTokensField: "max_tokens",
       },
     });
+  });
+
+  it("keeps manifest thinking controls and declared capabilities in runtime catalogs", () => {
+    const declaredModels = buildManifestModelProviderConfig({
+      providerId: "baseten",
+      catalog: manifest.modelCatalog.providers.baseten,
+    }).models;
+    const runtimeModels = new Map(buildStaticBasetenModels().map((model) => [model.id, model]));
+    const inkling = declaredModels.find((model) => model.id === "thinkingmachines/inkling");
+
+    expect.soft(inkling?.compat?.supportedReasoningEfforts).toContain("max");
+    for (const model of declaredModels) {
+      const runtimeModel = runtimeModels.get(model.id);
+      expect(runtimeModel, model.id).toBeDefined();
+      for (const field of [
+        "supportsReasoningEffort",
+        "supportedReasoningEfforts",
+        "reasoningEffortMap",
+        "codeMode",
+      ] as const) {
+        expect
+          .soft(runtimeModel?.compat?.[field], `${model.id} ${field}`)
+          .toEqual(model.compat?.[field]);
+      }
+    }
   });
 
   it("projects authenticated live rows while retaining curated capability metadata", () => {

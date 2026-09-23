@@ -1,4 +1,5 @@
 // Reads the bounded system/config journals as one admin-facing change history.
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   ErrorCodes,
   errorShape,
@@ -13,10 +14,8 @@ import {
   type ConfigAuditRecord,
 } from "../../config/io.audit.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../../infra/cli-root-options.js";
-import {
-  createSqliteAuditRecordStore,
-  type SequencedSqliteAuditRecordEntry,
-} from "../../infra/sqlite-audit-record-store.js";
+import { createSqliteAuditRecordStore } from "../../infra/sqlite-audit-record-store.js";
+import type { SequencedSqliteAuditRecordEntry } from "../../infra/sqlite-audit-record.kernel.js";
 import {
   SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
   SYSTEM_AGENT_AUDIT_SCOPE,
@@ -117,8 +116,7 @@ function transitionKey(before: string | null | undefined, after: string | null |
 }
 
 function recordTime(value: string, fallback: number): number {
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? timestamp : fallback;
+  return parseDateStringTimestampMs(value) ?? fallback;
 }
 
 function classifyConfigWriteSource(record: Extract<ConfigAuditRecord, { event: "config.write" }>) {

@@ -109,8 +109,9 @@ can consume embeddings without depending on the memory engine. Memory search
 also consumes generic `embeddingProviders`.
 
 The older memory-specific registration API and `memoryEmbeddingProviders`
-contract are deprecated. Use `registerEmbeddingProvider` and
-`embeddingProviders` for all new embedding providers.
+contract were removed after their August 2026 migration window. Use
+`registerEmbeddingProvider` and `embeddingProviders` for every embedding
+provider.
 
 ## Review checklist
 
@@ -130,3 +131,4 @@ If a PR skips the capability layer and hardcodes vendor behavior into a channel/
 - [Building plugins](/plugins/building-plugins) — first-plugin tutorial.
 - [SDK overview](/plugins/sdk-overview) — import map and registration API reference.
 - [Creating skills](/tools/creating-skills) — companion contributor surface.
+- [Plugin architecture internals](/plugins/architecture-internals) — load pipeline, registry model, and the guide to adding a capability.

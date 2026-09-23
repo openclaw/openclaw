@@ -1,8 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import type { SpawnInput } from "../process/supervisor/types.js";
-import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
@@ -48,6 +48,7 @@ afterEach(() => {
 
 function successfulSupervisorRun() {
   return {
+    activity: { resultSettled: true, lastOutputAtMs: Date.now() },
     runId: "mock-run",
     startedAtMs: Date.now(),
     wait: async () => ({
@@ -66,6 +67,7 @@ function successfulSupervisorRun() {
 
 function runtimeManagedRun(input: SpawnInput): ManagedRun {
   return {
+    activity: { resultSettled: true, lastOutputAtMs: Date.now() },
     runId: input.runId ?? "test-run",
     pid: 1234,
     startedAtMs: Date.now(),
@@ -110,7 +112,9 @@ describe("exec notifyOnExit suppression", () => {
         if (params.stdout) {
           input.onStdout?.(params.stdout);
         }
+        const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
         return {
+          activity,
           runId: "run-1",
           startedAtMs: Date.now(),
           pid: 123,
@@ -118,6 +122,7 @@ describe("exec notifyOnExit suppression", () => {
             await new Promise((resolve) => {
               setImmediate(resolve);
             });
+            activity.resultSettled = true;
             return {
               reason: params.reason,
               exitCode: null,
@@ -151,26 +156,16 @@ describe("exec notifyOnExit suppression", () => {
     return await run.promise;
   }
 
-  it("keeps manual-cancelled no-output background execs silent", async () => {
-    const outcome = await runBackgroundedExit({ reason: "manual-cancel" });
+  it.each(["", "partial output\n"])(
+    "keeps manually canceled background execs silent (output=%j)",
+    async (stdout) => {
+      const outcome = await runBackgroundedExit({ reason: "manual-cancel", stdout });
 
-    expect(outcome.status).toBe("failed");
-    expect(enqueueSystemEventWithReceiptMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
-  });
-
-  it("notifies for manual-cancelled background execs with output", async () => {
-    await runBackgroundedExit({ reason: "manual-cancel", stdout: "partial output\n" });
-
-    const [message, options] = requireSystemEventCall();
-    expect(message).toContain("partial output");
-    expect(options.sessionKey).toBe("agent:main:main");
-    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
-    const heartbeat = requireHeartbeatCall();
-    expect(heartbeat.coalesceMs).toBe(0);
-    expect(heartbeat.reason).toBe("exec-event");
-    expect(heartbeat.sessionKey).toBe("agent:main:main");
-  });
+      expect(outcome.status).toBe("failed");
+      expect(enqueueSystemEventWithReceiptMock).not.toHaveBeenCalled();
+      expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("still notifies for no-output background exec timeouts", async () => {
     await runBackgroundedExit({ reason: "overall-timeout" });
@@ -191,7 +186,7 @@ describe("exec notifyOnExit suppression", () => {
   it("keeps background exec exit-notification snippets on a UTF-16 boundary", async () => {
     const head = "a".repeat(178);
     const overflowingOutput = `${head}🎉${"b".repeat(30)}`;
-    await runBackgroundedExit({ reason: "manual-cancel", stdout: overflowingOutput });
+    await runBackgroundedExit({ reason: "overall-timeout", stdout: overflowingOutput });
 
     const [message] = requireSystemEventCall();
     const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
@@ -204,7 +199,7 @@ describe("exec notifyOnExit suppression", () => {
     const prefix = "a".repeat(101);
     const tailHead = "b".repeat(179);
     const overflowingOutput = `${prefix}🎉${tailHead}${"c".repeat(220)}`;
-    await runBackgroundedExit({ reason: "manual-cancel", stdout: overflowingOutput });
+    await runBackgroundedExit({ reason: "overall-timeout", stdout: overflowingOutput });
 
     const [message] = requireSystemEventCall();
     const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;

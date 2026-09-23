@@ -32,6 +32,14 @@ final class OnboardingFinishState {
     var didFinish = false
 }
 
+/// Dashboard surface opened when onboarding finishes with working inference.
+enum OnboardingDashboardHandoff: Equatable {
+    /// Fresh activation: the custodian flow owns the remaining first-run steps.
+    case custodianOnboarding
+    /// Live-verified pre-existing setup: reopen the normal dashboard.
+    case dashboard
+}
+
 enum OnboardingSystemAgentResumeStore {
     struct ActivationOwner: Equatable {
         let id: String
@@ -71,6 +79,13 @@ enum OnboardingSystemAgentResumeStore {
         let startedAt: Date?
         let deadline: Date?
         let activationOwner: ActivationOwner?
+        let modelTarget: OnboardingAISetupModel.ModelTarget?
+        let utilityModel: String?
+    }
+
+    struct ActivationModel: Equatable {
+        let modelTarget: OnboardingAISetupModel.ModelTarget?
+        let utilityModel: String?
     }
 
     private static let recordVersion = 4
@@ -93,15 +108,14 @@ enum OnboardingSystemAgentResumeStore {
         state: AppState = AppStateStore.shared,
         preferredGatewayID: String? = GatewayDiscoveryPreferences.preferredStableID()) -> String?
     {
-        let defaultRemotePort = GatewayEnvironment.gatewayPort()
         let sshRemotePort: Int = if state.connectionMode == .remote,
                                     state.remoteTransport == .ssh
         {
-            RemotePortTunnel.resolveRemotePortOverride(
-                defaultRemotePort: defaultRemotePort,
-                for: CommandResolver.parseSSHTarget(state.remoteTarget)?.host ?? "") ?? defaultRemotePort
+            RemotePortTunnel.ports(
+                root: OpenClawConfigFile.loadDict(),
+                sshHost: CommandResolver.parseSSHTarget(state.remoteTarget)?.host ?? "").remote
         } else {
-            defaultRemotePort
+            18789
         }
         return self.routeIdentity(
             connectionMode: state.connectionMode,
@@ -120,7 +134,7 @@ enum OnboardingSystemAgentResumeStore {
         remoteURL: String,
         remoteTarget: String,
         localStateDir: URL = OpenClawConfigFile.stateDirURL(),
-        sshRemotePort: Int = GatewayEnvironment.gatewayPort()) -> String?
+        sshRemotePort: Int = 18789) -> String?
     {
         switch connectionMode {
         case .unconfigured:
@@ -161,6 +175,8 @@ enum OnboardingSystemAgentResumeStore {
     static func markPending(
         routeIdentity: String?,
         activationOwner: ActivationOwner? = nil,
+        modelTarget: OnboardingAISetupModel.ModelTarget? = nil,
+        utilityModel: String? = nil,
         activationTimeoutMs: Double = OnboardingSystemAgentResumeStore.maximumActivationTimeoutMs,
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date())
@@ -174,7 +190,9 @@ enum OnboardingSystemAgentResumeStore {
             phase: .activating,
             startedAt: now,
             deadline: deadline,
-            activationOwner: activationOwner)
+            activationOwner: activationOwner,
+            modelTarget: modelTarget,
+            utilityModel: modelTarget == .utility ? self.normalized(utilityModel) : nil)
         self.writeRecords(records, defaults: defaults)
         return deadline
     }
@@ -182,6 +200,8 @@ enum OnboardingSystemAgentResumeStore {
     static func restorePending(
         routeIdentity: String,
         activationOwner: ActivationOwner? = nil,
+        modelTarget: OnboardingAISetupModel.ModelTarget? = nil,
+        utilityModel: String? = nil,
         deadline: Date,
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date())
@@ -192,7 +212,9 @@ enum OnboardingSystemAgentResumeStore {
             phase: .activating,
             startedAt: now,
             deadline: deadline,
-            activationOwner: activationOwner)
+            activationOwner: activationOwner,
+            modelTarget: modelTarget,
+            utilityModel: modelTarget == .utility ? self.normalized(utilityModel) : nil)
         self.writeRecords(records, defaults: defaults)
     }
 
@@ -211,7 +233,9 @@ enum OnboardingSystemAgentResumeStore {
             phase: .verified,
             startedAt: record.startedAt,
             deadline: record.deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds),
-            activationOwner: record.activationOwner)
+            activationOwner: record.activationOwner,
+            modelTarget: record.modelTarget,
+            utilityModel: record.utilityModel)
         self.writeRecords(records, defaults: defaults)
     }
 
@@ -231,7 +255,9 @@ enum OnboardingSystemAgentResumeStore {
             phase: .completed,
             startedAt: record.startedAt,
             deadline: record.deadline,
-            activationOwner: record.activationOwner)
+            activationOwner: record.activationOwner,
+            modelTarget: record.modelTarget,
+            utilityModel: record.utilityModel)
         self.writeRecords(records, defaults: defaults)
         return true
     }
@@ -243,6 +269,38 @@ enum OnboardingSystemAgentResumeStore {
     {
         guard let routeIdentity = normalized(routeIdentity) else { return nil }
         return self.loadRecords(defaults: defaults, now: now)[routeIdentity]?.activationOwner
+    }
+
+    static func activationModel(
+        for routeIdentity: String?,
+        activationOwner: ActivationOwner?,
+        defaults: UserDefaults = AppDefaults.standard) -> ActivationModel?
+    {
+        guard let routeIdentity = normalized(routeIdentity),
+              let record = loadRecords(defaults: defaults)[routeIdentity],
+              ownerMatches(record, activationOwner: activationOwner)
+        else { return nil }
+        return ActivationModel(modelTarget: record.modelTarget, utilityModel: record.utilityModel)
+    }
+
+    static func recordUtilityModel(
+        _ modelRef: String,
+        ifOwnedBy routeIdentity: String?,
+        activationOwner: ActivationOwner,
+        defaults: UserDefaults = AppDefaults.standard)
+    {
+        guard let routeIdentity = normalized(routeIdentity), let modelRef = normalized(modelRef) else { return }
+        var records = self.loadRecords(defaults: defaults)
+        guard let record = records[routeIdentity], record.modelTarget == .utility,
+              ownerMatches(record, activationOwner: activationOwner) else { return }
+        records[routeIdentity] = Record(
+            phase: record.phase,
+            startedAt: record.startedAt,
+            deadline: record.deadline,
+            activationOwner: record.activationOwner,
+            modelTarget: record.modelTarget,
+            utilityModel: modelRef)
+        self.writeRecords(records, defaults: defaults)
     }
 
     static func isOwned(
@@ -353,7 +411,9 @@ enum OnboardingSystemAgentResumeStore {
                     phase: record.phase,
                     startedAt: record.startedAt,
                     deadline: record.deadline,
-                    activationOwner: nil)
+                    activationOwner: nil,
+                    modelTarget: nil,
+                    utilityModel: nil)
             }
             self.writeRecords(records, defaults: defaults)
             return records
@@ -385,7 +445,9 @@ enum OnboardingSystemAgentResumeStore {
                 phase: .activating,
                 startedAt: startedAt ?? now,
                 deadline: deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds),
-                activationOwner: nil)
+                activationOwner: nil,
+                modelTarget: nil,
+                utilityModel: nil)
         case .verified, .completed:
             // v1 `verified` could be written by an early read-only probe and
             // carried no deadline, so migration must restore a full lease.
@@ -393,7 +455,9 @@ enum OnboardingSystemAgentResumeStore {
                 phase: .verified,
                 startedAt: startedAt ?? now,
                 deadline: deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds),
-                activationOwner: nil)
+                activationOwner: nil,
+                modelTarget: nil,
+                utilityModel: nil)
         }
     }
 
@@ -402,7 +466,9 @@ enum OnboardingSystemAgentResumeStore {
             phase: .activating,
             startedAt: now,
             deadline: now.addingTimeInterval(self.legacyActivationLeaseSeconds),
-            activationOwner: nil)
+            activationOwner: nil,
+            modelTarget: nil,
+            utilityModel: nil)
     }
 
     private static func decodeRecord(_ payload: [String: Any]) -> Record? {
@@ -416,11 +482,15 @@ enum OnboardingSystemAgentResumeStore {
         } else {
             nil
         }
+        let modelTarget = (payload["modelTarget"] as? String)
+            .flatMap(OnboardingAISetupModel.ModelTarget.init(rawValue:))
         return Record(
             phase: phase,
             startedAt: self.date(payload["startedAt"]),
             deadline: self.date(payload["deadlineAt"]),
-            activationOwner: activationOwner)
+            activationOwner: activationOwner,
+            modelTarget: modelTarget,
+            utilityModel: modelTarget == .utility ? self.normalized(payload["utilityModel"] as? String) : nil)
     }
 
     private static func writeRecords(_ records: [String: Record], defaults: UserDefaults) {
@@ -439,6 +509,12 @@ enum OnboardingSystemAgentResumeStore {
             if let activationOwner = record.activationOwner {
                 value["activationId"] = activationOwner.id
                 value["routeFingerprint"] = activationOwner.routeFingerprint
+            }
+            if let utilityModel = record.utilityModel {
+                value["utilityModel"] = utilityModel
+            }
+            if let modelTarget = record.modelTarget {
+                value["modelTarget"] = modelTarget.rawValue
             }
             return value
         }
@@ -531,6 +607,10 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     static let shared = OnboardingController()
     static let windowStyleMask: NSWindow.StyleMask = [.titled, .closable, .resizable, .fullSizeContentView]
     private var window: NSWindow?
+    var sheetPresentationWindow: NSWindow? {
+        self.window
+    }
+
     /// Human description of work in flight ("Installing the Gateway…").
     /// While set, closing the window asks for confirmation instead of quitting
     /// setup mid-operation.
@@ -593,8 +673,15 @@ final class OnboardingController: NSObject, NSWindowDelegate {
 
     func close() {
         self.busyReason = nil
+        // AppKit ignores close while its modal sheet is still attached.
+        self.dismissAttachedSheet()
         self.window?.close()
         self.window = nil
+    }
+
+    func dismissAttachedSheet() {
+        guard let window, let sheet = window.attachedSheet else { return }
+        window.endSheet(sheet)
     }
 
     func setWindowCloseEnabled(_ enabled: Bool) {
@@ -630,6 +717,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
 struct OnboardingView: View {
     enum CLIInstallPhase {
         case idle
+        case choosingTarget
         case installing
         case startingService
     }
@@ -644,8 +732,9 @@ struct OnboardingView: View {
     @State var cliStatusKnown = false
     @State var onboardingVisible = false
     @State var cliInstallLocation: String?
-    @State var showAdvancedConnection = false
     @State var showRemoteChoices = false
+    @State var showBrowserGateway = false
+    @State var showConnectionEditor = false
     @State var preferredGatewayID: String?
     @State var remoteProbeState: RemoteOnboardingProbeState = .idle
     @State var remoteProbeAttemptID: UUID?
@@ -662,7 +751,7 @@ struct OnboardingView: View {
     let systemAgentDefaults: UserDefaults
     let aiSetupRouteIdentityProvider: @MainActor () -> String?
     let gatewaySelectionPersister: @MainActor () -> Bool
-    let dashboardOnboardingOpener: @MainActor () -> Void
+    let dashboardHandoffOpener: @MainActor (OnboardingDashboardHandoff) -> Void
 
     static let windowWidth: CGFloat = 630
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
@@ -698,12 +787,12 @@ struct OnboardingView: View {
         requiresCLIInstall: Bool) -> [Int]
     {
         switch mode {
-        case .remote, .local:
+        case .local:
             // Native onboarding ends once inference works: install (when
-            // needed) plus AI setup. Everything after — memory import,
-            // permissions, channels, hatch — belongs to the dashboard's
-            // custodian onboarding, which Finish opens.
+            // needed) plus AI setup. Successful first run lands in the normal dashboard.
             requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]
+        case .remote:
+            [0, 1, 3]
         case .unconfigured:
             // "Set up later" has no gateway to hand off to; keep the native
             // ready page so the flow still ends with a visible outcome.
@@ -711,8 +800,8 @@ struct OnboardingView: View {
         }
     }
 
-    static func shouldActivateLocalGateway(afterCLIInstallFor mode: AppState.ConnectionMode) -> Bool {
-        mode == .local
+    var requiresLocalCLI: Bool {
+        self.selectedConnectionMode == .local && GatewayProcessManager.shared.installation != .external
     }
 
     var selectedConnectionMode: AppState.ConnectionMode {
@@ -728,8 +817,8 @@ struct OnboardingView: View {
 
     var pageOrder: [Int] {
         Self.pageOrder(
-            for: self.state.connectionMode,
-            requiresCLIInstall: !self.cliInstalled)
+            for: self.selectedConnectionMode,
+            requiresCLIInstall: self.requiresLocalCLI && !self.cliInstalled)
     }
 
     var pageCount: Int {
@@ -806,10 +895,30 @@ struct OnboardingView: View {
     }
 
     struct LocalGatewayProbe: Equatable {
-        let port: Int
-        let pid: Int32
-        let command: String
-        let expected: Bool
+        let subtitle: String
+
+        init(
+            port: Int,
+            pid: Int32,
+            command: String,
+            profile: AppProfile,
+            managedServicePID: Int32?)
+        {
+            let expectedTokens = ["node", "openclaw", "tsx", "pnpm", "bun"]
+            let looksLikeGateway = expectedTokens.contains { command.lowercased().contains($0) }
+            let process = command.isEmpty ? "" : " (\(command) pid \(pid))"
+            guard GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+                profile: profile,
+                listenerPID: pid,
+                managedServicePID: managedServicePID)
+            else {
+                let profile = profile.name.map { " for profile \($0)" } ?? ""
+                self.subtitle = "Port \(port) already in use\(process). Choose a different Gateway port\(profile)."
+                return
+            }
+            let base = looksLikeGateway ? "Existing gateway detected" : "Port \(port) already in use"
+            self.subtitle = "\(base)\(process). Will attach."
+        }
     }
 
     init(
@@ -822,8 +931,11 @@ struct OnboardingView: View {
         aiSetupRouteIdentityProvider: (@MainActor () -> String?)? = nil,
         configuredGatewayProbeTimeoutMs: Double = 15000,
         gatewaySelectionPersister: (@MainActor () -> Bool)? = nil,
-        dashboardOnboardingOpener: @escaping @MainActor () -> Void = {
-            AppNavigationActions.openDashboardOnboarding()
+        dashboardHandoffOpener: @escaping @MainActor (OnboardingDashboardHandoff) -> Void = {
+            switch $0 {
+            case .custodianOnboarding: AppNavigationActions.openDashboardOnboarding()
+            case .dashboard: AppNavigationActions.openDashboard()
+            }
         })
     {
         self.state = state
@@ -835,7 +947,7 @@ struct OnboardingView: View {
         self.gatewaySelectionPersister = gatewaySelectionPersister ?? {
             state.syncGatewayConfigNow()
         }
-        self.dashboardOnboardingOpener = dashboardOnboardingOpener
+        self.dashboardHandoffOpener = dashboardHandoffOpener
         _defaultsToLocalGateway = State(
             initialValue: !state.onboardingSeen && state.connectionMode == .unconfigured)
         _gatewayDiscovery = State(initialValue: discoveryModel)

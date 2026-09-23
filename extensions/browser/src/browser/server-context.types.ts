@@ -3,23 +3,31 @@
  * operation factories.
  */
 import type { Server } from "node:http";
+import type { ChromeMcpPageProbe } from "./chrome-mcp-contracts.js";
 import type { RunningChrome } from "./chrome.js";
 import type { BrowserOpenResult, BrowserTab, BrowserTransport } from "./client.types.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import type { BrowserErrorResponse } from "./errors.js";
-import type { ExtensionRelayHandle } from "./extension-relay/relay-server.js";
+import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";
 
 export type { BrowserTab };
 
 export type BrowserTabTargetOptions = BrowserOperationOptions & {
   /** Resolve only the raw target-id namespace for an id already selected internally. */
   exactTargetId?: true;
+  /** Revalidate the owner after target preparation, before a new native effect. */
+  assertCurrent?: () => Promise<void>;
 };
 
 /** Runtime state for a single profile's Chrome instance. */
 export type ProfileRuntimeState = {
   profile: ResolvedBrowserProfile;
   running: RunningChrome | null;
+  /** Process-memory observation bound to one externally owned browser instance. */
+  externalBrowserMode?: {
+    browserWebSocketUrl: string;
+    headless: Promise<boolean | undefined>;
+  };
   managedLaunchFailure?: {
     consecutiveFailures: number;
     lastFailureAt: number;
@@ -42,7 +50,7 @@ export type BrowserServerState = {
   resolved: ResolvedBrowserConfig;
   profiles: Map<string, ProfileRuntimeState>;
   /** Running extension relay servers keyed by profile name (extension driver). */
-  extensionRelays?: Map<string, ExtensionRelayHandle>;
+  extensionRelays?: Map<string, ExtensionRelayResource>;
   stopTrackedTabCleanup?: () => void;
   stopUnhandledRejectionHandler?: () => void;
 };
@@ -64,7 +72,11 @@ type BrowserProfileActions = {
     options?: EnsureTabAvailableOptions,
   ) => Promise<BrowserTab>;
   isHttpReachable: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
-  isTransportAvailable: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
+  isTransportAvailable: (
+    timeoutMs?: number,
+    signal?: AbortSignal,
+    pageProbe?: ChromeMcpPageProbe,
+  ) => Promise<boolean>;
   isReachable: (
     timeoutMs?: number,
     options?: { ephemeral?: boolean; signal?: AbortSignal },
@@ -72,11 +84,16 @@ type BrowserProfileActions = {
   listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (
     url: string,
-    opts?: { label?: string; signal?: AbortSignal; timeoutMs?: number },
+    opts?: {
+      label?: string;
+      signal?: AbortSignal;
+      timeoutMs?: number;
+      requireDurableOwnership?: boolean;
+    },
   ) => Promise<BrowserOpenResult>;
   labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
   focusTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
-  closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
+  closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<string>;
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;
   resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
 };

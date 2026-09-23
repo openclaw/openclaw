@@ -1,11 +1,17 @@
+import { Value } from "typebox/value";
 import { afterEach, expect, test } from "vitest";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { findTaskByRunId } from "../tasks/task-registry-query.js";
 import { getFinishedSession, getSession, markBackgrounded } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
+import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
+import { isToolResultError } from "./tool-result-error.js";
+import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -27,6 +33,161 @@ function textContent(result: { content: Array<{ type: string; text?: string }> }
 }
 
 const SYNTHETIC_FINALIZER_CREDENTIAL = ["sk", "synthetic", "fixture", "never", "real"].join("-");
+
+test.skipIf(process.platform === "win32")(
+  "keeps subagent yield blocked until a real finalized background exec is collected",
+  async () => {
+    const scopeKey = "agent:main:subagent:process-yield";
+    const finalization = createDeferredCore();
+    const run = await runExecProcess({
+      command: "yield-retention-proof",
+      workdir: process.cwd(),
+      env: {},
+      sandbox: {
+        containerName: "yield-retention-proof",
+        workspaceDir: process.cwd(),
+        containerWorkdir: process.cwd(),
+        async buildExecSpec() {
+          return {
+            argv: [process.execPath, "-e", "process.exit(2)"],
+            env: {},
+            stdinMode: "pipe-closed",
+          };
+        },
+        async finalizeExec() {
+          await finalization.promise;
+        },
+      },
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      sessionKey: scopeKey,
+      scopeKey,
+      timeoutSec: 10,
+    });
+    markBackgrounded(run.session);
+    let yieldCount = 0;
+    const yieldTool = createSessionsYieldTool({
+      sessionId: "process-yield",
+      claimYield: createRequesterYieldCallback({
+        requesterSessionKey: scopeKey,
+        requesterAgentId: "main",
+      }),
+      onYield: () => {
+        yieldCount += 1;
+      },
+    });
+    try {
+      expect((await yieldTool.execute("yield-running", {})).details).toMatchObject({
+        status: "error",
+      });
+      finalization.resolve();
+      await run.promise;
+      const retained = getFinishedSession(run.session.id);
+      expect(retained?.scopeKey).toBe(scopeKey);
+      expect(retained?.sessionKey).toBeUndefined();
+      expect((await yieldTool.execute("yield-finished", {})).details).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("Use process to poll and collect"),
+      });
+      expect(yieldCount).toBe(0);
+      const poll = await createProcessTool({ scopeKey }).execute("poll-finished", {
+        action: "poll",
+        sessionId: run.session.id,
+      });
+      acknowledgeInternalToolResult(poll);
+      expect(
+        (await yieldTool.execute("yield-collected", { waitFor: "message" })).details,
+      ).toMatchObject({
+        status: "yielded",
+      });
+      expect(yieldCount).toBe(1);
+    } finally {
+      finalization.resolve();
+      run.kill();
+      await run.promise;
+    }
+  },
+);
+
+test.skipIf(process.platform === "win32").each([false, true])(
+  "observes an explicit real process stop without hiding finalizer failure (fails=%s)",
+  async (finalizerFails) => {
+    const scopeKey = `agent:main:requested-stop-${finalizerFails}`;
+    const run = await runExecProcess({
+      command: "requested-stop-proof",
+      workdir: process.cwd(),
+      env: {},
+      sandbox: {
+        containerName: "requested-stop-proof",
+        workspaceDir: process.cwd(),
+        containerWorkdir: process.cwd(),
+        async buildExecSpec() {
+          return {
+            argv: [
+              process.execPath,
+              "-e",
+              'process.stdout.write("STOP_PROOF_READY"); setInterval(() => {}, 1000)',
+            ],
+            env: {},
+            stdinMode: "pipe-closed",
+          };
+        },
+        async finalizeExec() {
+          if (finalizerFails) {
+            throw new Error("requested stop cleanup failed");
+          }
+        },
+      },
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: true,
+      sessionKey: scopeKey,
+      scopeKey,
+      timeoutSec: 10,
+    });
+    markBackgrounded(run.session);
+    const processTool = createProcessTool({ scopeKey });
+    try {
+      await expect.poll(() => run.session.aggregated).toContain("STOP_PROOF_READY");
+      await processTool.execute("requested-stop", { action: "kill", sessionId: run.session.id });
+      await run.promise;
+      // Check before polling: collecting the result can acknowledge a queued event.
+      const notifications = peekSystemEventEntries(scopeKey);
+      expect(notifications).toHaveLength(finalizerFails ? 1 : 0);
+      if (finalizerFails) {
+        expect(notifications[0]?.text).toContain("Exec failed");
+      }
+      for (const action of ["poll", "log"] as const) {
+        const observed = await processTool.execute(`requested-stop-${action}`, {
+          action,
+          sessionId: run.session.id,
+        });
+        expect(observed.details).toMatchObject({
+          status: finalizerFails ? "failed" : "completed",
+          exitReason: "manual-cancel",
+          exitSignal: "SIGTERM",
+        });
+        expect(isToolResultError(observed)).toBe(finalizerFails);
+        expect(Value.Check(processTool.outputSchema!, observed.details)).toBe(true);
+        expect(textContent(observed)).toContain("STOP_PROOF_READY");
+        if (finalizerFails) {
+          expect(textContent(observed)).not.toContain("Process stopped by request");
+        } else {
+          expect(textContent(observed)).toContain("Process stopped by request (signal SIGTERM).");
+        }
+      }
+      expect(getFinishedSession(run.session.id)?.terminalStatus).toBe("failed");
+    } finally {
+      run.kill();
+      await run.promise;
+    }
+  },
+);
 
 test.skipIf(process.platform === "win32").each([
   {
@@ -111,13 +272,26 @@ test.skipIf(process.platform === "win32").each([
 
     const outcome = await run.promise;
     const notification = peekSystemEventEntries(scopeKey)[0]?.text;
-    const poll = await pendingPoll;
+    let poll = await pendingPoll;
+    if ((poll.details as { status?: string }).status === "running") {
+      expect(poll.details).toMatchObject({
+        status: "running",
+        sessionId: run.session.id,
+        aggregated: "REAL_CHILD_OUTPUT",
+      });
+      expect(textContent(poll)).toContain("REAL_CHILD_OUTPUT");
+      poll = await processTool.execute(`process-terminal-final-poll-${name}`, {
+        action: "poll",
+        sessionId: run.session.id,
+      });
+    }
     const details = poll.details as { status?: string; exitCode?: number };
 
     expect(outcome.status).toBe(expectedStatus);
     expect(details.status).toBe(expectedStatus);
+    expect(Value.Check(processTool.outputSchema!, poll.details)).toBe(true);
     expect(details.exitCode).toBe(expectedExitCode);
-    expect(getFinishedSession(run.session.id)?.status).toBe(expectedStatus);
+    expect(getFinishedSession(run.session.id)?.terminalStatus).toBe(expectedStatus);
     expect(textContent(poll)).toContain(`Process exited with ${expectedExitLabel}.`);
     expect(notification).toContain(expectedExitLabel);
     if (finalizerError) {
@@ -130,6 +304,61 @@ test.skipIf(process.platform === "win32").each([
       );
       expect(notification).not.toContain("code 0");
     }
+  },
+);
+
+test("rejects malformed direct actions before requiring a session id", async () => {
+  const result = await createProcessTool().execute("invalid-process-action", {
+    action: {},
+  } as never);
+
+  expect(textContent(result)).toContain("Invalid process action");
+  expect(textContent(result)).not.toContain("sessionId is required");
+  expect(result.details).toMatchObject({ status: "failed" });
+});
+
+test.each([
+  {
+    name: "empty nonzero exit",
+    source: "process.exit(1)",
+    expectedText: "(no output)\n\n(Command exited with code 1)",
+    expectedAggregated: "(no output)\n\n(Command exited with code 1)",
+    exitCode: 1,
+  },
+  {
+    name: "nonzero exit with output",
+    source: 'process.stdout.write("VISIBLE"); process.exit(1)',
+    expectedText: "VISIBLE\n\n(Command exited with code 1)",
+    expectedAggregated: "VISIBLE\n\n(Command exited with code 1)",
+    exitCode: 1,
+  },
+  {
+    name: "empty successful exit",
+    source: "process.exit(0)",
+    expectedText: "(no output)",
+    expectedAggregated: "",
+    exitCode: 0,
+  },
+])(
+  "renders a real foreground $name with the expected structured output",
+  async ({ source, expectedText, expectedAggregated, exitCode }) => {
+    const execTool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+      timeoutSec: 10,
+    });
+    const result = await execTool.execute(`foreground-exit-${exitCode}`, {
+      command: currentNodeEvalCommand(source),
+    });
+
+    expect(textContent(result)).toBe(expectedText);
+    expect(result.details).toMatchObject({
+      status: "completed",
+      exitCode,
+      aggregated: expectedAggregated,
+    });
   },
 );
 
@@ -182,7 +411,7 @@ test.skipIf(process.platform === "win32").each([
 );
 
 test.skipIf(process.platform === "win32")(
-  "consumes a real notify-on-exit event when process poll returns the terminal result",
+  "consumes a real notify-on-exit event when the terminal process poll is acknowledged",
   async () => {
     const scopeKey = "agent:main:process-notify-poll";
     const execTool = createExecTool({
@@ -222,12 +451,14 @@ test.skipIf(process.platform === "win32")(
       sessionId,
     });
     expect(poll.details).toMatchObject({ status: "completed", sessionId });
+    expect(peekSystemEventEntries(scopeKey)).toHaveLength(1);
+    acknowledgeInternalToolResult(poll);
     expect(peekSystemEventEntries(scopeKey)).toHaveLength(0);
   },
 );
 
 test.skipIf(process.platform === "win32")(
-  "controls one real interactive background child through exec and process tools",
+  "controls and cancels one real interactive background child through process tools",
   async () => {
     const scopeKey = "agent:main:process-control-roundtrip";
     const execTool = createExecTool({
@@ -252,7 +483,6 @@ test.skipIf(process.platform === "win32")(
         "  for (const char of chunk) {",
         '    if (char === "\\u0003") {',
         "      process.stdout.write(`CONTROL:CTRL-C:${lineCount}\\n`);",
-        "      setTimeout(() => process.exit(lineCount === 2 ? 0 : 3), 10);",
         "      continue;",
         "    }",
         '    if (char !== "\\r" && char !== "\\n") {',
@@ -308,11 +538,11 @@ test.skipIf(process.platform === "win32")(
         )
         .toContain("READY");
 
-      const readyPoll = await processTool.execute("process-control-ready-poll", {
-        action: "poll",
-        sessionId,
-        timeout: 1_000,
-      });
+      const readyPoll = await processTool.execute(
+        "process-control-ready-poll",
+        { action: "poll", sessionId, timeout: 30_000 },
+        AbortSignal.timeout(1_000),
+      );
       expect(readyPoll.details).toMatchObject({
         status: "running",
         sessionId,
@@ -389,6 +619,27 @@ test.skipIf(process.platform === "win32")(
         keys: ["C-c"],
       });
       expect(interrupt.details).toMatchObject({ status: "running", sessionId });
+      await expect
+        .poll(
+          async () => {
+            const log = await processTool.execute("process-control-interrupt-log", {
+              action: "log",
+              sessionId,
+            });
+            return textContent(log);
+          },
+          { timeout: 5_000, interval: 25 },
+        )
+        .toContain("CONTROL:CTRL-C:2");
+
+      const killed = await processTool.execute("process-control-kill", {
+        action: "kill",
+        sessionId,
+      });
+      expect(textContent(killed)).toBe(`Termination requested for session ${sessionId}.`);
+      // A performed kill must not read as a failed tool call.
+      expect(killed.details).toMatchObject({ status: "completed" });
+      expect(Value.Check(processTool.outputSchema!, killed.details)).toBe(true);
 
       await expect
         .poll(
@@ -400,12 +651,12 @@ test.skipIf(process.platform === "win32")(
             });
             const details = poll.details as {
               status?: string;
-              exitCode?: number;
+              exitReason?: string;
               aggregated?: string;
             };
             return {
               status: details.status,
-              exitCode: details.exitCode,
+              exitReason: details.exitReason,
               aggregated: details.aggregated ?? "",
             };
           },
@@ -413,7 +664,7 @@ test.skipIf(process.platform === "win32")(
         )
         .toEqual({
           status: "completed",
-          exitCode: 0,
+          exitReason: "manual-cancel",
           aggregated: expect.stringContaining("CONTROL:CTRL-C:2"),
         });
 
@@ -422,6 +673,7 @@ test.skipIf(process.platform === "win32")(
         sessionId,
       });
       expect(completedLog.details).toMatchObject({ status: "completed", sessionId });
+      expect(Value.Check(processTool.outputSchema!, completedLog.details)).toBe(true);
       expect(textContent(completedLog)).toContain("LINE:alpha");
       expect(textContent(completedLog)).toContain("LINE:beta");
       expect(textContent(completedLog)).toContain("CONTROL:CTRL-C:2");

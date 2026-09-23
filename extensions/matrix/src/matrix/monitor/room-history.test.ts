@@ -16,6 +16,18 @@ function entry(body: string) {
   return { sender: "user", body };
 }
 
+it("exposes only the room-history operations consumed by the monitor", () => {
+  expect(Object.keys(createRoomHistoryTracker())).toEqual([
+    "recordPending",
+    "reservePending",
+    "finalizePending",
+    "discardPending",
+    "prepareTrigger",
+    "prepareReservedTrigger",
+    "consumeHistory",
+  ]);
+});
+
 describe("createRoomHistoryTracker — watermark monotonicity", () => {
   it("consumeHistory is monotone: out-of-order completion does not regress the watermark", () => {
     const tracker = createRoomHistoryTracker();

@@ -1,43 +1,106 @@
-// Settles run-bound approvals when their active agent run is aborted.
-import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
-import type { ExecApprovalManager } from "../exec-approval-manager.js";
-import type { ExecApprovalIosPushDelivery } from "./approval-publication.js";
-import { publishAppliedApprovalResolution } from "./approval-publication.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
+// Settles run-bound approvals when a run stops or its tool permissions change.
+import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import type { OperatorApprovalRecord } from "../operator-approval-store.js";
+import {
+  sameWorkerSessionTurnClaim,
+  type WorkerSessionTurnClaim,
+} from "../worker-environments/placement-record.js";
 
-export function cancelRunBoundExecApprovals(params: {
-  runId: string;
-  manager: ExecApprovalManager;
-  context: GatewayRequestContext;
-  forwarder?: ExecApprovalForwarder;
-  iosPushDelivery?: ExecApprovalIosPushDelivery;
-}): number {
-  let cancelled = 0;
-  for (const pending of params.manager.listPendingRecords()) {
-    if (pending.request.runId !== params.runId) {
-      continue;
-    }
-    const result = params.manager.forceDenyDetailed(
-      pending.id,
-      "run-aborted",
-      { kind: "system", id: null },
-      "cancelled",
-    );
-    if (result.outcome !== "denied" || !result.liveRecord) {
-      continue;
-    }
-    cancelled += 1;
-    void publishAppliedApprovalResolution({
-      record: result.record,
-      liveRecord: result.liveRecord,
-      context: params.context,
-      forwarder: params.forwarder,
-      iosPushDelivery: params.iosPushDelivery,
-    }).catch((error: unknown) => {
-      params.context.logGateway?.error?.(
-        `exec approvals: run-abort publication failed: ${String(error)}`,
-      );
+type ApprovalCancellationManager<TPayload> = Pick<
+  ExecApprovalManager<TPayload>,
+  "listLocalPendingRecords" | "forceDenyDetailed"
+>;
+
+function cancelMatchingApprovals<TPayload>(params: {
+  reason?: "run-aborted" | "permission-change" | "approval-scope-closed";
+  manager: ApprovalCancellationManager<TPayload>;
+  matches: (record: ExecApprovalRecord<TPayload>) => boolean;
+  publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
+}): Promise<number> {
+  const operations = params.manager
+    .listLocalPendingRecords()
+    .filter(params.matches)
+    .map((pending) => {
+      // Revoke the issuing execution, not necessarily the outer agent loop.
+      // Keep the shipped cancellation reason; record the specific system resolver.
+      const resolverId = params.reason && params.reason !== "run-aborted" ? params.reason : null;
+      return params.manager
+        .forceDenyDetailed(
+          pending.id,
+          "run-aborted",
+          { kind: "system", id: resolverId },
+          "cancelled",
+          undefined,
+          false,
+          resolverId,
+        )
+        .then((result) => {
+          if (result.outcome === "denied" && result.liveRecord) {
+            params.publish(result.record, result.liveRecord);
+            return 1;
+          }
+          return 0;
+        });
     });
-  }
-  return cancelled;
+  return Promise.all(operations).then((counts) =>
+    counts.reduce((sum: number, count) => sum + count, 0),
+  );
+}
+
+export function cancelAgentRuntimeBoundApprovals<TPayload>(params: {
+  authority: AgentRunDelegatedAuthority;
+  reason?: "run-aborted" | "permission-change" | "approval-scope-closed";
+  manager: ApprovalCancellationManager<TPayload>;
+  publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
+}): Promise<number> {
+  return cancelMatchingApprovals({
+    reason: params.reason,
+    manager: params.manager,
+    publish: params.publish,
+    matches: (pending) => {
+      const bound = pending.agentRuntimeDelegatedAuthority;
+      return (
+        bound?.claimId === params.authority.claimId &&
+        bound.lifecycleGeneration === params.authority.lifecycleGeneration &&
+        bound.operationalRunInstance.instanceId ===
+          params.authority.operationalRunInstance.instanceId &&
+        bound.operationalRunInstance.runId === params.authority.operationalRunInstance.runId
+      );
+    },
+  });
+}
+
+/** Settles approvals whose authoritative worker turn claim has been fenced. */
+export function cancelWorkerTurnClaimBoundApprovals<TPayload>(params: {
+  claim: WorkerSessionTurnClaim;
+  manager: ApprovalCancellationManager<TPayload>;
+  publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
+}): Promise<number> {
+  return cancelMatchingApprovals({
+    manager: params.manager,
+    publish: params.publish,
+    matches: (pending) => {
+      const authority = pending.agentRuntimeDelegatedAuthority;
+      return (
+        authority?.kind === "worker" &&
+        params.claim.owner.kind === "worker" &&
+        sameWorkerSessionTurnClaim(authority.turnClaim, params.claim)
+      );
+    },
+  });
+}
+
+/** Preserves legacy run-id abort cleanup only for records without delegated authority. */
+export function cancelUnboundRunApprovals<TPayload extends { runId?: string | null }>(params: {
+  runId: string;
+  manager: ApprovalCancellationManager<TPayload>;
+  publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
+}): Promise<number> {
+  return cancelMatchingApprovals({
+    manager: params.manager,
+    publish: params.publish,
+    matches: (pending) =>
+      !pending.agentRuntimeDelegatedAuthority && pending.request.runId === params.runId,
+  });
 }

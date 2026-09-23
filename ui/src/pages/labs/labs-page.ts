@@ -1,21 +1,30 @@
 import { consume } from "@lit/context";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
-  renderDocsLink,
+  renderLearnMoreLink,
+  renderSettingsDefaultDescription,
   renderSettingsPage,
+  renderSettingsPageHeader,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsToggleRow,
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
+import {
+  currentConfigObject,
+  resolveEditableSnapshotConfig,
+} from "../../lib/config/config-state-model.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderSettingsSelectRow } from "../config/settings-select-row.ts";
 import {
   labFeatureMergePatch,
   labFeatureResetPatch,
@@ -29,9 +38,17 @@ class LabsPage extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @state() private busyFeatureId: string | null = null;
-  @state() private pendingValues: Readonly<Record<string, boolean>> = {};
+  @state() private pendingValues: Readonly<Record<string, boolean | string>> = {};
   @state() private saveError: string | null = null;
 
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    invalidateRequests: () => {
+      this.busyFeatureId = null;
+      this.pendingValues = {};
+      this.saveError = null;
+    },
+  });
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.runtimeConfig,
     (runtimeConfig) => {
@@ -52,10 +69,22 @@ class LabsPage extends OpenClawLightDomElement {
 
   private featureEnabled(feature: LabFeature): boolean {
     const pending = this.pendingValues[feature.id];
-    if (pending !== undefined) {
+    if (typeof pending === "boolean") {
       return pending;
     }
     return resolveLabFeatureState(this.editableConfig(), feature).enabled;
+  }
+
+  private decisionPreferenceKnown(): boolean {
+    const configState = this.context?.runtimeConfig.state;
+    return (
+      configState?.connected &&
+      !configState.configLoading &&
+      !configState.lastError &&
+      configState.configSnapshot?.valid !== false &&
+      currentConfigObject(configState) !== null &&
+      this.editableConfig() !== null
+    );
   }
 
   private canToggle(): boolean {
@@ -74,28 +103,43 @@ class LabsPage extends OpenClawLightDomElement {
     this.pendingValues = next;
   }
 
-  private async updateFeature(feature: LabFeature, enabled: boolean, raw: Record<string, unknown>) {
-    if (!this.canToggle()) {
+  private async updateSetting(
+    featureId: string,
+    value: boolean | string,
+    raw: Record<string, unknown>,
+  ) {
+    const scope = this.gateway.capture();
+    const runtimeConfig = this.context.runtimeConfig;
+    if (
+      !scope ||
+      !this.canToggle() ||
+      (featureId === "decisionAssistance" && !this.decisionPreferenceKnown())
+    ) {
       return;
     }
-    const runtimeConfig = this.context.runtimeConfig;
-    this.busyFeatureId = feature.id;
-    this.pendingValues = { ...this.pendingValues, [feature.id]: enabled };
+    const isCurrent = () =>
+      this.gateway.isCurrent(scope) && this.context.runtimeConfig === runtimeConfig;
+    this.busyFeatureId = featureId;
+    this.pendingValues = { ...this.pendingValues, [featureId]: value };
     this.saveError = null;
     try {
       const patched = await runtimeConfig.patch({
         raw,
-        note: `labs: update ${feature.id}`,
+        note: `labs: update ${featureId}`,
       });
-      if (!patched) {
+      if (isCurrent() && !patched) {
         this.saveError = runtimeConfig.state.lastError ?? t("labsPage.saveFailed");
       }
     } catch (error) {
-      this.saveError = String(error);
+      if (isCurrent()) {
+        this.saveError = formatUiError(error);
+      }
     } finally {
-      this.clearPendingValue(feature.id);
-      if (this.busyFeatureId === feature.id) {
-        this.busyFeatureId = null;
+      if (isCurrent()) {
+        this.clearPendingValue(featureId);
+        if (this.busyFeatureId === featureId) {
+          this.busyFeatureId = null;
+        }
       }
     }
   }
@@ -105,35 +149,111 @@ class LabsPage extends OpenClawLightDomElement {
     const featureState = resolveLabFeatureState(config, feature);
     const resetPatch =
       enabled === featureState.defaultEnabled ? labFeatureResetPatch(config, feature) : null;
-    void this.updateFeature(
-      feature,
+    void this.updateSetting(
+      feature.id,
       enabled,
-      resetPatch ?? labFeatureMergePatch(config, feature, enabled),
+      resetPatch ?? labFeatureMergePatch(feature, enabled),
     );
+  }
+
+  private codeModeConfig(): unknown {
+    const tools = this.editableConfig()?.tools;
+    return isRecord(tools) ? tools.codeMode : undefined;
+  }
+
+  private setCodeModeExecutor(executor: string) {
+    if (executor !== "node" && executor !== "quickjs") {
+      return;
+    }
+    const config = this.codeModeConfig();
+    void this.updateSetting("codeModeExecutor", executor, {
+      tools: {
+        codeMode: {
+          ...(config === undefined
+            ? { enabled: "auto" }
+            : typeof config === "boolean" || config === "auto"
+              ? { enabled: config }
+              : {}),
+          executor: executor === "node" ? null : executor,
+        },
+      },
+    });
+  }
+
+  private renderCodeModeExecutor() {
+    const config = this.codeModeConfig();
+    const pending = this.pendingValues.codeModeExecutor;
+    const executor =
+      typeof pending === "string" ? pending : isRecord(config) ? config.executor : null;
+    return renderSettingsSelectRow({
+      title: t("labsPage.codeMode.executor"),
+      description: t("labsPage.codeMode.executorDescription"),
+      value: executor === "quickjs" ? "quickjs" : "node",
+      options: [
+        { value: "node", label: t("labsPage.codeMode.executorNode") },
+        { value: "quickjs", label: t("labsPage.codeMode.executorQuickjs") },
+      ],
+      disabled: !this.canToggle(),
+      onChange: (value) => this.setCodeModeExecutor(value),
+    });
   }
 
   private renderFeature(feature: LabFeature) {
     const title = feature.title();
+    // A missing/stale/unreadable snapshot is not an observed opt-out. Keep
+    // this foundation row honest without changing other Labs owners here.
+    if (feature.id === "decisionAssistance" && !this.decisionPreferenceKnown()) {
+      const configState = this.context.runtimeConfig.state;
+      return renderSettingsRow({
+        title,
+        description: html`
+          ${feature.description()}
+          <br />
+          <span role="status"
+            >${
+              configState.configLoading
+                ? t("labsPage.decisionAssistance.loading")
+                : t("labsPage.decisionAssistance.unavailable")
+            }</span
+          >
+          <button
+            class="btn btn--sm"
+            ?disabled=${!configState.connected || configState.configLoading}
+            @click=${() => void this.context.runtimeConfig.refresh()}
+          >
+            ${t("labsPage.decisionAssistance.refresh")}
+          </button>
+        `,
+      });
+    }
     const featureState = resolveLabFeatureState(this.editableConfig(), feature);
     const canToggle = this.canToggle();
-    const defaultDescription = t(
-      featureState.overridden ? "configForm.defaultValue" : "configForm.usingDefault",
-      { value: featureState.defaultEnabled ? t("common.enabled") : t("common.disabled") },
+    const defaultDescription = renderSettingsDefaultDescription(
+      featureState.defaultEnabled ? t("common.enabled") : t("common.disabled"),
+      featureState.overridden,
     );
     const description = html`
       ${feature.description()}
+      ${
+        feature.id === "decisionAssistance" && featureState.enabled
+          ? html`<br />${t("labsPage.decisionAssistance.optedIn")}`
+          : nothing
+      }
       <a href=${feature.docsUrl} target=${EXTERNAL_LINK_TARGET} rel=${buildExternalLinkRel()}
         >${t("labsPage.documentation")}</a
-      >${feature.restartHint ? html` <span>${feature.restartHint()}</span>` : nothing}
-      <span>${defaultDescription}</span>
+      >
+      ${defaultDescription ? html`<br />${defaultDescription}` : nothing}
     `;
-    return renderSettingsToggleRow({
-      title,
-      description,
-      checked: this.featureEnabled(feature),
-      disabled: !canToggle,
-      onChange: (enabled) => this.setFeatureEnabled(feature, enabled),
-    });
+    return html`
+      ${renderSettingsToggleRow({
+        title,
+        description,
+        checked: this.featureEnabled(feature),
+        disabled: !canToggle,
+        onChange: (enabled) => this.setFeatureEnabled(feature, enabled),
+      })}
+      ${feature.id === "codeMode" ? this.renderCodeModeExecutor() : nothing}
+    `;
   }
 
   override render() {
@@ -154,20 +274,13 @@ class LabsPage extends OpenClawLightDomElement {
         },
         rows,
       ),
-      {
-        intro: html`${t("labsPage.intro")}
-        ${renderDocsLink(
-          "https://docs.openclaw.ai/concepts/experimental-features",
-          t("common.learnMore"),
-        )}`,
-      },
     );
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("labs")}</div>
-        </div>
-      </section>
+      ${renderSettingsPageHeader({
+        title: titleForRoute("labs"),
+        subtitle: html`${t("labsPage.intro")}
+        ${renderLearnMoreLink("https://docs.openclaw.ai/concepts/experimental-features")}`,
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

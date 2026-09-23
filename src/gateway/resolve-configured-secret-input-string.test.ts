@@ -4,10 +4,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { coerceConfig, resolveConfigForRead } from "../config/io.read-helpers.js";
+import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withMockedWindowsAclVerificationUnavailable } from "../test-utils/vitest-spies.js";
 import {
+  resolveConfiguredSecretInputString,
   resolveConfiguredSecretInputWithFallback,
   resolveRequiredConfiguredSecretRefInputString,
 } from "./resolve-configured-secret-input-string.js";
@@ -136,51 +139,32 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
     });
   });
 
-  it("falls back when SecretRef cannot be resolved", async () => {
-    const resolved = await resolveConfiguredSecretInputWithFallback({
-      config: createConfig("${MISSING_GATEWAY_TOKEN}"),
-      env: {} as NodeJS.ProcessEnv,
-      value: "${MISSING_GATEWAY_TOKEN}",
-      path: "gateway.auth.token",
-      readFallback: () => "env-fallback-token",
-    });
+  it.each([
+    { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+    { source: "file", provider: "missingfile", id: "value" },
+    { source: "exec", provider: "missingexec", id: "gateway/token" },
+    { source: "store", provider: "missingstore", id: "MISSING_GATEWAY_TOKEN" },
+  ] as const)(
+    "never reads fallback credentials after an unresolved $source SecretRef",
+    async (ref) => {
+      const fallbackCredential = "fallback-secret-must-not-be-read-or-disclosed";
+      const readFallback = vi.fn(() => fallbackCredential);
+      const resolved = await resolveConfiguredSecretInputWithFallback({
+        config: createConfig(ref),
+        env: {} as NodeJS.ProcessEnv,
+        value: ref,
+        path: "gateway.auth.token",
+        readFallback,
+      });
 
-    expect(resolved).toEqual({
-      value: "env-fallback-token",
-      source: "fallback",
-      secretRefConfigured: true,
-    });
-  });
-
-  it("ignores blank fallback values when SecretRef cannot be resolved", async () => {
-    const resolved = await resolveConfiguredSecretInputWithFallback({
-      config: createConfig("${MISSING_GATEWAY_TOKEN}"),
-      env: {} as NodeJS.ProcessEnv,
-      value: "${MISSING_GATEWAY_TOKEN}",
-      path: "gateway.auth.token",
-      readFallback: () => "   ",
-    });
-
-    expect(resolved.value).toBeUndefined();
-    expect(resolved.source).toBeUndefined();
-    expect(resolved.secretRefConfigured).toBe(true);
-    expect(resolved.unresolvedRefReason).toContain("gateway.auth.token SecretRef is unresolved");
-  });
-
-  it("returns unresolved reason when SecretRef cannot be resolved and no fallback exists", async () => {
-    const resolved = await resolveConfiguredSecretInputWithFallback({
-      config: createConfig("${MISSING_GATEWAY_TOKEN}"),
-      env: {} as NodeJS.ProcessEnv,
-      value: "${MISSING_GATEWAY_TOKEN}",
-      path: "gateway.auth.token",
-    });
-
-    expect(resolved.value).toBeUndefined();
-    expect(resolved.source).toBeUndefined();
-    expect(resolved.secretRefConfigured).toBe(true);
-    expect(resolved.unresolvedRefReason).toContain("gateway.auth.token SecretRef is unresolved");
-    expect(resolved.unresolvedRefReason).toContain("MISSING_GATEWAY_TOKEN");
-  });
+      expect(readFallback).not.toHaveBeenCalled();
+      expect(resolved).toEqual({
+        unresolvedRefReason: `gateway.auth.token SecretRef is unresolved (${ref.source}:${ref.provider}:${ref.id}).`,
+        secretRefConfigured: true,
+      });
+      expect(resolved.unresolvedRefReason).not.toContain(fallbackCredential);
+    },
+  );
 
   it("keeps generic Windows ACL failures byte-compatible", async () => {
     await withMockedWindowsAclVerificationUnavailable(
@@ -270,4 +254,87 @@ describe("resolveRequiredConfiguredSecretRefInputString", () => {
       }),
     ).rejects.toThrow(/MISSING_GATEWAY_TOKEN/i);
   });
+});
+
+describe("resolveConfiguredSecretInputString target identity", () => {
+  it.each([
+    { path: 'plugins.entries.fixture.config["simple"]', id: "SIMPLE_TOKEN" },
+    { path: 'plugins.entries.fixture.config["constructor"]', id: "CONSTRUCTOR_TOKEN" },
+    { path: 'plugins.entries.fixture.config["prototype"]', id: "PROTOTYPE_TOKEN" },
+    { path: 'plugins.entries.fixture.config["0"]', id: "OBJECT_TOKEN" },
+    { path: "plugins.entries.fixture.config.0", id: "OBJECT_TOKEN" },
+    { path: "plugins.entries.fixture.config.list[0]", id: "ARRAY_TOKEN" },
+    { path: "plugins.entries.fixture.config.list.0", id: "ARRAY_TOKEN" },
+  ])("resolves the actual config target at $path", async ({ path: configPath, id }) => {
+    const read = resolveConfigForRead(
+      {
+        plugins: {
+          entries: {
+            fixture: {
+              config: {
+                simple: "${SIMPLE_TOKEN}",
+                constructor: "${CONSTRUCTOR_TOKEN}",
+                prototype: "${PROTOTYPE_TOKEN}",
+                "0": "${OBJECT_TOKEN}",
+                list: ["${ARRAY_TOKEN}"],
+              },
+            },
+          },
+        },
+      },
+      {},
+    );
+    const config = coerceConfig(read.resolvedConfigRaw);
+    setConfigResolutionFacts(config, read.resolutionFacts);
+
+    const resolved = await resolveConfiguredSecretInputString({
+      config,
+      env: {},
+      value: `\${${id}}`,
+      path: configPath,
+    });
+
+    expect(resolved.value).toBeUndefined();
+    expect(resolved.unresolvedRefReason).toContain(`env:default:${id}`);
+  });
+
+  it.each([true, false])(
+    "keeps a literal target separate from a neighboring reference (available: %s)",
+    async (available) => {
+      const read = resolveConfigForRead(
+        {
+          plugins: {
+            entries: {
+              "foo.config.bar": { config: { token: "${SOURCE_A}" } },
+              foo: { config: { bar: { config: { token: "B_LITERAL" } } } },
+            },
+          },
+        },
+        {},
+      );
+      const config = coerceConfig(read.resolvedConfigRaw);
+      setConfigResolutionFacts(config, read.resolutionFacts);
+      const env = available ? { SOURCE_A: "A_REFERENCE" } : {};
+      const reference = await resolveConfiguredSecretInputString({
+        config,
+        env,
+        value: "${SOURCE_A}",
+        path: 'plugins.entries["foo.config.bar"].config.token',
+      });
+      const literal = await resolveConfiguredSecretInputString({
+        config,
+        env,
+        value: "B_LITERAL",
+        path: "plugins.entries.foo.config.bar.config.token",
+      });
+
+      expect(literal).toEqual({ value: "B_LITERAL" });
+      if (available) {
+        expect(reference).toEqual({ value: "A_REFERENCE" });
+      } else {
+        expect(reference.value).toBeUndefined();
+        expect(reference.unresolvedRefReason).toContain("env:default:SOURCE_A");
+      }
+    },
+  );
 });

@@ -8,6 +8,7 @@ import { inspectBundledPluginStartupMetadata } from "../../../plugins/bundled-pl
 import { resolveConfiguredGenericEmbeddingProviderId } from "../../../plugins/embedding-provider-config.js";
 import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-record-reader.js";
+import { isNativeSessionCatalogOptOutOnly } from "../../../plugins/native-session-catalog-config.js";
 import {
   hasOfficialExternalChannelTarget,
   hasOfficialExternalContractTarget,
@@ -16,7 +17,7 @@ import {
   hasOfficialExternalWebSearchTarget,
 } from "../../../plugins/official-external-plugin-targets.js";
 import { collectConfiguredProviderSelectionIds } from "./configured-provider-selection-ids.js";
-import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-installs.js";
+import { collectConfiguredRuntimeIds } from "./configured-runtime-plugin-installs.js";
 
 export type StartupPluginConvergencePlan = {
   required: boolean;
@@ -32,7 +33,10 @@ function hasPotentialPluginConfig(config: OpenClawConfig, env: NodeJS.ProcessEnv
     return false;
   }
   return Object.entries(entries).some(([pluginId, entry]) => {
-    if (isRecord(entry) && entry.enabled === false) {
+    if (
+      (isRecord(entry) && entry.enabled === false) ||
+      isNativeSessionCatalogOptOutOnly(pluginId, entry)
+    ) {
       return false;
     }
     return !inspectBundledPluginStartupMetadata({ pluginId, env });
@@ -73,7 +77,7 @@ function hasConfiguredCapabilityPlugin(config: OpenClawConfig, env: NodeJS.Proce
   if (memoryEmbeddingProviderIds.size > 0) {
     if (
       hasOfficialExternalContractTarget({
-        contract: "memoryEmbeddingProviders",
+        contract: "embeddingProviders",
         providerIds: memoryEmbeddingProviderIds,
       })
     ) {
@@ -116,7 +120,7 @@ export function configMayRequireStartupPluginConvergence(params: {
   if (hasPotentialPluginConfig(params.config, params.env)) {
     return true;
   }
-  if (collectConfiguredRuntimePluginIds(params.config).length > 0) {
+  if (collectConfiguredRuntimeIds(params.config).length > 0) {
     return true;
   }
   if (

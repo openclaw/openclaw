@@ -7,11 +7,8 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import {
-  getDeliveryQueueEntryStatus,
-  loadDeliveryQueueEntry,
-  upsertDeliveryQueueEntry,
-} from "../delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus, loadDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
+import { seedDeliveryQueueEntry } from "../delivery-queue-sqlite.test-support.js";
 import { deliverOutboundPayloadsInternal } from "./deliver.js";
 import {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -20,15 +17,16 @@ import {
   OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
 } from "./delivery-queue-media-staging.js";
 import { migrateLegacyPendingOutboundDeliveries } from "./delivery-queue-migration.js";
+import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import {
   enqueueDelivery,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
   reserveDeliveryAttempt,
+  type LegacyQueuedDelivery,
   type LegacyQueuedDeliveryPreparation,
   type QueuedDelivery,
 } from "./delivery-queue-storage.js";
-import { recoverPendingDeliveries } from "./delivery-queue.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
@@ -146,9 +144,15 @@ describe("outbound prepared queue migration", () => {
 
   it("prepares a legacy row once, fences rollback, and never reruns modifiers", async () => {
     const id = "stable-legacy-delivery";
-    upsertDeliveryQueueEntry({
+    const source = {
+      ...legacyEntry(id, "secret"),
+      completionRetention: "permanent",
+      replyToId: "root-message",
+      replyToMode: "batched",
+    } satisfies LegacyQueuedDelivery;
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-      entry: { ...legacyEntry(id, "secret"), completionRetention: "permanent" },
+      entry: source,
       stateDir: tmpDir(),
     });
 
@@ -158,7 +162,7 @@ describe("outbound prepared queue migration", () => {
         log: createRecoveryLog(),
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 1, skipped: 0 });
+    ).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
     expect(hookMocks.runMessageSending).toHaveBeenCalledTimes(1);
     expect(getDeliveryQueueEntryStatus(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBe(
       "completed",
@@ -174,6 +178,13 @@ describe("outbound prepared queue migration", () => {
     expect(
       acceptedPreparedOutboundEntries(queued.preparedBatch).map((entry) => entry.payload),
     ).toEqual([{ text: "secret-prepared" }]);
+    expect(queued.reply).toEqual({
+      source: "implicit",
+      replyToId: "root-message",
+      mode: "first",
+    });
+    expect(queued).not.toHaveProperty("replyToId");
+    expect(queued).not.toHaveProperty("replyToMode");
     expect(queued).not.toHaveProperty("legacyPreparationOwnerId");
     expect(queued).not.toHaveProperty("legacyPreparationLeaseExpiresAt");
 
@@ -207,7 +218,7 @@ describe("outbound prepared queue migration", () => {
   it("claims a legacy row before invoking modifiers", async () => {
     const id = "claimed-legacy-delivery";
     const source = legacyEntry(id, "first");
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry: source,
       stateDir: tmpDir(),
@@ -246,12 +257,17 @@ describe("outbound prepared queue migration", () => {
       loadDeliveryQueueEntry(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir()),
     ).toMatchObject({
       legacyPreparationState: "modifiers_started",
+      retainOnFailure: true,
       payloads: [{ text: "first" }],
     });
     releaseHook?.({ content: "first-prepared" });
 
-    await expect(migration).resolves.toEqual({ moved: 1, skipped: 0 });
-    await expect(overlappingMigration).resolves.toEqual({ moved: 1, skipped: 0 });
+    await expect(migration).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
+    await expect(overlappingMigration).resolves.toEqual({
+      moved: 1,
+      skipped: 0,
+      remaining: 0,
+    });
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
     expect(loadDeliveryQueueEntry(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir())).toBeNull();
     expect(loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toMatchObject({
@@ -265,7 +281,7 @@ describe("outbound prepared queue migration", () => {
     vi.useFakeTimers();
     try {
       const id = "legacy-renewal-failure";
-      upsertDeliveryQueueEntry({
+      seedDeliveryQueueEntry({
         queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
         entry: legacyEntry(id, "must not replay"),
         stateDir: tmpDir(),
@@ -289,7 +305,7 @@ describe("outbound prepared queue migration", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       releaseHook?.({ content: "must not replay-prepared" });
 
-      await expect(migration).resolves.toEqual({ moved: 0, skipped: 1 });
+      await expect(migration).resolves.toEqual({ moved: 0, skipped: 1, remaining: 0 });
       expect(
         getDeliveryQueueEntryStatus(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir()),
       ).toBe("failed");
@@ -306,13 +322,14 @@ describe("outbound prepared queue migration", () => {
     const interrupted = {
       ...legacyEntry(id, "must not be reconsidered"),
       legacyPreparationState: "modifiers_started",
+      retainOnFailure: true,
       deliveryCompletion: {
         kind: "conversation",
         agentId: "main",
         operationId: "interrupted-operation",
       },
     } satisfies LegacyQueuedDeliveryPreparation;
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
       entry: interrupted,
       stateDir: tmpDir(),
@@ -324,11 +341,12 @@ describe("outbound prepared queue migration", () => {
         log: createRecoveryLog(),
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 0, skipped: 1 });
+    ).resolves.toEqual({ moved: 0, skipped: 1, remaining: 0 });
 
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
     expect(completionMocks.failDurableDelivery).toHaveBeenCalledWith(
       interrupted.deliveryCompletion,
+      tmpDir(),
     );
     expect(getDeliveryQueueEntryStatus(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir())).toBe(
       "failed",
@@ -336,14 +354,15 @@ describe("outbound prepared queue migration", () => {
     const failedFence = readQueueEntryJson(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir());
     expect(failedFence).toBeDefined();
     expect(failedFence).not.toContain("must not be reconsidered");
-    expect(JSON.parse(failedFence ?? "{}")).toMatchObject({
+    const failedEntry = JSON.parse(failedFence ?? "{}") as Record<string, unknown>;
+    expect(failedEntry).toMatchObject({
       id,
-      enqueuedAt: 100,
+      enqueuedAt: expect.any(Number),
       retryCount: 0,
-      attemptCount: 0,
     });
-    expect(JSON.parse(failedFence ?? "{}")).not.toHaveProperty("payloads");
-    expect(JSON.parse(failedFence ?? "{}")).not.toHaveProperty("deliveryCompletion");
+    expect(failedEntry.enqueuedAt).toBe(failedEntry.failedAt);
+    expect(failedEntry).not.toHaveProperty("payloads");
+    expect(failedEntry).not.toHaveProperty("deliveryCompletion");
     expect(loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBeNull();
   });
 
@@ -352,6 +371,7 @@ describe("outbound prepared queue migration", () => {
     const active = {
       ...legacyEntry(id, "active raw input"),
       legacyPreparationState: "modifiers_started",
+      retainOnFailure: true,
       legacyPreparationOwnerId: "other-process",
       legacyPreparationLeaseExpiresAt: Date.now() + 60_000,
       deliveryCompletion: {
@@ -360,7 +380,7 @@ describe("outbound prepared queue migration", () => {
         operationId: "active-operation",
       },
     } satisfies LegacyQueuedDeliveryPreparation;
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
       entry: active,
       stateDir: tmpDir(),
@@ -372,7 +392,7 @@ describe("outbound prepared queue migration", () => {
         log: createRecoveryLog(),
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 0, skipped: 1 });
+    ).resolves.toEqual({ moved: 0, skipped: 1, remaining: 1 });
 
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
     expect(completionMocks.failDurableDelivery).not.toHaveBeenCalled();
@@ -386,7 +406,7 @@ describe("outbound prepared queue migration", () => {
 
   it("retries setup failures that occur before the first modifier invocation", async () => {
     const id = "legacy-pre-modifier-setup-failure";
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry: legacyEntry(id, "retry after setup"),
       stateDir: tmpDir(),
@@ -401,11 +421,11 @@ describe("outbound prepared queue migration", () => {
         log: createRecoveryLog(),
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 0, skipped: 1 });
+    ).resolves.toEqual({ moved: 0, skipped: 1, remaining: 1 });
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
     expect(
       loadDeliveryQueueEntry(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir()),
-    ).toMatchObject({ legacyPreparationState: "claimed" });
+    ).toMatchObject({ legacyPreparationState: "claimed", retainOnFailure: true });
 
     hookMocks.hasHooks.mockImplementation(
       (name?: string) => name === "message_sending" || name === "message_sent",
@@ -416,7 +436,7 @@ describe("outbound prepared queue migration", () => {
         log: createRecoveryLog(),
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 1, skipped: 0 });
+    ).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
     expect(loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toMatchObject({
       preparedBatch: {
@@ -442,7 +462,7 @@ describe("outbound prepared queue migration", () => {
       warn: (message: string) => warnings.push(message),
       error: vi.fn(),
     };
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry: sourceEntry,
       stateDir: tmpDir(),
@@ -454,7 +474,7 @@ describe("outbound prepared queue migration", () => {
         log,
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 0, skipped: 1 });
+    ).resolves.toEqual({ moved: 0, skipped: 1, remaining: 1 });
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
     expect(loadDeliveryQueueEntry(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBeNull();
     expect(
@@ -485,7 +505,7 @@ describe("outbound prepared queue migration", () => {
       stateDir: tmpDir(),
     });
     expect({ secondMigration, warnings }).toEqual({
-      secondMigration: { moved: 1, skipped: 0 },
+      secondMigration: { moved: 1, skipped: 0, remaining: 0 },
       warnings: [],
     });
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
@@ -507,7 +527,7 @@ describe("outbound prepared queue migration", () => {
 
   it("reconciles a legacy unknown send before modifiers and prepares only when not sent", async () => {
     const id = "legacy-pre-send-reconcile";
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry: {
         ...legacyEntry(id, "original"),
@@ -540,7 +560,7 @@ describe("outbound prepared queue migration", () => {
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
     settleReconciliation?.({ status: "not_sent" });
 
-    await expect(migration).resolves.toEqual({ moved: 1, skipped: 0 });
+    await expect(migration).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
     const queued = loadDeliveryQueueEntry(
       OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -568,7 +588,7 @@ describe("outbound prepared queue migration", () => {
 
   it("settles a reconciled-sent legacy row without rerunning modifiers or provider I/O", async () => {
     const id = "legacy-already-sent";
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry: {
         ...legacyEntry(id, "pre-policy"),
@@ -600,7 +620,7 @@ describe("outbound prepared queue migration", () => {
         log: createRecoveryLog(),
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 1, skipped: 0 });
+    ).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
     const migrated = loadDeliveryQueueEntry(
       OUTBOUND_DELIVERY_QUEUE_NAME,
       id,
@@ -784,7 +804,7 @@ describe("outbound prepared queue migration", () => {
 
   it("dead-letters a partially-sent legacy row even when reconciliation reports not sent", async () => {
     const id = "legacy-partial-not-sent";
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry: {
         ...legacyEntry(id, "pre-policy"),
@@ -803,6 +823,13 @@ describe("outbound prepared queue migration", () => {
     });
     const sendMatrix = vi.fn();
 
+    await expect(
+      migrateLegacyPendingOutboundDeliveries({
+        cfg: {},
+        log: createRecoveryLog(),
+        stateDir: tmpDir(),
+      }),
+    ).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
     await recoverPendingDeliveries({
       cfg: {},
       log: createRecoveryLog(),
@@ -826,7 +853,7 @@ describe("outbound prepared queue migration", () => {
 
   it("fails unresolved legacy custody payload-free without running modifiers", async () => {
     const id = "legacy-unresolved";
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry: {
         ...legacyEntry(id, "pre-policy"),
@@ -852,7 +879,7 @@ describe("outbound prepared queue migration", () => {
         log: createRecoveryLog(),
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 0, skipped: 1 });
+    ).resolves.toEqual({ moved: 0, skipped: 1, remaining: 0 });
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
     expect(loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBeNull();
     expect(loadDeliveryQueueEntry(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBeNull();

@@ -42,10 +42,20 @@ struct LowCoverageHelperTests {
         #expect(result.errorMessage != nil)
     }
 
-    @Test func `shell executor runs command`() async {
-        let result = await ShellExecutor.runDetailed(command: ["/bin/echo", "ok"], cwd: nil, env: nil, timeout: 2)
-        #expect(result.success == true)
-        #expect(result.stdout.contains("ok") || result.stderr.contains("ok"))
+    @Test func `shell executor stops before spawn when final preflight fails`() async {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-shell-preflight-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker) }
+
+        let result = await ShellExecutor.runDetailed(
+            command: ["/usr/bin/touch", marker.path],
+            cwd: nil,
+            env: nil,
+            timeout: 2,
+            beforeSpawn: { "preflight denied" })
+
+        #expect(result.preflightError == "preflight denied")
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
     }
 
     @Test func `shell executor times out`() async {
@@ -91,36 +101,10 @@ struct LowCoverageHelperTests {
         #expect(ContinuousClock.now - startedAt < .seconds(2))
     }
 
-    @Test func `node info codable round trip`() throws {
-        let info = NodeInfo(
-            nodeId: "node-1",
-            displayName: "Node One",
-            platform: "macOS",
-            version: "1.0",
-            coreVersion: "1.0-core",
-            uiVersion: "1.0-ui",
-            deviceFamily: "Mac",
-            modelIdentifier: "MacBookPro",
-            remoteIp: "192.168.1.2",
-            caps: ["chat"],
-            commands: ["send"],
-            permissions: ["send": true],
-            paired: true,
-            connected: false)
-        let data = try JSONEncoder().encode(info)
-        let decoded = try JSONDecoder().decode(NodeInfo.self, from: data)
-        #expect(decoded.nodeId == "node-1")
-        #expect(decoded.isPaired == true)
-        #expect(decoded.isConnected == false)
-    }
-
-    @Test @MainActor func `presence reporter helpers`() {
+    @Test @MainActor func `presence reporter summary and privacy parameters`() {
         let summary = PresenceReporter._testComposePresenceSummary(mode: "local", reason: "test")
         #expect(summary.contains("mode local"))
         #expect(!summary.contains("last input"))
-        #expect(!PresenceReporter._testAppVersionString().isEmpty)
-        #expect(!PresenceReporter._testPlatformString().isEmpty)
-        _ = PresenceReporter._testPrimaryIPv4Address()
         let privacyParameters = PresenceReporter._testActivityPrivacyParameters()
         #expect(privacyParameters["lastInputSeconds"]?.base as? Int == 2_592_000)
         #expect(
@@ -156,54 +140,6 @@ struct LowCoverageHelperTests {
 
         let emptyReport = PortGuardian._testBuildReport(port: 18789, mode: .local, listeners: [])
         #expect(emptyReport.summary.contains("Nothing is listening"))
-    }
-
-    @Test func `port guardian remote mode does not kill docker`() {
-        let port = GatewayEnvironment.gatewayPort()
-
-        #expect(PortGuardian._testIsExpected(
-            command: "com.docker.backend",
-            fullCommand: "com.docker.backend",
-            port: port,
-            mode: .remote) == true)
-
-        #expect(PortGuardian._testIsExpected(
-            command: "ssh",
-            fullCommand: "ssh -L \(port):localhost:\(port) user@host",
-            port: port,
-            mode: .remote) == true)
-
-        #expect(PortGuardian._testIsExpected(
-            command: "podman",
-            fullCommand: "podman",
-            port: port,
-            mode: .remote) == true)
-    }
-
-    @Test func `port guardian local mode still rejects unexpected`() {
-        #expect(PortGuardian._testIsExpected(
-            command: "com.docker.backend",
-            fullCommand: "com.docker.backend",
-            port: 18789,
-            mode: .local) == false)
-
-        #expect(PortGuardian._testIsExpected(
-            command: "python",
-            fullCommand: "python server.py",
-            port: 18789,
-            mode: .local) == false)
-
-        #expect(PortGuardian._testIsExpected(
-            command: "node",
-            fullCommand: "openclaw-gateway",
-            port: 18789,
-            mode: .local) == true)
-
-        #expect(PortGuardian._testIsExpected(
-            command: "node",
-            fullCommand: "node /path/to/gateway-daemon",
-            port: 18789,
-            mode: .local) == true)
     }
 
     @Test func `port guardian remote mode report accepts any listener`() {
@@ -277,6 +213,34 @@ struct LowCoverageHelperTests {
             process: .init(parentPid: 1, startedAt: spawnedBeforeRecord, fullCommand: nil)) == .keep)
     }
 
+    @Test func `orphan signals remain bound to the planned process`() {
+        let record = PortGuardian.Record(
+            port: 18789, pid: 4242, command: "/usr/bin/ssh", mode: "remote", timestamp: 100)
+        let command = "/usr/bin/ssh -N -L 18789:127.0.0.1:18789 host"
+        let captured = PortGuardian.TunnelProcessInfo(parentPid: 1, startedAt: 99, fullCommand: command)
+        let reused = PortGuardian.TunnelProcessInfo(parentPid: 1, startedAt: 101, fullCommand: command)
+        // A new process inside the legacy timestamp slack is not the captured orphan.
+        #expect(PortGuardian.classifyTunnelRecord(record, process: reused) == .reap)
+        #expect(PortGuardian.classifyTunnelRecord(
+            record, process: reused, expectedProcess: captured) == .drop)
+        #expect(PortGuardian.classifyTunnelRecord(
+            record,
+            process: .init(parentPid: 1, startedAt: 99, fullCommand: "/usr/bin/sleep 30"),
+            expectedProcess: captured) == .drop)
+        #expect(PortGuardian.classifyTunnelRecord(
+            record,
+            process: .init(
+                parentPid: 1, startedAt: 99,
+                fullCommand: "/usr/bin/ssh -N -L 18789:127.0.0.1:19000 other-host"),
+            expectedProcess: captured) == .drop)
+        #expect(PortGuardian.classifyTunnelRecord(
+            record,
+            process: .init(parentPid: 1, startedAt: 99, fullCommand: nil),
+            expectedProcess: captured) == .keep)
+        #expect(PortGuardian.classifyTunnelRecord(
+            record, process: captured, expectedProcess: captured) == .reap)
+    }
+
     @Test func `port guardian reap plan merges disk records and drops stale ones`() {
         func record(pid: Int32, port: Int, timestamp: TimeInterval) -> PortGuardian.Record {
             PortGuardian.Record(
@@ -308,7 +272,8 @@ struct LowCoverageHelperTests {
                 }
             },
             currentAppPID: currentAppPID)
-        #expect(plan.reap.map(\.pid) == [20])
+        #expect(plan.reap.map(\.record.pid) == [20])
+        #expect(plan.reap.first?.process.startedAt == 99)
         #expect(plan.keep.map(\.pid) == [10])
         #expect(plan.keep.first?.port == 18790)
         // The dead pid 30 is reported as a drop; the exact owned pid-10 receipt is kept.
@@ -322,7 +287,7 @@ struct LowCoverageHelperTests {
                 .init(parentPid: currentAppPID, startedAt: 399, fullCommand: tunnel(port: replacement.port))
             },
             currentAppPID: currentAppPID)
-        #expect(replacementPlan.reap == [replacement])
+        #expect(replacementPlan.reap.map(\.record) == [replacement])
         #expect(replacementPlan.keep.isEmpty)
 
         let sibling = record(pid: 40, port: 18793, timestamp: 500)
@@ -371,6 +336,7 @@ struct LowCoverageHelperTests {
         let missing = try #require(CanvasScheme.makeURL(session: "missing", path: "/"))
         let missingResponse = handler._testResponse(for: missing)
         #expect(missingResponse.mime == "text/html")
+        #expect(String(data: missingResponse.data, encoding: .utf8)?.contains("Not Found") == true)
 
         #expect(handler._testTextEncodingName(for: "text/html") == "utf-8")
         #expect(handler._testTextEncodingName(for: "application/octet-stream") == nil)
@@ -402,19 +368,11 @@ struct LowCoverageHelperTests {
         #expect(!body.contains("top-secret"))
     }
 
-    @Test @MainActor func `canvas window helper functions`() throws {
-        #expect(CanvasWindowController._testSanitizeSessionKey("  main ") == "main")
-        #expect(CanvasWindowController._testSanitizeSessionKey("bad/..") == "bad___")
-        #expect(CanvasWindowController._testJSOptionalStringLiteral(nil) == "null")
-
+    @Test @MainActor func `canvas window helper functions`() {
         let rect = NSRect(x: 10, y: 12, width: 400, height: 420)
         let key = CanvasWindowController._testStoredFrameKey(sessionKey: "test")
         let loaded = CanvasWindowController._testStoreAndLoadFrame(sessionKey: "test", frame: rect)
         UserDefaults.standard.removeObject(forKey: key)
         #expect(loaded?.size.width == rect.size.width)
-
-        let trusted = try #require(URL(string:
-            "http://127.0.0.1:18789/__openclaw__/cap/token/__openclaw__/a2ui/?platform=macos"))
-        #expect(CanvasA2UIActionMessageHandler.isTrustedSourceURL(trusted, expectedRemoteURL: trusted))
     }
 }

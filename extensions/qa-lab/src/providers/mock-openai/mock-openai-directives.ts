@@ -217,23 +217,37 @@ export function hasDeclaredTool(body: Record<string, unknown>, name: string) {
 export function hasToolDefinition(body: Record<string, unknown>, name: string) {
   const tools = Array.isArray(body.tools) ? body.tools : [];
   const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
-  return [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name));
+  return [...tools, ...dynamicTools].some((tool) => findNamedToolDefinition(tool, name) !== null);
 }
 
-function toolDefinitionMentionsName(value: unknown, name: string, depth = 0): boolean {
+export function findNamedToolDefinition(
+  value: unknown,
+  name: string,
+  depth = 0,
+): Record<string, unknown> | null {
   if (depth > 6 || !value || typeof value !== "object") {
-    return false;
+    return null;
   }
   if (Array.isArray(value)) {
-    return value.some((item) => toolDefinitionMentionsName(item, name, depth + 1));
+    for (const item of value) {
+      const match = findNamedToolDefinition(item, name, depth + 1);
+      if (match) {
+        return match;
+      }
+    }
+    return null;
   }
   const record = value as Record<string, unknown>;
-  for (const key of ["name", "tool", "functionName"]) {
-    if (record[key] === name) {
-      return true;
+  if (record.name === name || record.tool === name || record.functionName === name) {
+    return record;
+  }
+  for (const item of Object.values(record)) {
+    const match = findNamedToolDefinition(item, name, depth + 1);
+    if (match) {
+      return match;
     }
   }
-  return Object.values(record).some((item) => toolDefinitionMentionsName(item, name, depth + 1));
+  return null;
 }
 
 function instructionTextMentionsToolName(text: string, name: string) {
@@ -343,12 +357,17 @@ export function extractSessionStatusSessionKey(
   return /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ?? "";
 }
 
-export function isHeartbeatPrompt(text: string) {
+export function resolveHeartbeatPromptReply(text: string): "HEARTBEAT_OK" | "NO_REPLY" | undefined {
   const trimmed = text.trim();
   if (!trimmed || /remember this fact/i.test(trimmed)) {
-    return false;
+    return undefined;
   }
-  return /(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed);
+  if (/(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed)) {
+    return "HEARTBEAT_OK";
+  }
+  return /(?:^|[.\n]\s*)If nothing needs attention, reply NO_REPLY\b/i.test(trimmed)
+    ? "NO_REPLY"
+    : undefined;
 }
 
 export function readFirstMediaPath(value: unknown): string {

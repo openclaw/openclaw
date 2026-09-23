@@ -2,10 +2,15 @@ import { expectDefined } from "@openclaw/normalization-core";
 /** Config mutation helpers used by chat commands that edit OpenClaw config. */
 import { setConfigValueAtPath, unsetConfigValueAtPath } from "../../config/config-paths.js";
 import {
+  mutateConfigFileWithRetry,
   transformConfigFileWithRetry,
   validateConfigObjectWithPlugins,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  resolvePluginCapabilityConsent,
+  type PluginCapabilityConsentHandler,
+} from "../../plugins/capability-consent.js";
 import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
 
 export class AutoReplyConfigMutationError extends Error {}
@@ -17,10 +22,7 @@ export function formatAutoReplyConfigMutationError(error: unknown): string | nul
   return error instanceof AutoReplyConfigMutationError ? error.message : null;
 }
 
-function assertValidConfig(
-  next: Record<string, unknown>,
-  action: string,
-): { config: OpenClawConfig } {
+function assertValidConfig(next: Record<string, unknown>, action: string): OpenClawConfig {
   const validated = validateConfigObjectWithPlugins(next);
   if (!validated.ok) {
     const issue = expectDefined(validated.issues[0], "issues entry at 0");
@@ -28,24 +30,26 @@ function assertValidConfig(
       `Config invalid after ${action} (${issue.path}: ${issue.message}).`,
     );
   }
-  return { config: validated.config };
+  // Validation materializes runtime defaults; the mutation must retain source shape.
+  return next;
 }
 
 /** Removes a config path and returns whether anything changed. */
-export async function unsetConfigPath(path: string[]): Promise<boolean> {
+export async function unsetConfigPath(
+  path: string[],
+  assertCurrent?: () => void,
+): Promise<boolean> {
   try {
-    await transformConfigFileWithRetry({
+    await mutateConfigFileWithRetry({
       base: "source",
       afterWrite: { mode: "auto" },
-      transform: (currentConfig) => {
-        const next = structuredClone(currentConfig) as Record<string, unknown>;
+      writeOptions: { assertCurrent },
+      mutate: (next) => {
         const removed = unsetConfigValueAtPath(next, path);
         if (!removed) {
           throw new AutoReplyConfigNoopMutation();
         }
-        return {
-          nextConfig: assertValidConfig(next, "unset").config,
-        };
+        assertValidConfig(next, "unset");
       },
     });
     return true;
@@ -58,36 +62,50 @@ export async function unsetConfigPath(path: string[]): Promise<boolean> {
 }
 
 /** Sets and validates a config path in the source config file. */
-export async function setConfigPath(path: string[], value: unknown): Promise<void> {
-  await transformConfigFileWithRetry({
+export async function setConfigPath(
+  path: string[],
+  value: unknown,
+  assertCurrent?: () => void,
+): Promise<void> {
+  await mutateConfigFileWithRetry({
     base: "source",
     afterWrite: { mode: "auto" },
-    transform: (currentConfig) => {
-      const next = structuredClone(currentConfig) as Record<string, unknown>;
+    writeOptions: { assertCurrent },
+    mutate: (next) => {
       setConfigValueAtPath(next, path, value);
-      return { nextConfig: assertValidConfig(next, "set").config };
+      assertValidConfig(next, "set");
     },
   });
 }
 
-/** Toggles plugin enablement from a chat command and returns the committed config. */
+/** Toggles plugin enablement from a chat command. */
 export async function setPluginEnabledFromCommand(params: {
   pluginId: string;
   enabled: boolean;
   action: "enable" | "disable";
-}): Promise<OpenClawConfig> {
-  const committed = await transformConfigFileWithRetry({
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
+  assertCurrent?: () => void;
+}): Promise<void> {
+  await transformConfigFileWithRetry({
     afterWrite: { mode: "auto" },
-    transform: (currentConfig) => {
+    writeOptions: { assertCurrent: params.assertCurrent },
+    transform: async (currentConfig) => {
+      if (params.enabled) {
+        await resolvePluginCapabilityConsent({
+          config: currentConfig,
+          pluginId: params.pluginId,
+          onCapabilityConsent: params.onCapabilityConsent,
+          beforePersistentApply: params.assertCurrent,
+        });
+      }
       const next = setPluginEnabledInConfig(
         structuredClone(currentConfig),
         params.pluginId,
         params.enabled,
       );
-      return { nextConfig: assertValidConfig(next, `/plugins ${params.action}`).config };
+      return { nextConfig: assertValidConfig(next, `/plugins ${params.action}`) };
     },
   });
-  return committed.nextConfig;
 }
 
 type AllowlistConfigEditResult =
@@ -117,10 +135,12 @@ export async function applyAllowlistConfigMutation(params: {
   action: "add" | "remove";
   entry: string;
   applyConfigEdit: ApplyAllowlistConfigEdit;
+  assertCurrent?: () => void;
 }): Promise<void> {
   await transformConfigFileWithRetry({
     base: "source",
     afterWrite: { mode: "auto" },
+    writeOptions: { assertCurrent: params.assertCurrent },
     transform: async (currentConfig) => {
       const latestParsedConfig = structuredClone(currentConfig) as Record<string, unknown>;
       const latestEditResult = await params.applyConfigEdit({
@@ -138,7 +158,7 @@ export async function applyAllowlistConfigMutation(params: {
         return { nextConfig: currentConfig };
       }
       return {
-        nextConfig: assertValidConfig(latestParsedConfig, "update").config,
+        nextConfig: assertValidConfig(latestParsedConfig, "update"),
       };
     },
   });

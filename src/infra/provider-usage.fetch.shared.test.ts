@@ -1,4 +1,5 @@
 // Covers shared provider usage fetch parsing and error snapshots.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
@@ -6,19 +7,10 @@ import {
   buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
   fetchJson,
+  fetchUsageJson,
   parseFiniteNumber,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
-
-function requireFetchCall(
-  mock: ReturnType<typeof vi.fn>,
-): [URL | RequestInfo, RequestInit | undefined] {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected fetch call");
-  }
-  return call as [URL | RequestInfo, RequestInit | undefined];
-}
 
 describe("provider usage fetch shared helpers", () => {
   afterEach(() => {
@@ -61,7 +53,7 @@ describe("provider usage fetch shared helpers", () => {
     );
 
     expect(fetchFnMock).toHaveBeenCalledOnce();
-    const [input, init] = requireFetchCall(fetchFnMock);
+    const [input, init] = expectDefined(fetchFnMock.mock.calls[0], "fetch call");
     expect(input).toBe("https://example.com/usage");
     expect(init?.method).toBe("POST");
     expect(init?.headers).toEqual({ authorization: "Bearer test" });
@@ -188,6 +180,69 @@ describe("provider usage fetch shared helpers", () => {
     });
 
     expect(snapshot.error).toBe("HTTP 429");
+  });
+
+  describe("fetchUsageJson", () => {
+    it("returns parsed data for a successful response", async () => {
+      const result = await fetchUsageJson({
+        provider: "zai",
+        url: "https://example.com/usage",
+        init: { method: "GET" },
+        timeoutMs: 1_000,
+        fetchFn: withFetchPreconnect(vi.fn(async () => Response.json({ plan: "Pro" }))),
+      });
+
+      expect(result).toEqual({ ok: true, data: { plan: "Pro" } });
+    });
+
+    it("cancels non-OK bodies and returns the configured provider error", async () => {
+      const response = Response.json({ error: "expired" }, { status: 403 });
+      const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+
+      const result = await fetchUsageJson({
+        provider: "openai",
+        url: "https://example.com/usage",
+        init: { method: "GET" },
+        timeoutMs: 1_000,
+        fetchFn: withFetchPreconnect(vi.fn(async () => response)),
+        tokenExpiredStatuses: [401, 403],
+      });
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(result).toEqual({
+        ok: false,
+        snapshot: {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [],
+          error: "Token expired",
+        },
+      });
+    });
+
+    it.each([
+      { malformedResponseError: undefined, expected: "Malformed usage response" },
+      { malformedResponseError: "Invalid JSON", expected: "Invalid JSON" },
+    ])("returns $expected for malformed JSON", async ({ malformedResponseError, expected }) => {
+      const result = await fetchUsageJson({
+        provider: "minimax",
+        url: "https://example.com/usage",
+        init: { method: "GET" },
+        timeoutMs: 1_000,
+        fetchFn: withFetchPreconnect(vi.fn(async () => new Response("{not-json"))),
+        malformedResponseError,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        snapshot: {
+          provider: "minimax",
+          displayName: "MiniMax",
+          windows: [],
+          error: expected,
+        },
+      });
+    });
   });
 
   describe("readUsageJson", () => {

@@ -2,54 +2,38 @@
 // Gateway dedupe retains response payloads only for idempotent RPC replay.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeAgentRunTerminalDeliverySnapshot,
-  type AgentRunTerminalDeliverySnapshot,
-} from "../../agents/agent-run-terminal-delivery.js";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeAgentRunTerminalDeliverySnapshot } from "../../agents/agent-run-terminal-delivery.js";
 import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcome,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  hasExecutionSettlement,
   isStickyAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
-import {
-  normalizeAgentRunTerminalReceipt,
-  type AgentRunTerminalReceipt,
-} from "../../agents/agent-run-terminal-receipt.js";
+import { normalizeAgentRunTerminalReceipt } from "../../agents/agent-run-terminal-receipt.js";
 import {
   mergeAgentRunTerminalReplySnapshot,
   normalizeAgentRunTerminalReplySnapshot,
-  type AgentRunTerminalReplySnapshot,
 } from "../../agents/agent-run-terminal-reply.js";
-import { onAgentEvent } from "../../infra/agent-events.js";
+import { onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
+import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
+import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
 import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { DedupeEntry } from "../server-shared.js";
+import type { AgentJobObservation, AgentJobSession, AgentJobTerminalSnapshot } from "./types.js";
 
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
 const AGENT_RUN_CACHE_MAX_ENTRIES = 5_000;
 
-type AgentJobTerminalSnapshot = {
-  status: "ok" | "error" | "timeout";
-  startedAt?: number;
-  endedAt?: number;
-  error?: string;
-  stopReason?: string;
-  livenessState?: string;
-  yielded?: boolean;
-  pendingError?: boolean;
-  timeoutPhase?: AgentRunTerminalOutcome["timeoutPhase"];
-  providerStarted?: boolean;
-  terminalDelivery?: AgentRunTerminalDeliverySnapshot;
-  terminalReceipt?: AgentRunTerminalReceipt;
-  terminalReply?: AgentRunTerminalReplySnapshot;
-};
-
 type AgentJobSource = "agent" | "chat" | "lifecycle";
 type AgentRunObservation = AgentJobTerminalSnapshot & {
+  session?: AgentJobSession;
   runId: string;
   source: AgentJobSource;
   recordedAt: number;
@@ -58,7 +42,7 @@ type AgentRunObservation = AgentJobTerminalSnapshot & {
 type AgentRunSnapshot = AgentRunObservation & { cachedAt: number };
 type PendingAgentRunTerminal = {
   snapshot: AgentRunObservation;
-  timer: NodeJS.Timeout;
+  timer?: NodeJS.Timeout;
 };
 type AgentJobRecord = {
   cachedAt: number;
@@ -72,6 +56,7 @@ type DedupeObservation =
 
 type AgentJobState = {
   jobs: Map<string, AgentJobRecord>;
+  oldestCachedAt: number;
   runStarts: Map<string, number>;
   pendingErrors: Map<string, PendingAgentRunTerminal>;
   pendingTimeouts: Map<string, PendingAgentRunTerminal>;
@@ -83,6 +68,7 @@ const agentJobState = resolveGlobalSingleton<AgentJobState>(
   Symbol.for("openclaw.agentJobState"),
   () => ({
     jobs: new Map(),
+    oldestCachedAt: Infinity,
     runStarts: new Map(),
     pendingErrors: new Map(),
     pendingTimeouts: new Map(),
@@ -97,6 +83,7 @@ const agentJobState = resolveGlobalSingleton<AgentJobState>(
       clearTimeout(pending.timer);
     }
     state.jobs.clear();
+    state.oldestCachedAt = Infinity;
     state.runStarts.clear();
     state.pendingErrors.clear();
     state.pendingTimeouts.clear();
@@ -114,18 +101,56 @@ const pendingAgentRunTimeouts = agentJobState.pendingTimeouts;
 const agentRunWaiters = agentJobState.waiters;
 let agentRunListenerStarted = false;
 
+export function captureAgentJobSession(
+  routing:
+    | Pick<AgentEventPayload, "sessionKey" | "sessionId" | "agentId" | "lifecycleGeneration">
+    | undefined,
+): AgentJobSession | undefined {
+  if (!routing?.sessionKey || !routing.sessionId || !routing.lifecycleGeneration) {
+    return undefined;
+  }
+  return {
+    sessionKey: routing.sessionKey,
+    sessionId: routing.sessionId,
+    agentId: routing.agentId,
+    lifecycleGeneration: routing.lifecycleGeneration,
+  };
+}
+
+/** Retained routing locates a current sharing check; it never keeps execution authority alive. */
+export function getAgentJobSession(
+  runId: string,
+  source?: "chat",
+): Readonly<AgentJobSession> | undefined {
+  pruneAgentRunCache();
+  const job = agentJobs.get(runId);
+  const session =
+    (job && getCanonicalAgentRunSnapshot(job.snapshotsBySource, source)?.session) ??
+    (source
+      ? undefined
+      : (pendingAgentRunErrors.get(runId)?.snapshot.session ??
+        pendingAgentRunTimeouts.get(runId)?.snapshot.session));
+  return session?.lifecycleGeneration === getAgentRunLifecycleGeneration() ? session : undefined;
+}
+
 function nextAgentRunVersion(): number {
   agentJobState.version += 1;
   return agentJobState.version;
 }
 
 function pruneAgentRunCache(now = Date.now()) {
+  if (now - agentJobState.oldestCachedAt <= AGENT_RUN_CACHE_TTL_MS) {
+    return;
+  }
+  let oldestCachedAt = Infinity;
   for (const [runId, job] of agentJobs) {
     if (now - job.cachedAt <= AGENT_RUN_CACHE_TTL_MS) {
+      oldestCachedAt = Math.min(oldestCachedAt, job.cachedAt);
       continue;
     }
     agentJobs.delete(runId);
   }
+  agentJobState.oldestCachedAt = oldestCachedAt;
 }
 
 function enforceAgentRunCacheMaxEntries() {
@@ -174,13 +199,21 @@ function mergeSnapshot(
   if (!existing) {
     return incoming;
   }
+  const canonical = shouldPreserveTerminalSnapshot(existing, incoming) ? existing : incoming;
+  const sameSession =
+    existing.session?.sessionKey === incoming.session?.sessionKey &&
+    existing.session?.sessionId === incoming.session?.sessionId &&
+    existing.session?.agentId === incoming.session?.agentId &&
+    existing.session?.lifecycleGeneration === incoming.session?.lifecycleGeneration;
+  if (!sameSession) {
+    return canonical;
+  }
   const terminalReply = mergeAgentRunTerminalReplySnapshot(
     existing.terminalReply,
     incoming.terminalReply,
   );
   const terminalDelivery = incoming.terminalDelivery ?? existing.terminalDelivery;
   const terminalReceipt = incoming.terminalReceipt ?? existing.terminalReceipt;
-  const canonical = shouldPreserveTerminalSnapshot(existing, incoming) ? existing : incoming;
   // Terminal status precedence and producer reply evidence are independent;
   // a late sticky timeout must not erase the final reply (or vice versa).
   return {
@@ -192,12 +225,6 @@ function mergeSnapshot(
     recordedAt: incoming.recordedAt,
     version: incoming.version,
   };
-}
-
-function notifyAgentRunWaiters(runId: string) {
-  for (const waiter of agentRunWaiters.get(runId) ?? []) {
-    waiter();
-  }
 }
 
 function recordAgentRunSnapshot(
@@ -216,32 +243,28 @@ function recordAgentRunSnapshot(
     cachedAt: entry.cachedAt,
     snapshotsBySource,
   });
+  // A lower bound remains safe when a write refreshes or eviction removes the oldest job.
+  // Recompute only once that bound can expire, without changing insertion-order eviction.
+  agentJobState.oldestCachedAt = Math.min(agentJobState.oldestCachedAt, entry.cachedAt);
   enforceAgentRunCacheMaxEntries();
-  notifyAgentRunWaiters(entry.runId);
+  for (const waiter of agentRunWaiters.get(entry.runId) ?? []) {
+    waiter();
+  }
 }
 
-function clearPendingAgentRunError(runId: string) {
-  const pending = pendingAgentRunErrors.get(runId);
-  if (!pending) {
-    return;
+function clearPendingAgentRunTerminals(runId: string) {
+  for (const pendingRuns of [pendingAgentRunErrors, pendingAgentRunTimeouts]) {
+    const pending = pendingRuns.get(runId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      pendingRuns.delete(runId);
+    }
   }
-  clearTimeout(pending.timer);
-  pendingAgentRunErrors.delete(runId);
-}
-
-function clearPendingAgentRunTimeout(runId: string) {
-  const pending = pendingAgentRunTimeouts.get(runId);
-  if (!pending) {
-    return;
-  }
-  clearTimeout(pending.timer);
-  pendingAgentRunTimeouts.delete(runId);
 }
 
 function beginAgentJob(runId: string, startedAt?: number) {
   nextAgentRunVersion();
-  clearPendingAgentRunError(runId);
-  clearPendingAgentRunTimeout(runId);
+  clearPendingAgentRunTerminals(runId);
   agentJobs.delete(runId);
   if (startedAt !== undefined) {
     agentRunStarts.set(runId, startedAt);
@@ -266,11 +289,20 @@ function schedulePendingAgentRunTerminal(
     terminalSnapshot.version = snapshot.version;
     return;
   }
-  clearPendingAgentRunError(snapshot.runId);
-  clearPendingAgentRunTimeout(snapshot.runId);
+  const replacesPendingTimeout = pendingAgentRunTimeouts.has(snapshot.runId);
+  clearPendingAgentRunTerminals(snapshot.runId);
   const timer = setSafeTimeout(() => {
     const pending = pendingRuns.get(snapshot.runId);
     if (!pending || pending.timer !== timer) {
+      return;
+    }
+    if (
+      pendingRuns === pendingAgentRunErrors &&
+      !replacesPendingTimeout &&
+      terminalOutcomeFromSnapshot(pending.snapshot)?.reason === "failed" &&
+      agentRunWaiters.has(snapshot.runId)
+    ) {
+      pending.timer = undefined;
       return;
     }
     pendingRuns.delete(snapshot.runId);
@@ -280,14 +312,13 @@ function schedulePendingAgentRunTerminal(
   pendingRuns.set(snapshot.runId, { snapshot, timer });
 }
 
-function createPendingErrorTimeoutSnapshot(
-  snapshot: AgentJobTerminalSnapshot,
-): AgentJobTerminalSnapshot {
+function createPendingErrorTimeoutSnapshot(snapshot: AgentJobObservation): AgentJobObservation {
   return {
     status: "timeout",
     startedAt: snapshot.startedAt,
     error: snapshot.error,
     pendingError: true,
+    session: snapshot.session,
     ...(snapshot.providerStarted !== undefined
       ? { providerStarted: snapshot.providerStarted }
       : {}),
@@ -299,6 +330,7 @@ function createSnapshotFromLifecycleEvent(params: {
   runId: string;
   phase: "end" | "error";
   data?: Record<string, unknown>;
+  session?: AgentJobSession;
 }): AgentRunObservation {
   const { runId, phase, data } = params;
   const startedAt =
@@ -313,7 +345,10 @@ function createSnapshotFromLifecycleEvent(params: {
   // agent.wait historically treats a bare abort flag as a retryable timeout.
   // Modern explicit stop reasons keep the canonical cancellation projection.
   const legacyBareAbort =
-    terminalOutcome.reason === "aborted" && data?.stopReason == null && data?.status == null;
+    !hasExecutionSettlement(data) &&
+    terminalOutcome.reason === "aborted" &&
+    data?.stopReason == null &&
+    data?.status == null;
   const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(data?.terminalDelivery);
   const terminalReply = normalizeAgentRunTerminalReplySnapshot(data?.terminalReply);
   const normalizedTerminalReceipt = normalizeAgentRunTerminalReceipt(data?.terminalReceipt);
@@ -322,6 +357,7 @@ function createSnapshotFromLifecycleEvent(params: {
   return {
     runId,
     source: "lifecycle",
+    session: params.session,
     recordedAt: Date.now(),
     status: legacyBareAbort ? "timeout" : terminalOutcome.status,
     startedAt,
@@ -363,55 +399,39 @@ function ensureAgentRunListener() {
       runId: evt.runId,
       phase,
       data: evt.data,
+      session: captureAgentJobSession(evt),
     });
     agentRunStarts.delete(evt.runId);
-    if (phase === "error" && evt.data?.fallbackExhaustedFailure !== true) {
+    const executionSettled = hasExecutionSettlement(evt.data);
+    if (!executionSettled && phase === "error" && evt.data?.fallbackExhaustedFailure !== true) {
       schedulePendingAgentRunTerminal(pendingAgentRunErrors, snapshot);
       return;
     }
-    if (phase === "end" && snapshot.status === "timeout") {
+    if (!executionSettled && phase === "end" && snapshot.status === "timeout") {
       schedulePendingAgentRunTerminal(pendingAgentRunTimeouts, snapshot);
       return;
     }
     const terminalSnapshot = mergePendingAgentRunTerminal(snapshot);
-    clearPendingAgentRunError(evt.runId);
-    clearPendingAgentRunTimeout(evt.runId);
+    clearPendingAgentRunTerminals(evt.runId);
     recordAgentRunSnapshot(terminalSnapshot, snapshot.version);
   });
 }
 
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 function parseDedupeObservation(entry: DedupeEntry): DedupeObservation {
-  const payload = entry.payload as
-    | {
-        status?: unknown;
-        startedAt?: unknown;
-        endedAt?: unknown;
-        error?: unknown;
-        summary?: unknown;
-        stopReason?: unknown;
-        livenessState?: unknown;
-        yielded?: unknown;
-        timeoutPhase?: unknown;
-        providerStarted?: unknown;
-        result?: unknown;
-        terminalReply?: unknown;
-      }
-    | undefined;
+  const payload = asOptionalRecord(entry.payload);
   const status = typeof payload?.status === "string" ? payload.status : undefined;
   if (isNonTerminalAgentRunStatus(status)) {
     return { state: "active" };
   }
 
   const terminalStatus =
-    status === "ok" || status === "timeout" || status === "error"
-      ? status
-      : entry.ok
-        ? undefined
-        : "error";
+    status === "completed"
+      ? "ok"
+      : status === "ok" || status === "timeout" || status === "error"
+        ? status
+        : entry.ok
+          ? undefined
+          : "error";
   if (!terminalStatus) {
     return { state: "untracked" };
   }
@@ -422,18 +442,25 @@ function parseDedupeObservation(entry: DedupeEntry): DedupeObservation {
   );
   const startedAt = asFiniteNumber(payload?.startedAt);
   const endedAt = asFiniteNumber(payload?.endedAt) ?? entry.ts;
-  const stopReason = asString(payload?.stopReason) ?? asString(resultMeta?.stopReason);
-  const livenessState = asString(payload?.livenessState) ?? asString(resultMeta?.livenessState);
+  const stopReason =
+    readNonBlankString(payload?.stopReason) ?? readNonBlankString(resultMeta?.stopReason);
+  const livenessState =
+    readNonBlankString(payload?.livenessState) ?? readNonBlankString(resultMeta?.livenessState);
+  const errorMessage =
+    typeof payload?.error === "string"
+      ? payload.error
+      : typeof payload?.summary === "string"
+        ? payload.summary
+        : entry.error?.message;
   const terminalOutcome = buildAgentRunTerminalOutcome({
     status: terminalStatus,
     startedAt,
     endedAt,
+    // RPC errors stay native for retry policy; agent.wait is an operator-facing projection.
     error:
-      typeof payload?.error === "string"
-        ? payload.error
-        : typeof payload?.summary === "string"
-          ? payload.summary
-          : entry.error?.message,
+      errorMessage === undefined
+        ? undefined
+        : formatErrorMessageForDisplay(entry.error, errorMessage),
     stopReason,
     livenessState,
     timeoutPhase: payload?.timeoutPhase ?? resultMeta?.timeoutPhase,
@@ -475,6 +502,9 @@ export function setGatewayDedupeEntry(params: {
   dedupe: Map<string, DedupeEntry>;
   key: string;
   entry: DedupeEntry;
+  /** Admission owns a new attempt; retain request identity while retiring its old terminal. */
+  startNewAttempt?: true;
+  session?: Readonly<AgentJobSession>;
 }) {
   const existing = params.dedupe.get(params.key);
   const existingObservation = existing ? parseDedupeObservation(existing) : undefined;
@@ -490,13 +520,18 @@ export function setGatewayDedupeEntry(params: {
   if (
     existingOutcome &&
     isStickyAgentRunTerminalOutcome(existingOutcome) &&
+    !(params.startNewAttempt && incomingObservation.state === "active") &&
     (!incomingOutcome ||
       mergeAgentRunTerminalOutcome(existingOutcome, incomingOutcome) === existingOutcome)
   ) {
     return;
   }
 
-  params.dedupe.set(params.key, params.entry);
+  // Terminal writers own outcomes, not request identity; never erase the admission binding.
+  const entry = existing?.requestIdentity
+    ? { ...params.entry, requestIdentity: existing.requestIdentity }
+    : params.entry;
+  params.dedupe.set(params.key, entry);
   const key = parseDedupeKey(params.key);
   if (!key) {
     return;
@@ -506,10 +541,22 @@ export function setGatewayDedupeEntry(params: {
     return;
   }
   if (incomingObservation.state === "terminal") {
+    const lifecycle = agentJobs.get(key.runId)?.snapshotsBySource.get("lifecycle");
+    if (
+      key.source === "chat" &&
+      incomingObservation.snapshot.status === "ok" &&
+      lifecycle?.status === "ok" &&
+      lifecycle.yielded === true
+    ) {
+      // Chat completion closes delivery, not the runtime's yielded execution.
+      incomingObservation.snapshot.yielded = true;
+      incomingObservation.snapshot.livenessState = lifecycle.livenessState;
+    }
     recordAgentRunSnapshot({
       ...incomingObservation.snapshot,
       runId: key.runId,
       source: key.source,
+      session: params.session ? { ...params.session } : undefined,
       recordedAt: params.entry.ts,
     });
   }
@@ -531,8 +578,16 @@ function getFreshestDedupeSnapshot(
 
 function getCanonicalAgentRunSnapshot(
   snapshotsBySource: Map<AgentJobSource, AgentRunSnapshot>,
+  source?: "chat",
 ): AgentRunSnapshot | undefined {
-  const dedupe = getFreshestDedupeSnapshot(snapshotsBySource);
+  const dedupe = source
+    ? snapshotsBySource.get(source)
+    : getFreshestDedupeSnapshot(snapshotsBySource);
+  // A chat waiter must observe completed delivery before consuming the same
+  // run's lifecycle outcome and reply. An agent dedupe cannot close that barrier.
+  if (source && !dedupe) {
+    return undefined;
+  }
   const lifecycle = snapshotsBySource.get("lifecycle");
   if (!dedupe || !lifecycle) {
     return dedupe ?? lifecycle;
@@ -549,11 +604,9 @@ function getAgentRunSnapshot(params: {
 }): AgentRunSnapshot | undefined {
   pruneAgentRunCache();
   const job = agentJobs.get(params.runId);
-  const snapshot = params.source
-    ? job?.snapshotsBySource.get(params.source)
-    : job
-      ? getCanonicalAgentRunSnapshot(job.snapshotsBySource)
-      : undefined;
+  const snapshot = job
+    ? getCanonicalAgentRunSnapshot(job.snapshotsBySource, params.source)
+    : undefined;
   return snapshot && snapshot.version > params.afterVersion ? snapshot : undefined;
 }
 
@@ -565,12 +618,18 @@ function addAgentRunWaiter(runId: string, waiter: AgentJobWaiter): () => void {
     waiters.delete(waiter);
     if (waiters.size === 0) {
       agentRunWaiters.delete(runId);
+      const pendingError = pendingAgentRunErrors.get(runId);
+      if (pendingError && !pendingError.timer) {
+        pendingAgentRunErrors.delete(runId);
+        recordAgentRunSnapshot(pendingError.snapshot, pendingError.snapshot.version);
+      }
     }
   };
 }
 
-function publicSnapshot(snapshot: AgentRunObservation): AgentJobTerminalSnapshot {
+function selectedSnapshot(snapshot: AgentRunObservation): AgentJobObservation {
   return {
+    session: snapshot.session,
     status: snapshot.status,
     startedAt: snapshot.startedAt,
     endedAt: snapshot.endedAt,
@@ -592,7 +651,7 @@ export async function waitForAgentJob(params: {
   timeoutMs: number;
   ignoreCachedSnapshot?: boolean;
   source?: "chat";
-}): Promise<AgentJobTerminalSnapshot | null> {
+}): Promise<AgentJobObservation | null> {
   ensureAgentRunListener();
   const afterVersion = params.ignoreCachedSnapshot ? agentJobState.version : -1;
   const cached = getAgentRunSnapshot({
@@ -601,27 +660,32 @@ export async function waitForAgentJob(params: {
     afterVersion,
   });
   if (cached) {
-    return publicSnapshot(cached);
+    return selectedSnapshot(cached);
   }
-  if (params.timeoutMs <= 0) {
+  const signal = getAsyncWorkSignal();
+  if (params.timeoutMs <= 0 || signal?.aborted) {
     return null;
   }
 
   return await new Promise((resolve) => {
     let settled = false;
     let removeWaiter = () => {};
-    const finish = (snapshot: AgentJobTerminalSnapshot | null) => {
+    const finish = (snapshot: AgentJobObservation | null) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timeoutHandle);
+      signal?.removeEventListener("abort", onClose);
       removeWaiter();
       resolve(snapshot);
     };
+    // Closing this Gateway retires only its observation, never the run or another waiter.
+    const onClose = () => finish(null);
     const onWake = (lifecycleReset = false) => {
       if (lifecycleReset) {
-        finish(null);
+        // The lifecycle interrupted this wait; do not cache it as a terminal run outcome.
+        finish({ status: "timeout", timeoutPhase: "gateway_draining" });
         return;
       }
       const snapshot = getAgentRunSnapshot({
@@ -630,17 +694,19 @@ export async function waitForAgentJob(params: {
         afterVersion,
       });
       if (snapshot) {
-        finish(publicSnapshot(snapshot));
+        finish(selectedSnapshot(snapshot));
       }
     };
     removeWaiter = addAgentRunWaiter(params.runId, onWake);
     const timeoutHandle = setSafeTimeout(() => {
       if (!params.source) {
-        const pendingError = pendingAgentRunErrors.get(params.runId)?.snapshot;
+        const pending = pendingAgentRunErrors.get(params.runId);
+        const pendingError = pending?.snapshot;
         if (pendingError && pendingError.version > afterVersion) {
           finish(
-            isStickyAgentRunTerminalOutcome(terminalOutcomeFromSnapshot(pendingError))
-              ? publicSnapshot(pendingError)
+            !pending.timer ||
+              isStickyAgentRunTerminalOutcome(terminalOutcomeFromSnapshot(pendingError))
+              ? selectedSnapshot(pendingError)
               : createPendingErrorTimeoutSnapshot(pendingError),
           );
           return;
@@ -651,14 +717,19 @@ export async function waitForAgentJob(params: {
           pendingTimeout.version > afterVersion &&
           terminalOutcomeFromSnapshot(pendingTimeout)?.reason === "hard_timeout"
         ) {
-          finish(publicSnapshot(pendingTimeout));
+          finish(selectedSnapshot(pendingTimeout));
           return;
         }
       }
       finish(null);
     }, params.timeoutMs);
     timeoutHandle.unref?.();
-    onWake();
+    signal?.addEventListener("abort", onClose, { once: true });
+    if (signal?.aborted) {
+      onClose();
+    } else {
+      onWake();
+    }
   });
 }
 

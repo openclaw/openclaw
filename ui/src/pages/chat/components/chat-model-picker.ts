@@ -1,330 +1,141 @@
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import {
-  formatRawProviderLabel,
+  hasProviderBrandIcon,
   providerDisplayLabel,
   renderProviderBrandIcon,
 } from "../../../components/provider-icon.ts";
 import { t } from "../../../i18n/index.ts";
-import { formatContextTokenCapacity } from "../../../lib/format.ts";
+import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
+import type { ModelProviderAuthLabel as ChatModelProviderAuth } from "../../../lib/model-provider-auth-label.ts";
+import {
+  type ChatContextWindowControlParams,
+  renderContextWindowControl,
+} from "./chat-context-window-control.ts";
+import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
+import {
+  type ChatModelCatalogState,
+  renderChatModelCatalogRefresh,
+  renderChatModelCatalogState,
+} from "./chat-model-catalog-state.ts";
+import {
+  isModelPickerOptionSelected,
+  modelPickerOptionKey,
+  renderChatModelPickerOption,
+  renderChatModelPickerTargetOption,
+  renderChatModelProviderIcon,
+  type ChatModelPickerOption,
+  type ChatModelPickerTargetGroup,
+} from "./chat-model-picker-options.ts";
+import {
+  handleModelPickerKeydown,
+  handleModelSearchKeydown,
+  highlightModelRow,
+  pickerMenu,
+  resetModelSearch,
+  syncChatModelSearch,
+  toggleModelProviderGroup,
+  updateModelSearch,
+} from "./chat-model-picker-search.ts";
+import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 
-export type ChatModelCatalogState = {
-  hasSnapshot: boolean;
-  onRetry?: () => void;
-  status: "idle" | "loading" | "refreshing" | "ready" | "error";
-};
+registerModelControlsEnglish();
 
-export type ChatModelPickerOption = {
-  agentRuntimeId?: string;
-  commitValue: string;
-  contextWindow?: number;
-  isDefault: boolean;
-  label: string;
-  provider: string;
-  supportsTools?: boolean;
-  value: string;
-};
+export type { ChatModelCatalogState } from "./chat-model-catalog-state.ts";
 
-export type ChatModelPickerTargetGroup = {
-  id: string;
-  label: string;
-  options: readonly { label: string; value: string }[];
-};
-
-// Known models.list runtime ids; mirrors src/status/agent-runtime-label.ts,
-// which cannot be imported here (it drags terminal sanitizers into the bundle).
-const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
-  "claude-cli": "Claude CLI",
-  codex: "Codex",
-  "codex-cli": "Codex",
-  "google-gemini-cli": "Gemini CLI",
-  openclaw: "OpenClaw",
-};
-
-function formatAgentRuntimeLabel(id: string): string {
-  const normalized = id.trim().toLowerCase();
-  return (
-    AGENT_RUNTIME_LABELS[normalized] ??
-    `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`
-  );
-}
+export type { ModelProviderAuthLabel as ChatModelProviderAuth } from "../../../lib/model-provider-auth-label.ts";
 
 type ChatModelPickerParams = {
-  defaultModelLabel: string;
+  providerAuth?: ReadonlyMap<string, ChatModelProviderAuth>;
+  accountSection?: ChatModelAccountSection;
+  contextWindow?: ChatContextWindowControlParams;
   disabled: boolean;
   disabledReason?: string;
   modelCatalogState?: ChatModelCatalogState;
   modelSelectionLocked: boolean;
+  selectionScopeDescription?: string;
   modelOptions: ChatModelPickerOption[];
+  open?: boolean;
   targetGroups?: readonly ChatModelPickerTargetGroup[];
   selectedModelValue: string;
+  selectedAgentRuntime?: string;
+  /** Pin recorded on the session row; only then does an unavailable Default row reset. */
+  sessionModelPinned: boolean;
   sessionKey: string;
   triggerModelLabel: string;
+  triggerModelValue?: string;
   triggerStatusLabel?: string;
-  onModelSelect: (value: string, sessionKey: string) => Promise<unknown>;
+  triggerLoading?: boolean;
+  triggerStarting?: boolean;
+  onModelSetup?: () => void;
+  onOpen?: () => unknown;
+  onOpenChange?: (open: boolean) => void;
+  onModelSelect: (
+    value: string,
+    sessionKey: string,
+    agentRuntime?: string | null,
+  ) => Promise<unknown>;
+  onTargetRetry?: (groupId: string) => unknown;
   onTargetSelect?: (groupId: string, value: string) => unknown;
   onRequestUpdate?: () => void;
 };
 
-function renderProviderIcon(provider: string) {
-  return renderProviderBrandIcon(provider, { className: "chat-controls__provider-icon" });
-}
-
-function formatModelLabel(option: ChatModelPickerOption): string {
-  const prefixes = [
-    formatRawProviderLabel(option.provider),
-    providerDisplayLabel(option.provider),
-  ].toSorted((left, right) => right.length - left.length);
-  for (const prefix of prefixes) {
-    if (option.label.toLowerCase().startsWith(`${prefix.toLowerCase()} `)) {
-      return option.label.slice(prefix.length + 1);
-    }
-  }
-  return option.label;
-}
-
-function pickerMenu(target: EventTarget | null): HTMLElement | null {
-  return target instanceof Element
-    ? target.closest<HTMLElement>(".chat-controls__model-menu")
-    : null;
-}
-
-function visibleModelRows(menu: HTMLElement): HTMLButtonElement[] {
-  return [...menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")]
-    .filter((row) => !row.hidden)
-    .toSorted(
-      (left, right) =>
-        Number(left.dataset.chatModelRank ?? left.dataset.chatModelIndex ?? 0) -
-        Number(right.dataset.chatModelRank ?? right.dataset.chatModelIndex ?? 0),
-    );
-}
-
-function ensureModelPickerIds(menu: HTMLElement): void {
-  const details = menu.closest<HTMLDetailsElement>(".chat-controls__model-picker");
-  const input = menu.querySelector<HTMLInputElement>("[data-chat-model-search]");
-  const listbox = menu.querySelector<HTMLElement>("[data-chat-model-list]");
-  if (!details || !input || !listbox) {
-    return;
-  }
-  const prefix = details.dataset.chatModelPickerId ?? `chat-model-picker-${crypto.randomUUID()}`;
-  details.dataset.chatModelPickerId = prefix;
-  listbox.id = `${prefix}-listbox`;
-  menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]").forEach((row, index) => {
-    row.id = `${prefix}-option-${index}`;
-  });
-  input.setAttribute("aria-controls", listbox.id);
-  input.setAttribute("aria-expanded", details.open ? "true" : "false");
-}
-
-function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined): void {
-  menu.querySelectorAll<HTMLElement>("[data-chat-model-option]").forEach((candidate) => {
-    candidate.toggleAttribute("data-chat-model-highlighted", candidate === row);
-  });
-  const input = menu.querySelector<HTMLInputElement>("[data-chat-model-search]");
-  if (row?.id) {
-    input?.setAttribute("aria-activedescendant", row.id);
-  } else {
-    input?.removeAttribute("aria-activedescendant");
-  }
-}
-
-function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElement[]): void {
-  menu.querySelectorAll<HTMLElement>("[data-chat-model-shortcut]").forEach((shortcut) => {
-    shortcut.hidden = true;
-    shortcut.removeAttribute("data-chat-model-shortcut-number");
-  });
-  rows.slice(0, 9).forEach((row, index) => {
-    const shortcut = row.querySelector<HTMLElement>("[data-chat-model-shortcut]");
-    if (!shortcut) {
-      return;
-    }
-    shortcut.hidden = false;
-    shortcut.setAttribute("data-chat-model-shortcut-number", String(index + 1));
-  });
-}
-
-function modelMatchRank(row: HTMLButtonElement, query: string): number | null {
-  const model = row.dataset.chatModelName ?? "";
-  const provider = row.dataset.chatModelProviderLabel ?? "";
-  if (model.startsWith(query)) {
-    return 0;
-  }
-  if (model.includes(query)) {
-    return 1;
-  }
-  if (provider.startsWith(query)) {
-    return 2;
-  }
-  return provider.includes(query) ? 3 : null;
-}
-
-function updateModelSearch(input: HTMLInputElement): void {
-  const menu = pickerMenu(input);
-  if (!menu) {
-    return;
-  }
-  ensureModelPickerIds(menu);
-  const query = input.value.trim().toLocaleLowerCase();
-  menu.toggleAttribute("data-chat-model-filtering", Boolean(query));
-  const rows = [...menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
-  const matches: Array<{ row: HTMLButtonElement; score: number; index: number }> = [];
-  rows.forEach((row, index) => {
-    const score = query ? modelMatchRank(row, query) : 0;
-    row.hidden = score === null;
-    row.style.removeProperty("--chat-model-rank");
-    delete row.dataset.chatModelRank;
-    if (score !== null) {
-      matches.push({ row, score, index });
-    }
-  });
-  matches
-    .toSorted((left, right) => left.score - right.score || left.index - right.index)
-    .forEach(({ row }, rank) => {
-      row.dataset.chatModelRank = String(rank);
-      row.style.setProperty("--chat-model-rank", String(rank));
-    });
-  const visibleRows = visibleModelRows(menu);
-  updateModelShortcuts(menu, visibleRows);
-  const selected = visibleRows.find((row) => row.getAttribute("aria-selected") === "true");
-  highlightModelRow(menu, query ? visibleRows[0] : (selected ?? visibleRows[0]));
-  const empty = menu.querySelector<HTMLElement>("[data-chat-model-search-empty]");
-  if (empty) {
-    empty.hidden = !query || visibleRows.length > 0;
-  }
-}
-
-function resetModelSearch(details: HTMLDetailsElement): void {
-  const input = details.querySelector<HTMLInputElement>("[data-chat-model-search]");
-  if (!input) {
-    return;
-  }
-  input.value = "";
-  updateModelSearch(input);
-}
-
-export function clearChatModelSearchOnEscape(event: KeyboardEvent): boolean {
-  if (event.key !== "Escape") {
-    return false;
-  }
-  const input = event
-    .composedPath()
-    .find(
-      (target): target is HTMLInputElement =>
-        target instanceof HTMLInputElement && target.matches("[data-chat-model-search]"),
-    );
-  if (!input?.value) {
-    return false;
-  }
-  input.value = "";
-  updateModelSearch(input);
-  event.preventDefault();
-  event.stopPropagation();
-  return true;
-}
-
-function handleModelSearchKeydown(event: KeyboardEvent): void {
-  const input = event.currentTarget as HTMLInputElement;
-  const menu = pickerMenu(input);
-  if (!menu) {
-    return;
-  }
-  const rows = visibleModelRows(menu);
-  if (rows.length === 0) {
-    return;
-  }
-  if (/^[1-9]$/u.test(event.key) && input.value === "") {
-    event.preventDefault();
-    rows[Number(event.key) - 1]?.click();
-    return;
-  }
-  if (event.key === "Enter") {
-    const highlighted = rows.find((row) => row.hasAttribute("data-chat-model-highlighted"));
-    if (highlighted) {
-      event.preventDefault();
-      highlighted.click();
-    }
-    return;
-  }
-  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
-    return;
-  }
-  event.preventDefault();
-  const currentIndex = rows.findIndex((row) => row.hasAttribute("data-chat-model-highlighted"));
-  const offset = event.key === "ArrowDown" ? 1 : rows.length - 1;
-  const nextIndex = currentIndex < 0 ? 0 : (currentIndex + offset) % rows.length;
-  highlightModelRow(menu, rows[nextIndex]);
-  rows[nextIndex]?.scrollIntoView?.({ block: "nearest" });
-}
-
-function renderCatalogState(state: ChatModelCatalogState | undefined, hasOptions: boolean) {
-  if (!state || (state.status === "ready" && hasOptions)) {
-    return nothing;
-  }
-  const label =
-    state.status === "refreshing"
-      ? t("chat.modelControls.refreshingModels")
-      : state.status === "error"
-        ? state.hasSnapshot
-          ? t("chat.modelControls.modelsRefreshFailed")
-          : t("chat.modelControls.modelsUnavailable")
-        : state.status === "ready"
-          ? t("chat.modelControls.noModelsAvailable")
-          : t("chat.modelControls.loadingModels");
-  return html`
-    <div
-      class="chat-controls__model-catalog-state ${hasOptions
-        ? ""
-        : "chat-controls__model-catalog-state--empty"}"
-      data-chat-model-catalog-state=${state.status}
-      aria-live="polite"
-    >
-      <span class="chat-controls__model-catalog-state-label">
-        ${state.status === "error" ? icons.alertTriangle : nothing}
-        <span>${label}</span>
-      </span>
-      ${state.status === "error" && state.onRetry
-        ? html`
-            <button
-              class="chat-controls__model-catalog-retry"
-              data-chat-model-catalog-retry="true"
-              type="button"
-              @click=${(event: MouseEvent) => {
-                event.stopPropagation();
-                state.onRetry?.();
-              }}
-            >
-              ${icons.refresh}
-              <span>${t("common.retry")}</span>
-            </button>
-          `
-        : nothing}
-    </div>
-  `;
-}
-
 export function renderChatModelPicker(params: ChatModelPickerParams) {
   const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
-  const activeModelOption =
-    params.selectedModelValue === ""
-      ? defaultModelOption
-      : params.modelOptions.find((option) => option.value === params.selectedModelValue);
-  const modelToolsUnavailable = activeModelOption?.supportsTools === false;
+  const activeModelOption = params.modelOptions.find((option) =>
+    isModelPickerOptionSelected(option, params.selectedModelValue, params.selectedAgentRuntime),
+  );
+  const triggerModelValue = params.triggerModelValue;
+  const triggerModelOption =
+    triggerModelValue === undefined
+      ? activeModelOption
+      : triggerModelValue === ""
+        ? undefined
+        : params.modelOptions.find((option) =>
+            isModelPickerOptionSelected(option, triggerModelValue, params.selectedAgentRuntime),
+          );
+  const modelToolsUnavailable = triggerModelOption?.supportsTools === false;
+  const selectedContextWindowOption = params.contextWindow?.options.find(
+    (option) => option.id === params.contextWindow?.selected,
+  );
+  const showContextWindowBadge =
+    selectedContextWindowOption !== undefined &&
+    params.contextWindow?.selected !== params.contextWindow?.defaultId;
   const triggerTitle = [
     params.triggerStatusLabel ?? params.triggerModelLabel,
+    params.triggerStarting ? t("chat.modelControls.modelStarting") : "",
     modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
   ]
     .filter(Boolean)
     .join(" · ");
-  const triggerMeta = activeModelOption?.contextWindow
-    ? formatContextTokenCapacity(activeModelOption.contextWindow)
-    : "";
+  // Brand mark ahead of the model name, and only when one actually ships:
+  // hasProviderBrandIcon gates out the lettered fallback badge, so a provider
+  // without a mark renders nothing rather than a placeholder — the trigger's gap
+  // sits between boxes that exist, so nothing reserves space either. A status
+  // label replaces the model name outright, and a provider mark next to
+  // "Loading..." would claim an identity the trigger is not showing.
+  const triggerProviderIcon =
+    !params.triggerLoading &&
+    !params.triggerStatusLabel &&
+    triggerModelOption &&
+    hasProviderBrandIcon(triggerModelOption.provider)
+      ? renderProviderBrandIcon(triggerModelOption.provider, {
+          className: "chat-controls__trigger-provider-icon",
+        })
+      : nothing;
   const providerGroups = new Map<string, ChatModelPickerOption[]>();
   for (const option of params.modelOptions) {
     const existing = providerGroups.get(option.provider);
     if (existing) {
-      existing.push(option);
+      if (option.isDefault) {
+        existing.unshift(option);
+      } else {
+        existing.push(option);
+      }
     } else {
       providerGroups.set(option.provider, [option]);
     }
@@ -340,30 +151,44 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     }
   }
   const orderedOptions = orderedProviderGroups.flatMap(([, options]) => options);
-  const optionIndex = new Map(orderedOptions.map((option, index) => [option.value, index]));
+  const optionIndex = new Map(
+    orderedOptions.map((option, index) => [modelPickerOptionKey(option), index]),
+  );
   const targetGroups = params.targetGroups ?? [];
   const targetOptionCount = targetGroups.reduce((count, group) => count + group.options.length, 0);
-  const hasOptions = params.modelOptions.length + targetOptionCount > 0;
-  const commitModel = (value: string) => {
+  const hasOptions =
+    params.modelOptions.length + targetOptionCount > 0 ||
+    targetGroups.some((group) => group.status !== "ready");
+  const hasSelectableModelOptions = params.modelOptions.some((option) => !option.disabled);
+  const commitModel = (entry: ChatModelPickerOption) => {
     if (params.modelSelectionLocked) {
       return;
     }
-    void params.onModelSelect(value, params.sessionKey).finally(() => params.onRequestUpdate?.());
+    void params
+      .onModelSelect(
+        entry.commitValue,
+        params.sessionKey,
+        entry.runtimeOverride ??
+          (entry.isDefault || entry.agentRuntime !== undefined ? null : undefined),
+      )
+      .finally(() => params.onRequestUpdate?.());
     params.onRequestUpdate?.();
   };
   const selectModel = (entry: ChatModelPickerOption, event: MouseEvent) => {
     event.stopPropagation();
-    if (params.disabled || params.modelSelectionLocked) {
+    // An unavailable Default row still clears a recorded pin: it commits the reset, not the model.
+    const resetsPin = entry.isDefault && params.sessionModelPinned;
+    if (params.disabled || params.modelSelectionLocked || (entry.disabled && !resetsPin)) {
       event.preventDefault();
       return;
     }
-    if (entry.commitValue !== params.selectedModelValue) {
-      commitModel(entry.commitValue);
-    }
+    commitModel(entry);
     const details = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>("details");
     if (details) {
       details.open = false;
-      details.querySelector<HTMLElement>("summary")?.focus();
+      if (event.detail === 0) {
+        details.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+      }
     }
   };
   const selectTarget = (groupId: string, value: string, event: MouseEvent) => {
@@ -376,337 +201,355 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     const details = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>("details");
     if (details) {
       details.open = false;
-      details.querySelector<HTMLElement>("summary")?.focus();
+      if (event.detail === 0) {
+        details.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+      }
+    }
+  };
+  const highlightOption = (row: HTMLButtonElement) => {
+    const menu = pickerMenu(row);
+    if (menu) {
+      highlightModelRow(menu, row);
     }
   };
   return html`
     <details
       class="chat-controls__inline-select chat-controls__model-picker"
+      data-chat-autotype-shortcuts
+      ?open=${params.open === true}
+      ${ref((details) => syncChatModelSearch(details))}
+      @keydown=${handleModelPickerKeydown}
       @toggle=${(event: Event) => {
         const details = event.currentTarget as HTMLDetailsElement;
+        params.onOpenChange?.(details.open);
+        handleChatComposerDetailsToggle(event);
+        syncChatPickerOverlay(details);
         if (!details.open) {
+          params.accountSection?.onClose();
           resetModelSearch(details);
           return;
         }
-        queueMicrotask(() => {
-          const input = details.querySelector<HTMLInputElement>("[data-chat-model-search]");
-          if (input) {
-            updateModelSearch(input);
-            input.focus({ preventScroll: true });
-          }
-        });
+        void params.onOpen?.();
+        syncChatModelSearch(details);
       }}
     >
       <summary
-        class="chat-controls__inline-select-trigger chat-controls__model-trigger ${params.disabled
-          ? "chat-controls__inline-select-trigger--disabled"
-          : ""}"
+        class="chat-controls__inline-select-trigger chat-controls__model-trigger ${
+          params.triggerLoading ? "chat-controls__model-trigger--loading" : ""
+        } ${params.disabled ? "chat-controls__inline-select-trigger--disabled" : ""}"
         data-chat-model-select="true"
         data-chat-model-locked=${params.modelSelectionLocked ? "true" : "false"}
         data-chat-select-value=${params.selectedModelValue}
         data-chat-model-tools=${modelToolsUnavailable ? "unavailable" : "available"}
-        aria-label=${`${t("chat.selectors.model")}: ${triggerTitle}`}
+        aria-label=${`${t("chat.selectors.model")}: ${triggerTitle}${
+          params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""
+        }`}
+        aria-busy=${params.triggerLoading || params.triggerStarting ? "true" : "false"}
         aria-disabled=${params.disabled ? "true" : "false"}
-        title=${params.disabledReason ?? triggerTitle}
+        title=${params.disabledReason?.trim() || params.selectionScopeDescription || triggerTitle}
         @click=${(event: MouseEvent) => {
           if (params.disabled) {
             event.preventDefault();
+            return;
           }
+          (event.currentTarget as HTMLElement).focus({ preventScroll: true });
         }}
       >
-        ${modelToolsUnavailable
-          ? html`
-              <openclaw-tooltip .content=${t("chat.modelControls.chatOnlyHelp")}>
-                <span class="chat-controls__model-capability-badge" aria-hidden="true">
-                  ${icons.alertTriangle}
-                  <span>${t("chat.modelControls.chatOnly")}</span>
-                </span>
-              </openclaw-tooltip>
-            `
-          : nothing}
+        ${
+          modelToolsUnavailable
+            ? html`
+                <openclaw-tooltip .content=${t("chat.modelControls.chatOnlyHelp")}>
+                  <span class="chat-controls__model-capability-badge" aria-hidden="true">
+                    ${icons.alertTriangle}
+                    <span>${t("chat.modelControls.chatOnly")}</span>
+                  </span>
+                </openclaw-tooltip>
+              `
+            : nothing
+        }
+        ${triggerProviderIcon}
         <span class="chat-controls__inline-select-label">
-          ${params.triggerStatusLabel ?? params.triggerModelLabel}
+          ${
+            params.triggerLoading
+              ? html`<span
+                  class="skeleton chat-controls__model-trigger-skeleton"
+                  aria-hidden="true"
+                ></span>`
+              : (params.triggerStatusLabel ?? params.triggerModelLabel)
+          }
         </span>
-        ${params.triggerStatusLabel || !triggerMeta
-          ? nothing
-          : html`<span class="chat-controls__trigger-meta">${triggerMeta}</span>`}
+        ${
+          showContextWindowBadge
+            ? html`
+                <span
+                  class="chat-controls__locked-model-badge chat-controls__model-context-badge"
+                  data-chat-model-context-badge
+                >
+                  ${selectedContextWindowOption.label}
+                </span>
+              `
+            : nothing
+        }
+        <span class="chat-controls__inline-select-chevron" aria-hidden="true"
+          >${
+            params.triggerStarting ? html`<span class="btn__spinner"></span>` : icons.chevronUp
+          }</span
+        >
       </summary>
-      <div
-        class="chat-controls__inline-select-menu chat-controls__model-menu"
-        aria-label=${t("chat.selectors.model")}
-      >
-        ${params.modelSelectionLocked
-          ? html`
-              <div
-                class="chat-controls__locked-model"
-                aria-label=${t("chat.selectors.modelLockedLabel")}
-              >
-                <span class="chat-controls__inline-select-section-label">
-                  ${t("chat.selectors.modelSection")}
-                </span>
-                <span class="chat-controls__locked-model-value">${params.triggerModelLabel}</span>
-                <span class="chat-controls__locked-model-badge">
-                  ${t("chat.selectors.modelLocked")}
-                </span>
-              </div>
-            `
-          : html`
-              <div class="chat-controls__model-search-wrap">
-                ${icons.search}
-                <input
-                  class="chat-controls__model-search"
-                  data-chat-model-search="true"
-                  type="search"
-                  role="combobox"
-                  aria-autocomplete="list"
-                  autocomplete="off"
-                  spellcheck="false"
-                  placeholder=${t("chat.modelControls.searchModels")}
-                  aria-label=${t("chat.modelControls.searchModels")}
-                  ?disabled=${params.disabled}
-                  @input=${(event: InputEvent) =>
-                    updateModelSearch(event.currentTarget as HTMLInputElement)}
-                  @keydown=${handleModelSearchKeydown}
-                />
-              </div>
-              ${renderCatalogState(params.modelCatalogState, params.modelOptions.length > 0)}
-              ${hasOptions
-                ? html`
-                    <div
-                      class="chat-controls__model-options"
-                      data-chat-model-list="true"
-                      role="listbox"
-                      aria-label=${t("chat.selectors.model")}
+      <wa-popup data-anchored-overlay>
+        <div
+          class="chat-controls__inline-select-menu chat-controls__model-menu"
+          aria-label=${t("chat.selectors.model")}
+        >
+          ${
+            params.modelSelectionLocked
+              ? html`
+                  <div
+                    class="chat-controls__locked-model"
+                    aria-label=${t("chat.selectors.modelLockedLabel")}
+                  >
+                    <span class="chat-controls__inline-select-section-label">
+                      ${t("chat.selectors.modelSection")}
+                    </span>
+                    <span class="chat-controls__locked-model-value"
+                      >${params.triggerModelLabel}</span
                     >
-                      ${repeat(
-                        orderedProviderGroups,
-                        ([provider]) => provider,
-                        ([provider, options]) => html`
-                          <section
-                            class="chat-controls__provider-model-group"
-                            data-chat-model-provider-group=${provider}
-                            aria-label=${t("chat.modelControls.providerModels", {
-                              provider: providerDisplayLabel(provider),
-                            })}
-                          >
-                            <div
-                              class="chat-controls__provider-heading"
-                              data-chat-model-provider=${provider}
-                            >
-                              ${renderProviderIcon(provider)}
-                              <span>${providerDisplayLabel(provider)}</span>
-                            </div>
+                    <span class="chat-controls__locked-model-badge">
+                      ${t("chat.selectors.modelLocked")}
+                    </span>
+                  </div>
+                `
+              : html`
+                  ${
+                    hasOptions || params.accountSection
+                      ? html`
+                          <div class="chat-controls__model-search-wrap">
+                            ${icons.search}
+                            <input
+                              class="chat-controls__model-search"
+                              data-chat-model-search="true"
+                              type="search"
+                              role="combobox"
+                              aria-autocomplete="list"
+                              autocomplete="off"
+                              spellcheck="false"
+                              placeholder=${t("chat.modelControls.searchModels")}
+                              aria-label=${t("chat.modelControls.searchModels")}
+                              ?disabled=${params.disabled}
+                              @input=${(event: InputEvent) =>
+                                updateModelSearch(event.currentTarget as HTMLInputElement)}
+                              @keydown=${handleModelSearchKeydown}
+                            />
+                            ${
+                              params.modelOptions.length > 0
+                                ? renderChatModelCatalogRefresh(params.modelCatalogState)
+                                : nothing
+                            }
+                          </div>
+                        `
+                      : nothing
+                  }
+                  ${renderChatModelCatalogState(
+                    params.modelCatalogState,
+                    params.modelOptions.length > 0,
+                    hasSelectableModelOptions,
+                    params.onModelSetup,
+                  )}
+                  ${
+                    hasOptions || params.accountSection
+                      ? html`
+                          <div class="chat-controls__model-options">
                             ${repeat(
-                              options,
-                              (entry) => entry.value,
-                              (entry) => {
-                                const selected =
-                                  entry.value === params.selectedModelValue ||
-                                  (entry.isDefault && params.selectedModelValue === "");
-                                const modelLabel = formatModelLabel(entry);
-                                const modelMeta = [
-                                  entry.contextWindow
-                                    ? formatContextTokenCapacity(entry.contextWindow)
-                                    : "",
-                                  entry.supportsTools === false
-                                    ? t("chat.modelControls.chatOnly")
-                                    : "",
-                                  entry.agentRuntimeId
-                                    ? formatAgentRuntimeLabel(entry.agentRuntimeId)
-                                    : "",
-                                ]
-                                  .filter(Boolean)
-                                  .join(" · ");
-                                const index = optionIndex.get(entry.value) ?? 0;
+                              orderedProviderGroups,
+                              ([provider]) => provider,
+                              ([provider, options]) => {
+                                const auth = params.providerAuth?.get(provider);
+                                const showAuth =
+                                  auth &&
+                                  !(
+                                    auth.kind === "missing" &&
+                                    options.some(
+                                      (option) =>
+                                        option.disabled &&
+                                        (option.unavailableReason === "missing-auth" ||
+                                          option.unavailableReason === "auth-failed"),
+                                    )
+                                  );
+                                const authLabel = showAuth
+                                  ? [auth.label, auth.detail].filter(Boolean).join(" · ")
+                                  : undefined;
+                                const route = resolveModelRuntimeRoute(provider);
+                                const routeDetail = route
+                                  ? t(`chat.modelControls.routes.${route}.detail`)
+                                  : undefined;
                                 return html`
-                                  <button
-                                    class="chat-controls__inline-select-option chat-controls__model-option ${selected
-                                      ? "chat-controls__inline-select-option--selected"
-                                      : ""}"
-                                    data-chat-model-option=${entry.value}
-                                    data-chat-model-default=${entry.isDefault ? "true" : nothing}
-                                    data-chat-model-index=${index}
-                                    data-chat-model-name=${modelLabel.toLocaleLowerCase()}
-                                    data-chat-model-provider-label=${providerDisplayLabel(
-                                      entry.provider,
-                                    ).toLocaleLowerCase()}
-                                    role="option"
-                                    aria-selected=${selected ? "true" : "false"}
-                                    type="button"
-                                    ?disabled=${params.disabled}
-                                    @mouseenter=${(event: MouseEvent) => {
-                                      const menu = pickerMenu(event.currentTarget);
-                                      if (menu) {
-                                        highlightModelRow(
-                                          menu,
-                                          event.currentTarget as HTMLButtonElement,
-                                        );
-                                      }
-                                    }}
-                                    @click=${(event: MouseEvent) => selectModel(entry, event)}
+                                  <section
+                                    class="chat-controls__provider-model-group"
+                                    data-chat-model-provider-group=${provider}
+                                    aria-label=${t("chat.modelControls.providerModels", {
+                                      provider: providerDisplayLabel(provider),
+                                    })}
                                   >
-                                    <span class="chat-controls__model-option-provider">
-                                      ${renderProviderIcon(entry.provider)}
-                                    </span>
-                                    <span class="chat-controls__model-option-copy">
-                                      <span class="chat-controls__model-option-title">
-                                        <span class="chat-controls__model-option-name"
-                                          >${modelLabel}</span
+                                    <div
+                                      class="chat-controls__provider-heading"
+                                      data-chat-model-provider=${provider}
+                                      title=${[routeDetail, authLabel].filter(Boolean).join(" · ") || nothing}
+                                    >
+                                      <button
+                                        class="chat-controls__provider-toggle"
+                                        type="button"
+                                        data-chat-model-group-toggle
+                                        data-chat-model-provider-toggle
+                                        aria-expanded="false"
+                                        aria-label=${`${t("chat.modelControls.providerModels", {
+                                          provider: providerDisplayLabel(provider),
+                                        })} (${options.length})`}
+                                        aria-description=${routeDetail ?? nothing}
+                                        ?disabled=${params.disabled}
+                                        @click=${toggleModelProviderGroup}
+                                      >
+                                        ${renderChatModelProviderIcon(provider)}
+                                        <span class="chat-controls__provider-label"
+                                          >${providerDisplayLabel(provider)}</span
                                         >
-                                        ${entry.isDefault
-                                          ? html`<span
-                                              class="chat-controls__model-state-label chat-controls__model-state-label--default"
-                                              >${t("chat.modelControls.default")}</span
-                                            >`
-                                          : nothing}
-                                      </span>
-                                      ${modelMeta
-                                        ? html`<span class="chat-controls__model-option-meta"
-                                            >${modelMeta}</span
-                                          >`
-                                        : nothing}
-                                    </span>
-                                    <span class="chat-controls__model-option-action">
-                                      ${selected
-                                        ? html`<span
-                                            class="chat-controls__inline-select-check"
-                                            aria-hidden="true"
-                                            >${icons.check}</span
-                                          >`
-                                        : html`<kbd
-                                            data-chat-model-shortcut="true"
-                                            aria-hidden="true"
-                                            hidden
-                                          ></kbd>`}
-                                    </span>
-                                  </button>
+                                        <span>${options.length}</span>
+                                        <span
+                                          class="chat-controls__inline-select-chevron"
+                                          aria-hidden="true"
+                                          >${icons.chevronDown}</span
+                                        >
+                                      </button>
+                                      ${showAuth ? html`<span class="chat-controls__auth-meta" data-auth-kind=${auth.kind}><span aria-hidden="true">${auth.kind === "subscription" ? icons.circleUser : auth.kind === "api" ? icons.key : icons.alertTriangle}</span><span class="chat-controls__auth-meta-label">${authLabel}</span></span>` : nothing}
+                                      ${
+                                        params.onModelSetup
+                                          ? html`<button
+                                              class="chat-controls__provider-settings"
+                                              data-chat-model-provider-settings
+                                              type="button"
+                                              aria-label=${t("chat.modelControls.configureModels")}
+                                              @click=${(event: MouseEvent) => {
+                                                event.stopPropagation();
+                                                params.onModelSetup?.();
+                                              }}
+                                            >
+                                              ${icons.settings}
+                                            </button>`
+                                          : nothing
+                                      }
+                                    </div>
+                                    <div
+                                      class="chat-controls__provider-model-list"
+                                      data-chat-model-list="true"
+                                      role="listbox"
+                                      aria-label=${t("chat.modelControls.providerModels", {
+                                        provider: providerDisplayLabel(provider),
+                                      })}
+                                    >
+                                      ${repeat(options, modelPickerOptionKey, (entry) =>
+                                        renderChatModelPickerOption({
+                                          disabled: params.disabled,
+                                          entry,
+                                          index: optionIndex.get(modelPickerOptionKey(entry)) ?? 0,
+                                          selectedModelValue: params.selectedModelValue,
+                                          selectedAgentRuntime: params.selectedAgentRuntime,
+                                          sessionModelPinned: params.sessionModelPinned,
+                                          onHighlight: highlightOption,
+                                          onSelect: selectModel,
+                                          onModelSetup: params.onModelSetup,
+                                        }),
+                                      )}
+                                    </div>
+                                  </section>
                                 `;
                               },
                             )}
-                          </section>
-                        `,
-                      )}
-                      ${repeat(
-                        targetGroups,
-                        (group) => group.id,
-                        (group) => html`
-                          <section
-                            class="chat-controls__provider-model-group"
-                            data-chat-model-target-group=${group.id}
-                            aria-label=${group.label}
-                          >
-                            <div class="chat-controls__provider-heading">
-                              <span
-                                class="chat-controls__provider-icon chat-controls__target-icon"
-                                aria-hidden="true"
-                                >${icons.terminal}</span
-                              >
-                              <span>${group.label}</span>
-                            </div>
                             ${repeat(
-                              group.options,
-                              (entry) => entry.value,
-                              (entry, targetIndex) => html`
-                                <button
-                                  class="chat-controls__inline-select-option chat-controls__model-option"
-                                  data-chat-model-option=${`target:${group.id}:${entry.value}`}
-                                  data-chat-model-target=${entry.value}
-                                  data-chat-model-index=${orderedOptions.length + targetIndex}
-                                  data-chat-model-name=${entry.label.toLocaleLowerCase()}
-                                  data-chat-model-provider-label=${group.label.toLocaleLowerCase()}
-                                  role="option"
-                                  aria-selected="false"
-                                  type="button"
-                                  ?disabled=${params.disabled}
-                                  @mouseenter=${(event: MouseEvent) => {
-                                    const menu = pickerMenu(event.currentTarget);
-                                    if (menu) {
-                                      highlightModelRow(
-                                        menu,
-                                        event.currentTarget as HTMLButtonElement,
-                                      );
-                                    }
-                                  }}
-                                  @click=${(event: MouseEvent) =>
-                                    selectTarget(group.id, entry.value, event)}
+                              targetGroups,
+                              (group) => group.id,
+                              (group) => html`
+                                <section
+                                  class="chat-controls__provider-model-group"
+                                  data-chat-model-target-group=${group.id}
+                                  aria-label=${group.label}
                                 >
-                                  <span
-                                    class="chat-controls__model-option-provider chat-controls__target-icon"
-                                    aria-hidden="true"
-                                    >${icons.terminal}</span
-                                  >
-                                  <span class="chat-controls__model-option-copy">
-                                    <span class="chat-controls__model-option-title">
-                                      <span class="chat-controls__model-option-name"
-                                        >${entry.label}</span
-                                      >
-                                    </span>
-                                  </span>
-                                  <span class="chat-controls__model-option-action">
-                                    <kbd
-                                      data-chat-model-shortcut="true"
+                                  <div class="chat-controls__provider-heading">
+                                    <span
+                                      class="chat-controls__provider-icon chat-controls__target-icon"
                                       aria-hidden="true"
-                                      hidden
-                                    ></kbd>
-                                  </span>
-                                </button>
+                                      >${icons.terminal}</span
+                                    >
+                                    <span>${group.label}</span>
+                                  </div>
+                                  ${
+                                    group.status === "ready"
+                                      ? nothing
+                                      : renderChatModelCatalogState(
+                                          { hasSnapshot: false, status: group.status },
+                                          false,
+                                          false,
+                                          undefined,
+                                          group.errorLabel,
+                                          params.onTargetRetry
+                                            ? {
+                                                disabled: params.disabled,
+                                                groupId: group.id,
+                                                onRetry: params.onTargetRetry,
+                                              }
+                                            : undefined,
+                                        )
+                                  }
+                                  <div
+                                    class="chat-controls__provider-model-list"
+                                    data-chat-model-list="true"
+                                    role="listbox"
+                                    aria-label=${group.label}
+                                  >
+                                    ${repeat(
+                                      group.options,
+                                      (entry) => entry.value,
+                                      (entry, targetIndex) =>
+                                        renderChatModelPickerTargetOption({
+                                          disabled: params.disabled,
+                                          entry,
+                                          groupId: group.id,
+                                          groupLabel: group.label,
+                                          index: orderedOptions.length + targetIndex,
+                                          onHighlight: highlightOption,
+                                          onSelect: selectTarget,
+                                        }),
+                                    )}
+                                  </div>
+                                </section>
                               `,
                             )}
-                          </section>
-                        `,
-                      )}
-                    </div>
-                    <div
-                      class="chat-controls__model-search-empty"
-                      data-chat-model-search-empty
-                      hidden
-                    >
-                      ${t("chat.modelControls.noMatchingModels")}
-                    </div>
-                    ${params.modelOptions.length > 0
-                      ? html`<footer class="chat-controls__model-provenance">
-                          ${params.selectedModelValue === ""
-                            ? html`<span class="chat-controls__model-provenance-value--inherit">
-                                ${t("chat.modelControls.usingDefault")}
-                              </span>`
-                            : html`
-                                <span>${t("chat.modelControls.sessionOverride")}</span>
-                                <openclaw-tooltip
-                                  .content=${t("chat.modelControls.resetToDefault", {
-                                    model: params.defaultModelLabel,
-                                  })}
-                                >
-                                  <button
-                                    class="chat-controls__model-reset"
-                                    data-chat-model-reset="true"
-                                    type="button"
-                                    ?disabled=${params.disabled}
-                                    @click=${(event: MouseEvent) => {
-                                      event.stopPropagation();
-                                      if (params.disabled) {
-                                        event.preventDefault();
-                                        return;
-                                      }
-                                      commitModel("");
-                                      const details = (
-                                        event.currentTarget as HTMLElement
-                                      ).closest<HTMLDetailsElement>("details");
-                                      if (details) {
-                                        details.open = false;
-                                        details.querySelector<HTMLElement>("summary")?.focus();
-                                      }
-                                    }}
-                                  >
-                                    ${t("chat.modelControls.useDefault")}
-                                  </button>
-                                </openclaw-tooltip>
-                              `}
-                        </footer>`
-                      : nothing}
-                  `
-                : nothing}
-            `}
-      </div>
+                            ${params.accountSection?.render(orderedOptions.length + targetOptionCount) ?? nothing}
+                          </div>
+                          <div
+                            class="chat-controls__model-search-empty"
+                            data-chat-model-search-empty
+                            hidden
+                          >
+                            ${t("chat.modelControls.noMatchingModels")}
+                          </div>
+                          ${
+                            params.contextWindow
+                              ? renderContextWindowControl(params.contextWindow, params.sessionKey)
+                              : nothing
+                          }
+                        `
+                      : nothing
+                  }
+                `
+          }
+          ${
+            params.modelSelectionLocked && params.accountSection
+              ? html`<div class="chat-controls__model-options">
+                  ${params.accountSection.render(0)}
+                </div>`
+              : nothing
+          }
+        </div>
+      </wa-popup>
     </details>
   `;
 }

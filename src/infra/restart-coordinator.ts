@@ -1,12 +1,11 @@
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import {
   createGatewayActiveWorkSnapshot,
   type GatewayActiveWorkBlocker,
   type GatewayActiveWorkInspectors,
 } from "./gateway-active-work.js";
-import { scheduleGatewaySigusr1Restart, type ScheduledRestart } from "./restart.js";
+import { scheduleGatewayRestart, type ScheduledRestart } from "./restart.js";
 
-// Safe restart coordination checks active local work before scheduling SIGUSR1
+// Safe restart coordination checks active local work before scheduling SIGUSR2
 // restarts, while still allowing explicit deferral bypasses for operators.
 type SafeGatewayRestartCounts = {
   queueSize: number;
@@ -55,15 +54,11 @@ export type SafeGatewayRestartRequestResult = {
   restart: ScheduledRestart;
 };
 
-function createSafeGatewayRestartPreflight(
+export function createSafeGatewayRestartPreflight(
   inspectors: Partial<SafeRestartInspectors> = {},
 ): SafeGatewayRestartPreflight {
   const snapshot = createGatewayActiveWorkSnapshot({
     ...inspectors,
-    // Restart RPC preflight itself owns a root. Count every other admitted
-    // handoff so signal emission cannot split spawn from durable ownership.
-    getRootRequests:
-      inspectors.getRootRequests ?? (() => getActiveGatewayRootWorkCount({ excludeCurrent: true })),
     getSessionAdmissions: () => 0,
     getSessionMutations: () => 0,
     getChatRuns: () => 0,
@@ -103,7 +98,7 @@ function createSafeGatewayRestartPreflight(
 }
 
 /** Schedule a gateway restart after collecting tracked active-work blockers. */
-export function requestSafeGatewayRestart(
+export function scheduleSafeGatewayRestart(
   opts: {
     reason?: string;
     delayMs?: number;
@@ -114,7 +109,7 @@ export function requestSafeGatewayRestart(
 ): SafeGatewayRestartRequestResult {
   const preflight = createSafeGatewayRestartPreflight(opts.inspect);
   const skipDeferral = opts.skipDeferral === true;
-  const restart = scheduleGatewaySigusr1Restart({
+  const restart = scheduleGatewayRestart({
     delayMs: opts.delayMs ?? 0,
     reason: opts.reason ?? "gateway.restart.safe",
     ...(opts.preservePendingEmitHooks === true || skipDeferral

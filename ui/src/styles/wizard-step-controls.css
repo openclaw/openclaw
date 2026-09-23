@@ -4,23 +4,29 @@
 }
 
 .wizard-step__message {
+  min-width: 0;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
-.wizard-step__device-code {
+.wizard-step__sign-in {
   display: grid;
-  justify-items: start;
-  gap: 8px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
 }
 
-.wizard-step__device-code code {
-  font-size: 18px;
+.wizard-step__sign-in p {
+  margin: 0;
+}
+
+.wizard-step__sign-in-code {
+  padding: 8px 16px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  font-size: 24px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.15em;
 }
 
 .wizard-step__options {
@@ -70,6 +76,7 @@
 
 .wizard-step__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 

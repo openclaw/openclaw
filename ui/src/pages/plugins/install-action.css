@@ -1,0 +1,113 @@
+openclaw-plugin-install-action {
+  display: inline-block;
+  max-width: 100%;
+}
+.plugin-install-action {
+  display: inline-flex;
+  position: relative;
+}
+.plugin-install-action__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.plugin-install-action__button > svg {
+  width: 14px;
+  height: 14px;
+}
+.plugin-install-action__button.plugin-install-action__button--failed {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--bg-elevated);
+}
+.plugin-install-action__popup {
+  --arrow-color: var(--bg-elevated);
+}
+.plugin-install-progress {
+  box-sizing: border-box;
+  width: 380px;
+  max-width: calc(100vw - 24px);
+  padding: 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+}
+.plugin-install-progress__header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 13px;
+}
+.plugin-install-progress__header strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.plugin-install-progress__header > span {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.plugin-install-progress__activities {
+  display: grid;
+  gap: 17px;
+  list-style: none;
+  padding: 23px 0 0;
+  margin: 0;
+}
+.plugin-install-progress__activities:empty {
+  padding: 0;
+}
+.plugin-install-progress__activity {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.35;
+}
+.plugin-install-progress__activity--started {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.plugin-install-progress__activity--failed {
+  color: var(--warn);
+}
+.plugin-install-progress__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  box-sizing: border-box;
+  border-radius: 50%;
+}
+.plugin-install-progress__activity--started .plugin-install-progress__icon {
+  border: 1px solid var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-subtle);
+}
+.plugin-install-progress__activity--completed .plugin-install-progress__icon {
+  background: var(--ok);
+  color: var(--bg);
+}
+.plugin-install-progress__activity--completed svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 2;
+}
+.plugin-install-progress__activity--failed .plugin-install-progress__icon {
+  border: 1px solid var(--warn);
+  font-size: 12px;
+  font-weight: 700;
+}
+@media (max-width: 400px) {
+  .plugin-install-progress {
+    padding: 16px;
+  }
+  .plugin-install-progress__activity {
+    font-size: 13px;
+  }
+}

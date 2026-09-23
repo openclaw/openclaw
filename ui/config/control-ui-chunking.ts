@@ -1,6 +1,32 @@
 // Control UI config module wires control ui chunking behavior.
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { resolvedLocaleConfigHintsModulePrefix } from "./control-ui-locales.ts";
+
+const configDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(configDir, "../..");
+// Fresh /new and /chat captures separate shared boot work from route-only work.
+// The generator disables these groups so stale entries cannot feed back into it.
+const controlUiBootModules = JSON.parse(
+  fs.readFileSync(path.join(configDir, "control-ui-boot-modules.json"), "utf8"),
+) as Record<"shared" | "new" | "chat", string[]>;
+
 function normalizeModuleId(id: string): string {
   return id.replace(/\\/g, "/");
+}
+
+export function controlUiBootManifestKey(id: string): string {
+  // Canonical manifest key: vendor modules key from their innermost
+  // node_modules entry so pnpm virtual-store paths match; first-party modules
+  // key repo-relative.
+  const stripped = id.replace(/[?#].*$/u, "");
+  const normalized = normalizeModuleId(stripped);
+  const vendorIndex = normalized.lastIndexOf("/node_modules/");
+  if (vendorIndex !== -1) {
+    return `node_modules/${normalized.slice(vendorIndex + "/node_modules/".length)}`;
+  }
+  return normalizeModuleId(path.relative(repoRoot, stripped));
 }
 
 function moduleIdIncludesPackage(id: string, packageName: string): boolean {
@@ -11,18 +37,24 @@ function moduleIdIncludesPackage(id: string, packageName: string): boolean {
   );
 }
 
+export const controlUiLocaleConfigHintsChunkPrefix = "locale-config-hints-";
+
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
-  // These entry-and-route helpers must stay together; separate shared chunks
-  // turn small route-graph changes into extra startup preload requests.
-  if (
-    normalized.endsWith("/ui/src/components/config-form.shared.ts") ||
-    normalized.endsWith("/ui/src/lib/clipboard.ts") ||
-    normalized.endsWith("/ui/src/build-info-normalizers.ts") ||
-    normalized.endsWith("/ui/src/build-info.ts")
-  ) {
-    return "control-ui-shared";
+  switch (controlUiBootManifestKey(id)) {
+    case "ui/src/components/login-gate.ts":
+    case "ui/src/components/login-gate-feedback.ts":
+    case "ui/src/i18n/locales/en-login.ts":
+    case "ui/src/lib/gateway-secret-shape.ts":
+      return "login-runtime";
+    case "ui/src/components/sidebar-update-card.ts":
+    case "ui/src/styles/sidebar-update-card.css":
+      return "sidebar-update-runtime";
+  }
+
+  if (normalized.startsWith(resolvedLocaleConfigHintsModulePrefix)) {
+    return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
   }
 
   if (normalized.endsWith("/ui/src/lib/gateway-methods.ts")) {
@@ -30,11 +62,23 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   if (
+    normalized.endsWith("/ui/src/styles/chat/grouped.css") ||
+    normalized.endsWith("/ui/src/styles/chat/message-layout.css")
+  ) {
+    // Both routes load transcript styles; keep them outside the larger shared boot stylesheet.
+    return "chat-transcript-styles";
+  }
+
+  if (
     moduleIdIncludesPackage(id, "lit") ||
     moduleIdIncludesPackage(id, "lit-html") ||
     moduleIdIncludesPackage(id, "@lit/reactive-element")
   ) {
-    return "lit-runtime";
+    // Cache and async content directives have only deferred consumers. Keep
+    // their implementation and helpers with those consumers, outside startup.
+    return /\/directives\/(?:cache|until|private-async-helpers)\.js$/u.test(normalized)
+      ? undefined
+      : "lit-runtime";
   }
 
   if (
@@ -51,19 +95,17 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "markdown-runtime";
   }
 
-  if (
-    moduleIdIncludesPackage(id, "zod") ||
-    moduleIdIncludesPackage(id, "json5") ||
-    moduleIdIncludesPackage(id, "libphonenumber-js")
-  ) {
+  if (moduleIdIncludesPackage(id, "zod") || moduleIdIncludesPackage(id, "json5")) {
     return "config-runtime";
   }
 
-  if (
-    moduleIdIncludesPackage(id, "@noble/ed25519") ||
-    moduleIdIncludesPackage(id, "@noble/hashes") ||
-    moduleIdIncludesPackage(id, "ipaddr.js")
-  ) {
+  if (moduleIdIncludesPackage(id, "libphonenumber-js")) {
+    return "phone-runtime";
+  }
+
+  // @noble/hashes stays out of this startup chunk deliberately: it is only
+  // dynamically imported as the insecure-context fallback digest provider.
+  if (moduleIdIncludesPackage(id, "@noble/ed25519") || moduleIdIncludesPackage(id, "ipaddr.js")) {
     return "gateway-runtime";
   }
 
@@ -83,10 +125,25 @@ export const controlUiCodeSplitting = {
         normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
       tags: ["$initial"] as ["$initial"],
       priority: 10,
-      // 512 KiB packs the grown core graph into fewer chunks; the previous
-      // 448 KiB boundary split one core chunk in two, costing ~1.9 KiB startup
-      // gzip (same tradeoff as the earlier 400->448 bump).
-      maxSize: 512 * 1024,
+      // Keep the boot graph in fewer partitions; the performance checker owns
+      // the compressed-size and request budgets for the emitted chunks.
+      maxSize: 1024 * 1024,
     },
+    ...(["shared", "new", "chat"] as const).map((route, index) => {
+      const modules = new Set(controlUiBootModules[route]);
+      return {
+        name: `control-ui-boot-${route}`,
+        test: (id: string) => modules.has(controlUiBootManifestKey(id)),
+        // Shared dependencies must be assigned first, or a route group pulls
+        // them (and therefore other routes) into its eagerly imported chunk.
+        priority: 8 - index,
+        includeDependenciesRecursively: true,
+        // Shared and chat groups both contain dense UI modules; keep their
+        // generated chunks within the existing compressed-size budget.
+        // Let tiny split tails stay with their consumers through automatic chunking.
+        minSize: 16 * 1024,
+        maxSize: 1408 * 1024,
+      };
+    }),
   ],
 };

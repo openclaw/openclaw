@@ -5,10 +5,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { loggingState } from "../../logging/state.js";
 import { isConfigSetJsonParseOnly } from "../config-output-mode.js";
 import { setCommandJsonMode } from "./json-mode.js";
-import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 import {
   COLD_READ_COMMAND_PATHS,
-  registerColdReadCommandFixtures,
+  registerPreActionCommandFixtures,
+  registerNativeExecutorPreActionTests,
 } from "./preaction.test-helpers.js";
 
 const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
@@ -58,16 +58,16 @@ vi.mock("../../logging/console.js", () => ({
   routeLogsToStderr: routeLogsToStderrMock,
 }));
 
-vi.mock("../cli-name.js", () => ({
-  resolveCliName: () => "openclaw",
-}));
-
 vi.mock("./config-guard.js", () => ({
   ensureConfigReady: ensureConfigReadyMock,
 }));
 
 vi.mock("../plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
+}));
+
+vi.mock("../state-dir-gateway-check.js", () => ({
+  checkCliGatewayStateDir: vi.fn(async () => ({ kind: "allow" })),
 }));
 
 vi.mock("../gateway-cli/pre-bootstrap.js", () => ({
@@ -148,140 +148,11 @@ afterEach(() => {
 
 describe("registerPreActionHooks", () => {
   let program: Command;
-  let preActionHook:
-    | ((thisCommand: Command, actionCommand: Command) => Promise<void> | void)
-    | null = null;
+  let preActionHook: Parameters<Command["hook"]>[1] | null = null;
 
   function buildProgram() {
     const programLocal = new Command().name("openclaw").enablePositionalOptions();
-    const agent = programLocal
-      .command("agent")
-      .argument("[note]")
-      .requiredOption("-m, --message <text>")
-      .option("--local")
-      .option("--json")
-      .action(() => {});
-    agent
-      .command("exec")
-      .argument("[message]")
-      .option("--json")
-      .action(() => {});
-    programLocal
-      .command("status")
-      .option("--json")
-      .action(() => {});
-    const acp = programLocal
-      .command("acp")
-      .option("--token <token>")
-      .option("--verbose")
-      .action(() => {});
-    acp
-      .command("client")
-      .option("--cwd <dir>")
-      .action(() => {});
-    programLocal
-      .command("mcp")
-      .command("serve")
-      .action(() => {});
-    const gateway = programLocal
-      .command("gateway")
-      .option("--port <port>")
-      .option("--token <token>")
-      .option("--allow-unconfigured")
-      .option("--force")
-      .option("--reset")
-      .action(() => {});
-    gateway
-      .command("run")
-      .option("--allow-unconfigured")
-      .option("--force")
-      .option("--reset")
-      .action(() => {});
-    gateway
-      .command("call")
-      .argument("<method>")
-      .option("--json")
-      .action(() => {});
-    gateway
-      .command("health")
-      .option("--json")
-      .action(() => {});
-    for (const gatewayCommand of ["stability", "usage-cost"]) {
-      gateway
-        .command(gatewayCommand)
-        .option("--json")
-        .action(() => {});
-    }
-    programLocal
-      .command("backup")
-      .command("create")
-      .option("--json")
-      .action(() => {});
-    programLocal
-      .command("doctor")
-      .option("--lint")
-      .action(() => {});
-    programLocal.command("completion").action(() => {});
-    programLocal.command("secrets").action(() => {});
-    const skills = programLocal.command("skills");
-    skills.option("--json").action(() => {});
-    for (const skillCommand of ["list", "check"]) {
-      skills
-        .command(skillCommand)
-        .option("--json")
-        .action(() => {});
-    }
-    registerColdReadCommandFixtures(programLocal, skills);
-    for (const skillCommand of ["install", "verify"]) {
-      skills
-        .command(skillCommand)
-        .argument("<skill-ref>")
-        .option("--version <version>")
-        .action(() => {});
-    }
-    programLocal
-      .command("qa")
-      .command("suite")
-      .action(() => {});
-    const agents = programLocal.command("agents");
-    agents
-      .command("list")
-      .option("--json")
-      .action(() => {});
-    agents
-      .command("bindings")
-      .option("--json")
-      .action(() => {});
-    programLocal
-      .command("approvals")
-      .command("pending")
-      .option("--json")
-      .action(() => {});
-    programLocal.command("configure").action(() => {});
-    programLocal.command("onboard").action(() => {});
-    const channels = programLocal.command("channels");
-    channels.command("add").action(() => {});
-    channels
-      .command("send")
-      .option("--json")
-      .action(() => {});
-    applyParentDefaultHelpAction(channels);
-    programLocal
-      .command("plugins")
-      .command("install")
-      .argument("<spec>")
-      .option("--marketplace <marketplace>")
-      .action(() => {});
-    programLocal
-      .command("update")
-      .command("status")
-      .option("--json")
-      .action(() => {});
-    programLocal
-      .command("message")
-      .command("send")
-      .option("--json")
-      .action(() => {});
+    registerPreActionCommandFixtures(programLocal);
     setCommandJsonMode(programLocal.command("machine"), "output", ({ argv, stdoutIsTTY }) => {
       observedMachineOutputStdoutIsTTY = stdoutIsTTY;
       return argv.includes("--machine-output");
@@ -329,6 +200,12 @@ describe("registerPreActionHooks", () => {
     }
     await preActionHook(program, actionCommand);
   }
+
+  registerNativeExecutorPreActionTests(() => registerPreActionHooks, {
+    config: ensureConfigReadyMock,
+    plugins: ensurePluginRegistryLoadedMock,
+    banner: emitCliBannerMock,
+  });
 
   it("applies shared skip policy to routed reads on the Commander path", async () => {
     const processTitleSetSpy = vi.spyOn(process, "title", "set");
@@ -399,7 +276,7 @@ describe("registerPreActionHooks", () => {
     }
 
     expect(prepareGatewayRunBootstrapMock).toHaveBeenCalledWith({
-      opts: { force: true, reset: false },
+      opts: expect.objectContaining({ force: true, reset: false }),
       runtime: runtimeMock,
     });
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
@@ -423,7 +300,7 @@ describe("registerPreActionHooks", () => {
     const beforeStateMigrations = ensureConfigReadyMock.mock.calls[0]?.[0]?.beforeStateMigrations;
     await beforeStateMigrations?.();
     expect(recheckGatewayRunBootstrapMock).toHaveBeenCalledWith({
-      opts: { force: false, reset: false },
+      opts: expect.objectContaining({ force: false, reset: false }),
       runtime: runtimeMock,
     });
     expect(reloadTrustedGatewayRunEnvironmentMock).toHaveBeenCalledWith({
@@ -452,18 +329,13 @@ describe("registerPreActionHooks", () => {
     );
   });
 
-  it("allows invalid config for update migration commands", async () => {
+  it("defers config bootstrap for update commands", async () => {
     await runPreAction({
       parseArgv: ["update"],
       processArgv: ["node", "openclaw", "update", "--json"],
     });
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["update"],
-      allowInvalid: true,
-    });
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
     await runPreAction({
@@ -471,13 +343,7 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "update", "status", "--json"],
     });
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["update", "status"],
-      allowInvalid: true,
-      suppressDoctorStdout: true,
-    });
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
   });
 
   it("loads plugins for text local agent runs", async () => {
@@ -516,7 +382,7 @@ describe("registerPreActionHooks", () => {
   it("bypasses operator config and plugin startup for agent exec", async () => {
     await runPreAction({
       parseArgv: ["agent", "exec", "fix it"],
-      processArgv: ["node", "openclaw", "agent", "exec", "fix it"],
+      processArgv: ["node", "openclaw", "agent", "--agent", "main", "exec", "fix it"],
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
@@ -804,13 +670,8 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "update", "status", "--json"],
     });
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["update", "status"],
-      allowInvalid: true,
-      suppressDoctorStdout: true,
-    });
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
@@ -906,11 +767,32 @@ describe("registerPreActionHooks", () => {
     }
 
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(observedMachineOutputStdoutIsTTY).toBe(false);
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       measure: expect.any(Function),
       commandPath: ["machine"],
+      suppressDoctorStdout: true,
+    });
+  });
+
+  it("keeps plain model output clean throughout Commander startup", async () => {
+    loggingState.forceConsoleToStderr = true;
+    loggingState.earlyConsoleRoutingRestore = false;
+
+    await runPreAction({
+      parseArgv: ["models", "aliases", "list"],
+      processArgv: ["node", "openclaw", "models", "aliases", "list", "--plain"],
+    });
+
+    expect(loggingState.forceConsoleToStderr).toBe(true);
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      measure: expect.any(Function),
+      commandPath: ["models", "aliases", "list"],
       suppressDoctorStdout: true,
     });
   });
@@ -969,6 +851,7 @@ describe("registerPreActionHooks", () => {
       measure: expect.any(Function),
       commandPath: ["gateway", "call"],
       suppressDoctorStdout: true,
+      validateConfigOnly: true,
     });
   });
 

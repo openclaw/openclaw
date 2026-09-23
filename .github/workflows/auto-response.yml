@@ -21,9 +21,12 @@ jobs:
   auto-response:
     if: >-
       ${{
-        github.event_name != 'pull_request_target' ||
-        (github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
-        (github.actor != 'clawsweeper[bot]' && github.actor != 'openclaw-clawsweeper[bot]')
+        (github.event_name != 'issue_comment' || github.event.comment.user.type != 'Bot') &&
+        (
+          github.event_name != 'pull_request_target' ||
+          (github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+          (github.actor != 'clawsweeper[bot]' && github.actor != 'openclaw-clawsweeper[bot]')
+        )
       }}
     permissions:
       contents: read
@@ -31,7 +34,7 @@ jobs:
       pull-requests: write
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false

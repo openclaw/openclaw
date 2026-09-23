@@ -1,108 +1,140 @@
 // Level filter tests cover logger filtering by configured log level.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
+import { levelToMinLevel } from "./levels.js";
 
-const { readLoggingConfigMock, shouldSkipMutatingLoggingConfigReadMock } = vi.hoisted(() => ({
-  readLoggingConfigMock: vi.fn(() => undefined),
-  shouldSkipMutatingLoggingConfigReadMock: vi.fn(() => false),
+const { readLoggingConfigMock } = vi.hoisted(() => ({
+  readLoggingConfigMock: vi.fn<() => { level: "silent" } | { consoleLevel: "silent" } | undefined>(
+    () => undefined,
+  ),
 }));
 
 vi.mock("./config.js", () => ({
+  invalidateLoggingConfigCache: vi.fn(),
   readLoggingConfig: readLoggingConfigMock,
-  shouldSkipMutatingLoggingConfigRead: shouldSkipMutatingLoggingConfigReadMock,
 }));
 
-vi.mock("./node-require.js", () => ({
-  resolveNodeRequireFromMeta: () => () => {
-    throw new Error("config fallback not used");
-  },
-}));
-
-let logging: typeof import("../logging.js");
+let envSnapshot: ReturnType<typeof captureEnv> | undefined;
+let logging: typeof import("./logger.js");
+let consoleLogging: typeof import("./console.js");
 
 beforeAll(async () => {
-  logging = await import("../logging.js");
+  // A sibling may retain an older logger; this suite observes its own config mock.
+  vi.resetModules();
+  logging = await import("./logger.js");
+  consoleLogging = await import("./console.js");
 });
 
 beforeEach(() => {
+  envSnapshot = captureEnv([
+    "OPENCLAW_TEST_FILE_LOG",
+    "OPENCLAW_TEST_CONSOLE",
+    "OPENCLAW_LOG_LEVEL",
+  ]);
   delete process.env.OPENCLAW_TEST_FILE_LOG;
+  delete process.env.OPENCLAW_TEST_CONSOLE;
   delete process.env.OPENCLAW_LOG_LEVEL;
   readLoggingConfigMock.mockClear();
-  shouldSkipMutatingLoggingConfigReadMock.mockReset();
-  shouldSkipMutatingLoggingConfigReadMock.mockReturnValue(false);
   logging.resetLogger();
   logging.setLoggerOverride(null);
 });
 
 afterEach(() => {
-  delete process.env.OPENCLAW_TEST_FILE_LOG;
-  delete process.env.OPENCLAW_LOG_LEVEL;
+  envSnapshot?.restore();
+  envSnapshot = undefined;
   logging.resetLogger();
   logging.setLoggerOverride(null);
   vi.restoreAllMocks();
 });
 
-function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected mock call");
-  }
-  const [arg] = call;
-  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
-    throw new Error("expected mock call argument to be an object");
-  }
-  return arg as Record<string, unknown>;
-}
+describe("resolved logging settings cache", () => {
+  it("loads file settings once per logger generation", () => {
+    process.env.OPENCLAW_TEST_FILE_LOG = "1";
+    readLoggingConfigMock.mockReturnValue({ level: "silent" });
+
+    logging.getLogger();
+    logging.getLogger();
+    expect(readLoggingConfigMock).toHaveBeenCalledTimes(1);
+
+    logging.setLoggerOverride({ level: "silent" });
+    logging.getLogger();
+    expect(readLoggingConfigMock).toHaveBeenCalledTimes(1);
+
+    logging.setLoggerOverride(null);
+    logging.getLogger();
+    logging.getLogger();
+    expect(readLoggingConfigMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses settings resolved by the file-level admission check when building the logger", () => {
+    process.env.OPENCLAW_TEST_FILE_LOG = "1";
+    readLoggingConfigMock.mockReturnValue({ level: "silent" });
+
+    expect(logging.isFileLogLevelEnabled("info")).toBe(false);
+    logging.getLogger();
+
+    expect(readLoggingConfigMock).toHaveBeenCalledOnce();
+  });
+
+  it("loads console settings once per logger generation", () => {
+    process.env.OPENCLAW_TEST_CONSOLE = "1";
+    readLoggingConfigMock.mockReturnValue({ consoleLevel: "silent" });
+    logging.setLoggerOverride(null);
+    readLoggingConfigMock.mockClear();
+
+    consoleLogging.getConsoleSettings();
+    consoleLogging.getConsoleSettings();
+    expect(readLoggingConfigMock).toHaveBeenCalledTimes(1);
+
+    logging.setLoggerOverride({ consoleLevel: "silent" });
+    consoleLogging.getConsoleSettings();
+    expect(readLoggingConfigMock).toHaveBeenCalledTimes(1);
+
+    logging.setLoggerOverride(null);
+    consoleLogging.getConsoleSettings();
+    consoleLogging.getConsoleSettings();
+    expect(readLoggingConfigMock).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("isFileLogLevelEnabled", () => {
-  it("returns false for all levels when configured as silent", () => {
-    logging.setLoggerOverride({ level: "silent" });
-    expect(logging.isFileLogLevelEnabled("fatal")).toBe(false);
-    expect(logging.isFileLogLevelEnabled("error")).toBe(false);
-    expect(logging.isFileLogLevelEnabled("warn")).toBe(false);
-    expect(logging.isFileLogLevelEnabled("info")).toBe(false);
-    expect(logging.isFileLogLevelEnabled("debug")).toBe(false);
-    expect(logging.isFileLogLevelEnabled("trace")).toBe(false);
-  });
-
-  it("passes only fatal when configured as fatal", () => {
-    logging.setLoggerOverride({ level: "fatal" });
-    expect(logging.isFileLogLevelEnabled("fatal")).toBe(true);
-    expect(logging.isFileLogLevelEnabled("error")).toBe(false);
-    expect(logging.isFileLogLevelEnabled("warn")).toBe(false);
-    expect(logging.isFileLogLevelEnabled("info")).toBe(false);
-    expect(logging.isFileLogLevelEnabled("debug")).toBe(false);
-    expect(logging.isFileLogLevelEnabled("trace")).toBe(false);
-  });
-
-  it("passes fatal and error when configured as error", () => {
-    logging.setLoggerOverride({ level: "error" });
-    expect(logging.isFileLogLevelEnabled("fatal")).toBe(true);
-    expect(logging.isFileLogLevelEnabled("error")).toBe(true);
-    expect(logging.isFileLogLevelEnabled("warn")).toBe(false);
-    expect(logging.isFileLogLevelEnabled("info")).toBe(false);
-    expect(logging.isFileLogLevelEnabled("debug")).toBe(false);
-    expect(logging.isFileLogLevelEnabled("trace")).toBe(false);
-  });
-
-  it("passes fatal, error, warn, info when configured as info", () => {
-    logging.setLoggerOverride({ level: "info" });
-    expect(logging.isFileLogLevelEnabled("fatal")).toBe(true);
-    expect(logging.isFileLogLevelEnabled("error")).toBe(true);
-    expect(logging.isFileLogLevelEnabled("warn")).toBe(true);
-    expect(logging.isFileLogLevelEnabled("info")).toBe(true);
-    expect(logging.isFileLogLevelEnabled("debug")).toBe(false);
-    expect(logging.isFileLogLevelEnabled("trace")).toBe(false);
-  });
-
-  it("passes all levels when configured as trace", () => {
-    logging.setLoggerOverride({ level: "trace" });
-    expect(logging.isFileLogLevelEnabled("fatal")).toBe(true);
-    expect(logging.isFileLogLevelEnabled("error")).toBe(true);
-    expect(logging.isFileLogLevelEnabled("warn")).toBe(true);
-    expect(logging.isFileLogLevelEnabled("info")).toBe(true);
-    expect(logging.isFileLogLevelEnabled("debug")).toBe(true);
-    expect(logging.isFileLogLevelEnabled("trace")).toBe(true);
-  });
+  for (const { name, level, expected } of [
+    {
+      name: "returns false for all levels when configured as silent",
+      level: "silent",
+      expected: [false, false, false, false, false, false],
+    },
+    {
+      name: "passes only fatal when configured as fatal",
+      level: "fatal",
+      expected: [true, false, false, false, false, false],
+    },
+    {
+      name: "passes fatal and error when configured as error",
+      level: "error",
+      expected: [true, true, false, false, false, false],
+    },
+    {
+      name: "passes fatal, error, warn, info when configured as info",
+      level: "info",
+      expected: [true, true, true, true, false, false],
+    },
+    {
+      name: "passes all levels when configured as trace",
+      level: "trace",
+      expected: [true, true, true, true, true, true],
+    },
+  ] as const) {
+    it(name, () => {
+      logging.setLoggerOverride({ level });
+      expect(logging.isFileLogLevelEnabled("fatal")).toBe(expected[0]);
+      expect(logging.isFileLogLevelEnabled("error")).toBe(expected[1]);
+      expect(logging.isFileLogLevelEnabled("warn")).toBe(expected[2]);
+      expect(logging.isFileLogLevelEnabled("info")).toBe(expected[3]);
+      expect(logging.isFileLogLevelEnabled("debug")).toBe(expected[4]);
+      expect(logging.isFileLogLevelEnabled("trace")).toBe(expected[5]);
+    });
+  }
 
   it("never treats silent as an emittable file level", () => {
     logging.setLoggerOverride({ level: "info" });
@@ -114,20 +146,20 @@ describe("getChildLogger minLevel inheritance", () => {
   it("child logger inherits parent minLevel when no level is specified", () => {
     logging.setLoggerOverride({ level: "warn" });
     const child = logging.getChildLogger({ component: "test" });
-    expect(child.settings.minLevel).toBe(logging.levelToMinLevel("warn"));
+    expect(child.settings.minLevel).toBe(levelToMinLevel("warn"));
   });
 
   it("child logger uses its own level when explicitly specified", () => {
     logging.setLoggerOverride({ level: "warn" });
     const child = logging.getChildLogger({ component: "test" }, { level: "error" });
-    expect(child.settings.minLevel).toBe(logging.levelToMinLevel("error"));
+    expect(child.settings.minLevel).toBe(levelToMinLevel("error"));
   });
 
   it("child logger does not default to minLevel=0 (allow-all) when no level given", () => {
     logging.setLoggerOverride({ level: "fatal" });
     const child = logging.getChildLogger({ component: "test" });
     expect(child.settings.minLevel).not.toBe(0);
-    expect(child.settings.minLevel).toBe(logging.levelToMinLevel("fatal"));
+    expect(child.settings.minLevel).toBe(levelToMinLevel("fatal"));
   });
 
   it("child logger preserves a silent parent without triggering tslog validation", () => {
@@ -136,30 +168,25 @@ describe("getChildLogger minLevel inheritance", () => {
 
     const child = logging.getChildLogger({ component: "test" });
 
-    expect(child.settings.minLevel).toBe(logging.levelToMinLevel("silent"));
+    expect(child.settings.minLevel).toBe(levelToMinLevel("silent"));
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("pino child logger propagates the parent minLevel", () => {
-    logging.setLoggerOverride({ level: "error" });
+  it.each(["error", "silent"] as const)("pino child preserves its parent's %s policy", (level) => {
+    logging.setLoggerOverride({ level });
     const base = logging.getLogger();
-    const getSubLoggerSpy = vi.spyOn(base, "getSubLogger");
-
-    logging.toPinoLikeLogger(base, "info").child({ component: "test" });
-
-    expect(getSubLoggerSpy).toHaveBeenCalledOnce();
-    expect(firstMockArg(getSubLoggerSpy).minLevel).toBe(logging.levelToMinLevel("error"));
-  });
-
-  it("pino child logger preserves a silent parent without triggering tslog validation", () => {
-    logging.setLoggerOverride({ level: "silent" });
-    const base = logging.getLogger();
-    const getSubLoggerSpy = vi.spyOn(base, "getSubLogger");
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const records: unknown[] = [];
+    base.attachTransport((record) => {
+      records.push(record);
+    });
 
-    logging.toPinoLikeLogger(base, "info").child({ component: "test" });
+    const child = logging.toPinoLikeLogger(base, "info").child({ component: "test" });
+    child.warn("filtered warning");
+    child.error("parent error policy");
 
-    expect(firstMockArg(getSubLoggerSpy).minLevel).toBe(logging.levelToMinLevel("fatal"));
+    expect(records).toHaveLength(level === "silent" ? 0 : 1);
+    expect(JSON.stringify(records)).not.toContain("filtered warning");
     expect(warnSpy).not.toHaveBeenCalled();
   });
 });

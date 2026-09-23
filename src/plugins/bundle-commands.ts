@@ -11,6 +11,7 @@ import {
 } from "../../packages/markdown-core/src/frontmatter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { walkDirectorySync } from "../infra/fs-safe.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -57,34 +58,16 @@ function resolveClaudeCommandRootDirs(rootDir: string): string[] {
 }
 
 function listMarkdownFilesRecursive(rootDir: string): string[] {
-  const pending = [rootDir];
-  const files: string[] = [];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current) {
-      continue;
-    }
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (entry.name.startsWith(".")) {
-        continue;
-      }
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        pending.push(fullPath);
-        continue;
-      }
-      if (entry.isFile() && normalizeOptionalLowercaseString(entry.name)?.endsWith(".md")) {
-        files.push(fullPath);
-      }
-    }
-  }
-  return files.toSorted((a, b) => a.localeCompare(b));
+  return walkDirectorySync(rootDir, {
+    symlinks: "skip",
+    descend: ({ name }) => !name.startsWith("."),
+    include: ({ kind, name }) =>
+      kind === "file" &&
+      !name.startsWith(".") &&
+      Boolean(normalizeOptionalLowercaseString(name)?.endsWith(".md")),
+  })
+    .entries.map((entry) => entry.path)
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
 function toDefaultCommandName(rootDir: string, filePath: string): string {
@@ -93,12 +76,10 @@ function toDefaultCommandName(rootDir: string, filePath: string): string {
   return withoutExt.split(path.sep).join(":");
 }
 
-function toDefaultDescription(rawName: string, promptTemplate: string): string {
-  const firstLine = promptTemplate
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .find(Boolean);
-  return firstLine || rawName;
+function toDefaultDescription(promptTemplate: string): string {
+  // stripFrontmatterBlock already normalized line endings and trimmed the nonempty body.
+  const lineEnd = promptTemplate.indexOf("\n");
+  return (lineEnd < 0 ? promptTemplate : promptTemplate.slice(0, lineEnd)).trimEnd();
 }
 
 function loadBundleCommandsFromRoot(params: {
@@ -131,8 +112,7 @@ function loadBundleCommandsFromRoot(params: {
       continue;
     }
     const description =
-      normalizeOptionalString(frontmatter.description) ||
-      toDefaultDescription(rawName, promptTemplate);
+      normalizeOptionalString(frontmatter.description) || toDefaultDescription(promptTemplate);
     entries.push({
       pluginId: params.pluginId,
       rawName,
@@ -170,6 +150,7 @@ export function loadEnabledClaudeBundleCommands(params: {
     const activationState = resolveEffectivePluginActivationState({
       id: record.id,
       origin: record.origin,
+      channelIds: record.channels,
       config: normalizedPlugins,
       rootConfig: params.cfg,
     });

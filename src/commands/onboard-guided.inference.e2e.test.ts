@@ -3,9 +3,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { listKnownProviderEnvApiKeyNames } from "../agents/model-auth-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
 vi.mock("./onboard-interactive-runner.js", async (importActual) => {
   const actual = await importActual<typeof import("./onboard-interactive-runner.js")>();
@@ -26,14 +28,16 @@ const cleanupTasks: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
   await Promise.allSettled(cleanupTasks.splice(0).map((cleanup) => cleanup()));
+  vi.restoreAllMocks();
   vi.resetModules();
 });
 
 describe("guided onboarding inference composition", () => {
-  it(
-    "advances from full-access detection through a real embedded OpenAI probe",
+  it.each(["configured", "before-provision", "after-members", "after-provision"] as const)(
+    "advances through a real embedded probe and setup (%s)",
     { timeout: 300_000 },
-    async () => {
+    async (mode) => {
+      const team = mode !== "configured";
       const env = captureFullEnv();
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-guided-inference-e2e-"));
       const workspace = path.join(root, "workspace");
@@ -61,14 +65,14 @@ describe("guided onboarding inference composition", () => {
       await fs.writeFile(
         configPath,
         `${JSON.stringify({
-          gateway: { mode: "local" },
+          meta: { migrations: { utilityModelSeparation: true } },
+          ...(!team ? { gateway: { mode: "local" } } : {}),
           plugins: { slots: { memory: "none" } },
           agents: {
             defaults: {
-              workspace,
+              ...(!team ? { workspace } : {}),
               skipBootstrap: true,
               skills: [],
-              models: { "openai/gpt-5.6": { agentRuntime: { id: "openclaw" } } },
             },
           },
           models: {
@@ -97,16 +101,22 @@ describe("guided onboarding inference composition", () => {
         })}\n`,
       );
 
-      const prompter = createWizardPrompter(undefined, { selectValues: ["full", "use"] });
+      const prompter = createWizardPrompter(
+        {
+          text: vi.fn(async ({ initialValue }) => initialValue ?? ""),
+        },
+        { selectValues: [team ? "team" : "one", "full", "detected-ai"] },
+      );
       const runSetupMemoryImportStep = vi.fn(async () => ({
         status: "skipped" as const,
         providers: [],
       }));
       const runAppRecommendations = vi.fn(async ({ config }) => ({
         config,
-        commitResult: vi.fn(),
+        commitResult: vi.fn(async () => undefined),
       }));
       const launchHatchTui = vi.fn(async () => undefined);
+      const runSystemAgentChat = vi.fn(async () => undefined);
       const runtime = {
         log: vi.fn(),
         error: vi.fn(),
@@ -120,8 +130,10 @@ describe("guided onboarding inference composition", () => {
       const setupInference = await import("../system-agent/setup-inference.js");
       const onboardInference = await import("./onboard-inference.js");
       const { runGuidedOnboarding } = await import("./onboard-guided.js");
-      await runGuidedOnboarding({ acceptRisk: true, workspace, tui: true }, runtime, {
-        createPrompter: () => prompter,
+      let activePrompter = prompter;
+      let interruptAfterProvision = team;
+      const deps: GuidedOnboardingDeps = {
+        createPrompter: () => activePrompter,
         detect: async () => {
           const probeLocalCommand = async (command: string) => ({
             command,
@@ -136,45 +148,140 @@ describe("guided onboarding inference composition", () => {
                 platform: "linux",
                 deps: {
                   probeLocalCommand,
-                  readClaudeCliCredentials: () => null,
+                  detectClaudeLoginState: async () => ({ credentials: false }),
                   readCodexCliCredentials: () => null,
                   readGeminiCliCredentials: () => null,
                   randomInt: () => 0,
                 },
               }),
-            probeLocalCommand,
             resolveManifestProviderAuthChoices: () => [],
           });
           return result;
         },
-        activate: setupInference.activateSetupInference,
+        activate: async (params) => {
+          const result = await setupInference.activateSetupInference(params);
+          expect(result.ok, result.ok ? undefined : result.error).toBe(true);
+          return result;
+        },
+        applySetup: async (params, hooks) => {
+          if (interruptAfterProvision && mode === "before-provision") {
+            throw new Error("fixture interruption before provisioning");
+          }
+          if (interruptAfterProvision && mode === "after-members") {
+            const onboarding = await import("./onboard-agent.js");
+            const ensureAgent = onboarding.ensureOnboardingAgent;
+            vi.spyOn(onboarding, "ensureOnboardingAgent").mockImplementationOnce(async (input) => {
+              await ensureAgent(input);
+              throw new Error("fixture interruption after member creation");
+            });
+          }
+          const { applySystemAgentSetup } = await import("../system-agent/setup-apply.js");
+          const result = await applySystemAgentSetup({ ...params, surface: "gateway" }, hooks);
+          return interruptAfterProvision ? { ...result, workspaceReady: false } : result;
+        },
         runSetupMemoryImportStep,
         runAppRecommendations,
         launchHatchTui,
-      });
+        runSystemAgentChat,
+      };
+      const run = () =>
+        runGuidedOnboarding({ acceptRisk: true, workspace, tui: true }, runtime, deps);
+      if (team) {
+        await expect(run()).rejects.toThrow(
+          mode === "after-provision" ? "workspace could not be prepared" : "fixture interruption",
+        );
+        const { readLocalOnboardingState } = await import("../state/local-onboarding-state.js");
+        expect(readLocalOnboardingState(configPath)).toMatchObject({
+          status: "pending",
+          workspace,
+          teamCoordinatorId: "coordinator",
+        });
+        expect(launchHatchTui).not.toHaveBeenCalled();
+        if (mode === "after-members") {
+          expect(
+            (await configModule.readConfigFileSnapshot()).sourceConfigBeforeMigrations?.agents
+              ?.defaults?.workspace,
+          ).toBeUndefined();
+        }
+        interruptAfterProvision = false;
+        activePrompter = createWizardPrompter(undefined, {
+          selectValues: ["full", "detected-ai", "candidate:existing-model"],
+        });
+      }
+      await run();
 
       expect(prompter.select).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({
+          initialValue: false,
+          options: [
+            expect.objectContaining({ value: false }),
+            expect.objectContaining({ value: true }),
+          ],
+        }),
+      );
+      expect(prompter.select).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          initialValue: "one",
+          options: [
+            { value: "one", label: "One agent" },
+            { value: "team", label: "A small team: a chief of staff plus specialists" },
+          ],
+        }),
+      );
+      expect(prompter.select).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({
           options: expect.arrayContaining([expect.objectContaining({ value: "full" })]),
         }),
       );
-      expect(mockOpenAi.requestBodies).toHaveLength(1);
-      expect(JSON.parse(mockOpenAi.requestBodies[0] ?? "{}")).toMatchObject({ model: "gpt-5.6" });
-      const notes = (prompter.note as ReturnType<typeof vi.fn>).mock.calls;
+      const persisted = await configModule.readConfigFileSnapshot();
+      expect(runSystemAgentChat).not.toHaveBeenCalled();
+      expect(persisted.valid).toBe(true);
+      expect(persisted.sourceConfig).toMatchObject({
+        telemetry: { enabled: false, consentedAt: expect.any(String) },
+        wizard: { accessMode: "full" },
+      });
+      expect(mockOpenAi.requestBodies).toHaveLength(team ? 2 : 1);
+      expect(JSON.parse(mockOpenAi.requestBodies[0] ?? "{}")).toMatchObject({
+        model: "gpt-6-astra",
+      });
+      const notes = [
+        ...vi.mocked(prompter.note).mock.calls,
+        ...(activePrompter === prompter ? [] : vi.mocked(activePrompter.note).mock.calls),
+      ];
       const inferenceReadyIndex = notes.findIndex((call) => call[1] === "Inference ready");
       const postInferenceIndex = notes.findIndex(
         (call, index) =>
           index > inferenceReadyIndex &&
-          String(call[0]).includes("your AI just passed a fresh check"),
+          call[0].includes(team ? "Workspace:" : "your AI just passed a fresh check"),
       );
       expect(inferenceReadyIndex).toBeGreaterThanOrEqual(0);
       expect(postInferenceIndex).toBeGreaterThan(inferenceReadyIndex);
       expect(runSetupMemoryImportStep).toHaveBeenCalledOnce();
       expect(runAppRecommendations).toHaveBeenCalledWith(
-        expect.objectContaining({ modelRouteVerified: true, workspaceDir: workspace }),
+        expect.objectContaining({
+          modelRouteVerified: true,
+          workspaceDir: team ? path.join(workspace, "coordinator") : workspace,
+        }),
       );
-      expect(launchHatchTui).toHaveBeenCalledWith(workspace);
+      expect(launchHatchTui).toHaveBeenCalledWith(
+        team ? path.join(workspace, "coordinator") : workspace,
+      );
+      if (team) {
+        expect(Object.keys(persisted.sourceConfig.agents?.entries ?? {})).toEqual([
+          "coordinator",
+          "researcher",
+          "writer",
+          "reviewer",
+        ]);
+        const { readLocalOnboardingState } = await import("../state/local-onboarding-state.js");
+        expect(readLocalOnboardingState(configPath)).toMatchObject({
+          status: "completed",
+          workspace,
+        });
+      }
     },
   );
 });
@@ -264,12 +371,5 @@ function writeMockOpenAiResponse(response: ServerResponse): void {
       },
     },
   ];
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
+  writeOpenAiResponsesSse(response, events);
 }

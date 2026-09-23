@@ -23,9 +23,17 @@ protocol-version decision and coordinated client follow-through. See
 
 ## Install
 
+Use the verified stable release with an exact pin:
+
 ```bash
-npm install @openclaw/gateway-protocol
+npm install --save-exact @openclaw/gateway-protocol@2026.8.1
 ```
+
+This release declares Node.js `>=22.19.0`. See the canonical
+[installation guide](https://docs.openclaw.ai/gateway/clients#install-the-packages)
+for the matching client package, package/wire-version rules, and recovery from
+reserved `0.0.0` artifacts. Test it with the Gateway version you deploy; the root
+`openclaw` CLI has its own package versions and dist-tags.
 
 ## Entry points
 
@@ -72,6 +80,14 @@ console.log(frame.id, frame.method);
 `validateRequestFrame` validates the request envelope. Dispatch code must also use
 the validator for the selected method's `params`; the root entry point exports those
 validators as `validate*Params` functions.
+
+External lifecycle controllers can validate suspension responses with
+`validateGatewaySuspendPrepareResult` and `validateGatewaySuspendStatusResult`.
+These use the canonical result schemas without changing the payload. Preserve
+optional `writeCustody`: absence means unknown custody, not an empty list. Phase
+names are open strings; consumers must not discard an unfamiliar owner phase.
+Validation does not authorize a stop or replace lease, process-identity, and
+readiness checks owned by the controller.
 
 ## Guard an event without TypeBox
 
@@ -144,9 +160,12 @@ boundary before reading nested values.
 
 ### Machine-readable schema
 
-`protocol.schema.json` ships in the npm tarball as the generated machine-readable
+[`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@2026.8.1/protocol.schema.json)
+ships in the npm tarball as the generated machine-readable
 contract. It contains the frame union, named schema definitions, and core method
 metadata. It is generated during `prepack` and is not committed to the repository.
+Download it as a file; `@openclaw/gateway-protocol/protocol.schema.json` is not an
+exported package import subpath.
 
 ### Method discovery
 

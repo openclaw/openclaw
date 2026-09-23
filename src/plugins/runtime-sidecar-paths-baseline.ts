@@ -2,9 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../shared/non-packaged-plugin-dirs.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
-
-const NON_PACKAGED_RUNTIME_SIDECAR_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab"]);
 
 function buildBundledDistArtifactPath(dirName: string, artifact: string): string {
   return ["dist", "extensions", dirName, artifact].join("/");
@@ -40,7 +39,7 @@ function collectRootPackageExcludedRuntimeSidecarPluginDirs(rootDir: string): Se
 function collectBundledRuntimeSidecarPaths(params?: { rootDir?: string }): readonly string[] {
   const rootDir = params?.rootDir ?? process.cwd();
   const excludedRuntimeSidecarPluginDirs = new Set([
-    ...NON_PACKAGED_RUNTIME_SIDECAR_PLUGIN_DIRS,
+    ...NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
     ...collectRootPackageExcludedRuntimeSidecarPluginDirs(rootDir),
   ]);
   return listBundledPluginMetadata({

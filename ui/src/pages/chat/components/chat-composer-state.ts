@@ -1,47 +1,45 @@
-import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
+import type { ChatQueueItem, HumanMention } from "../../../lib/chat/chat-types.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
-import { adjustTextareaHeight } from "./chat-composer-dom.ts";
+import {
+  adjustTextareaHeight,
+  disconnectComposerPopoverAnchorObserver,
+} from "./chat-composer-dom.ts";
+import { ComposerEmojiMenu } from "./chat-composer-emoji.ts";
 import { clearGoalElapsedTimers } from "./chat-composer-goal.ts";
+import { HumanMentionMenu } from "./chat-composer-mention-menu.ts";
+import { createSkillMenuState } from "./chat-composer-skill-menu.ts";
+import { createSlashMenuState } from "./chat-composer-slash-menu.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 function createChatComposerState(): ChatComposerState {
   return {
-    slashMenuOpen: false,
-    slashMenuItems: [],
-    slashMenuIndex: 0,
-    slashMenuMode: "command",
-    slashMenuCommand: null,
-    slashMenuArgItems: [],
-    slashMenuExpanded: false,
-    slashCommandRefreshPending: false,
-    skillMenuOpen: false,
-    skillMenuItems: [],
-    skillMenuIndex: 0,
-    skillMenuTarget: null,
-    skillCommandRefreshPending: false,
-    skillCommandRefreshGeneration: 0,
-    skillCommandRefreshTargetStart: null,
+    ...createSlashMenuState(),
+    ...createSkillMenuState(),
     composerComposing: false,
+    editRevision: 0,
+    mentionMenu: new HumanMentionMenu(),
+    emojiMenu: new ComposerEmojiMenu(),
     composingDraft: null,
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
     goalExpandedId: null,
-    activeGatewayQuestionId: null,
-    gatewayQuestionCollapsed: false,
+    goalComposer: null,
+    activeQuestionKey: null,
+    gatewayQuestionIds: new Set(),
+    asyncQuestionIds: new Set(),
+    questionCollapsed: false,
     questionTakeoverActive: false,
     restoreComposerFocus: false,
+    composerInput: null,
     composerTextarea: null,
-    microphonePickerOpen: false,
-    microphonePickerLoading: false,
-    microphoneDevices: [],
-    microphoneIssue: null,
-    microphoneDeviceWatch: null,
-    microphoneDiscoveryRequest: 0,
+    microphonePicker: null,
     capabilityMenuOpen: false,
     capabilityMenuView: "root",
     textareaRef: null,
+    composerInputRef: null,
     dictation: null,
-    dictationDraftKey: null,
+    composerDraftScopeKey: null,
+    dictationError: null,
     dictationSelection: null,
   };
 }
@@ -70,20 +68,20 @@ export function isCurrentSessionSubmittedProgress(
   return (
     item.sessionKey === sessionKey &&
     !item.pendingRunId &&
-    (item.sendState === "sending" || item.sendState === "waiting-model") &&
+    (item.sendState === "submitting" ||
+      item.sendState === "sending" ||
+      item.sendState === "waiting-model") &&
     (status == null || item.sendRunId !== status.runId)
   );
 }
 
-// Single source for "the agent is visibly working": drives both the thread's
-// working spark and the composer's sr-only announcement. A fresh terminal
-// toast masks stale abortable rows so neither surface flashes back to working.
+// Single source for "the selected session is visibly working": drives both
+// the thread's working spark and the composer's sr-only announcement.
 export function isChatRunWorking(
-  props: Pick<ChatComposerProps, "canAbort" | "onAbort" | "runStatus" | "queue" | "sessionKey">,
+  props: Pick<ChatComposerProps, "runActive" | "runStatus" | "queue" | "sessionKey">,
 ): boolean {
-  const canAbort = Boolean(props.canAbort && props.onAbort);
   return (
-    (canAbort && !hasTerminalRunStatus(props.runStatus)) ||
+    (props.runActive === true && !hasTerminalRunStatus(props.runStatus)) ||
     props.queue.some((item) =>
       isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
     )
@@ -96,14 +94,36 @@ export function composerDraftKey(
   return `${props.currentAgentId}\u0000${props.sessionKey}`;
 }
 
-export function commitComposerDraft(props: ChatComposerProps, value: string): void {
-  if (props.getDraft?.() === value || props.draft === value) {
+export function commitComposerDraft(
+  props: ChatComposerProps,
+  value: string,
+  mentions?: readonly HumanMention[],
+): void {
+  const currentDraft = props.getDraft ? props.getDraft() : props.draft;
+  if (currentDraft === value && mentions === undefined) {
     return;
   }
-  props.onDraftChange(value);
+  const previousMentions = props.getMentions?.() ?? props.mentions ?? [];
+  getChatComposerState(props.paneId).editRevision += 1;
+  props.onDraftChange(value, mentions);
+  const nextMentions = props.getMentions?.() ?? mentions ?? props.mentions ?? [];
+  // Moving a token while typing prose changes its span, not the recipient strip.
+  if (
+    previousMentions.length !== nextMentions.length ||
+    previousMentions.some((previous, index) => {
+      const next = nextMentions[index]!;
+      return (
+        previous.profileId !== next.profileId ||
+        currentDraft.slice(previous.start, previous.end) !== value.slice(next.start, next.end)
+      );
+    })
+  ) {
+    props.onRequestUpdate?.();
+  }
 }
 
 export function markComposerInputIntent(state: ChatComposerState, key: string): void {
+  state.editRevision += 1;
   state.composerInputIntentKey = key;
 }
 
@@ -145,10 +165,15 @@ export function suppressStaleSubmittedDraftReplay(
   return true;
 }
 
-/** Drops the devicechange subscription so a closed picker stops refreshing. */
-export function releaseMicrophoneDeviceWatch(state: ChatComposerState) {
-  state.microphoneDeviceWatch?.();
-  state.microphoneDeviceWatch = null;
+function disposeChatComposerState(state: ChatComposerState) {
+  state.emojiMenu.close();
+  state.mentionMenu.dispose();
+  state.composerDraftScopeKey = null;
+  state.dictation?.dispose();
+  state.microphonePicker?.dispose();
+  if (state.composerInput) {
+    disconnectComposerPopoverAnchorObserver(state.composerInput);
+  }
 }
 
 export function resetChatComposerState(paneId?: string) {
@@ -156,16 +181,14 @@ export function resetChatComposerState(paneId?: string) {
     // Goal elapsed timers are keyed by element and cleaned up when their
     // element leaves the DOM, so a per-pane reset does not need to touch them.
     const paneState = composerStates.get(paneId);
-    paneState?.dictation?.dispose();
     if (paneState) {
-      releaseMicrophoneDeviceWatch(paneState);
+      disposeChatComposerState(paneState);
     }
     composerStates.delete(paneId);
     return;
   }
   for (const state of composerStates.values()) {
-    state.dictation?.dispose();
-    releaseMicrophoneDeviceWatch(state);
+    disposeChatComposerState(state);
   }
   composerStates.clear();
   clearGoalElapsedTimers();

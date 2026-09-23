@@ -3,7 +3,11 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayAuthResult } from "./auth.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { killSubagentRunAdmin } from "../agents/subagents/registry/subagent-control.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayAuthResult, ResolvedGatewayAuth } from "./auth.js";
+import { finishFailedGatewayHttpResponse } from "./http-common.js";
 
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 const WORKER_SESSION_KEY = "agent:main:subagent:worker";
@@ -20,7 +24,8 @@ const REQUESTER_ADMIN_HEADERS = {
   "x-openclaw-requester-session-key": "agent:other:main",
 };
 
-let cfg: Record<string, unknown> = {};
+let cfg: OpenClawConfig = {};
+let resolvedAuth: ResolvedGatewayAuth;
 const authMock = vi.fn(async (): Promise<GatewayAuthResult> => ({ ok: true }));
 const loadSessionEntryMock = vi.fn();
 const killSubagentRunAdminMock = vi.fn();
@@ -41,7 +46,7 @@ vi.mock("./session-utils.js", () => ({
   loadSessionEntry: loadSessionEntryMock,
 }));
 
-vi.mock("../agents/subagent-control.js", () => ({
+vi.mock("../agents/subagents/registry/subagent-control.js", () => ({
   killSubagentRunAdmin: killSubagentRunAdminMock,
 }));
 
@@ -53,13 +58,18 @@ let server: ReturnType<typeof createServer> | undefined;
 beforeAll(async () => {
   server = createServer((req, res) => {
     void handleSessionKillHttpRequest(req, res, {
-      auth: { mode: "token", token: TEST_GATEWAY_TOKEN, allowTailscale: false },
-    }).then((handled) => {
-      if (!handled) {
-        res.statusCode = 404;
-        res.end("not found");
-      }
-    });
+      auth: resolvedAuth,
+      cfg,
+      getRuntimeConfig: () => cfg,
+      getResolvedAuth: () => resolvedAuth,
+    })
+      .then((handled) => {
+        if (!handled) {
+          res.statusCode = 404;
+          res.end("not found");
+        }
+      })
+      .catch(() => finishFailedGatewayHttpResponse(res));
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -84,6 +94,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   cfg = {};
+  resolvedAuth = { mode: "token", token: TEST_GATEWAY_TOKEN, allowTailscale: false };
   authMock.mockReset();
   authMock.mockResolvedValue({ ok: true, method: "token" });
   loadSessionEntryMock.mockReset();
@@ -206,9 +217,10 @@ describe("POST /sessions/:sessionKey/kill", () => {
     );
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, killed: true });
-    expect(killSubagentRunAdminMock).toHaveBeenCalledWith({
+    expect(killSubagentRunAdminMock.mock.calls[0]?.[0]).toEqual({
       cfg,
       sessionKey: WORKER_SESSION_KEY,
+      agentId: "main",
     });
   });
 
@@ -220,6 +232,59 @@ describe("POST /sessions/:sessionKey/kill", () => {
     const response = await postWorkerKill(TEST_GATEWAY_TOKEN, ADMIN_SCOPE_HEADERS);
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, killed: false });
+  });
+
+  it.each(["unchanged settings", "policy revocation", "credential rotation"] as const)(
+    "checks HTTP kill authority after %s",
+    async (change) => {
+      allowTrustedProxyAuth();
+      mockWorkerSession();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const cancel = vi.fn();
+      killSubagentRunAdminMock.mockImplementationOnce(
+        async (_params: unknown, control: Parameters<typeof killSubagentRunAdmin>[1]) => {
+          entered.resolve();
+          await release.promise;
+          control?.assertCurrent();
+          cancel();
+          return { found: true, killed: true };
+        },
+      );
+      const responsePromise = postWorkerKill(TEST_GATEWAY_TOKEN, ADMIN_SCOPE_HEADERS);
+      try {
+        await Promise.race([
+          entered.promise,
+          responsePromise.then(() => {
+            throw new Error("kill returned before cancellation preparation");
+          }),
+        ]);
+        if (change === "policy revocation") {
+          cfg = { gateway: { auth: { allowTailscale: true } } };
+        } else if (change === "credential rotation") {
+          resolvedAuth = { ...resolvedAuth, token: "rotated-test-gateway-token" };
+        }
+      } finally {
+        release.resolve();
+      }
+      const response = await responsePromise;
+      const authorized = change === "unchanged settings";
+      expect(response.status).toBe(authorized ? 200 : 401);
+      expect(cancel).toHaveBeenCalledTimes(authorized ? 1 : 0);
+      await expect(response.json()).resolves.toMatchObject(
+        authorized ? { ok: true, killed: true } : { error: { type: "unauthorized" } },
+      );
+    },
+  );
+
+  it("preserves failures from an authorized kill", async () => {
+    allowTrustedProxyAuth();
+    mockWorkerSession();
+    killSubagentRunAdminMock.mockRejectedValueOnce(new Error("cancellation failed"));
+
+    const response = await postWorkerKill(TEST_GATEWAY_TOKEN, ADMIN_SCOPE_HEADERS);
+    expect(response.status).toBe(500);
+    await expect(response.text()).resolves.toBe("Internal Server Error");
   });
 
   it("rejects local bearer-auth kills without a trusted admin scope surface", async () => {
@@ -261,9 +326,10 @@ describe("POST /sessions/:sessionKey/kill", () => {
     const response = await postWorkerKill("", REQUESTER_ADMIN_HEADERS);
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, killed: true });
-    expect(killSubagentRunAdminMock).toHaveBeenCalledWith({
+    expect(killSubagentRunAdminMock.mock.calls[0]?.[0]).toEqual({
       cfg,
       sessionKey: WORKER_SESSION_KEY,
+      agentId: "main",
     });
   });
 

@@ -1,69 +1,56 @@
 // Verifies env API-key lookup through plugin provider-auth aliases.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   resolveEnvApiKey,
   resolveProviderDirectAuthPlanningEvidence,
   resolveProviderEnvAuthEvidence,
 } from "./model-auth-env.js";
 
-const pluginMetadataMocks = vi.hoisted(() => {
-  const snapshot = {
-    index: {
-      plugins: [
-        {
-          pluginId: "external-cloud",
-          origin: "global",
-          enabled: true,
-          enabledByDefault: true,
-        },
-      ],
-    },
-    plugins: [
-      {
-        id: "external-cloud",
-        origin: "global",
-        providerAuthAliases: {
-          "cloud-alias": "external-cloud",
-        },
-        setup: {
-          providers: [{ id: "external-cloud", envVars: ["EXTERNAL_CLOUD_API_KEY"] }],
-        },
+const pluginMetadataMocks = vi.hoisted(() => ({
+  getCurrentPluginMetadataSnapshot: vi.fn(),
+  loadPluginMetadataSnapshot: vi.fn(),
+}));
+
+const snapshot = createPluginMetadataSnapshotFixture({
+  plugins: [
+    {
+      id: "external-cloud",
+      origin: "global",
+      providerAuthAliases: { "cloud-alias": "external-cloud" },
+      setup: {
+        providers: [{ id: "external-cloud", envVars: ["EXTERNAL_CLOUD_API_KEY"] }],
       },
-    ],
-  };
-  return {
-    snapshot,
-    getCurrentPluginMetadataSnapshot: vi.fn(() => snapshot),
-    loadPluginMetadataSnapshot: vi.fn(() => snapshot),
-  };
+    },
+  ],
 });
 
 const setupRegistryMocks = vi.hoisted(() => ({
-  resolvePluginSetupProvider: vi.fn(() => undefined),
+  resolvePluginSetupProviderCore: vi.fn(() => undefined),
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: pluginMetadataMocks.getCurrentPluginMetadataSnapshot,
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   loadPluginMetadataSnapshot: pluginMetadataMocks.loadPluginMetadataSnapshot,
 }));
 
 vi.mock("../plugins/setup-registry.js", () => ({
-  resolvePluginSetupProvider: setupRegistryMocks.resolvePluginSetupProvider,
+  resolvePluginSetupProviderCore: setupRegistryMocks.resolvePluginSetupProviderCore,
 }));
 
 describe("resolveEnvApiKey provider auth aliases", () => {
   beforeEach(() => {
     pluginMetadataMocks.getCurrentPluginMetadataSnapshot.mockReset();
-    pluginMetadataMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(
-      pluginMetadataMocks.snapshot,
-    );
+    pluginMetadataMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
     pluginMetadataMocks.loadPluginMetadataSnapshot.mockReset();
-    pluginMetadataMocks.loadPluginMetadataSnapshot.mockReturnValue(pluginMetadataMocks.snapshot);
-    setupRegistryMocks.resolvePluginSetupProvider.mockReset();
-    setupRegistryMocks.resolvePluginSetupProvider.mockReturnValue(undefined);
+    pluginMetadataMocks.loadPluginMetadataSnapshot.mockReturnValue(snapshot);
+    setupRegistryMocks.resolvePluginSetupProviderCore.mockReset();
+    setupRegistryMocks.resolvePluginSetupProviderCore.mockReturnValue(undefined);
   });
 
   it("reuses the current scoped metadata snapshot while resolving provider auth aliases", () => {
@@ -100,7 +87,7 @@ describe("resolveEnvApiKey provider auth aliases", () => {
     // fallback must receive the same scope as metadata resolution.
     const config = {};
     const env = {} as NodeJS.ProcessEnv;
-    setupRegistryMocks.resolvePluginSetupProvider.mockReturnValue({
+    setupRegistryMocks.resolvePluginSetupProviderCore.mockReturnValue({
       resolveConfigApiKey: () => "setup-secret",
     } as never);
 
@@ -113,7 +100,7 @@ describe("resolveEnvApiKey provider auth aliases", () => {
       apiKey: "setup-secret",
       source: "env",
     });
-    expect(setupRegistryMocks.resolvePluginSetupProvider).toHaveBeenCalledWith({
+    expect(setupRegistryMocks.resolvePluginSetupProviderCore).toHaveBeenCalledWith({
       provider: "setup-cloud",
       config,
       workspaceDir: "/workspace",
@@ -135,7 +122,7 @@ describe("resolveEnvApiKey provider auth aliases", () => {
     ).toEqual({ mode: "api-key", source: "env: EXTERNAL_CLOUD_API_KEY" });
     expect(pluginMetadataMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
     expect(pluginMetadataMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-    expect(setupRegistryMocks.resolvePluginSetupProvider).not.toHaveBeenCalled();
+    expect(setupRegistryMocks.resolvePluginSetupProviderCore).not.toHaveBeenCalled();
   });
 
   it("retains setup-provider fallback as deferred planning evidence without loading it", () => {
@@ -149,6 +136,6 @@ describe("resolveEnvApiKey provider auth aliases", () => {
     ).toEqual({ kind: "setup-provider", mode: "api-key", source: "setup provider" });
     expect(pluginMetadataMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
     expect(pluginMetadataMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-    expect(setupRegistryMocks.resolvePluginSetupProvider).not.toHaveBeenCalled();
+    expect(setupRegistryMocks.resolvePluginSetupProviderCore).not.toHaveBeenCalled();
   });
 });

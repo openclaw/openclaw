@@ -25,7 +25,6 @@ struct IOSMediaArtifactLoader: Sendable {
     static let maximumImageBytes = 12 * 1024 * 1024
     static let maximumAudioBytes = 16 * 1024 * 1024
     static let maximumVideoBytes = 16 * 1024 * 1024
-    private static let managedMediaPathPrefix = "/api/chat/media/outgoing/"
     private let connectionProvider: ConnectionProvider
     private let requestFactory: RequestFactory
 
@@ -61,7 +60,7 @@ struct IOSMediaArtifactLoader: Sendable {
         {
             guard response.encoding == "base64",
                   let declaredMIME,
-                  declaredMIME.hasPrefix(kind.mimeTypePrefix),
+                  kind.acceptsMIMEType(declaredMIME),
                   let data = Data(base64Encoded: encoded)
             else { throw LoadError.invalidResponse }
             guard data.count <= maximumBytes else { throw LoadError.payloadTooLarge }
@@ -71,8 +70,10 @@ struct IOSMediaArtifactLoader: Sendable {
         let path = response.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard let connection = await self.connectionProvider(),
               connection.gatewayID == expectedGatewayID,
-              let sourceURL = Self.managedMediaURL(config: connection.config, path: path),
-              let url = Self.playbackURL(sourceURL, mode: playback)
+              let url = OpenClawChatMediaURL.resolve(
+                  gatewayURL: connection.config.url,
+                  ticketedPath: path,
+                  playback: playback)
         else { throw LoadError.invalidSource }
 
         let headers = url.scheme?.lowercased() == "https"
@@ -84,7 +85,7 @@ struct IOSMediaArtifactLoader: Sendable {
             url.scheme?.lowercased() == "https" &&
             connection.config.tls == nil &&
             headers.isEmpty &&
-            declaredMIME?.hasPrefix(kind.mimeTypePrefix) == true
+            declaredMIME.map(kind.acceptsMIMEType) == true
         if canStreamDirectly, playback != .transcode, let declaredMIME {
             return .stream(OpenClawChatMediaStream(
                 url: url,
@@ -94,7 +95,7 @@ struct IOSMediaArtifactLoader: Sendable {
 
         var request = URLRequest(url: url)
         request.timeoutInterval = kind == .video ? 60 : 20
-        request.setValue("\(kind.rawValue)/*", forHTTPHeaderField: "Accept")
+        request.setValue(kind.acceptHeader, forHTTPHeaderField: "Accept")
         if canStreamDirectly {
             request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
         }
@@ -121,7 +122,7 @@ struct IOSMediaArtifactLoader: Sendable {
             throw LoadError.requestFailed(statusCode: http.statusCode)
         }
         guard let mimeType = http.mimeType?.lowercased(),
-              mimeType.hasPrefix(kind.mimeTypePrefix)
+              kind.acceptsMIMEType(mimeType)
         else { throw LoadError.unsupportedMediaType }
         if canStreamDirectly {
             return .stream(OpenClawChatMediaStream(
@@ -138,40 +139,7 @@ struct IOSMediaArtifactLoader: Sendable {
         case .image: self.maximumImageBytes
         case .audio: self.maximumAudioBytes
         case .video: self.maximumVideoBytes
+        case .file: 100 * 1024 * 1024 // Gateway document limit (media-core/constants).
         }
-    }
-
-    private static func managedMediaURL(config: GatewayConnectConfig, path: String) -> URL? {
-        guard path.hasPrefix(self.managedMediaPathPrefix),
-              let relative = URLComponents(string: path),
-              relative.scheme == nil,
-              relative.host == nil,
-              relative.fragment == nil,
-              relative.percentEncodedPath.hasPrefix(Self.managedMediaPathPrefix),
-              relative.queryItems?.contains(where: {
-                  $0.name == "mediaTicket" && $0.value?.isEmpty == false
-              }) == true,
-              var base = URLComponents(url: config.url, resolvingAgainstBaseURL: false),
-              base.host != nil
-        else { return nil }
-        switch base.scheme?.lowercased() {
-        case "wss", "https": base.scheme = "https"
-        case "ws", "http": base.scheme = "http"
-        default: return nil
-        }
-        base.percentEncodedPath = relative.percentEncodedPath
-        base.percentEncodedQuery = relative.percentEncodedQuery
-        base.fragment = nil
-        return base.url
-    }
-
-    private static func playbackURL(_ url: URL, mode: OpenClawChatPlaybackMode?) -> URL? {
-        guard mode == .transcode else { return url }
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
-        var queryItems = components.queryItems ?? []
-        queryItems.removeAll { $0.name == "playback" }
-        queryItems.append(URLQueryItem(name: "playback", value: "1"))
-        components.queryItems = queryItems
-        return components.url
     }
 }

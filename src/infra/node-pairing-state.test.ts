@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureAuthenticatedNodePairingState,
   captureNodePairingGeneration,
-  isNodePairingGenerationCurrent,
 } from "./device-pairing-node-state.js";
 import type { PairedDevice } from "./device-pairing.js";
 
@@ -51,7 +50,7 @@ describe("node pairing generation", () => {
     mocks.getPairedDevice.mockReset();
   });
 
-  it("binds work to node-role token and node-surface approval identity", async () => {
+  it("captures a generation for an approved node-role pairing", async () => {
     const original = pairedNode();
     mocks.getPairedDevice.mockResolvedValueOnce(original);
 
@@ -61,15 +60,6 @@ describe("node pairing generation", () => {
       nodeId: "node-1",
       key: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
-    mocks.getPairedDevice.mockResolvedValueOnce(
-      pairedNode({
-        tokens: {
-          ...original.tokens,
-          node: { ...original.tokens!.node!, token: "secret-token", rotatedAtMs: 500 },
-        },
-      }),
-    );
-    await expect(isNodePairingGenerationCurrent(generation!)).resolves.toBe(false);
   });
 
   it("binds connected sessions to the public key and node token used at authentication", async () => {
@@ -125,7 +115,36 @@ describe("node pairing generation", () => {
         key: expect.stringMatching(/^[a-f0-9]{64}$/u),
       },
       generation: null,
+      approvedSurface: { caps: [], commands: [], permissions: undefined },
     });
+  });
+
+  it("captures the approved surface from the same authenticated row as its generation", async () => {
+    const original = pairedNode({
+      nodeSurface: {
+        createdAtMs: 300,
+        approvedAtMs: 400,
+        caps: ["screen"],
+        commands: ["screen.snapshot"],
+        permissions: { accessibility: false },
+      },
+    });
+    mocks.getPairedDevice.mockResolvedValueOnce(original);
+
+    await expect(
+      captureAuthenticatedNodePairingState({
+        nodeId: original.deviceId,
+        publicKey: original.publicKey,
+        token: original.tokens!.node!.token,
+      }),
+    ).resolves.toMatchObject({
+      approvedSurface: {
+        caps: ["screen"],
+        commands: ["screen.snapshot"],
+        permissions: { accessibility: false },
+      },
+    });
+    expect(mocks.getPairedDevice).toHaveBeenCalledTimes(1);
   });
 
   it("keeps pairing identity stable when the pending surface is approved", async () => {
@@ -144,56 +163,6 @@ describe("node pairing generation", () => {
     expect(pendingState?.generation).toBeNull();
     expect(approvedState?.generation).not.toBeNull();
     expect(approvedState?.identity.key).toBe(pendingState?.identity.key);
-  });
-
-  it("keeps node work current across unrelated operator approval", async () => {
-    const original = pairedNode();
-    mocks.getPairedDevice.mockResolvedValueOnce(original);
-    const generation = await captureNodePairingGeneration(original.deviceId);
-
-    mocks.getPairedDevice.mockResolvedValueOnce(
-      pairedNode({
-        approvedAtMs: 201,
-        tokens: {
-          ...original.tokens,
-          operator: {
-            ...original.tokens!.operator!,
-            token: "gateway-token",
-            rotatedAtMs: 501,
-          },
-        },
-      }),
-    );
-
-    await expect(isNodePairingGenerationCurrent(generation!)).resolves.toBe(true);
-  });
-
-  it("invalidates node work when the node surface is reapproved", async () => {
-    const original = pairedNode();
-    mocks.getPairedDevice.mockResolvedValueOnce(original);
-    const generation = await captureNodePairingGeneration(original.deviceId);
-
-    mocks.getPairedDevice.mockResolvedValueOnce(
-      pairedNode({ nodeSurface: { createdAtMs: 300, approvedAtMs: 401 } }),
-    );
-    await expect(isNodePairingGenerationCurrent(generation!)).resolves.toBe(false);
-  });
-
-  it("invalidates node work when its effective node token is revoked", async () => {
-    const original = pairedNode();
-    mocks.getPairedDevice.mockResolvedValueOnce(original);
-    const generation = await captureNodePairingGeneration(original.deviceId);
-
-    mocks.getPairedDevice.mockResolvedValueOnce(
-      pairedNode({
-        tokens: {
-          ...original.tokens,
-          node: { ...original.tokens!.node!, revokedAtMs: 501 },
-        },
-      }),
-    );
-
-    await expect(isNodePairingGenerationCurrent(generation!)).resolves.toBe(false);
   });
 
   it("rejects admission without an active node token or approved node surface", async () => {

@@ -17,18 +17,18 @@ import { setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createRunningTaskRun, recordTaskRunProgressByRunId } from "./task-executor.js";
-import { createTaskRecord, getTaskById, reloadTaskRegistryFromStore } from "./task-registry.js";
+import { createRunningTaskRunCore, recordTaskRunProgressByRunIdCore } from "./task-executor.js";
+import { reloadTaskRegistryFromStoreAsync } from "./task-registry-state.js";
+import { createTaskRecord, getTaskById } from "./task-registry.js";
 import {
-  resetTaskRegistryMaintenanceRuntimeForTests,
+  configureTaskRegistryMaintenance,
   stopTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "./task-runtime.test-helpers.js";
 
@@ -74,12 +74,10 @@ function requireTask(taskId: string) {
   return task;
 }
 
-function resetTaskOperationsRuntime(): void {
-  stopTaskRegistryMaintenance();
-  resetTaskRegistryMaintenanceRuntimeForTests();
+async function resetTaskOperationsRuntime(): Promise<void> {
+  await stopTaskRegistryMaintenance();
+  configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   resetDetachedTaskLifecycleRuntimeForTests();
-  resetTaskRegistryControlRuntimeForTests();
-  resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   resetSystemEventsForTest();
@@ -88,20 +86,25 @@ function resetTaskOperationsRuntime(): void {
 }
 
 describe("task operations product boundary", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await resetTaskOperationsRuntime();
     vi.useRealTimers();
-    resetTaskOperationsRuntime();
   });
 
   it("runs persisted task operations through CLI, chat, notification, audit, and maintenance", async () => {
     await withOpenClawTestState(
       {
-        layout: "state-only",
+        layout: "home",
         scenario: "minimal",
         prefix: "openclaw-task-operations-e2e-",
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: undefined,
+          OPENCLAW_GATEWAY_PASSWORD: undefined,
+          OPENCLAW_GATEWAY_URL: undefined,
+        },
       },
       async () => {
-        resetTaskOperationsRuntime();
+        await resetTaskOperationsRuntime();
         const clearHeartbeat = setHeartbeatWakeHandler(async () => ({
           status: "ran",
           durationMs: 0,
@@ -122,7 +125,7 @@ describe("task operations product boundary", () => {
             notifyPolicy: "silent",
           });
           vi.setSystemTime(now - 40 * 60_000);
-          const stale = createRunningTaskRun({
+          const stale = createRunningTaskRunCore({
             runtime: "cli",
             requesterSessionKey: OWNER_KEY,
             runId: "run-a07-stale",
@@ -134,7 +137,7 @@ describe("task operations product boundary", () => {
           vi.setSystemTime(now);
           vi.useRealTimers();
 
-          const operatorTask = createRunningTaskRun({
+          const operatorTask = createRunningTaskRunCore({
             runtime: "cli",
             requesterSessionKey: OWNER_KEY,
             runId: "run-a07-operator",
@@ -152,13 +155,22 @@ describe("task operations product boundary", () => {
           }
 
           resetTaskRegistryForTests({ persist: false });
-          reloadTaskRegistryFromStore();
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           expect(requireTask(operatorTask.taskId)).toMatchObject({
             runId: "run-a07-operator",
             status: "running",
             notifyPolicy: "done_only",
           });
 
+          const standaloneList = createRuntime();
+          await tasksListCommand({}, standaloneList.runtime);
+          expect(standaloneList.logs.join("\n")).toContain(
+            "Task pressure: 0 queued · 2 running · 0 issues",
+          );
+          expect(requireTask(stale.taskId).status).toBe("running");
+
+          // Only the Gateway can reconcile CLI runs from process-local liveness.
+          configureTaskRegistryMaintenance({ runtimeAuthoritative: true });
           const list = createRuntime();
           await tasksListCommand({}, list.runtime);
           expect(list.logs.join("\n")).toContain("Background tasks: 3");
@@ -187,7 +199,7 @@ describe("task operations product boundary", () => {
           ]);
           expect(requireTask(operatorTask.taskId).notifyPolicy).toBe("state_changes");
 
-          recordTaskRunProgressByRunId({
+          recordTaskRunProgressByRunIdCore({
             runId: "run-a07-operator",
             progressSummary: "Indexed 3 records",
             eventSummary: "Indexed 3 records",
@@ -199,7 +211,7 @@ describe("task operations product boundary", () => {
           });
 
           resetTaskRegistryForTests({ persist: false });
-          reloadTaskRegistryFromStore();
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           expect(requireTask(operatorTask.taskId)).toMatchObject({
             notifyPolicy: "state_changes",
             progressSummary: "Indexed 3 records",
@@ -255,22 +267,29 @@ describe("task operations product boundary", () => {
 
           const cancel = createRuntime();
           await tasksCancelCommand({ lookup: operatorTask.taskId }, cancel.runtime);
-          expect(cancel.errors).toEqual([]);
-          expect(cancel.exits).toEqual([]);
-          expect(cancel.logs).toEqual([
-            `Cancelled ${operatorTask.taskId} (cli) run run-a07-operator.`,
+          // A persisted row cannot stand in for the Gateway's live execution owner.
+          expect(cancel.errors).toEqual([
+            expect.stringContaining(
+              "CLI task cancellation requires the live Gateway tasks.cancel path:",
+            ),
           ]);
+          expect(cancel.errors[0]).toContain("requires credentials before opening a websocket");
+          expect(cancel.exits).toEqual([1]);
+          expect(cancel.logs).toEqual([]);
+          resetTaskRegistryForTests({ persist: false });
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           expect(requireTask(operatorTask.taskId)).toMatchObject({
-            status: "cancelled",
-            error: "Cancelled by operator.",
+            status: "running",
           });
 
-          const cancelledShow = createRuntime();
-          await tasksShowCommand({ lookup: operatorTask.taskId }, cancelledShow.runtime);
-          expect(cancelledShow.logs.join("\n")).toContain("status: cancelled");
+          expect(requireTask(operatorTask.taskId).error).toBeUndefined();
+
+          const retainedShow = createRuntime();
+          await tasksShowCommand({ lookup: operatorTask.taskId }, retainedShow.runtime);
+          expect(retainedShow.logs.join("\n")).toContain("status: running");
         } finally {
           clearHeartbeat();
-          resetTaskOperationsRuntime();
+          await resetTaskOperationsRuntime();
         }
       },
     );

@@ -1,6 +1,6 @@
 // Session model override helpers normalize per-session provider model choices.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 
 /** User or automatic model/provider override selection for a session entry. */
 type ModelOverrideSelection = {
@@ -12,6 +12,8 @@ type ModelOverrideSelection = {
 export const MODEL_SELECTION_LOCKED_MESSAGE = "Model selection is locked for this session.";
 export const MODEL_SELECTION_LOCKED_RESET_MESSAGE =
   "This session cannot be reset while model selection is locked.";
+export const MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE =
+  "Model-selection-locked sessions cannot create child sessions from parent context.";
 
 /** Raised when a caller attempts to mutate a locked session model selection. */
 export class ModelSelectionLockedError extends Error {
@@ -25,10 +27,13 @@ export function isModelSelectionLocked(entry: SessionEntry | undefined): boolean
   return entry?.modelSelectionLocked === true;
 }
 
-/** Enforces the durable model-selection lock before any session model fields change. */
-function assertModelSelectionUnlocked(entry: SessionEntry): void {
+/** A locked harness owns both model selection and transcript lineage. */
+export function assertModelSelectionUnlocked(
+  entry: SessionEntry,
+  message = MODEL_SELECTION_LOCKED_MESSAGE,
+): void {
   if (isModelSelectionLocked(entry)) {
-    throw new ModelSelectionLockedError();
+    throw new ModelSelectionLockedError(message);
   }
 }
 
@@ -53,6 +58,7 @@ export function applyModelOverrideToSessionEntry(params: {
   profileOverrideSource?: "auto" | "user";
   preserveAuthProfileOverride?: boolean;
   selectionSource?: "auto" | "user";
+  explicitDefaultSelection?: boolean;
   markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
@@ -64,6 +70,15 @@ export function applyModelOverrideToSessionEntry(params: {
   let profileUpdated = false;
 
   if (selection.isDefault) {
+    if (params.explicitDefaultSelection && entry.modelOverrideSource !== "default") {
+      entry.modelOverrideSource = "default";
+      updated = true;
+      selectionUpdated = true;
+    } else if (!params.explicitDefaultSelection && entry.modelOverrideSource !== undefined) {
+      delete entry.modelOverrideSource;
+      updated = true;
+      selectionUpdated = true;
+    }
     if (entry.providerOverride) {
       delete entry.providerOverride;
       updated = true;
@@ -73,10 +88,6 @@ export function applyModelOverrideToSessionEntry(params: {
       delete entry.modelOverride;
       updated = true;
       selectionUpdated = true;
-    }
-    if (entry.modelOverrideSource) {
-      delete entry.modelOverrideSource;
-      updated = true;
     }
     if (entry.modelOverrideRouteResolution) {
       delete entry.modelOverrideRouteResolution;
@@ -136,19 +147,20 @@ export function applyModelOverrideToSessionEntry(params: {
   // contextTokens are derived from the active session model. When the selected
   // model changes (or runtime model is already stale), the cached window can
   // pin the session to an older/smaller limit until another run refreshes it.
-  if (
-    entry.contextTokens !== undefined &&
-    (selectionUpdated || (runtimePresent && !runtimeAligned))
-  ) {
-    delete entry.contextTokens;
-    updated = true;
-  }
-  if (
-    entry.contextBudgetStatus !== undefined &&
-    (selectionUpdated || (runtimePresent && !runtimeAligned))
-  ) {
-    delete entry.contextBudgetStatus;
-    updated = true;
+  const shouldClearModelDerivedState = selectionUpdated || (runtimePresent && !runtimeAligned);
+  if (shouldClearModelDerivedState) {
+    if (entry.contextTokens !== undefined) {
+      delete entry.contextTokens;
+      updated = true;
+    }
+    if (entry.contextTokensSource !== undefined) {
+      delete entry.contextTokensSource;
+      updated = true;
+    }
+    if (entry.contextBudgetStatus !== undefined) {
+      delete entry.contextBudgetStatus;
+      updated = true;
+    }
   }
 
   if (profileOverride) {

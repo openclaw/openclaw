@@ -57,7 +57,7 @@ struct ComputerActionServiceTests {
                 await self.releaseFirst.wait()
             }
             try Task.checkCancellation()
-            return OpenClawComputerActResult(ok: true, cursorX: Double(actionID), cursorY: 0)
+            return OpenClawComputerActResult(ok: true)
         }
     }
 
@@ -70,7 +70,7 @@ struct ComputerActionServiceTests {
             self.allowed = allowed
         }
 
-        func attempt() -> Bool {
+        func attempt(_: UUID?) -> Bool {
             self.attempts += 1
             return self.allowed
         }
@@ -112,6 +112,14 @@ struct ComputerActionServiceTests {
             return true
         }
         return false
+    }
+
+    private func unsupportedAction(_ error: Error?) -> OpenClawComputerAction? {
+        guard let error = error as? ComputerActionService.ComputerActionError else { return nil }
+        if case let .unsupportedAction(action) = error {
+            return action
+        }
+        return nil
     }
 
     private func validationError(
@@ -189,7 +197,7 @@ struct ComputerActionServiceTests {
             y: 2,
             refWidth: 1280)
         let missingError = self.validationError {
-            try ComputerActionService.validateDisplayFrame(missing, currentFrameId: currentFrameId)
+            try ComputerScreenActionExecutor.validateDisplayFrame(missing, currentFrameId: currentFrameId)
         }
         if case .some(.missingDisplayFrameId) = missingError {} else {
             Issue.record("expected missingDisplayFrameId")
@@ -202,7 +210,7 @@ struct ComputerActionServiceTests {
             y: 2,
             refWidth: 1280)
         let staleError = self.validationError {
-            try ComputerActionService.validateDisplayFrame(stale, currentFrameId: currentFrameId)
+            try ComputerScreenActionExecutor.validateDisplayFrame(stale, currentFrameId: currentFrameId)
         }
         if case .some(.displayFrameChanged) = staleError {} else {
             Issue.record("expected displayFrameChanged")
@@ -214,7 +222,7 @@ struct ComputerActionServiceTests {
             x: 1,
             y: 2,
             refWidth: 1280)
-        try ComputerActionService.validateDisplayFrame(current, currentFrameId: currentFrameId)
+        try ComputerScreenActionExecutor.validateDisplayFrame(current, currentFrameId: currentFrameId)
 
         let missingScale = OpenClawComputerActParams(
             action: .leftClick,
@@ -222,7 +230,7 @@ struct ComputerActionServiceTests {
             x: 1,
             y: 2)
         let missingScaleError = self.validationError {
-            try ComputerActionService.validateDisplayFrame(
+            try ComputerScreenActionExecutor.validateDisplayFrame(
                 missingScale,
                 currentFrameId: currentFrameId)
         }
@@ -254,7 +262,7 @@ struct ComputerActionServiceTests {
             y: 2,
             refWidth: 640)
         let mismatchedScaleError = self.validationError {
-            try ComputerActionService.validateDisplayFrame(
+            try ComputerScreenActionExecutor.validateDisplayFrame(
                 mismatchedScale,
                 currentFrameId: mismatchedScaleFrameId)
         }
@@ -264,7 +272,7 @@ struct ComputerActionServiceTests {
 
         // Cursor-relative/keyboard actions do not consume screenshot coordinates.
         let keyboard = OpenClawComputerActParams(action: .type, text: "hello")
-        try ComputerActionService.validateDisplayFrame(keyboard, currentFrameId: currentFrameId)
+        try ComputerScreenActionExecutor.validateDisplayFrame(keyboard, currentFrameId: currentFrameId)
     }
 
     @Test func `cursor-relative input stays inside the selected display`() throws {
@@ -273,59 +281,61 @@ struct ComputerActionServiceTests {
             originY: -50,
             widthPoints: 800,
             heightPoints: 600)
-        #expect(try ComputerActionService.validatedCurrentCursorPoint(
+        #expect(try ComputerScreenActionExecutor.validatedCurrentCursorPoint(
             CGPoint(x: 100, y: -50),
             display: display) == CGPoint(x: 100, y: -50))
         #expect(throws: ComputerActionService.ComputerActionError.self) {
-            try ComputerActionService.validatedCurrentCursorPoint(
+            try ComputerScreenActionExecutor.validatedCurrentCursorPoint(
                 CGPoint(x: 99, y: 0),
                 display: display)
         }
         #expect(throws: ComputerActionService.ComputerActionError.self) {
-            try ComputerActionService.validatedCurrentCursorPoint(nil, display: display)
+            try ComputerScreenActionExecutor.validatedCurrentCursorPoint(nil, display: display)
         }
     }
 
     @Test func `integrated drag and duplicate down are rejected during a split hold`() throws {
         #expect(throws: ComputerActionService.ComputerActionError.self) {
-            try ComputerActionService.validateHeldButtonTransition(
+            try ComputerScreenActionExecutor.validateHeldButtonTransition(
                 action: .leftClickDrag,
                 leftButtonDown: true)
         }
         #expect(throws: ComputerActionService.ComputerActionError.self) {
-            try ComputerActionService.validateHeldButtonTransition(
+            try ComputerScreenActionExecutor.validateHeldButtonTransition(
                 action: .leftMouseDown,
                 leftButtonDown: true)
         }
         #expect(throws: ComputerActionService.ComputerActionError.self) {
-            try ComputerActionService.validateHeldButtonTransition(
+            try ComputerScreenActionExecutor.validateHeldButtonTransition(
                 action: .doubleClick,
                 leftButtonDown: true)
         }
-        try ComputerActionService.validateHeldButtonTransition(
+        try ComputerScreenActionExecutor.validateHeldButtonTransition(
             action: .leftMouseUp,
             leftButtonDown: true)
     }
 
     @Test func `left mouse up requires a service owned split hold`() throws {
         #expect(throws: ComputerActionService.ComputerActionError.self) {
-            try ComputerActionService.validateHeldButtonTransition(
+            try ComputerScreenActionExecutor.validateHeldButtonTransition(
                 action: .leftMouseUp,
                 leftButtonDown: false)
         }
-        try ComputerActionService.validateHeldButtonTransition(
+        try ComputerScreenActionExecutor.validateHeldButtonTransition(
             action: .leftMouseDown,
             leftButtonDown: false)
-        try ComputerActionService.validateHeldButtonTransition(
+        try ComputerScreenActionExecutor.validateHeldButtonTransition(
             action: .leftMouseUp,
             leftButtonDown: true)
     }
 
-    @Test func `lifecycle release retries event creation failure before returning`() async {
+    @Test(arguments: [false, true])
+    func `input release retries event creation failure before returning`(wholeRoute: Bool) async {
+        let scope = UUID()
         let flags: CGEventFlags = [.maskCommand, .maskShift]
         var attempts = 0
         var postedFlags: [CGEventFlags] = []
-        let service = ComputerActionService { down, _, eventFlags in
+        let screen = ComputerScreenActionExecutor { down, _, eventFlags in
             #expect(!down)
             attempts += 1
             postedFlags.append(eventFlags)
@@ -333,13 +343,18 @@ struct ComputerActionServiceTests {
                 throw ComputerActionService.ComputerActionError.eventCreationFailed
             }
         }
-        service.holdLeftButtonForTesting(flags: flags)
+        let service = ComputerActionService(screen: screen)
+        screen.holdLeftButtonForTesting(flags: flags, inputScopeId: scope)
 
-        await service.releaseHeldInput(lifecycleGeneration: 1)
+        if wholeRoute {
+            await service.releaseHeldInput(lifecycleGeneration: 1)
+        } else {
+            await service.releaseHeldInput(inputScopeId: scope)
+        }
 
-        #expect(!service.isLeftButtonDownForTesting)
-        #expect(service.heldButtonFlagsForTesting.isEmpty)
-        #expect(!service.buttonWatchdogArmedForTesting)
+        #expect(!screen.isLeftButtonDownForTesting)
+        #expect(screen.heldButtonFlagsForTesting.isEmpty)
+        #expect(!screen.buttonWatchdogArmedForTesting)
         #expect(attempts == 2)
         #expect(postedFlags == [flags, flags])
     }
@@ -347,7 +362,7 @@ struct ComputerActionServiceTests {
     @Test func `watchdog release retains ownership and rearms after post failure`() {
         let flags: CGEventFlags = [.maskAlternate]
         var attempts = 0
-        let service = ComputerActionService { down, _, eventFlags in
+        let screen = ComputerScreenActionExecutor { down, _, eventFlags in
             #expect(!down)
             #expect(eventFlags == flags)
             attempts += 1
@@ -355,20 +370,165 @@ struct ComputerActionServiceTests {
                 throw SyntheticPostError.failed
             }
         }
-        service.holdLeftButtonForTesting(flags: flags)
+        screen.holdLeftButtonForTesting(flags: flags)
 
-        service.fireButtonWatchdogForTesting()
+        screen.fireButtonWatchdogForTesting()
 
-        #expect(service.isLeftButtonDownForTesting)
-        #expect(service.heldButtonFlagsForTesting == flags)
-        #expect(service.buttonWatchdogArmedForTesting)
+        #expect(screen.isLeftButtonDownForTesting)
+        #expect(screen.heldButtonFlagsForTesting == flags)
+        #expect(screen.buttonWatchdogArmedForTesting)
 
-        service.fireButtonWatchdogForTesting()
+        screen.fireButtonWatchdogForTesting()
 
-        #expect(!service.isLeftButtonDownForTesting)
-        #expect(service.heldButtonFlagsForTesting.isEmpty)
-        #expect(!service.buttonWatchdogArmedForTesting)
+        #expect(!screen.isLeftButtonDownForTesting)
+        #expect(screen.heldButtonFlagsForTesting.isEmpty)
+        #expect(!screen.buttonWatchdogArmedForTesting)
         #expect(attempts == 2)
+    }
+
+    @Test func `closing a different execution preserves the owned mouse button`() async throws {
+        let owner = UUID()
+        let other = UUID()
+        var posted: [Bool] = []
+        let screen = ComputerScreenActionExecutor { down, _, _ in posted.append(down) }
+        let service = ComputerActionService(screen: screen)
+        try screen.pressLeftButton(at: .zero, flags: [.maskShift], inputScopeId: owner)
+
+        await service.releaseHeldInput(inputScopeId: other)
+        #expect(screen.isLeftButtonDownForTesting)
+        #expect(screen.heldButtonFlagsForTesting == [.maskShift])
+        #expect(posted == [true])
+
+        await service.releaseHeldInput(inputScopeId: owner)
+        #expect(!screen.isLeftButtonDownForTesting)
+        #expect(posted == [true, false])
+    }
+
+    @Test(arguments: [false, true])
+    func `typing cancellation releases only its execution input`(closeExecution: Bool) async throws {
+        let owner = UUID()
+        let other = UUID()
+        let started = AsyncSignal()
+        let resume = AsyncSignal()
+        var mouseEvents: [Bool] = []
+        var textEvents: [Character] = []
+        var releases: [UUID?] = []
+        let screen = ComputerScreenActionExecutor(
+            mouseButtonEventPoster: { down, _, _ in mouseEvents.append(down) },
+            textGraphemePoster: { grapheme in
+                textEvents.append(grapheme)
+                await started.signal()
+                await resume.wait()
+            })
+        let queue = ComputerActionExecutionQueue(onInputRelease: { scope in
+            releases.append(scope)
+            return screen.releaseCurrentHeldButton(inputScopeId: scope)
+        })
+        try screen.pressLeftButton(at: .zero, flags: [], inputScopeId: owner)
+        let typing = Task { @MainActor in
+            try await queue.perform(
+                OpenClawComputerActParams(action: .type, text: "AB"),
+                lifecycleGeneration: 0,
+                inputScopeId: other)
+            { _, generation in
+                try await screen.typeText("AB") { try queue.checkExecutionAllowed(lifecycleGeneration: generation) }
+                return OpenClawComputerActResult(ok: true)
+            }
+        }
+        await started.wait()
+        let closing: Task<Void, Never>?
+        if closeExecution {
+            closing = Task { @MainActor in await queue.releaseHeldInput(inputScopeId: other) }
+        } else {
+            closing = nil
+            typing.cancel()
+        }
+        while releases.isEmpty {
+            await Task.yield()
+        }
+        #expect(screen.isLeftButtonDownForTesting)
+        #expect(mouseEvents == [true])
+        await resume.signal()
+        do {
+            _ = try await typing.value
+            Issue.record("cancelled typing unexpectedly completed")
+        } catch {
+            #expect(error is CancellationError)
+        }
+        await closing?.value
+        #expect(textEvents == ["A"])
+        #expect(releases.allSatisfy { $0 == other })
+        #expect(screen.isLeftButtonDownForTesting)
+        await queue.releaseHeldInput(inputScopeId: owner)
+        #expect(mouseEvents == [true, false])
+    }
+
+    @Test(arguments: [false, true])
+    func `scope release preserves sibling queue while route release cancels all`(wholeRoute: Bool) async throws {
+        let owner = UUID()
+        let sibling = UUID()
+        let probe = ActionProbe()
+        var releases: [UUID?] = []
+        let queue = ComputerActionExecutionQueue(onInputRelease: { releases.append($0)
+            return true
+        })
+        let first = Task { @MainActor in
+            try await queue.perform(
+                OpenClawComputerActParams(action: .type, x: 1),
+                lifecycleGeneration: 0,
+                inputScopeId: owner,
+                operation: probe.perform)
+        }
+        await probe.firstStarted.wait()
+        let other = Task { @MainActor in
+            try await queue.perform(
+                OpenClawComputerActParams(action: .type, x: 2),
+                lifecycleGeneration: 0,
+                inputScopeId: sibling,
+                operation: probe.perform)
+        }
+        let queuedOwner = Task { @MainActor in
+            try await queue.perform(
+                OpenClawComputerActParams(action: .type, x: 3),
+                lifecycleGeneration: 0,
+                inputScopeId: owner,
+                operation: probe.perform)
+        }
+        while queue.pendingActionCountForTesting != 2 {
+            await Task.yield()
+        }
+        let release = Task { @MainActor in
+            if wholeRoute {
+                await queue.releaseHeldInput(lifecycleGeneration: 1)
+            } else {
+                await queue.releaseHeldInput(inputScopeId: owner)
+            }
+        }
+        while releases.isEmpty {
+            await Task.yield()
+        }
+        #expect(queue.pendingActionCountForTesting == (wholeRoute ? 0 : 1))
+        await probe.releaseFirst.signal()
+        await release.value
+        for task in [first, queuedOwner] {
+            do {
+                _ = try await task.value
+                Issue.record("retired execution unexpectedly completed")
+            } catch {
+                #expect(wholeRoute ? self.isLifecycleChanged(error) : error is CancellationError)
+            }
+        }
+        if wholeRoute {
+            do {
+                _ = try await other.value
+                Issue.record("retired route unexpectedly completed sibling")
+            } catch {
+                #expect(self.isLifecycleChanged(error))
+            }
+        } else {
+            _ = try await other.value
+        }
+        #expect(probe.enteredActionIDs == (wholeRoute ? [1] : [1, 2]))
     }
 
     @Test func `failed explicit release retains added modifiers for watchdog retry`() {
@@ -377,7 +537,7 @@ struct ComputerActionServiceTests {
         let expectedFlags = heldFlags.union(releaseFlags)
         var attempts = 0
         var postedFlags: [CGEventFlags] = []
-        let service = ComputerActionService { down, _, eventFlags in
+        let screen = ComputerScreenActionExecutor { down, _, eventFlags in
             #expect(!down)
             attempts += 1
             postedFlags.append(eventFlags)
@@ -385,28 +545,28 @@ struct ComputerActionServiceTests {
                 throw SyntheticPostError.failed
             }
         }
-        service.holdLeftButtonForTesting(flags: heldFlags)
+        screen.holdLeftButtonForTesting(flags: heldFlags)
 
         #expect(throws: SyntheticPostError.self) {
-            try service.releaseHeldButtonForTesting(additionalFlags: releaseFlags)
+            try screen.releaseHeldButtonForTesting(additionalFlags: releaseFlags)
         }
 
-        #expect(service.isLeftButtonDownForTesting)
-        #expect(service.heldButtonFlagsForTesting == expectedFlags)
-        #expect(service.buttonWatchdogArmedForTesting)
+        #expect(screen.isLeftButtonDownForTesting)
+        #expect(screen.heldButtonFlagsForTesting == expectedFlags)
+        #expect(screen.buttonWatchdogArmedForTesting)
 
-        service.fireButtonWatchdogForTesting()
+        screen.fireButtonWatchdogForTesting()
 
-        #expect(!service.isLeftButtonDownForTesting)
-        #expect(service.heldButtonFlagsForTesting.isEmpty)
-        #expect(!service.buttonWatchdogArmedForTesting)
+        #expect(!screen.isLeftButtonDownForTesting)
+        #expect(screen.heldButtonFlagsForTesting.isEmpty)
+        #expect(!screen.buttonWatchdogArmedForTesting)
         #expect(attempts == 2)
         #expect(postedFlags == [expectedFlags, expectedFlags])
     }
 
     @Test func `computer actions execute in FIFO order without overlap`() async throws {
         let probe = ActionProbe()
-        let queue = ComputerActionExecutionQueue(onLifecycleRelease: { true })
+        let queue = ComputerActionExecutionQueue(onInputRelease: { _ in true })
         let firstParams = OpenClawComputerActParams(action: .leftClick, x: 1, y: 0, refWidth: 1280)
         let secondParams = OpenClawComputerActParams(action: .leftClick, x: 2, y: 0, refWidth: 1280)
 
@@ -431,9 +591,79 @@ struct ComputerActionServiceTests {
         #expect(probe.maximumActiveActionCount == 1)
     }
 
+    @Test func `window authority rejects a result after lifecycle revocation`() async {
+        let service = ComputerWindowActionExecutor()
+        var checks = 0
+        let outcomeError: Error?
+        do {
+            _ = try await service.perform(
+                OpenClawComputerActParams(action: .getCursorPosition),
+                lifecycleGeneration: 0,
+                checkExecutionAllowed: {
+                    checks += 1
+                    if checks > 1 {
+                        throw ComputerActionService.ComputerActionError.lifecycleChanged
+                    }
+                })
+            outcomeError = nil
+        } catch {
+            outcomeError = error
+        }
+
+        #expect(self.isLifecycleChanged(outcomeError))
+        #expect(checks == 2)
+    }
+
+    @Test func `execution authority revalidates after awaited preparation`() async {
+        let started = AsyncSignal()
+        let resume = AsyncSignal()
+        let releaseProbe = LifecycleReleaseProbe(allowed: true)
+        let authority = ComputerActionExecutionAuthority {
+            guard releaseProbe.allowed else {
+                throw ComputerActionService.ComputerActionError.lifecycleChanged
+            }
+        }
+        let operation = Task { @MainActor in
+            try await authority.run {
+                await started.signal()
+                await resume.wait()
+                return true
+            }
+        }
+        await started.wait()
+        releaseProbe.allowed = false
+        await resume.signal()
+
+        let outcomeError: Error?
+        do {
+            _ = try await operation.value
+            outcomeError = nil
+        } catch {
+            outcomeError = error
+        }
+        #expect(self.isLifecycleChanged(outcomeError))
+    }
+
+    @Test func `window executor rejects foreground accessibility-only actions`() async {
+        let service = ComputerWindowActionExecutor()
+        for action in [OpenClawComputerAction.setValue, .invokeMenu] {
+            let outcomeError: Error?
+            do {
+                _ = try await service.perform(
+                    OpenClawComputerActParams(action: action, deliveryMode: .foreground),
+                    lifecycleGeneration: 0,
+                    checkExecutionAllowed: {})
+                outcomeError = nil
+            } catch {
+                outcomeError = error
+            }
+            #expect(self.unsupportedAction(outcomeError) == action)
+        }
+    }
+
     @Test func `cancelled queued action never executes`() async throws {
         let probe = ActionProbe()
-        let queue = ComputerActionExecutionQueue(onLifecycleRelease: { true })
+        let queue = ComputerActionExecutionQueue(onInputRelease: { _ in true })
         let firstParams = OpenClawComputerActParams(action: .leftClick, x: 1, y: 0, refWidth: 1280)
         let cancelledParams = OpenClawComputerActParams(action: .leftClick, x: 2, y: 0, refWidth: 1280)
 
@@ -467,7 +697,7 @@ struct ComputerActionServiceTests {
     @Test func `cancelled active action releases held input before it settles`() async {
         let probe = ActionProbe()
         let releaseProbe = LifecycleReleaseProbe(allowed: true)
-        let queue = ComputerActionExecutionQueue(onLifecycleRelease: releaseProbe.attempt)
+        let queue = ComputerActionExecutionQueue(onInputRelease: releaseProbe.attempt)
         let params = OpenClawComputerActParams(action: .leftMouseDown, x: 1, y: 0, refWidth: 1280)
         let action = Task { @MainActor in
             try await queue.perform(params, lifecycleGeneration: 0, operation: probe.perform)
@@ -488,7 +718,7 @@ struct ComputerActionServiceTests {
         let cancellationHop = CancellationHopProbe()
         var releaseAttempts = 0
         let queue = ComputerActionExecutionQueue(
-            onLifecycleRelease: {
+            onInputRelease: { _ in
                 releaseAttempts += 1
                 return releaseAttempts >= 2
             },
@@ -502,7 +732,7 @@ struct ComputerActionServiceTests {
         let action = Task { @MainActor in
             try await queue.perform(params, lifecycleGeneration: 0) { _, _ in
                 taskBox.task?.cancel()
-                return OpenClawComputerActResult(ok: true, cursorX: 1, cursorY: 0)
+                return OpenClawComputerActResult(ok: true)
             }
         }
         taskBox.task = action
@@ -525,7 +755,8 @@ struct ComputerActionServiceTests {
 
     @Test func `typing posts exactly one event pair per Swift grapheme`() async throws {
         var posted: [Character] = []
-        let service = ComputerActionService(textGraphemePoster: { posted.append($0) })
+        let service = ComputerActionService(
+            screen: ComputerScreenActionExecutor(textGraphemePoster: { posted.append($0) }))
         let text = "A👨‍👩‍👧‍👦e\u{301}\n\t"
 
         _ = try await service.typeTextForTesting(text)
@@ -537,12 +768,13 @@ struct ComputerActionServiceTests {
         let firstPosted = AsyncSignal()
         let resumePoster = AsyncSignal()
         var posted: [Character] = []
-        let service = ComputerActionService(textGraphemePoster: { grapheme in
-            posted.append(grapheme)
-            guard posted.count == 1 else { return }
-            await firstPosted.signal()
-            await resumePoster.wait()
-        })
+        let service = ComputerActionService(screen: ComputerScreenActionExecutor(
+            textGraphemePoster: { grapheme in
+                posted.append(grapheme)
+                guard posted.count == 1 else { return }
+                await firstPosted.signal()
+                await resumePoster.wait()
+            }))
         let action = Task { @MainActor in
             try await service.typeTextForTesting("A👨‍👩‍👧‍👦B")
         }
@@ -566,12 +798,13 @@ struct ComputerActionServiceTests {
         let firstPosted = AsyncSignal()
         let resumePoster = AsyncSignal()
         var posted: [Character] = []
-        let service = ComputerActionService(textGraphemePoster: { grapheme in
-            posted.append(grapheme)
-            guard posted.count == 1 else { return }
-            await firstPosted.signal()
-            await resumePoster.wait()
-        })
+        let service = ComputerActionService(screen: ComputerScreenActionExecutor(
+            textGraphemePoster: { grapheme in
+                posted.append(grapheme)
+                guard posted.count == 1 else { return }
+                await firstPosted.signal()
+                await resumePoster.wait()
+            }))
         let action = Task { @MainActor in
             try await service.typeTextForTesting("A👨‍👩‍👧‍👦B")
         }
@@ -600,7 +833,7 @@ struct ComputerActionServiceTests {
     @Test func `new lifecycle generation cancels old work before fresh action`() async throws {
         let probe = ActionProbe()
         let releaseProbe = LifecycleReleaseProbe(allowed: true)
-        let queue = ComputerActionExecutionQueue(onLifecycleRelease: releaseProbe.attempt)
+        let queue = ComputerActionExecutionQueue(onInputRelease: releaseProbe.attempt)
         let oldParams = OpenClawComputerActParams(action: .leftClick, x: 1, y: 0, refWidth: 1280)
         let freshParams = OpenClawComputerActParams(action: .leftClick, x: 2, y: 0, refWidth: 1280)
 
@@ -649,7 +882,7 @@ struct ComputerActionServiceTests {
     @Test func `failed lifecycle mouse up blocks newer generation until retry succeeds`() async throws {
         let probe = ActionProbe()
         let releaseProbe = LifecycleReleaseProbe(allowed: false)
-        let queue = ComputerActionExecutionQueue(onLifecycleRelease: releaseProbe.attempt)
+        let queue = ComputerActionExecutionQueue(onInputRelease: releaseProbe.attempt)
         let params = OpenClawComputerActParams(action: .type, x: 2, y: 0, refWidth: 1280)
 
         let action = Task { @MainActor in
@@ -673,7 +906,7 @@ struct ComputerActionServiceTests {
     @Test func `raw click preconstructs up before posting down`() throws {
         var factoryCalls = 0
         var postCount = 0
-        let service = ComputerActionService(
+        let screen = ComputerScreenActionExecutor(
             mouseEventFactory: { type, point, button, _, _ in
                 factoryCalls += 1
                 if factoryCalls == 2 {
@@ -690,7 +923,7 @@ struct ComputerActionServiceTests {
             mouseEventPoster: { _ in postCount += 1 })
 
         #expect(throws: SyntheticPostError.self) {
-            try service.rawClickForTesting()
+            try screen.rawClickForTesting()
         }
         #expect(factoryCalls == 2)
         #expect(postCount == 0)
@@ -700,7 +933,7 @@ struct ComputerActionServiceTests {
         var eventTypes: [ObjectIdentifier: CGEventType] = [:]
         var postedTypes: [CGEventType] = []
         var failedMove = false
-        let service = ComputerActionService(
+        let screen = ComputerScreenActionExecutor(
             mouseEventFactory: { type, point, button, _, _ in
                 guard let event = CGEvent(
                     mouseEventSource: nil,
@@ -721,7 +954,7 @@ struct ComputerActionServiceTests {
             })
 
         do {
-            try await service.rawDragForTesting()
+            try await screen.rawDragForTesting()
             Issue.record("raw drag unexpectedly succeeded")
         } catch is SyntheticPostError {
             // Expected injected move failure.
@@ -737,7 +970,7 @@ struct ComputerActionServiceTests {
     @Test func `raw drag posts release when cancelled between moves`() async {
         var eventTypes: [ObjectIdentifier: CGEventType] = [:]
         var postedTypes: [CGEventType] = []
-        let service = ComputerActionService(
+        let screen = ComputerScreenActionExecutor(
             mouseEventFactory: { type, point, button, _, _ in
                 guard let event = CGEvent(
                     mouseEventSource: nil,
@@ -755,7 +988,7 @@ struct ComputerActionServiceTests {
             })
 
         let drag = Task { @MainActor in
-            try await service.rawDragForTesting()
+            try await screen.rawDragForTesting()
         }
         while !postedTypes.contains(.leftMouseDragged) {
             await Task.yield()

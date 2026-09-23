@@ -6,9 +6,9 @@ read_when:
 title: "Zalo personal plugin"
 ---
 
-Zalo Personal support for OpenClaw via a plugin that uses native `zca-js` to
-automate a normal Zalo user account. No external `zca`/`openzca` CLI binary is
-required.
+The zalouser plugin adds unofficial Zalo Personal support to OpenClaw. It uses
+native `zca-js` to automate a normal Zalo user account. No external
+`zca`/`openzca` CLI binary is required.
 
 <Warning>
 Unofficial automation may lead to account suspension or ban. Use at your own risk.
@@ -23,7 +23,8 @@ bundled Zalo Bot/webhook integration - see [Zalo](/channels/zalo).
 ## Where it runs
 
 This plugin runs **inside the Gateway process**. For a remote Gateway,
-install/configure it on that host, then restart the Gateway.
+install/configure it on that host. Installation applies to a running Gateway
+automatically; if it is offline, start it after configuration.
 
 ## Install
 
@@ -34,18 +35,18 @@ openclaw plugins install @openclaw/zalouser
 ```
 
 Use the bare package to follow the current official release tag; pin an exact
-version only when you need a reproducible install. Restart the Gateway
-afterwards.
+version only when you need a reproducible install. Check the installation's
+application result; see [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ### From a local folder (dev)
 
 ```bash
-PLUGIN_SRC=./path/to/local/zalouser-plugin
-openclaw plugins install "$PLUGIN_SRC"
-cd "$PLUGIN_SRC" && pnpm install
+cd ./path/to/local/zalouser-plugin
+pnpm install
+openclaw plugins install --link .
 ```
 
-Restart the Gateway afterwards.
+After subsequent source or manifest edits, run `openclaw plugins reload zalouser`.
 
 ## Config
 

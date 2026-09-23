@@ -1,7 +1,11 @@
 import { buildSandboxHostPath } from "../agents/sandbox-host.js";
 import type { BoardWidgetHtmlViewMetadata } from "../boards/board-store.js";
+import { WIDGET_CDN_ORIGINS } from "../plugin-sdk/widget-html.js";
+import { WIDGET_MEDIA_SOURCES } from "../shared/widget-media.js";
 
-type BoardWidgetSandboxMetadata = Pick<BoardWidgetHtmlViewMetadata, "declared" | "grantState">;
+type BoardWidgetSandboxMetadata = Pick<BoardWidgetHtmlViewMetadata, "declared" | "grantState"> & {
+  resourceOrigins?: readonly string[];
+};
 
 function grantedConnectOrigins(document: BoardWidgetSandboxMetadata): string[] | undefined {
   if (document.grantState !== "granted") {
@@ -17,6 +21,8 @@ export function buildBoardWidgetSandboxPath(document: BoardWidgetSandboxMetadata
     // Best-effort hardening for the documented WebRTC residual; the DOM guard
     // reduces fresh descendant realms but is not an authorization boundary.
     blockDescendantFrames: true,
+    mediaDomains: [...WIDGET_MEDIA_SOURCES, ...(document.resourceOrigins ?? [])],
+    resourceDomains: [...new Set([...WIDGET_CDN_ORIGINS, ...(document.resourceOrigins ?? [])])],
     ...(connectDomains ? { connectDomains } : {}),
   });
 }
@@ -26,11 +32,15 @@ export function buildBoardWidgetContentSecurityPolicy(
   document: BoardWidgetSandboxMetadata,
 ): string {
   const connectSources = grantedConnectOrigins(document)?.join(" ") ?? "'none'";
+  const resourceSources = document.resourceOrigins?.join(" ") ?? "";
+  const cdnSources = WIDGET_CDN_ORIGINS.join(" ");
   return [
     "default-src 'none'",
-    "script-src 'unsafe-inline'",
-    "style-src 'unsafe-inline'",
-    "img-src data:",
+    `script-src 'unsafe-inline' ${cdnSources} ${resourceSources}`.trim(),
+    `style-src 'unsafe-inline' ${cdnSources}`,
+    `font-src data: ${cdnSources}`,
+    `img-src data: ${resourceSources}`.trim(),
+    `media-src data: ${WIDGET_MEDIA_SOURCES.join(" ")} ${resourceSources}`.trim(),
     `connect-src ${connectSources}`,
     "webrtc 'block'",
     "base-uri 'none'",

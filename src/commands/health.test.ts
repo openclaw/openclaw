@@ -1,7 +1,16 @@
 // Health command tests cover gateway health probes, JSON output, and status formatting.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
+  waitForGatewayDiagnosticReadiness: vi.fn(async () => undefined),
+}));
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { waitForGatewayDiagnosticReadiness } from "../cli/daemon-cli/diagnostic-readiness.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { ExitError } from "../runtime.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
   buildRateLimitedHealthDiagnostic,
@@ -14,15 +23,12 @@ import type { HealthSummary } from "./health.js";
 import {
   formatConfigReloadHealthLine,
   formatContextEngineHealthLine,
-  formatDeliveryQueueHealthLine,
   healthCommand,
+  healthCommandNonExiting,
 } from "./health.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
 
 const defaultSessions: HealthSummary["sessions"] = {
   path: "/tmp/sessions.json",
@@ -44,12 +50,14 @@ const createMainAgentSummary = (sessions = defaultSessions) => ({
   sessions,
 });
 
-const createHealthSummary = (params: {
-  channels: HealthSummary["channels"];
-  channelOrder: string[];
-  channelLabels: HealthSummary["channelLabels"];
-  sessions?: HealthSummary["sessions"];
-}): HealthSummary => {
+const createHealthSummary = (
+  params: {
+    channels: HealthSummary["channels"];
+    channelOrder: string[];
+    channelLabels: HealthSummary["channelLabels"];
+    sessions?: HealthSummary["sessions"];
+  } = { channels: {}, channelOrder: [], channelLabels: {} },
+): HealthSummary => {
   const sessions = params.sessions ?? defaultSessions;
   return {
     ok: true,
@@ -66,6 +74,9 @@ const createHealthSummary = (params: {
 };
 
 const callGatewayMock = vi.fn();
+const listReadOnlyChannelPluginsForConfigMock = vi.fn(
+  (_config: unknown, _options?: unknown): unknown[] => [],
+);
 const isGatewayCredentialsRequiredErrorMock = vi.fn((_value: unknown) => false);
 const isGatewaySecretRefUnavailableErrorMock = vi.fn((_value: unknown) => false);
 const TEST_GATEWAY_URL = "ws://127.0.0.1:18789";
@@ -111,7 +122,8 @@ vi.mock("../cli/daemon-cli/probe.js", () => ({
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: () => [],
+  listReadOnlyChannelPluginsForConfig: (config: unknown, options?: unknown) =>
+    listReadOnlyChannelPluginsForConfigMock(config, options),
 }));
 
 function requireFirstRuntimeLog(): string {
@@ -120,10 +132,10 @@ function requireFirstRuntimeLog(): string {
     throw new Error("expected health command log output");
   }
   const [message] = call;
-  if (message === undefined) {
+  if (typeof message !== "string") {
     throw new Error("expected health command log output");
   }
-  return String(message);
+  return message;
 }
 
 function requireFirstGatewayRequest(): Record<string, unknown> {
@@ -140,6 +152,7 @@ function requireFirstGatewayRequest(): Record<string, unknown> {
 
 describe("healthCommand", () => {
   beforeEach(() => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
     vi.clearAllMocks();
     buildGatewayConnectionDetailsMock.mockReturnValue({
       message: TEST_GATEWAY_MESSAGE,
@@ -164,7 +177,7 @@ describe("healthCommand", () => {
     probeGatewayStatusMock.mockReset();
   });
 
-  it("outputs JSON from gateway", async () => {
+  it("preserves plugin health in JSON while surfacing activated failures in text", async () => {
     const agentSessions = {
       path: "/tmp/sessions.json",
       count: 1,
@@ -188,9 +201,27 @@ describe("healthCommand", () => {
       },
       sessions: agentSessions,
     });
+    snapshot.plugins = {
+      loaded: ["calendar"],
+      errors: [
+        {
+          id: "calendar",
+          origin: "workspace",
+          activated: true,
+          failurePhase: "service",
+          error: "service scheduler: address already in use",
+        },
+        {
+          id: "inactive",
+          origin: "workspace",
+          activated: false,
+          error: "inactive plugin load failed",
+        },
+      ],
+    };
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
-    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
 
     expect(runtime.exit).not.toHaveBeenCalled();
     const parsed = JSON.parse(requireFirstRuntimeLog()) as HealthSummary;
@@ -198,25 +229,215 @@ describe("healthCommand", () => {
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
+    expect(parsed.plugins).toEqual(snapshot.plugins);
+
+    runtime.log.mockClear();
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).toContain(`Session store (main): ${parsed.sessions.path}`);
+    expect(output).toContain(
+      "Plugin calendar: failed - service scheduler: address already in use; run openclaw doctor",
+    );
+    expect(output).not.toContain("inactive plugin load failed");
   });
 
+  it.each([
+    { everyMs: 65_001, expected: "1m 5s 1ms" },
+    { everyMs: 604_800_001, expected: "1w 1ms" },
+    { everyMs: 691_200_000, expected: "1w 1d" },
+  ])(
+    "preserves configured duration precision in heartbeat: $everyMs ms",
+    async ({ everyMs, expected }) => {
+      const snapshot = createHealthSummary();
+      const agent = createMainAgentSummary();
+      agent.heartbeat = { ...agent.heartbeat, every: `${everyMs}ms`, everyMs };
+      snapshot.agents = [agent];
+      snapshot.heartbeatSeconds = Math.round(everyMs / 1_000);
+      callGatewayMock.mockResolvedValueOnce(snapshot);
+
+      await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime);
+
+      const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+      expect(output).toContain(`Heartbeat interval: ${expected} (main)`);
+    },
+  );
+
   it("prints the gateway probe duration in text output", async () => {
-    const snapshot = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const snapshot = createHealthSummary();
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
-    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime);
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
     expect(output).toContain("Gateway probe duration: 5ms");
   });
 
+  it.each([
+    { configured: true, available: false },
+    { configured: undefined, available: false },
+    { configured: true, available: true },
+  ])(
+    "keeps local diagnostic metadata separate from identity logging (configured=$configured, available=$available)",
+    async ({ configured, available }) => {
+      const account = {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        token: "resolved-token",
+      };
+      const resolveAccount = vi.fn(() => account);
+      const logSelfId = vi.fn();
+      listReadOnlyChannelPluginsForConfigMock.mockReturnValueOnce([
+        {
+          id: "diagnostic-fixture",
+          meta: { label: "Diagnostic" },
+          config: {
+            listAccountIds: () => ["default"],
+            inspectAccount: () => ({
+              accountId: "default",
+              enabled: true,
+              configured,
+              tokenSource: "secretref",
+              tokenStatus: available ? "available" : "configured_unavailable",
+            }),
+            resolveAccount,
+          },
+          status: { logSelfId },
+        },
+      ]);
+      callGatewayMock.mockResolvedValueOnce(
+        createHealthSummary({
+          channels: { "diagnostic-fixture": { accountId: "default", configured, linked: true } },
+          channelOrder: ["diagnostic-fixture"],
+          channelLabels: { "diagnostic-fixture": "Diagnostic" },
+        }),
+      );
+
+      await healthCommand({ config: { diagnostics: { flags: ["health"] } } }, runtime);
+
+      const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+      expect(output).toContain(`configured=${configured ?? "unknown"} tokenSource=secretref`);
+      if (available) {
+        expect(logSelfId).toHaveBeenCalledWith(expect.objectContaining({ account }));
+      } else {
+        expect(logSelfId).not.toHaveBeenCalled();
+        expect(resolveAccount).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("surfaces unhealthy secondary accounts without an explicit account binding", async () => {
+    const primary = {
+      accountId: "main",
+      enabled: true,
+      configured: true,
+      linked: true,
+      healthState: "healthy",
+      probe: { ok: true, elapsedMs: 12 },
+    };
+    const snapshot = createHealthSummary({
+      channels: {
+        matrix: {
+          ...primary,
+          accounts: {
+            main: primary,
+            alerts: {
+              accountId: "alerts",
+              enabled: true,
+              configured: true,
+              linked: true,
+              healthState: "blocked",
+            },
+          },
+        },
+      },
+      channelOrder: ["matrix"],
+      channelLabels: { matrix: "Matrix" },
+    });
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+    listReadOnlyChannelPluginsForConfigMock.mockReturnValueOnce([
+      { id: "matrix", config: { listAccountIds: () => ["main", "alerts"] } },
+    ]);
+
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).toContain("Matrix: blocked");
+    expect(output).not.toContain("Matrix: ok");
+  });
+
+  it.each(["remote", "empty", "missing"] as const)(
+    "shows each explicit fleet owner's sessions with %s agent summaries",
+    async (agentSummaries) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const storePath = state.statePath("shared.sqlite");
+        const updatedAt = Date.now();
+        for (const [agentId, key] of [
+          ["alpha", "first"],
+          ["alpha", "second"],
+          ["beta", "only"],
+        ] as const) {
+          await replaceSessionEntry(
+            { agentId, storePath, sessionKey: `agent:${agentId}:${key}` },
+            { sessionId: `${agentId}-${key}`, updatedAt },
+          );
+        }
+        const agent = (agentId: string, keys: string[]) => ({
+          ...createMainAgentSummary({
+            path: storePath,
+            count: keys.length,
+            recent: keys.map((key) => ({
+              key: `agent:${agentId}:${key}`,
+              updatedAt,
+              age: 0,
+            })),
+          }),
+          agentId,
+          isDefault: false,
+        });
+        const { agents: _agents, ...snapshot } = createHealthSummary();
+        callGatewayMock.mockResolvedValueOnce({
+          ...snapshot,
+          defaultAgentId: undefined,
+          ...(agentSummaries === "missing"
+            ? {}
+            : {
+                agents:
+                  agentSummaries === "empty"
+                    ? []
+                    : [agent("alpha", ["first", "second"]), agent("beta", ["only"])],
+              }),
+        });
+
+        await healthCommand(
+          {
+            json: false,
+            timeoutMs: 1_000,
+            config: {
+              session: { store: storePath },
+              agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+            },
+          },
+          runtime,
+        );
+
+        const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+        expect(output).toContain(
+          `Session store (alpha): ${storePath} (2 entries)\n- agent:alpha:first`,
+        );
+        expect(output).toContain(
+          `Session store (beta): ${storePath} (1 entries)\n- agent:beta:only`,
+        );
+        expect(output).not.toContain("(default)");
+      });
+    },
+  );
+
   it("prints persistent event-loop degradation duration in text output", async () => {
     const snapshot = {
-      ...createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} }),
+      ...createHealthSummary(),
       eventLoop: {
         degraded: true,
         degradedSinceMs: 180_000,
@@ -230,7 +451,7 @@ describe("healthCommand", () => {
     };
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
-    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime);
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
     expect(output).toContain("Gateway event loop: degraded for 3m");
@@ -238,32 +459,24 @@ describe("healthCommand", () => {
   });
 
   it("omits the probe duration for legacy gateway snapshots", async () => {
-    const { durationMs, ...legacySnapshot } = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const { durationMs, ...legacySnapshot } = createHealthSummary();
     expect(durationMs).toBe(5);
     callGatewayMock.mockResolvedValueOnce(legacySnapshot);
 
-    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime);
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
     expect(output).not.toContain("Gateway probe duration:");
   });
 
   it("prints the delivery queue warning line when the gateway reports dead-letters", async () => {
-    const snapshot = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const snapshot = createHealthSummary();
     snapshot.deliveryQueues = {
       failed: [{ queueName: "outbound", count: 2, oldestFailedAt: Date.now() - 7_200_000 }],
     };
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
-    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime);
 
     expect(runtime.exit).not.toHaveBeenCalled();
     const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
@@ -273,106 +486,112 @@ describe("healthCommand", () => {
   });
 
   it("surfaces a disabled config hot-reload watcher in JSON output", async () => {
-    const snapshot = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const snapshot = createHealthSummary();
     snapshot.configReload = { hotReloadStatus: "disabled" };
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
-    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
 
     const parsed = JSON.parse(requireFirstRuntimeLog()) as HealthSummary;
     expect(parsed.configReload).toEqual({ hotReloadStatus: "disabled" });
   });
 
   it("prints the config hot-reload disabled line in text output", async () => {
-    const snapshot = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const snapshot = createHealthSummary();
     snapshot.configReload = { hotReloadStatus: "disabled" };
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
-    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
+    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime);
 
     const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
     expect(output).toContain("Config hot reload: disabled");
   });
 
   it("omits the config hot-reload line in text output when the reloader is active", async () => {
-    const snapshot = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const snapshot = createHealthSummary();
     snapshot.configReload = { hotReloadStatus: "active" };
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
-    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
+    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime);
 
     const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
     expect(output).not.toContain("Config hot reload");
   });
 
-  it("prints the rich text summary and verbose gateway details", async () => {
-    const recent = [
-      { key: "main", updatedAt: Date.now() - 60_000, age: 60_000 },
-      { key: "foo", updatedAt: null, age: null },
-    ];
-    const snapshot = createHealthSummary({
-      channels: {
-        whatsapp: { accountId: "default", linked: true, authAgeMs: 5 * 60_000 },
-        telegram: {
-          accountId: "default",
-          configured: true,
-          probe: {
-            ok: true,
-            elapsedMs: 7,
-            bot: { username: "bot" },
-            webhook: { url: "https://example.com/h" },
+  it.each(
+    [0, -600_000, 600_000].flatMap((clockSkewMs) =>
+      ["agent", "top-level"].map((surface) => ({ clockSkewMs, surface })),
+    ),
+  )(
+    "prints $surface gateway ages with $clockSkewMs ms client clock skew",
+    async ({ clockSkewMs, surface }) => {
+      const gatewayNow = Date.now();
+      const recent = [
+        { key: "main", updatedAt: gatewayNow - 60_000, age: 60_000 },
+        { key: "fresh", updatedAt: gatewayNow, age: 0 },
+        { key: "foo", updatedAt: null, age: null },
+      ];
+      const snapshot = createHealthSummary({
+        channels: {
+          whatsapp: { accountId: "default", linked: true, authAgeMs: 5 * 60_000 },
+          telegram: {
+            accountId: "default",
+            configured: true,
+            probe: {
+              ok: true,
+              elapsedMs: 7,
+              bot: { username: "bot" },
+              webhook: { url: "https://example.com/h" },
+            },
           },
+          discord: { accountId: "default", configured: false },
         },
-        discord: { accountId: "default", configured: false },
-      },
-      channelOrder: ["whatsapp", "telegram", "discord"],
-      channelLabels: {
-        whatsapp: "WhatsApp",
-        telegram: "Telegram",
-        discord: "Discord",
-      },
-      sessions: {
-        path: "/tmp/sessions.json",
-        count: 2,
-        recent,
-      },
-    });
-    callGatewayMock.mockResolvedValueOnce(snapshot);
+        channelOrder: ["whatsapp", "telegram", "discord"],
+        channelLabels: {
+          whatsapp: "WhatsApp",
+          telegram: "Telegram",
+          discord: "Discord",
+        },
+        sessions: {
+          path: "/tmp/sessions.json",
+          count: recent.length,
+          recent,
+        },
+      });
+      if (surface === "top-level") {
+        snapshot.agents = [];
+      }
+      callGatewayMock.mockResolvedValueOnce(snapshot);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(gatewayNow + clockSkewMs);
+      try {
+        await healthCommand(
+          {
+            json: false,
+            verbose: true,
+            timeoutMs: 1000,
+            config: { agents: { ownership: "explicit", entries: {} } },
+          },
+          runtime,
+        );
+      } finally {
+        clock.mockRestore();
+      }
 
-    await healthCommand(
-      { json: false, verbose: true, timeoutMs: 1000, config: {} },
-      runtime as never,
-    );
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-    const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
-    expect(output).toMatch(/WhatsApp: linked/i);
-    expect(runtime.log.mock.calls.slice(0, 3)).toEqual([
-      ["Gateway connection:"],
-      ["  Gateway mode: local"],
-      [`  Gateway target: ${TEST_GATEWAY_URL}`],
-    ]);
-    expect(buildGatewayConnectionDetailsMock).toHaveBeenCalled();
-  });
+      expect(runtime.exit).not.toHaveBeenCalled();
+      const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
+      expect(output).toContain("- main (1m ago)\n- fresh (0m ago)\n- foo (no activity)");
+      expect(output).toMatch(/WhatsApp: linked/i);
+      expect(runtime.log.mock.calls.slice(0, 3)).toEqual([
+        ["Gateway connection:"],
+        ["  Gateway mode: local"],
+        [`  Gateway target: ${TEST_GATEWAY_URL}`],
+      ]);
+      expect(buildGatewayConnectionDetailsMock).toHaveBeenCalled();
+    },
+  );
 
   it("passes explicit gateway credentials through to the gateway call", async () => {
-    const snapshot = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const snapshot = createHealthSummary();
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
     await healthCommand(
@@ -382,8 +601,9 @@ describe("healthCommand", () => {
         config: {},
         token: "setup-token",
         password: "setup-password",
+        ignoreEnvUrlOverride: true,
       },
-      runtime as never,
+      runtime,
     );
 
     expect(callGatewayMock).toHaveBeenCalledOnce();
@@ -391,6 +611,8 @@ describe("healthCommand", () => {
     expect(gatewayRequest.method).toBe("health");
     expect(gatewayRequest.token).toBe("setup-token");
     expect(gatewayRequest.password).toBe("setup-password");
+    expect(gatewayRequest.ignoreEnvUrlOverride).toBe(true);
+    expect(gatewayRequest.sharedStateMode).toBe("read-only");
   });
 
   it("outputs JSON for gateway transport failures in JSON mode", async () => {
@@ -413,7 +635,7 @@ describe("healthCommand", () => {
     callGatewayMock.mockRejectedValueOnce(error);
     formatGatewayTransportErrorJsonMock.mockReturnValueOnce(payload);
 
-    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
 
     expect(formatGatewayTransportErrorJsonMock).toHaveBeenCalledWith(error);
     expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -442,7 +664,7 @@ describe("healthCommand", () => {
     callGatewayMock.mockRejectedValueOnce(error);
     formatGatewayClientRequestErrorJsonMock.mockReturnValueOnce(payload);
 
-    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
 
     expect(formatGatewayAuthErrorJsonMock).toHaveBeenCalledWith(error);
     expect(formatGatewayClientRequestErrorJsonMock).toHaveBeenCalledWith(error);
@@ -461,9 +683,9 @@ describe("healthCommand", () => {
     });
     callGatewayMock.mockRejectedValueOnce(error);
 
-    await expect(
-      healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never),
-    ).rejects.toBe(error);
+    await expect(healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime)).rejects.toBe(
+      error,
+    );
 
     expect(formatGatewayAuthErrorJsonMock).not.toHaveBeenCalled();
     expect(formatGatewayClientRequestErrorJsonMock).not.toHaveBeenCalled();
@@ -482,9 +704,10 @@ describe("healthCommand", () => {
         ok: false,
         kind: "connect",
         error: TEST_AUTH_CLOSE_ERROR,
+        gatewayReached: true,
       });
 
-      await healthCommand({ json, timeoutMs: 5000, config: {} }, runtime as never);
+      await healthCommand({ json, timeoutMs: 5000, config: {} }, runtime);
 
       expect(probeGatewayStatusMock).toHaveBeenCalledWith({
         url: TEST_GATEWAY_URL,
@@ -528,9 +751,10 @@ describe("healthCommand", () => {
         retryable: true,
         retryAfterMs: 60_000,
       });
+      retainGatewayResponsePayload(error, undefined);
       callGatewayMock.mockRejectedValueOnce(error);
 
-      await healthCommand({ json, timeoutMs: 5000, config: {} }, runtime as never);
+      await healthCommand({ json, timeoutMs: 5000, config: {} }, runtime);
 
       expect(isGatewayCredentialsRequiredErrorMock).not.toHaveBeenCalled();
       expect(probeGatewayStatusMock).not.toHaveBeenCalled();
@@ -562,9 +786,10 @@ describe("healthCommand", () => {
         kind: "connect",
         error: "connect failed",
         connectFailure: { kind: "rate-limited", detailCode: "AUTH_RATE_LIMITED" },
+        gatewayReached: true,
       });
 
-      await healthCommand({ json, timeoutMs: 5000, config: {} }, runtime as never);
+      await healthCommand({ json, timeoutMs: 5000, config: {} }, runtime);
 
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(runtime.log).toHaveBeenCalledTimes(expectedLogs);
@@ -581,6 +806,83 @@ describe("healthCommand", () => {
       expect(output).not.toContain("devices rotate");
     },
   );
+
+  it("does not report reachable from a locally constructed rate-limit error", async () => {
+    const error = new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message: "unauthorized: too many failed authentication attempts (retry later)",
+      details: { code: "AUTH_RATE_LIMITED" },
+    });
+    callGatewayMock.mockRejectedValueOnce(error);
+
+    await expect(healthCommand({ config: {} }, runtime)).rejects.toBe(error);
+
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(probeGatewayStatusMock).not.toHaveBeenCalled();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { elapsedMs: 4000, skipReadiness: false },
+    { elapsedMs: 5000, skipReadiness: false },
+    { elapsedMs: 4000, skipReadiness: true },
+    { elapsedMs: 5000, skipReadiness: true },
+  ])(
+    "charges target/auth preparation and readiness to one budget ($elapsedMs, $skipReadiness)",
+    async ({ elapsedMs, skipReadiness }) => {
+      vi.mocked(waitForGatewayDiagnosticReadiness).mockImplementationOnce(async () => {
+        vi.spyOn(performance, "now").mockReturnValue(elapsedMs);
+        return skipReadiness
+          ? undefined
+          : {
+              healthy: true,
+              waitOutcome: "healthy",
+              elapsedMs: 1000,
+              runtime: { status: "running", pid: 42 },
+              portUsage: { port: 18789, status: "busy", listeners: [{ pid: 42 }], hints: [] },
+              staleGatewayPids: [],
+            };
+      });
+      if (elapsedMs === 5000) {
+        await expect(healthCommand({ timeoutMs: 5000, config: {} }, runtime)).rejects.toThrow(
+          "Gateway diagnostic budget exhausted",
+        );
+        expect(callGatewayMock).not.toHaveBeenCalled();
+      } else {
+        callGatewayMock.mockResolvedValueOnce(createHealthSummary());
+        await healthCommand({ timeoutMs: 5000, config: {} }, runtime);
+        expect(callGatewayMock).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
+      }
+    },
+  );
+
+  it("keeps readiness exhaustion machine-readable without a second network probe", async () => {
+    vi.mocked(waitForGatewayDiagnosticReadiness).mockResolvedValueOnce({
+      healthy: false,
+      waitOutcome: "timeout",
+      elapsedMs: 5000,
+      probeError: "connect ECONNREFUSED",
+      runtime: { status: "stopped" },
+      portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+      staleGatewayPids: [],
+    });
+    const { formatGatewayTransportErrorJson } =
+      await vi.importActual<typeof import("../gateway/call.js")>("../gateway/call.js");
+    formatGatewayTransportErrorJsonMock.mockImplementation(formatGatewayTransportErrorJson);
+
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
+
+    expect(JSON.parse(requireFirstRuntimeLog())).toMatchObject({
+      ok: false,
+      error: { type: "gateway_transport_error", kind: "timeout", timeoutMs: 5000 },
+      gateway: { url: TEST_GATEWAY_URL },
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
 
   it("keeps credential failures machine-readable when the gateway is unreachable", async () => {
     const error = new Error("gateway health requires credentials");
@@ -600,7 +902,7 @@ describe("healthCommand", () => {
     });
     formatGatewayAuthErrorJsonMock.mockReturnValueOnce(payload);
 
-    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
 
     expect(formatGatewayAuthErrorJsonMock).toHaveBeenCalledWith(error);
     expect(formatGatewayTransportErrorJsonMock).not.toHaveBeenCalled();
@@ -620,7 +922,7 @@ describe("healthCommand", () => {
     callGatewayMock.mockRejectedValueOnce(error);
     formatGatewayAuthErrorJsonMock.mockReturnValueOnce(payload);
 
-    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
 
     expect(probeGatewayStatusMock).not.toHaveBeenCalled();
     expect(formatGatewayAuthErrorJsonMock).toHaveBeenCalledWith(error);
@@ -637,11 +939,22 @@ describe("healthCommand", () => {
       ok: false,
       kind: "connect",
       error: TEST_AUTH_CLOSE_ERROR,
+      gatewayReached: true,
     });
 
-    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
+    await healthCommand(
+      { json: false, timeoutMs: 5000, config: {}, ignoreEnvUrlOverride: true },
+      runtime,
+    );
 
     expect(isGatewaySecretRefUnavailableErrorMock).toHaveBeenCalledWith(error);
+    expect(buildGatewayProbeConnectionDetailsMock).toHaveBeenCalledWith({
+      config: {},
+      token: undefined,
+      password: undefined,
+      ignoreEnvUrlOverride: true,
+      localPortOverride: undefined,
+    });
     expect(probeGatewayStatusMock).toHaveBeenCalledWith({
       url: TEST_GATEWAY_URL,
       token: undefined,
@@ -659,15 +972,38 @@ describe("healthCommand", () => {
     ]);
     expect(runtime.error).not.toHaveBeenCalled();
   });
+
+  it("throws ExitError from healthCommandNonExiting instead of exiting the host runtime", async () => {
+    const error = new Error("gateway.auth.password is unavailable");
+    callGatewayMock.mockRejectedValueOnce(error);
+    isGatewaySecretRefUnavailableErrorMock.mockReturnValueOnce(true);
+    probeGatewayStatusMock.mockResolvedValueOnce({
+      ok: false,
+      kind: "connect",
+      error: TEST_AUTH_CLOSE_ERROR,
+      gatewayReached: true,
+    });
+
+    await expect(
+      healthCommandNonExiting(
+        { json: false, timeoutMs: 5000, config: {}, ignoreEnvUrlOverride: true },
+        runtime,
+      ),
+    ).rejects.toBeInstanceOf(ExitError);
+
+    // The embedded wizard/doctor host keeps running: its own exit is never invoked
+    // and the diagnostic was still printed through its log sink.
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(runtime.log.mock.calls).toEqual([
+      [GATEWAY_HEALTH_REACHABLE_LINE],
+      [GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE],
+    ]);
+  });
 });
 
 describe("formatContextEngineHealthLine", () => {
   it("summarizes quarantined context engines", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const summary = createHealthSummary();
     summary.contextEngines = {
       quarantined: [
         {
@@ -686,62 +1022,9 @@ describe("formatContextEngineHealthLine", () => {
   });
 });
 
-describe("formatDeliveryQueueHealthLine", () => {
-  it("summarizes dead-lettered delivery queue entries with the oldest age", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
-    summary.deliveryQueues = {
-      failed: [
-        { queueName: "outbound", count: 3, oldestFailedAt: 90_000 },
-        { queueName: "session", count: 1 },
-      ],
-    };
-
-    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
-      "Delivery queue: warning (dead-lettered entries — outbound: 3, session: 1; oldest 2h ago)",
-    );
-  });
-
-  it("summarizes dead-lettered ingress entries per channel account", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
-    summary.deliveryQueues = {
-      failed: [],
-      ingressFailed: [
-        { channelId: "line", accountId: "default", count: 1, oldestFailedAt: 90_000 },
-        { channelId: "telegram", accountId: "ops", count: 2 },
-      ],
-    };
-
-    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
-      "Delivery queue: warning (dead-lettered entries — inbound line/default: 1, inbound telegram/ops: 2; oldest 2h ago)",
-    );
-  });
-
-  it("returns null when no dead-lettered entries are reported", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
-
-    expect(formatDeliveryQueueHealthLine(summary)).toBeNull();
-  });
-});
-
 describe("formatConfigReloadHealthLine", () => {
   it("reports a disabled config hot-reload watcher", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const summary = createHealthSummary();
     summary.configReload = { hotReloadStatus: "disabled" };
 
     expect(formatConfigReloadHealthLine(summary)).toBe(
@@ -750,22 +1033,14 @@ describe("formatConfigReloadHealthLine", () => {
   });
 
   it("stays silent while the config hot-reload watcher is active", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const summary = createHealthSummary();
     summary.configReload = { hotReloadStatus: "active" };
 
     expect(formatConfigReloadHealthLine(summary)).toBeNull();
   });
 
   it("stays silent when no config reloader is running", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const summary = createHealthSummary();
 
     expect(formatConfigReloadHealthLine(summary)).toBeNull();
   });

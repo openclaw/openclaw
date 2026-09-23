@@ -4,10 +4,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTelegramDmAllow } from "./access-groups.js";
 import { mergeTelegramAccountConfig } from "./account-config.js";
 import {
-  resolveTelegramCommandAuthorization,
   resolveTelegramGroupAllowFromContext,
   resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
+import { resolveTelegramEffectiveGroupPolicy } from "./group-access.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 
@@ -92,7 +92,6 @@ export type TelegramSupersedeAuthContext = {
   accountId: string;
   /** Bot username for @bot command targeting (from getMe / botInfo). */
   botUsername?: string;
-  /** Test seam / preloaded pairing-store ids; defaults to live pairing store. */
 };
 
 /**
@@ -112,6 +111,7 @@ export async function isTelegramSpooledUpdateSenderAuthorized(
   const dmPolicy = accountCfg.dmPolicy ?? "pairing";
   const allowFrom = accountCfg.allowFrom;
   const groupAllowFrom = accountCfg.groupAllowFrom ?? accountCfg.allowFrom;
+  const threadSpec = resolveTelegramMessageThreadSpec(facts.message);
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
     cfg: auth.cfg,
     chatId: facts.chatId,
@@ -120,7 +120,7 @@ export async function isTelegramSpooledUpdateSenderAuthorized(
     allowFrom,
     senderId: facts.senderId,
     isGroup: facts.isGroup,
-    threadSpec: resolveTelegramMessageThreadSpec(facts.message),
+    threadSpec,
     groupAllowFrom,
     resolveTelegramGroupConfig: (chatId, messageThreadId, cfg) => {
       const telegramCfg = mergeTelegramAccountConfig(cfg, auth.accountId);
@@ -130,6 +130,18 @@ export async function isTelegramSpooledUpdateSenderAuthorized(
 
   const { resolvedThreadId, storeAllowFrom, groupAllowOverride, effectiveGroupAllow } =
     groupAllowContext;
+
+  if (
+    facts.isGroup &&
+    resolveTelegramEffectiveGroupPolicy({
+      cfg: auth.cfg,
+      telegramCfg: accountCfg,
+      groupConfig: groupAllowContext.groupConfig,
+      topicConfig: groupAllowContext.topicConfig,
+    }) === "disabled"
+  ) {
+    return false;
+  }
 
   const dmAllow = await resolveTelegramDmAllow({
     cfg: auth.cfg,
@@ -141,15 +153,6 @@ export async function isTelegramSpooledUpdateSenderAuthorized(
     dmPolicy,
   });
 
-  const ownerAccess = resolveTelegramCommandAuthorization({
-    cfg: auth.cfg,
-    accountId: auth.accountId,
-    chatId: facts.chatId,
-    isGroup: facts.isGroup,
-    ...(resolvedThreadId !== undefined ? { resolvedThreadId } : {}),
-    senderId: facts.senderId,
-    ...(facts.senderUsername !== undefined ? { senderUsername: facts.senderUsername } : {}),
-  });
   const gate = await resolveTelegramCommandIngressAuthorization({
     accountId: auth.accountId,
     cfg: auth.cfg,
@@ -160,7 +163,6 @@ export async function isTelegramSpooledUpdateSenderAuthorized(
     senderId: facts.senderId,
     effectiveDmAllow: dmAllow.effectiveAllow,
     effectiveGroupAllow,
-    ownerAccess,
     eventKind: "message",
     allowTextCommands: true,
     hasControlCommand: true,

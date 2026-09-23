@@ -102,6 +102,16 @@ describe("resolveAuthProfileFailureReason", () => {
     ).toBeNull();
   });
 
+  it("does not persist provider-scoped overload as auth-profile health", () => {
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "overloaded",
+        providerStarted: true,
+        policy: "shared",
+      }),
+    ).toBeNull();
+  });
+
   it("does not persist empty responses as auth-profile health", () => {
     expect(
       resolveAuthProfileFailureReason({
@@ -130,5 +140,15 @@ describe("resolveAuthProfileFailureReason", () => {
         policy: "shared",
       }),
     ).toBeNull();
+  });
+
+  it("still records genuine session_expired failures as auth-profile health", () => {
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "session_expired",
+        providerStarted: true,
+        policy: "shared",
+      }),
+    ).toBe("session_expired");
   });
 });

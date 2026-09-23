@@ -1,5 +1,9 @@
 // Covers gateway restart process and supervisor paths.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  isGatewayWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { captureFullEnv, withEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
@@ -36,7 +40,14 @@ vi.mock("../config/paths.js", () => ({
 
 const { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
   await import("./restart-stale-pids.js");
-const { triggerOpenClawRestart } = await import("./restart.js");
+const {
+  consumeGatewayRestartAuthorization,
+  normalizeGatewayRestartDelayMs,
+  requestGatewayRestartWithSignalAdmission,
+  resetGatewayRestartStateForInProcessRestart,
+  scheduleGatewayRestart,
+  triggerOpenClawRestart,
+} = await import("./restart.js");
 
 const envSnapshot = captureFullEnv();
 
@@ -54,10 +65,6 @@ afterEach(() => {
   envSnapshot.restore();
   vi.restoreAllMocks();
 });
-
-function setPlatform(platform: NodeJS.Platform): void {
-  mockProcessPlatform(platform);
-}
 
 function requireFirstSpawnSyncCall(): [unknown, unknown, unknown] {
   const [call] = spawnSyncMock.mock.calls;
@@ -193,7 +200,7 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
 
 describe("triggerOpenClawRestart", () => {
   it("does not kickstart after bootstrap registers an unloaded LaunchAgent", () => {
-    setPlatform("darwin");
+    mockProcessPlatform("darwin");
     withEnv(
       { VITEST: undefined, NODE_ENV: undefined, HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
       () => {
@@ -226,7 +233,7 @@ describe("triggerOpenClawRestart", () => {
   });
 
   it("continues when launchctl bootstrap reports the service is already loaded", () => {
-    setPlatform("darwin");
+    mockProcessPlatform("darwin");
     withEnv(
       { VITEST: undefined, NODE_ENV: undefined, HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
       () => {
@@ -260,5 +267,62 @@ describe("triggerOpenClawRestart", () => {
         });
       },
     );
+  });
+});
+
+describe("gateway restart delivery and delay", () => {
+  it.each(["linux", "darwin"] as const)(
+    "rejects restart without signaling an embedded %s host that has no restart handler",
+    (platform) => {
+      mockProcessPlatform(platform);
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const listeners = process.listeners("SIGUSR2");
+      process.removeAllListeners("SIGUSR2");
+      resetGatewayRestartStateForInProcessRestart();
+      resetGatewayWorkAdmission();
+      try {
+        expect(requestGatewayRestartWithSignalAdmission("embedded-host")).toEqual({
+          status: "failed",
+        });
+        expect(killSpy).not.toHaveBeenCalled();
+        expect(consumeGatewayRestartAuthorization()).toBe(false);
+        expect(isGatewayWorkAdmissionClosed()).toBe(false);
+      } finally {
+        for (const listener of listeners) {
+          process.on("SIGUSR2", listener);
+        }
+        resetGatewayRestartStateForInProcessRestart();
+        resetGatewayWorkAdmission();
+      }
+    },
+  );
+
+  it.each([
+    { requested: undefined, effective: 2000 },
+    { requested: Number.NaN, effective: 2000 },
+    { requested: Number.POSITIVE_INFINITY, effective: 2000 },
+    { requested: -1, effective: 0 },
+    { requested: 1500.8, effective: 1500 },
+    { requested: 2_147_153_648, effective: 60_000 },
+  ])("normalizes $requested to $effective ms", ({ requested, effective }) => {
+    expect(normalizeGatewayRestartDelayMs(requested)).toBe(effective);
+  });
+
+  it("does not emit an overflow-sized restart before its effective 60-second delay", async () => {
+    vi.useFakeTimers();
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      const restart = scheduleGatewayRestart({
+        delayMs: 2_147_153_648,
+        skipCooldown: true,
+      });
+
+      expect(restart.delayMs).toBe(60_000);
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(killSpy).not.toHaveBeenCalled();
+    } finally {
+      resetGatewayRestartStateForInProcessRestart();
+      vi.useRealTimers();
+    }
   });
 });

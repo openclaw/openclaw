@@ -1,8 +1,7 @@
-// Slack plugin module implements reactions behavior.
 import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { allowListMatches, normalizeAllowListLower } from "../allow-list.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
@@ -15,6 +14,7 @@ import {
 function shouldEmitSlackReactionNotification(params: {
   ctx: SlackMonitorContext;
   event: SlackReactionEvent;
+  eventScope?: SlackEventScope;
   actorName?: string;
 }) {
   const { ctx, event, actorName } = params;
@@ -31,6 +31,7 @@ function shouldEmitSlackReactionNotification(params: {
     }
     return allowListMatches({
       allowList,
+      teamId: params.eventScope?.teamId ?? ctx.teamId,
       id: event.user,
       name: actorName,
       allowNameMatching: ctx.allowNameMatching,
@@ -54,20 +55,24 @@ export function registerSlackReactionEvents(params: {
     eventId: string,
   ) => {
     try {
+      const runtimeContext = await params.ctx.readRuntimeContext();
       const item = event.item;
       if (!item || item.type !== "message") {
         return;
       }
-      if (ctx.reactionMode === "off") {
+      if (runtimeContext.reactionMode === "off") {
         return;
       }
-      if (ctx.reactionMode === "own" && (!ctx.botUserId || event.item_user !== ctx.botUserId)) {
+      if (
+        runtimeContext.reactionMode === "own" &&
+        (!runtimeContext.botUserId || event.item_user !== runtimeContext.botUserId)
+      ) {
         return;
       }
       trackEvent?.();
 
       const ingressContext = await authorizeAndResolveSlackSystemEventContext({
-        ctx,
+        ctx: runtimeContext,
         senderId: event.user,
         channelId: item.channel,
         eventKind: "reaction",
@@ -86,8 +91,9 @@ export function registerSlackReactionEvents(params: {
       const [actorInfo, authorInfo] = await Promise.all([actorInfoPromise, authorInfoPromise]);
       if (
         !shouldEmitSlackReactionNotification({
-          ctx,
+          ctx: runtimeContext,
           event,
+          eventScope,
           actorName: actorInfo?.name,
         })
       ) {
@@ -98,8 +104,7 @@ export function registerSlackReactionEvents(params: {
       const authorLabel = authorInfo?.name ?? event.item_user;
       const baseText = `Slack reaction ${action}: :${emojiLabel}: by ${actorLabel} in ${ingressContext.channelLabel} msg ${item.ts}`;
       const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
-      enqueueSystemEvent(text, {
-        sessionKey: ingressContext.sessionKey,
+      enqueueRoutedSystemEvent(text, ingressContext.route, {
         contextKey: `slack:reaction:${eventScope ? `${eventScope.teamId}:` : ""}${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}:${eventId}`,
       });
     } catch (err) {

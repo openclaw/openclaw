@@ -1,7 +1,8 @@
-// Codex plugin module implements conversation turn collector behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isAssistantCommentaryCompletionNotification } from "./app-server/attempt-notifications.js";
+import {
+  asOptionalRecord as readRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isCodexNotificationForTurn } from "./app-server/notification-correlation.js";
 import {
   isJsonObject,
@@ -57,7 +58,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
       return;
     }
     if (notification.method === "item/agentMessage/delta") {
-      const itemId = readString(params, "itemId") ?? "assistant";
+      const itemId = normalizeOptionalString(params.itemId) ?? "assistant";
       const delta = readTextString(params, "delta");
       if (!delta) {
         return;
@@ -68,12 +69,10 @@ export function createCodexConversationTurnCollector(threadId: string) {
     if (notification.method === "item/completed") {
       const item = isJsonObject(params.item) ? params.item : undefined;
       if (item?.type === "agentMessage") {
-        const itemId = readString(item, "id") ?? readString(params, "itemId") ?? "assistant";
+        const itemId =
+          normalizeOptionalString(item.id) ?? normalizeOptionalString(params.itemId) ?? "assistant";
         assistantTextByItem.delete(itemId);
-        if (isAssistantCommentaryCompletionNotification(notification)) {
-          return;
-        }
-        const text = readTextString(item, "text");
+        const text = readAssistantReplyText(item);
         if (text?.trim()) {
           assistantTextByItem.set(itemId, text);
         }
@@ -82,10 +81,11 @@ export function createCodexConversationTurnCollector(threadId: string) {
     }
     if (notification.method === "turn/completed") {
       const turn = isJsonObject(params.turn) ? params.turn : undefined;
-      const status = readString(turn, "status");
+      const status = normalizeOptionalString(turn?.status);
       if (status === "failed") {
         failedError =
-          readString(readRecord(turn?.error), "message") ?? "codex app-server turn failed";
+          normalizeOptionalString(readRecord(turn?.error)?.message) ??
+          "codex app-server turn failed";
       } else if (status === "interrupted") {
         // Codex reports an interrupted turn as a terminal completion without a
         // final answer; streamed partial text must not become a successful reply.
@@ -99,9 +99,10 @@ export function createCodexConversationTurnCollector(threadId: string) {
           if (!isJsonObject(item) || item.type !== "agentMessage") {
             continue;
           }
-          const itemId = readString(item, "id") ?? `assistant-${assistantTextByItem.size + 1}`;
+          const itemId =
+            normalizeOptionalString(item.id) ?? `assistant-${assistantTextByItem.size + 1}`;
           assistantTextByItem.delete(itemId);
-          const text = item.phase === "commentary" ? undefined : readTextString(item, "text");
+          const text = readAssistantReplyText(item);
           if (text?.trim()) {
             assistantTextByItem.set(itemId, text);
           }
@@ -139,9 +140,10 @@ export function createCodexConversationTurnCollector(threadId: string) {
   };
 }
 
-function readString(record: Record<string, unknown> | JsonObject | undefined, key: string) {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+function readAssistantReplyText(item: JsonObject): string | undefined {
+  return item.phase === "commentary" || item.delivery === "async"
+    ? undefined
+    : readTextString(item, "text");
 }
 
 function readTextString(record: Record<string, unknown> | JsonObject | undefined, key: string) {

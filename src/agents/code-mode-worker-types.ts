@@ -1,11 +1,17 @@
-import type { Result } from "@openclaw/normalization-core/result";
+import type { CodeModeJsonSource, CodeModeOutputSource } from "./code-mode-json.js";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
+
+// Also bounds queued ordinary guest requests independently of configured in-flight slots.
+export const MAX_CODE_MODE_PENDING_TOOL_CALLS = 128;
+export const CODE_MODE_WORKER_WATCHDOG_GRACE_MS = 2_000;
 
 type CodeModeBridgeMethod =
   | "search"
   | "describe"
-  | "call"
   | "callValue"
+  | "resultSave"
+  | "resultLoad"
+  | "resultDelete"
   | "nodes"
   | "yield"
   | "namespace"
@@ -13,6 +19,7 @@ type CodeModeBridgeMethod =
   | "agentWait"
   | "skillsList"
   | "skillsRead"
+  | "sleep"
   | "swarmNote";
 
 export type CodeModeConfig = {
@@ -29,7 +36,7 @@ export type PendingBridgeRequest = {
   args: unknown[];
 };
 
-export type SettledBridgeRequest = { id: string } & Result<unknown, string>;
+export type SettledBridgeRequest = { id: string; ok: boolean; json: string };
 
 type SerializedCodeModeNamespaceValue =
   | { kind: "array"; items: SerializedCodeModeNamespaceValue[] }
@@ -44,10 +51,12 @@ export type CodeModeNamespaceDescriptor = {
   scope: SerializedCodeModeNamespaceValue;
 };
 
-type CodeModeWorkerInput =
+type CodeModeWorkerInput<State> =
   | {
       kind: "exec";
       source: string;
+      prelude?: string;
+      executionTimeoutMs?: number;
       config: CodeModeConfig;
       catalog: unknown[];
       apiFiles?: CodeModeApiVirtualFile[];
@@ -56,34 +65,57 @@ type CodeModeWorkerInput =
     }
   | {
       kind: "resume";
-      snapshotBytes: Uint8Array;
+      continuation: State;
       config: CodeModeConfig;
       settledRequests: SettledBridgeRequest[];
       pendingRequests?: PendingBridgeRequest[];
     };
 
-export type CodeModeWorkerPayload = CodeModeWorkerInput & {
-  wasmModule: WebAssembly.Module;
+export type CodeModeWorkerPayload<State> = CodeModeWorkerInput<State> & {
+  /** Only interactive, non-replay cells can hand full final JSON to the run store. */
+  retainFinalValue?: boolean;
 };
 
 export type CodeModeSettlementMode =
   | { kind: "awaiting" }
   | { kind: "draining"; requiredRequestIds: string[] };
 
+/** Transient worker boundary; no heap serialization and no resumable handle. */
+export type CodeModeWorkerBoundary = {
+  networkContentObserved?: true;
+  status: "boundary";
+  pendingRequests: PendingBridgeRequest[];
+  canceledRequestIds: string[];
+  settlementMode: CodeModeSettlementMode;
+  output: CodeModeOutputSource;
+  /** Engine-reported allocations for diagnostics, not RSS or admission authority. */
+  memoryUsedBytes: number;
+};
+
+export type CodeModeWorkerContinuation =
+  | { kind: "checkpoint" }
+  | {
+      kind: "continue";
+      timeoutMs: number;
+      settledRequests: SettledBridgeRequest[];
+      pendingRequests: PendingBridgeRequest[];
+    };
+
 export type CodeModeFailurePhase = "input" | "guest" | "bridge" | "host";
 
-export type CodeModeWorkerThreadResult =
+type CodeModeWorkerOutcome<Output, Value, State> = { networkContentObserved?: true } & (
   | {
       status: "completed";
-      value: unknown;
-      output: unknown[];
+      value: Value;
+      output: Output;
     }
   | {
       status: "waiting";
-      snapshotBytes: Uint8Array;
+      continuation: State;
       pendingRequests: PendingBridgeRequest[];
+      canceledRequestIds: string[];
       settlementMode: CodeModeSettlementMode;
-      output: unknown[];
+      output: Output;
     }
   | {
       status: "failed";
@@ -92,10 +124,17 @@ export type CodeModeWorkerThreadResult =
         | "invalid_input"
         | "runtime_unavailable"
         | "timeout"
-        | "output_limit_exceeded"
         | "snapshot_limit_exceeded"
         | "internal_error";
       failurePhase: Extract<CodeModeFailurePhase, "input" | "guest">;
       bridgeDispatchStarted: false;
-      output: unknown[];
-    };
+      output: Output;
+    }
+);
+
+export type CodeModeVmResult<State> = CodeModeWorkerOutcome<unknown[], unknown, State>;
+export type CodeModeWorkerThreadResult<State> = CodeModeWorkerOutcome<
+  CodeModeOutputSource,
+  CodeModeJsonSource,
+  State
+>;

@@ -2,6 +2,7 @@
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
+import type { GatewayUiCommandTarget } from "../gateway/ui-command-target.types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -11,6 +12,7 @@ import type { PluginHookChannelContext } from "../plugins/hook-channel-context.t
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";
+import type { GroupThreadMentionFacts } from "./group-thread.types.js";
 import type { HistoryEntry } from "./reply/history.types.js";
 import type { ReplyThreadingPolicy } from "./types.js";
 
@@ -44,6 +46,8 @@ export type ChannelStructuredContextEntry = {
   source?: string;
   type?: string;
   payload: unknown;
+  /** Keeps this provider-owned window independent of bounded canonical transcript enrichment. */
+  sessionTranscriptMode?: "preserve";
   /** Internal exact-id hints for canonical transcript/live-cache deduplication. */
   sessionTranscriptDedupeMessageIds?: string[];
   /** Internal visible-text hints for legacy assistant rows without transcript ids. */
@@ -53,6 +57,8 @@ export type ChannelStructuredContextEntry = {
 export type SessionTranscriptContext = {
   chatWindow?: boolean;
   historyLimit: number;
+  /** A platform-selected recent window keeps its configured bound and does not merge transcript rows. */
+  historyKind?: "pending" | "recent";
   beforeTimestampMs?: number;
   minTimestampMs?: number;
   senderLabels?: { assistant: string; user: string };
@@ -147,6 +153,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
    * id, such as selected-agent global sessions.
    */
   AgentId?: string;
+  /** Participant mention facts prepared once from the physical inbound message. */
+  GroupThread?: GroupThreadMentionFacts;
   /** Effective routed DM scope, including binding overrides. */
   DmScope?: DmScope;
   /**
@@ -304,19 +312,25 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   UntrustedStructuredContext?: UntrustedStructuredContextEntry[];
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
+  /** Internal wake cause, independent of transport, transcript provenance, and execution authority. */
+  InternalTurnSource?: "heartbeat" | "cron" | "exec" | "progress-card-refresh";
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
   SenderId?: string;
   /** Trusted in-process creation provenance; never populated from channel payloads. */
   SessionCreation?: {
+    skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     via: import("../config/sessions/session-entry-provenance.js").SessionCreatedVia;
     actor?: import("../config/sessions/session-entry-provenance.js").SessionCreatedActor;
+    sandbox?: "required";
   };
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
   SenderIsBot?: boolean;
+  /** Channel-ingress fact: sender is the operator's own account (from-me). */
+  SenderIsSelf?: boolean;
   Timestamp?: number;
   LocationLat?: number;
   LocationLon?: number;
@@ -325,7 +339,16 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   LocationAddress?: string;
   LocationSource?: string;
   LocationIsLive?: boolean;
+  LocationLivePeriodSeconds?: number;
   LocationCaption?: string;
+  /** Stable identity of the provider update that carried this message. */
+  ProviderUpdateId?: string;
+  /** Provider update kind, for example `message` or `edited_message`. */
+  ProviderUpdateKind?: string;
+  /** Provider-native timestamp for the original message. */
+  ProviderMessageTimestamp?: number;
+  /** Provider-native timestamp for an edited message update. */
+  ProviderEditTimestamp?: number;
   /** Provider label. */
   Provider?: string;
   /** Provider surface label. Prefer this over `Provider` when available. */
@@ -359,6 +382,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   GatewayClientScopes?: string[];
   /** Gateway client capabilities when the message originates from the gateway. */
   GatewayClientCaps?: string[];
+  /** Server-bound requesting browser; never sourced from message text or rendered into prompts. */
+  GatewayUiCommandTarget?: GatewayUiCommandTarget;
   /** Run-scoped plugin tool bindings; never rendered into prompt text. */
   GatewayRunToolBindings?: Readonly<Record<string, unknown>>;
   /** Gateway device id allowed to review approvals initiated by this turn. */
@@ -369,6 +394,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
+  /** Channel-owned local conversation image reference; never rendered into prompt text. */
+  ConversationAvatar?: string;
   /** Channel-owned metadata exposed to plugin hook context, not prompt text. */
   ChannelContext?: PluginHookChannelContext;
   /** Provider-native chat/conversation id used by channel plugins that expose `chat_id`. */
@@ -402,6 +429,10 @@ export type MsgContext = Partial<CanonicalInboundText> & {
    * Correlation interceptors must fail closed when this proof is absent.
    */
   InboundAccessAuthorized?: boolean;
+  /** Internal marker that channel ingress authoritatively observed route-context facts. */
+  ConversationRouteContextObserved?: boolean;
+  /** Canonical peer used by route selection; delivery targets may use a different namespace. */
+  ConversationRoutePeerId?: string;
   /**
    * Internal flag for channels that emit message_received through a channel-specific
    * privacy gate before entering the shared reply dispatcher.
@@ -456,7 +487,9 @@ export type FinalizedRuntimeMsgContext = Omit<
     CommandTurn?: CommandTurnContext;
   };
 
-export type TemplateContext = RuntimeMsgContext & {
+type NonTemplateContextKey = "ConversationAvatar";
+
+export type TemplateContext = Omit<RuntimeMsgContext, NonTemplateContextKey> & {
   BodyStripped?: string;
   SessionId?: string;
   IsNewSession?: string;
@@ -524,6 +557,9 @@ export function applyTemplate(str: string | undefined, ctx: TemplateContext) {
     return "";
   }
   return str.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
+    if (key === "ConversationAvatar") {
+      return "";
+    }
     const value = ctx[key as keyof TemplateContext];
     return formatTemplateValue(value);
   });

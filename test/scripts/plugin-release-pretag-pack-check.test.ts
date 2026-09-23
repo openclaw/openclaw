@@ -1,77 +1,45 @@
 // Plugin release pretag pack check tests cover its script-local target and command routing.
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OPENCLAW_PLUGIN_NPM_REPOSITORY_URL } from "../../scripts/lib/plugin-npm-release.ts";
 import {
   collectPluginReleasePretagPackTargets,
+  pluginReleasePretagExitCode,
   runPluginReleasePretagPackCheck,
 } from "../../scripts/plugin-release-pretag-pack-check.ts";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../helpers/temp-repo.js";
+import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
+import { writeJsonFile } from "../helpers/temp-repo.js";
 
-const { execFileSyncMock } = vi.hoisted(() => ({
-  execFileSyncMock: vi.fn(),
+const { runManagedCommandMock } = vi.hoisted(() => ({
+  runManagedCommandMock: vi.fn(),
 }));
 
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+vi.mock("../../scripts/lib/managed-child-process.mts", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../scripts/lib/managed-child-process.mts")
+  >("../../scripts/lib/managed-child-process.mts");
   return {
     ...actual,
-    execFileSync: execFileSyncMock,
+    runManagedCommand: runManagedCommandMock,
   };
 });
 
 const tempDirs: string[] = [];
 
-type ExecOptions = {
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  stdio?: unknown;
-};
-
 afterEach(() => {
   cleanupTempDirs(tempDirs);
-  execFileSyncMock.mockReset();
+  runManagedCommandMock.mockReset();
 });
 
 function createDualPublishPluginRepo() {
   const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-pretag-pack-");
-  const packageDir = join(repoDir, "extensions", "demo-plugin");
-  mkdirSync(packageDir, { recursive: true });
   writeJsonFile(join(repoDir, "package.json"), { name: "openclaw-test-root", type: "module" });
-  writeJsonFile(join(packageDir, "package.json"), {
-    name: "@openclaw/demo-plugin",
+  writePublishablePluginFixture(repoDir, {
     version: "2026.4.10",
-    type: "module",
-    repository: {
-      type: "git",
-      url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
-    },
-    openclaw: {
-      extensions: ["./index.ts"],
-      compat: {
-        pluginApi: ">=2026.4.10",
-      },
-      build: {
-        openclawVersion: "2026.4.10",
-      },
-      install: {
-        npmSpec: "@openclaw/demo-plugin",
-      },
-      release: {
-        publishToClawHub: true,
-        publishToNpm: true,
-      },
-    },
+    publishTo: "both",
   });
-  writeFileSync(join(packageDir, "README.md"), "# Demo plugin\n");
-  writeFileSync(join(packageDir, "index.ts"), "export const demo = 1;\n");
-
   return repoDir;
-}
-
-function callOptions(index: number): ExecOptions {
-  return execFileSyncMock.mock.calls[index]?.[2] as ExecOptions;
 }
 
 describe("scripts/plugin-release-pretag-pack-check.ts", () => {
@@ -88,44 +56,164 @@ describe("scripts/plugin-release-pretag-pack-check.ts", () => {
     ]);
   });
 
-  it("runs runtime build, npm pack, and ClawHub pack commands for selected targets", () => {
+  it("runs runtime build, npm pack, and ClawHub pack commands as managed process groups", async () => {
     const repoDir = createDualPublishPluginRepo();
-    execFileSyncMock.mockImplementation(() => "");
+    runManagedCommandMock.mockResolvedValue(0);
 
-    runPluginReleasePretagPackCheck(repoDir);
+    await runPluginReleasePretagPackCheck(repoDir);
 
-    expect(execFileSyncMock).toHaveBeenCalledTimes(3);
-    expect(execFileSyncMock.mock.calls[0]?.slice(0, 2)).toEqual([
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/check-plugin-npm-runtime-builds.mts",
-        "--package",
-        "extensions/demo-plugin",
-      ],
-    ]);
-    expect(callOptions(0)).toMatchObject({ cwd: repoDir, stdio: "inherit" });
-
-    expect(execFileSyncMock.mock.calls[1]?.slice(0, 2)).toEqual([
-      "bash",
-      ["scripts/plugin-npm-publish.sh", "--pack-dry-run", "extensions/demo-plugin"],
-    ]);
-    expect(callOptions(1)).toMatchObject({
-      cwd: repoDir,
-      env: { OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0" },
-      stdio: ["inherit", "ignore", "inherit"],
-    });
-
-    expect(execFileSyncMock.mock.calls[2]?.slice(0, 2)).toEqual([
-      "bash",
-      ["scripts/plugin-clawhub-publish.sh", "--pack", "extensions/demo-plugin"],
-    ]);
-    expect(callOptions(2)).toMatchObject({
-      cwd: repoDir,
-      env: { OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0" },
-      stdio: ["inherit", "ignore", "inherit"],
-    });
-    expect(callOptions(2).env?.OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR).toContain("clawhub-0");
+    expect(runManagedCommandMock).toHaveBeenCalledTimes(3);
+    expect(runManagedCommandMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        args: [
+          "--import",
+          "tsx",
+          "scripts/check-plugin-npm-runtime-builds.mts",
+          "--package",
+          "extensions/demo-plugin",
+        ],
+        bin: process.execPath,
+        cwd: repoDir,
+        shell: false,
+        requireProcessTreeExit: process.platform !== "win32",
+        stdio: "inherit",
+        timeoutMs: 600_000,
+      }),
+    );
+    expect(runManagedCommandMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        args: ["scripts/plugin-npm-publish.sh", "--pack-dry-run", "extensions/demo-plugin"],
+        bin: "bash",
+        cwd: repoDir,
+        env: expect.objectContaining({ OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0" }),
+        stdio: ["inherit", "ignore", "inherit"],
+        timeoutMs: 600_000,
+      }),
+    );
+    expect(runManagedCommandMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        args: ["scripts/plugin-clawhub-publish.sh", "--pack", "extensions/demo-plugin"],
+        bin: "bash",
+        cwd: repoDir,
+        env: expect.objectContaining({ OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0" }),
+        stdio: ["inherit", "ignore", "inherit"],
+        timeoutMs: 600_000,
+      }),
+    );
+    const clawHubOptions = runManagedCommandMock.mock.calls[2]?.[0] as {
+      env?: NodeJS.ProcessEnv;
+    };
+    expect(clawHubOptions.env?.OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR).toContain("clawhub-0");
   });
+
+  it("gives each selected runtime build its own managed deadline", async () => {
+    const repoDir = createDualPublishPluginRepo();
+    writePublishablePluginFixture(repoDir, {
+      extensionId: "second-plugin",
+      version: "2026.4.11",
+      publishTo: "both",
+    });
+    runManagedCommandMock.mockResolvedValue(0);
+
+    await runPluginReleasePretagPackCheck(repoDir, { timeoutMs: 321 });
+
+    expect(runManagedCommandMock).toHaveBeenCalledTimes(6);
+    expect(runManagedCommandMock.mock.calls[0]?.[0]).toMatchObject({
+      args: expect.arrayContaining(["--package", "extensions/demo-plugin"]),
+      timeoutMs: 321,
+    });
+    expect(runManagedCommandMock.mock.calls[3]?.[0]).toMatchObject({
+      args: expect.arrayContaining(["--package", "extensions/second-plugin"]),
+      timeoutMs: 321,
+    });
+  });
+
+  it("applies a caller-provided timeout to every managed command", async () => {
+    const repoDir = createDualPublishPluginRepo();
+    runManagedCommandMock.mockResolvedValue(0);
+
+    await runPluginReleasePretagPackCheck(repoDir, { timeoutMs: 321 });
+
+    expect(runManagedCommandMock).toHaveBeenCalledTimes(3);
+    for (const [options] of runManagedCommandMock.mock.calls) {
+      expect(options).toMatchObject({ timeoutMs: 321 });
+    }
+  });
+
+  it("preserves nonzero command failure semantics", async () => {
+    const repoDir = createDualPublishPluginRepo();
+    runManagedCommandMock.mockResolvedValueOnce(7);
+
+    let thrown: unknown;
+    try {
+      await runPluginReleasePretagPackCheck(repoDir);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({ code: 7 });
+    expect((thrown as Error).message).toBe(
+      "plugin runtime build for @openclaw/demo-plugin failed with exit code 7: node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package extensions/demo-plugin",
+    );
+  });
+
+  it("identifies the stalled release stage without exposing child details", async () => {
+    const repoDir = createDualPublishPluginRepo();
+    runManagedCommandMock.mockResolvedValueOnce(0).mockRejectedValueOnce(
+      Object.assign(new Error("managed command ETIMEDOUT secret-marker"), {
+        code: "ETIMEDOUT",
+      }),
+    );
+
+    let thrown: unknown;
+    try {
+      await runPluginReleasePretagPackCheck(repoDir);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({ code: "ETIMEDOUT" });
+    expect((thrown as Error).message).toBe(
+      "npm pack for @openclaw/demo-plugin timed out after 600000ms: bash scripts/plugin-npm-publish.sh --pack-dry-run extensions/demo-plugin",
+    );
+    expect((thrown as Error).message).not.toContain("secret-marker");
+  });
+
+  it("preserves managed cancellation statuses at the CLI boundary", () => {
+    expect(
+      pluginReleasePretagExitCode(Object.assign(new Error("interrupted"), { code: 130 })),
+    ).toBe(130);
+    expect(pluginReleasePretagExitCode(Object.assign(new Error("terminated"), { code: 143 }))).toBe(
+      143,
+    );
+    expect(
+      pluginReleasePretagExitCode(Object.assign(new Error("timed out"), { code: "ETIMEDOUT" })),
+    ).toBe(1);
+  });
+
+  it.each(["live", "indeterminate", "terminated"] as const)(
+    "retains temporary inputs only when managed cleanup reports %s work",
+    async (processTreeState) => {
+      const repoDir = createDualPublishPluginRepo();
+      runManagedCommandMock.mockResolvedValueOnce(0).mockRejectedValueOnce(
+        Object.assign(new Error("managed cleanup failed"), {
+          code: "EPROCESSGROUP_CLEANUP_FAILED",
+          processTreeState,
+        }),
+      );
+      await expect(runPluginReleasePretagPackCheck(repoDir)).rejects.toMatchObject({
+        code: "EPROCESSGROUP_CLEANUP_FAILED",
+        processTreeState,
+      });
+      const options = runManagedCommandMock.mock.calls[1]?.[0] as {
+        env: NodeJS.ProcessEnv;
+      };
+      const wrapperDir = options.env.PATH!.split(delimiter)[0]!;
+      const tempRoot = dirname(wrapperDir);
+      tempDirs.push(tempRoot);
+      expect(existsSync(tempRoot)).toBe(processTreeState !== "terminated");
+    },
+  );
 });

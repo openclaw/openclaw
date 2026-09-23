@@ -1,7 +1,8 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveIMessageEchoMediaKey } from "../state-contract.js";
 // Imessage plugin module implements echo cache behavior.
 import { stripLeadingEchoTextCorruptionMarkers } from "./echo-text-corruption.js";
-import { hasPersistedIMessageEcho, resolveIMessageEchoMediaKey } from "./persisted-echo-cache.js";
+import { hasPersistedIMessageEcho } from "./persisted-echo-cache.js";
 
 type SentMessageLookup = {
   text?: string;
@@ -29,7 +30,7 @@ export type SentMessageCache = {
     scope: string,
     lookup: SentMessageLookup,
     options?: boolean | SentMessageLookupOptions,
-  ) => boolean;
+  ) => Promise<boolean>;
 };
 
 // Echo arrival observed at ~2.2s on M4 Mac Mini (SQLite poll interval is the bottleneck).
@@ -88,16 +89,16 @@ class DefaultSentMessageCache implements SentMessageCache {
     this.cleanup();
   }
 
-  has(
+  async has(
     scope: string,
     lookup: SentMessageLookup,
     options: boolean | SentMessageLookupOptions = false,
-  ): boolean {
+  ): Promise<boolean> {
     this.cleanup();
     const resolvedOptions =
       typeof options === "boolean" ? { skipIdShortCircuit: options } : options;
     if (
-      hasPersistedIMessageEcho({
+      await hasPersistedIMessageEcho({
         scope,
         text: lookup.text,
         media: lookup.media,

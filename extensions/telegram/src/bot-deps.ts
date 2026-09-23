@@ -1,22 +1,22 @@
-// Telegram plugin module implements bot deps behavior.
 import {
   resolveApprovalOverGateway,
   type ApprovalResolveResult,
 } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelMessageReplyPipeline,
-  deliverInboundReplyWithMessageSendContext,
+  deliverStructuredInboundReplyWithMessageSendContext,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import {
+  readChannelAllowFromStore,
   recordInboundSession,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { buildModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
+import { buildPreparedModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -29,10 +29,14 @@ import {
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
-import { deliverReplies, emitTelegramMessageSentHooks } from "./bot/delivery.js";
+import {
+  deliverReplies,
+  deliverStructuredReplies,
+  emitTelegramMessageSentHooks,
+} from "./bot/delivery.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { editMessageTelegram } from "./send.js";
@@ -46,8 +50,8 @@ type ResolveTelegramApprovalParams = {
   senderId?: string | null;
   gatewayUrl?: string;
 } & (
-  | { approvalKind: "exec" | "plugin"; resolveMethod?: never }
-  | { approvalKind?: never; resolveMethod: "exec" | "plugin" }
+  | { approvalKind: ChannelApprovalKind; resolveMethod?: never }
+  | { approvalKind?: never; resolveMethod: ChannelApprovalKind }
 );
 
 type ResolveTelegramApproval = (
@@ -68,17 +72,18 @@ export type TelegramBotDeps = {
   buildChannelInboundEventContext?: typeof buildChannelInboundEventContext;
   readChannelAllowFromStore: typeof readChannelAllowFromStore;
   upsertChannelPairingRequest: typeof upsertChannelPairingRequest;
-  enqueueSystemEvent: typeof enqueueSystemEvent;
+  enqueueRoutedSystemEvent: typeof enqueueRoutedSystemEvent;
   dispatchReplyWithBufferedBlockDispatcher: typeof dispatchReplyWithBufferedBlockDispatcher;
   loadWebMedia?: typeof loadWebMedia;
-  buildModelsProviderData: typeof buildModelsProviderData;
+  buildModelsProviderData: typeof buildPreparedModelsProviderData;
   listSkillCommandsForAgents: typeof listSkillCommandsForAgents;
   syncTelegramMenuCommands?: typeof syncTelegramMenuCommands;
-  wasSentByBot: typeof wasSentByBot;
+  wasSentByBot: (...args: Parameters<typeof wasSentByBot>) => boolean | Promise<boolean>;
   resolveApproval?: ResolveTelegramApproval;
   createTelegramDraftStream?: typeof createTelegramDraftStream;
   deliverReplies?: typeof deliverReplies;
-  deliverInboundReplyWithMessageSendContext?: typeof deliverInboundReplyWithMessageSendContext;
+  deliverStructuredReplies?: typeof deliverStructuredReplies;
+  deliverStructuredInboundReplyWithMessageSendContext?: typeof deliverStructuredInboundReplyWithMessageSendContext;
   emitTelegramMessageSentHooks?: typeof emitTelegramMessageSentHooks;
   editMessageTelegram?: typeof editMessageTelegram;
   recordOutboundMessageForPromptContext?: typeof recordOutboundMessageForPromptContext;
@@ -125,8 +130,8 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   get upsertChannelPairingRequest() {
     return upsertChannelPairingRequest;
   },
-  get enqueueSystemEvent() {
-    return enqueueSystemEvent;
+  get enqueueRoutedSystemEvent() {
+    return enqueueRoutedSystemEvent;
   },
   get dispatchReplyWithBufferedBlockDispatcher() {
     return dispatchReplyWithBufferedBlockDispatcher;
@@ -135,7 +140,7 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
     return loadWebMedia;
   },
   get buildModelsProviderData() {
-    return buildModelsProviderData;
+    return buildPreparedModelsProviderData;
   },
   get listSkillCommandsForAgents() {
     return listSkillCommandsForAgents;
@@ -155,8 +160,11 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   get deliverReplies() {
     return deliverReplies;
   },
-  get deliverInboundReplyWithMessageSendContext() {
-    return deliverInboundReplyWithMessageSendContext;
+  get deliverStructuredReplies() {
+    return deliverStructuredReplies;
+  },
+  get deliverStructuredInboundReplyWithMessageSendContext() {
+    return deliverStructuredInboundReplyWithMessageSendContext;
   },
   get emitTelegramMessageSentHooks() {
     return emitTelegramMessageSentHooks;

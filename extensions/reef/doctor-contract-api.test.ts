@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -12,19 +13,23 @@ import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   legacyConfigRules,
   normalizeCompatibilityConfig,
   stateMigrations,
 } from "./doctor-contract-api.js";
-import {
-  base64url,
-  generateIdentity,
-  MemoryAuditStore,
-  type ReviewRequest,
-} from "./protocol/index.js";
+import { base64url, generateIdentity, type ReviewRequest } from "./protocol/index.js";
+import { MemoryAuditStore } from "./protocol/memory-stores.test-support.js";
 import { ReefChannelConfigSchema } from "./src/config-schema.js";
+import {
+  REEF_REPLAY_MAX_ENTRIES,
+  REEF_REPLAY_NAMESPACE,
+  REEF_REPLAY_TTL_MS,
+  reefReplayStoreKey,
+  type ReefReplayRecord,
+} from "./src/replay-store.js";
 import {
   generateAndStoreKeys,
   loadKeys,
@@ -46,21 +51,16 @@ import {
   REEF_DELIVERED_MAX_ENTRIES,
   REEF_DELIVERED_NAMESPACE,
   REEF_DELIVERED_TTL_MS,
-  REEF_REPLAY_MAX_ENTRIES,
-  REEF_REPLAY_NAMESPACE,
-  REEF_REPLAY_TTL_MS,
   REEF_REGISTRATION_IDENTITY_KEY,
   REEF_REGISTRATION_MAX_ENTRIES,
   REEF_REGISTRATION_NAMESPACE,
   REEF_REVIEWS_MAX_ENTRIES,
   REEF_REVIEWS_NAMESPACE,
   reefAuditEntryKey,
-  reefReplayStoreKey,
   type ReefAuditHeadRecord,
   type ReefAuditStateRecord,
   type ReefIdentityBinding,
   type ReefIdentityMigrationRecord,
-  type ReefReplayRecord,
   type ReefReviewRecord,
 } from "./src/state.js";
 import {
@@ -93,6 +93,11 @@ function createRuntime(env: NodeJS.ProcessEnv) {
   const runtime = createPluginRuntimeMock();
   runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
     createPluginStateSyncKeyedStoreForTests<T>("reef", {
+      ...options,
+      env: options.env ?? env,
+    });
+  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
+    createPluginStateKeyedStoreForTests<T>("reef", {
       ...options,
       env: options.env ?? env,
     });
@@ -144,8 +149,9 @@ describe("Reef doctor contract", () => {
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
@@ -167,6 +173,57 @@ describe("Reef doctor contract", () => {
       requestPolicy: "code-only",
       friends: expect.any(Object),
     });
+  });
+
+  it("moves stray plugin-entry config into channels.reef and clears the entry", () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          reef: { enabled: true, config: { handle: "owner", requestPolicy: "code-only" } },
+        },
+      },
+    } as never;
+    expect(
+      legacyConfigRules[1]?.match?.({ handle: "owner", requestPolicy: "code-only" }, cfg),
+    ).toBe(true);
+    expect(legacyConfigRules[1]?.match?.({}, cfg)).toBe(false);
+
+    const result = normalizeCompatibilityConfig({ cfg });
+
+    expect(result.changes).toEqual([
+      "Moved plugins.entries.reef.config.handle to channels.reef.handle.",
+      "Moved plugins.entries.reef.config.requestPolicy to channels.reef.requestPolicy.",
+    ]);
+    expect(result.config.channels?.reef).toEqual({ handle: "owner", requestPolicy: "code-only" });
+    expect(result.config.plugins?.entries?.reef).toEqual({ enabled: true });
+  });
+
+  it("keeps channels.reef authoritative over conflicting stray entry config", () => {
+    const cfg = {
+      channels: { reef: { handle: "canonical" } },
+      plugins: { entries: { reef: { config: { handle: "stray", email: "o@example.com" } } } },
+    } as never;
+
+    const result = normalizeCompatibilityConfig({ cfg });
+
+    expect(result.changes).toEqual([
+      "Moved plugins.entries.reef.config.email to channels.reef.email.",
+      "Removed plugins.entries.reef.config.handle; channels.reef.handle is authoritative.",
+    ]);
+    expect(result.config.channels?.reef).toEqual({ handle: "canonical", email: "o@example.com" });
+    expect(result.config.plugins?.entries?.reef).toEqual({});
+  });
+
+  it("leaves unmergeable stray entry config in place instead of corrupting channels.reef", () => {
+    const cfg = {
+      plugins: { entries: { reef: { config: { unknownKey: true } } } },
+    } as never;
+
+    const result = normalizeCompatibilityConfig({ cfg });
+
+    expect(result.changes).toEqual([]);
+    expect(result.config.channels?.reef).toBeUndefined();
+    expect(result.config.plugins?.entries?.reef).toEqual({ config: { unknownKey: true } });
   });
 
   it("imports identity keys into SQLite before archiving keys.json", async () => {

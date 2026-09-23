@@ -1,13 +1,16 @@
 /** Tests SecretRef provider resolution for env, file, and exec sources. */
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 import {
   killPidIfAlive,
-  readPidFile,
+  waitForPidFile,
   waitForPidToExit,
   writeForkingNoOutputScript,
 } from "../test-utils/process-tree.js";
@@ -283,34 +286,60 @@ describe("secret ref resolver", () => {
     expect(isMissingSecretRefResolutionError({ ref, error })).toBe(false);
   });
 
-  itPosix("resolves file refs in json mode", async () => {
-    const root = await createCaseDir("file");
-    const filePath = path.join(root, "secrets.json");
-    await writeSecureFile(
-      filePath,
-      JSON.stringify({
-        providers: {
-          openai: {
-            apiKey: "sk-file-value", // pragma: allowlist secret
-          },
-        },
-      }),
-    );
-
-    const value = await resolveSecretRefString(
-      { source: "file", provider: "filemain", id: "/providers/openai/apiKey" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              filemain: createFileProviderConfig(filePath),
+  itPosix(
+    "recovers file refs after replacing a hardlinked credential with a private file",
+    async () => {
+      const root = await createCaseDir("file");
+      const filePath = path.join(root, "secrets.json");
+      const aliasPath = path.join(root, "old-secret-link.json");
+      await writeSecureFile(
+        filePath,
+        JSON.stringify({
+          providers: {
+            openai: {
+              apiKey: "sk-file-value", // pragma: allowlist secret
             },
           },
-        },
-      },
-    );
-    expect(value).toBe("sk-file-value");
-  });
+        }),
+      );
+
+      const resolve = () =>
+        resolveSecretRefString(
+          { source: "file", provider: "filemain", id: "/providers/openai/apiKey" },
+          {
+            config: {
+              secrets: {
+                providers: {
+                  filemain: createFileProviderConfig(filePath),
+                },
+              },
+            },
+          },
+        );
+      await expect(resolve()).resolves.toBe("sk-file-value");
+      const original = await fs.stat(filePath);
+      const contents = await fs.readFile(filePath, "utf8");
+      expect(original.nlink).toBe(1);
+
+      await fs.link(filePath, aliasPath);
+      expect((await fs.stat(filePath)).nlink).toBe(2);
+      await expect(resolve()).rejects.toMatchObject({
+        code: "SECRET_PROVIDER_UNAVAILABLE",
+        cause: { code: "hardlink" },
+      });
+
+      await writeSecureFile(filePath, contents);
+      const recovered = await fs.stat(filePath);
+      const oldAlias = await fs.stat(aliasPath);
+      expect(recovered.nlink).toBe(1);
+      expect(recovered.mode & 0o777).toBe(0o600);
+      expect(recovered.ino).not.toBe(original.ino);
+      expect(oldAlias.ino).toBe(original.ino);
+      expect(oldAlias.nlink).toBe(1);
+      await expect(fs.readFile(aliasPath, "utf8")).resolves.toBe(contents);
+      await expect(resolve()).resolves.toBe("sk-file-value");
+    },
+  );
 
   itPosix("classifies an out-of-bounds file pointer as a missing ref", async () => {
     const root = await createCaseDir("file-missing-index");
@@ -437,36 +466,46 @@ describe("secret ref resolver", () => {
     const scriptPath = await writeForkingNoOutputScript(root);
     const pidPath = path.join(root, "forked.pid");
     let childPid: number | undefined;
+    let resultPromise: Promise<string> | undefined;
     const nativeSetTimeout = globalThis.setTimeout;
-    const noOutputTimeouts: Array<() => void> = [];
+    let noOutputTimeout: (() => void) | undefined;
     const setTimeoutSpy = vi
       .spyOn(globalThis, "setTimeout")
       .mockImplementation((callback, delay, ...args) => {
         if (delay === 1_000) {
-          noOutputTimeouts.push(() => callback(...args));
+          noOutputTimeout = () => callback(...args);
           return nativeSetTimeout(() => undefined, 60_000);
         }
         return nativeSetTimeout(callback, delay, ...args);
       });
 
     try {
-      const resultPromise = resolveExecSecret(scriptPath, {
+      resultPromise = resolveExecSecret(scriptPath, {
         env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
-        // Preserve production-like startup headroom; the test fires the
-        // re-armed timer only after the readiness byte arrives.
         noOutputTimeoutMs: 1_000,
         timeoutMs: 10_000,
       });
-      await vi.waitFor(() => {
-        expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
+      const resultErrorPromise = resultPromise.catch((error: unknown) => error);
+      childPid = await waitForPidFile(pidPath);
+      expect(isPidAlive(childPid)).toBe(true);
+      expectDefined(noOutputTimeout, "no-output timeout")();
+      const error = await resultErrorPromise;
+
+      expect(isProviderScopedSecretResolutionError(error)).toBe(true);
+      if (!isProviderScopedSecretResolutionError(error)) {
+        throw new Error("expected a provider-scoped no-output error");
+      }
+      expect(error).toMatchObject({
+        code: "SECRET_PROVIDER_UNAVAILABLE",
+        source: "exec",
+        provider: "execmain",
+        message: 'Exec provider "execmain" produced no output for 1000ms.',
       });
-      childPid = await readPidFile(pidPath);
-      noOutputTimeouts.at(-1)?.();
-      await expect(resultPromise).rejects.toThrow('Exec provider "execmain" produced no output');
       expect(await waitForPidToExit(childPid, 5_000)).toBe(true);
     } finally {
       setTimeoutSpy.mockRestore();
       killPidIfAlive(childPid);
+      await resultPromise?.catch(() => {});
     }
   });
 
@@ -926,17 +965,18 @@ describe("secret ref resolver", () => {
         0o700,
       );
 
-      const originalLstat = fs.lstat.bind(fs);
+      const originalLstat = fsSync.lstatSync.bind(fsSync);
       let commandPathStats = 0;
-      const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const lstatSpy = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
         if (String(args[0]) === commandPath && ++commandPathStats === 2) {
           throw Object.assign(new Error("provider command disappeared"), { code: "ENOENT" });
         }
-        return await originalLstat(...args);
+        return originalLstat(...args);
       });
       try {
         const error = await resolveExecSecret(commandPath).catch((caught: unknown) => caught);
 
+        expect(commandPathStats).toBe(2);
         expect(isProviderScopedSecretResolutionError(error)).toBe(true);
         if (!isProviderScopedSecretResolutionError(error)) {
           return;

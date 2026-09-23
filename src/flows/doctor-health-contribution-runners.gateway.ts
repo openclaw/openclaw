@@ -1,13 +1,13 @@
 import { note } from "../../packages/terminal-core/src/note.js";
+import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { runCoreContributionHealth } from "./doctor-health-contribution-core.js";
+import { runWriteConfigHealth } from "./doctor-health-contribution-runners.config.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
-import {
-  isUpdateDoctorRun,
-  resolveDoctorMode,
-  resolveLegacyParentVersionOverride,
-} from "./doctor-health-contribution-utils.js";
+import { resolveDoctorMode } from "./doctor-health-contribution-utils.js";
+import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 
 export async function runCommandOwnerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteCommandOwnerHealth } = await import("../commands/doctor-command-owner.js");
@@ -19,9 +19,37 @@ export async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<
   noteClaudeCliHealth(ctx.cfg);
 }
 
+export async function writeDoctorGatewayConfig(
+  ctx: DoctorHealthFlowContext,
+  nextConfig: OpenClawConfig,
+): Promise<OpenClawConfig> {
+  const previous = ctx.cfg;
+  ctx.cfg = nextConfig;
+  try {
+    // Service installation needs the token persisted and Doctor's saved baseline
+    // advanced. A normal-return refusal must not authorize the service change.
+    if (!(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false }))) {
+      throw new Error("Doctor did not persist the gateway token; service repair was skipped.");
+    }
+    return ctx.cfg;
+  } catch (error) {
+    ctx.cfg = previous;
+    throw error;
+  }
+}
+
 export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  // Stray jobs can disrupt admitted maintenance; managed-service repair stays below the fence.
+  const { noteMacForeignLaunchdJobs } = await import("../commands/doctor-foreign-launchd-jobs.js");
+  await noteMacForeignLaunchdJobs(ctx.options, ctx.runtime, ctx.env ?? process.env);
+  if (ctx.gatewayMaintenanceActive) {
+    return;
+  }
   if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
+    return;
+  }
+  if (!(await shouldManageGatewayService(ctx.env ?? process.env))) {
     return;
   }
   const {
@@ -36,7 +64,6 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
   } = await import("../commands/doctor-platform-notes.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
   await maybeResolveDuelingSystemdGatewayScopes(ctx.runtime, ctx.prompter);
-  const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
   ctx.cfg = await maybeRepairGatewayServiceConfig(
     ctx.cfg,
     resolveDoctorMode(ctx.cfg),
@@ -44,16 +71,17 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
     ctx.prompter,
     {
       allowExecSecretRefs: ctx.options.allowExec === true,
-      allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
-      skipPluginValidation:
-        ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
-      preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
-      ...resolveLegacyParentVersionOverride(ctx),
+      writeConfig: (nextConfig) => writeDoctorGatewayConfig(ctx, nextConfig),
     },
   );
   await noteMacLaunchAgentOverrides();
   await noteMacStaleOpenClawUpdateLaunchdJobs();
   await noteMacLaunchctlGatewayEnvOverrides(ctx.cfg);
+}
+
+export async function runHostDesktopHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteHostDesktopHealth } = await import("../commands/doctor-host-desktop.js");
+  await noteHostDesktopHealth(ctx.cfg, { prompter: ctx.prompter });
 }
 
 export async function runStartupChannelMaintenanceHealth(
@@ -72,7 +100,9 @@ export async function runStartupChannelMaintenanceHealth(
 export async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteInstallPolicyHealth } = await import("../commands/doctor-install-policy.js");
   const { noteSecurityWarnings } = await import("../commands/doctor-security.js");
-  await noteSecurityWarnings(ctx.cfg);
+  const { securityAuditFindingToHealthFinding } = await import("./health-check-adapter.js");
+  const findings = await noteSecurityWarnings(ctx.cfg);
+  recordDoctorHealthWarnings(ctx, findings.map(securityAuditFindingToHealthFinding));
   await noteInstallPolicyHealth(ctx.cfg, { deep: ctx.options.deep === true, env: ctx.env });
 }
 
@@ -82,6 +112,16 @@ export async function runWebFetchProxyHealth(ctx: DoctorHealthFlowContext): Prom
   }
   const { noteWebFetchProxyDiagnostic } = await import("../commands/doctor-web-fetch-proxy.js");
   await noteWebFetchProxyDiagnostic({ cfg: ctx.cfg, env: ctx.env ?? process.env });
+}
+
+export async function runGitHubProjectHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { hasConfiguredGitHubApiCredential } = await import("../gateway/github-public-api.js");
+  if (!hasConfiguredGitHubApiCredential(ctx.env ?? process.env, ctx.cfg)) {
+    note(
+      "Prefer gateway.controlUi.github.token for Gateway-owned GitHub project access, or set GH_TOKEN/GITHUB_TOKEN in the shared Gateway process environment. Without either, search is public-only.",
+      "GitHub projects",
+    );
+  }
 }
 
 export async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -99,20 +139,27 @@ export async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Pro
 export async function runWhatsappResponsivenessHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteWhatsappResponsivenessHealth } =
     await import("../commands/doctor-whatsapp-responsiveness.js");
-  await noteWhatsappResponsivenessHealth({
+  noteWhatsappResponsivenessHealth({
     cfg: ctx.cfg,
     status: ctx.gatewayStatus,
-    shouldRepair: ctx.prompter.shouldRepair,
   });
 }
 
 export async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteDevicePairingHealth } = await import("../commands/doctor-device-pairing.js");
-  await noteDevicePairingHealth({ cfg: ctx.cfg, healthOk: ctx.healthOk ?? false });
+  await noteDevicePairingHealth({ cfg: ctx.cfg, healthOk: ctx.healthOk ?? false, env: ctx.env });
 }
 
 export async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
+    return;
+  }
+  if (ctx.cfg.gateway?.mode !== "remote") {
+    const { noteMacDisabledGatewayLaunchAgent } =
+      await import("../commands/doctor-platform-notes.js");
+    await noteMacDisabledGatewayLaunchAgent(ctx.env ?? process.env);
+  }
+  if (ctx.gatewayMaintenanceActive) {
     return;
   }
   const { maybeRepairGatewayDaemon } = await import("../commands/doctor-gateway-daemon-flow.js");

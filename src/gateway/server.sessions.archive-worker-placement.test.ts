@@ -1,7 +1,11 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { createDeferred } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -9,11 +13,33 @@ import {
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
+import { createWorkerInferenceDrainService } from "./worker-environments/inference-control.test-helpers.js";
+import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
+import {
+  ACTIVE_PLACEMENT,
+  createCoordinatorTestService,
+  LOCAL_PLACEMENT,
+} from "./worker-environments/placement-dispatch-coordinator.test-support.js";
+import {
+  REQUEST,
+  seedProvisioningPlacement,
+} from "./worker-environments/placement-dispatch-test-fixtures.js";
+import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { createWorkerEnvironmentService } from "./worker-environments/service.js";
+import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const pendingArchiveCleanups = new Set<() => Promise<void>>();
 
-afterEach(() => {
+afterEach(async () => {
+  // Join gated requests even when a runner timeout leaves the test body suspended.
+  for (const cleanup of pendingArchiveCleanups) {
+    await cleanup();
+  }
+  pendingArchiveCleanups.clear();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -28,6 +54,7 @@ function workerPlacement(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId ?? "main",
+    executionMode: "worker-turn",
     state: params.state,
     generation: 2,
     turnClaim: null,
@@ -82,15 +109,213 @@ function placementReader(current: () => WorkerSessionPlacementRecord | undefined
   };
 }
 
-test("sessions.patch reclaims the exact active cloud placement before archive metadata commits", async () => {
+test.each([false, true])(
+  "sessions.patch archives past queued maintenance and explains concurrent requests (cleanup fails=%s)",
+  async (cleanupFails) => {
+    const { dir, storePath } = await createSessionStoreDir();
+    const sessionKey = "agent:main:archive-already-stopping";
+    const sessionId = "session-archive-already-stopping";
+    await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+    let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
+    const environmentStore = await createWorkerEnvironmentStore({
+      database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: dir } }),
+    });
+    await environmentStore.createIntent({
+      environmentId: "worker-environment",
+      providerId: "fixture",
+      profileId: "fixture",
+      profileSnapshot: {},
+      provisionOperationId: "fixture-provision",
+    });
+    const unexpectedWorkerWork = async (): Promise<never> => {
+      throw new Error("Archive fixture must not start provider or inference work");
+    };
+    const environments = createWorkerEnvironmentService({
+      store: environmentStore,
+      getConfig: () => ({}),
+      resolveProvider: () => undefined,
+      prepareInstallation: unexpectedWorkerWork,
+      bootstrapWorker: unexpectedWorkerWork,
+      executeInference: unexpectedWorkerWork,
+    });
+    const reclaimStarted = createDeferredCore();
+    const releaseReclaim = createDeferredCore();
+    const reclaim = vi.fn(async () => {
+      reclaimStarted.resolve();
+      await releaseReclaim.promise;
+      if (cleanupFails && reclaim.mock.calls.length === 1) {
+        throw new Error("provider cleanup pending");
+      }
+      const local = { ...LOCAL_PLACEMENT, sessionId, sessionKey };
+      placement = local;
+      return local;
+    });
+    const dispatchEntered = createDeferredCore();
+    const releaseDispatch = createDeferredCore();
+    const reconcile = vi.fn(async () => {});
+    const coordinated = coordinateWorkerPlacementDispatch(
+      createCoordinatorTestService({
+        dispatch: async (request) => {
+          dispatchEntered.resolve();
+          await releaseDispatch.promise;
+          return { ...ACTIVE_PLACEMENT, ...request };
+        },
+        reconcile,
+        reclaim: async (_request, _authorize, _beforeDrain, serialize) => {
+          if (!serialize) {
+            throw new Error("Archive fixture requires reclaim serialization");
+          }
+          return await serialize(reclaim);
+        },
+      }),
+      (_request, run) => run(),
+    );
+    const dispatch = coordinated.dispatch({
+      ...REQUEST,
+      sessionId: "unrelated-session",
+      sessionKey: "agent:main:unrelated-session",
+    });
+    await dispatchEntered.promise;
+    const sweep = coordinated.reconcile();
+    const context = {
+      workerEnvironmentService: environments,
+      workerSessionPlacementService: placementReader(() => placement),
+      workerPlacementDispatchService: coordinated,
+    };
+    const archive = () =>
+      directSessionReq(
+        "sessions.patch",
+        { key: sessionKey, archived: true, expectedSessionId: sessionId },
+        { context },
+      );
+    const first = archive();
+    try {
+      await Promise.race([
+        reclaimStarted.promise,
+        first.then((result) => {
+          expect(result).toMatchObject({ ok: true });
+          throw new Error("archive completed before worker cleanup");
+        }),
+      ]);
+      expect(reclaim).toHaveBeenCalledOnce();
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const duplicate = await archive();
+        expect(duplicate).toMatchObject({
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            retryable: true,
+            message: expect.stringContaining("already being stopped by another archive or delete"),
+          },
+        });
+        expect(reclaim).toHaveBeenCalledOnce();
+        expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+      }
+      releaseReclaim.resolve();
+      expect(await first).toMatchObject({ ok: !cleanupFails });
+      if (cleanupFails) {
+        expect(await archive()).toMatchObject({ ok: true });
+        expect(reclaim).toHaveBeenCalledTimes(2);
+      }
+      expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
+      expect(reconcile).not.toHaveBeenCalled();
+    } finally {
+      releaseReclaim.resolve();
+      releaseDispatch.resolve();
+      await Promise.all([first, dispatch, sweep]);
+      await environments.stop();
+    }
+  },
+);
+
+test.each([false, true])(
+  "sessions.patch waits for orphaned provisioning cleanup (failure=%s)",
+  async (destroyFails) => {
+    const { dir, storePath } = await createSessionStoreDir();
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: dir } });
+    const placements = createWorkerSessionPlacementStore({ database });
+    const harness = createHarness(database, placements, { workspacePath: dir, destroyFails });
+    seedProvisioningPlacement(placements, harness.ready.environmentId);
+    await writeSessionStore({
+      entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
+    });
+    const destroy = vi.mocked(harness.environments.destroy).getMockImplementation()!;
+    const destroying = createDeferredCore();
+    const release = createDeferredCore();
+    vi.mocked(harness.environments.destroy).mockImplementation(async (environmentId) => {
+      destroying.resolve();
+      await release.promise;
+      return await destroy(environmentId);
+    });
+    const archive = directSessionReq(
+      "sessions.patch",
+      {
+        key: REQUEST.sessionKey,
+        archived: true,
+        expectedSessionId: REQUEST.sessionId,
+      },
+      {
+        context: {
+          workerEnvironmentService: createWorkerInferenceDrainService(
+            () => ({
+              drained: Promise.resolve(),
+              hasWork: () => false,
+              release: vi.fn(),
+            }),
+            harness.environments,
+          ),
+          workerSessionPlacementService: placements,
+          workerPlacementDispatchService: harness.service,
+        },
+      },
+    );
+    try {
+      await Promise.race([
+        destroying.promise,
+        archive.then((result) => {
+          expect(result).toMatchObject({ ok: true });
+          throw new Error("archive completed before worker destruction");
+        }),
+      ]);
+      expect(
+        loadSessionEntry({ storePath, sessionKey: REQUEST.sessionKey })?.archivedAt,
+      ).toBeUndefined();
+      release.resolve();
+      if (destroyFails) {
+        await expect(archive).resolves.toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+        expect(placements.get(REQUEST.sessionId)?.state).toBe("failed");
+        expect(harness.environments.get(harness.ready.environmentId)?.state).not.toBe("destroyed");
+        expect(
+          loadSessionEntry({ storePath, sessionKey: REQUEST.sessionKey })?.archivedAt,
+        ).toBeUndefined();
+        return;
+      }
+      await expect(archive).resolves.toMatchObject({ ok: true });
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
+      expect(harness.environments.get(harness.ready.environmentId)?.state).toBe("destroyed");
+      expect(loadSessionEntry({ storePath, sessionKey: REQUEST.sessionKey })?.archivedAt).toEqual(
+        expect.any(Number),
+      );
+    } finally {
+      release.resolve();
+      await archive;
+    }
+  },
+);
+
+test("sessions.patch reclaims the exact active cloud placement before archive metadata commits", async ({
+  signal,
+}) => {
   const { storePath } = await createSessionStoreDir();
   const requestedKey = "archive-cloud-active";
   const sessionKey = `agent:main:${requestedKey}`;
   const sessionId = "session-archive-cloud-active";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
   let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
-  const reclaimGate = createDeferred();
+  const reclaimStarted = createDeferredCore();
+  const reclaimGate = createDeferredCore();
   const reclaim = vi.fn(async () => {
+    reclaimStarted.resolve();
     await reclaimGate.promise;
     placement = workerPlacement({ sessionId, sessionKey, state: "reclaimed" });
     return placement as Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
@@ -98,7 +323,7 @@ test("sessions.patch reclaims the exact active cloud placement before archive me
 
   const archive = directSessionReq(
     "sessions.patch",
-    { key: requestedKey, archived: true },
+    { key: requestedKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
         workerSessionPlacementService: placementReader(() => placement),
@@ -107,13 +332,35 @@ test("sessions.patch reclaims the exact active cloud placement before archive me
     },
   );
 
-  await vi.waitFor(() => expect(reclaim).toHaveBeenCalledOnce());
-  expect(reclaim).toHaveBeenCalledWith({ sessionId, sessionKey, agentId: "main" });
-  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
-  reclaimGate.resolve();
+  const settledArchive = Promise.allSettled([archive]);
+  const cleanup = async () => {
+    reclaimGate.resolve();
+    await settledArchive;
+  };
+  pendingArchiveCleanups.add(cleanup);
+  try {
+    await Promise.race([
+      reclaimStarted.promise,
+      archive.then((result) => {
+        throw new Error(`Archive settled before reclaim: ${result.error?.message ?? "no reclaim"}`);
+      }),
+    ]);
+    signal.throwIfAborted();
+    expect(reclaim).toHaveBeenCalledOnce();
+    expect(reclaim).toHaveBeenCalledWith(
+      { sessionId, sessionKey, agentId: "main" },
+      expect.any(Function),
+      expect.any(Function),
+    );
+    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+    reclaimGate.resolve();
 
-  await expect(archive).resolves.toMatchObject({ ok: true });
-  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
+    await expect(archive).resolves.toMatchObject({ ok: true });
+    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
+  } finally {
+    await cleanup();
+    pendingArchiveCleanups.delete(cleanup);
+  }
 });
 
 test.each(["rejected", "unavailable"] as const)(
@@ -133,19 +380,14 @@ test.each(["rejected", "unavailable"] as const)(
 
     const archived = await directSessionReq(
       "sessions.patch",
-      { key: sessionKey, archived: true },
+      { key: sessionKey, archived: true, expectedSessionId: sessionId },
       {
         context: {
-          workerEnvironmentService: {
-            beginInferenceSessionDrain: () => ({
-              drained: Promise.resolve(),
-              hasWork: () => false,
-              release,
-            }),
-            cancelInferenceForSession: vi.fn(() => []),
-            hasInferenceForSession: vi.fn(() => false),
-            resolveInferenceSessionForRunId: vi.fn(),
-          },
+          workerEnvironmentService: createWorkerInferenceDrainService(() => ({
+            drained: Promise.resolve(),
+            hasWork: () => false,
+            release,
+          })),
           workerSessionPlacementService: placementReader(() => placement),
           workerPlacementDispatchService,
         },
@@ -178,7 +420,7 @@ test("sessions.patch rejects a mismatched reclaimed identity without archiving",
 
   const archived = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: true },
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
         workerSessionPlacementService: placementReader(() => placement),
@@ -194,81 +436,19 @@ test("sessions.patch rejects a mismatched reclaimed identity without archiving",
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 });
 
-test("sessions.patch rejects a placement identity changed during the runtime drain", async () => {
+test("sessions.patch rejects a reclaimed return when its authoritative placement stayed active", async () => {
   const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:archive-cloud-fresh-placement";
-  const sessionId = "session-archive-cloud-fresh-placement";
+  const sessionKey = "agent:main:archive-cloud-stale-reclaim";
+  const sessionId = "session-archive-cloud-stale-reclaim";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
-  const drainGate = createDeferred();
-  const drainStarted = vi.fn();
-  const release = vi.fn();
-  const reclaim = vi.fn();
-
-  const archive = directSessionReq(
-    "sessions.patch",
-    { key: sessionKey, archived: true },
-    {
-      context: {
-        workerEnvironmentService: {
-          beginInferenceSessionDrain: () => {
-            drainStarted();
-            return { drained: drainGate.promise, hasWork: () => false, release };
-          },
-          cancelInferenceForSession: vi.fn(() => []),
-          hasInferenceForSession: vi.fn(() => false),
-          resolveInferenceSessionForRunId: vi.fn(),
-        },
-        workerSessionPlacementService: placementReader(() => placement),
-        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
-      },
-    },
-  );
-
-  await vi.waitFor(() => expect(drainStarted).toHaveBeenCalledOnce());
-  placement = workerPlacement({
-    sessionId,
-    sessionKey: "agent:main:replacement-placement",
-    state: "active",
-  });
-  drainGate.resolve();
-
-  await expect(archive).resolves.toMatchObject({
-    ok: false,
-    error: { code: "UNAVAILABLE", retryable: true },
-  });
-  expect(reclaim).not.toHaveBeenCalled();
-  expect(release).toHaveBeenCalledOnce();
-  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
-});
-
-test.each([
-  { name: "requested", state: "requested" as const },
-  { name: "provisioning", state: "provisioning" as const },
-  { name: "syncing", state: "syncing" as const },
-  { name: "starting", state: "starting" as const },
-  { name: "draining", state: "draining" as const },
-  { name: "reconciling", state: "reconciling" as const },
-  { name: "failed with a live environment", state: "failed" as const, live: true },
-  { name: "failed with an unknown environment", state: "failed" as const },
-])("sessions.patch rejects $name before cancellation or reclaim", async (testCase) => {
-  const { storePath } = await createSessionStoreDir();
-  const caseId = testCase.name.replaceAll(" ", "-");
-  const sessionKey = `agent:main:archive-cloud-${caseId}`;
-  const sessionId = `session-archive-cloud-${caseId}`;
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const placement = workerPlacement({ sessionId, sessionKey, state: testCase.state });
-  const reclaim = vi.fn();
-  embeddedRunMock.activeIds.add(sessionId);
+  const placement = workerPlacement({ sessionId, sessionKey, state: "active" });
+  const reclaim = vi.fn(async () => workerPlacement({ sessionId, sessionKey, state: "reclaimed" }));
 
   const archived = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: true },
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
-        ...(testCase.live
-          ? { workerEnvironmentService: { get: () => ({ state: "attached", leaseId: "lease" }) } }
-          : {}),
         workerSessionPlacementService: placementReader(() => placement),
         workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
       },
@@ -279,6 +459,124 @@ test.each([
     ok: false,
     error: { code: "UNAVAILABLE", retryable: true },
   });
+  expect(reclaim).toHaveBeenCalledOnce();
+  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+});
+
+test.for(["active", "failed"] as const)(
+  "sessions.patch rejects a %s placement identity changed during the runtime drain",
+  async (state, { signal }) => {
+    const { storePath } = await createSessionStoreDir();
+    const sessionKey = "agent:main:archive-cloud-fresh-placement";
+    const sessionId = "session-archive-cloud-fresh-placement";
+    await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+    let placement = workerPlacement({ sessionId, sessionKey, state });
+    const drainGate = createDeferredCore();
+    const drainEntered = createDeferredCore();
+    const release = vi.fn();
+    const reclaim = vi.fn();
+    const drainStarted = vi.fn(() => {
+      drainEntered.resolve();
+      return { drained: drainGate.promise, hasWork: () => false, release };
+    });
+
+    const archive = directSessionReq(
+      "sessions.patch",
+      { key: sessionKey, archived: true, expectedSessionId: sessionId },
+      {
+        context: {
+          workerEnvironmentService: createWorkerInferenceDrainService(drainStarted),
+          workerSessionPlacementService: placementReader(() => placement),
+          workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+        },
+      },
+    );
+
+    const settledArchive = Promise.allSettled([archive]);
+    const cleanup = async () => {
+      drainGate.resolve();
+      await settledArchive;
+    };
+    pendingArchiveCleanups.add(cleanup);
+    try {
+      await Promise.race([
+        drainEntered.promise,
+        archive.then((result) => {
+          throw new Error(
+            `Archive settled before its runtime drain: ${result.error?.message ?? "no drain"}`,
+          );
+        }),
+      ]);
+      signal.throwIfAborted();
+      expect(drainStarted).toHaveBeenCalledOnce();
+      placement = workerPlacement({
+        sessionId,
+        sessionKey: "agent:main:replacement-placement",
+        state: "active",
+      });
+      drainGate.resolve();
+
+      await expect(archive).resolves.toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", retryable: true },
+      });
+      expect(reclaim).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledOnce();
+      expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+    } finally {
+      await cleanup();
+      pendingArchiveCleanups.delete(cleanup);
+    }
+  },
+);
+
+test.each(["requested", "provisioning", "syncing", "starting", "draining"] as const)(
+  "sessions.patch stops %s placement before archiving",
+  async (state) => {
+    const { storePath } = await createSessionStoreDir();
+    const sessionKey = `agent:main:archive-cloud-${state}`;
+    const sessionId = `session-archive-cloud-${state}`;
+    await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+    let placement = workerPlacement({ sessionId, sessionKey, state });
+    const reclaim = vi.fn(async () => {
+      placement = workerPlacement({ sessionId, sessionKey, state: "local" });
+      return placement;
+    });
+    const archived = await directSessionReq(
+      "sessions.patch",
+      { key: sessionKey, archived: true, expectedSessionId: sessionId },
+      {
+        context: {
+          workerSessionPlacementService: placementReader(() => placement),
+          workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+        },
+      },
+    );
+    expect(archived).toMatchObject({ ok: true });
+    expect(reclaim).toHaveBeenCalledOnce();
+    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
+  },
+);
+
+test("sessions.patch keeps reconciliation pending before cancellation", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:archive-cloud-reconciling";
+  const sessionId = "session-archive-cloud-reconciling";
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  const placement = workerPlacement({ sessionId, sessionKey, state: "reconciling" });
+  const reclaim = vi.fn();
+  embeddedRunMock.activeIds.add(sessionId);
+  const archived = await directSessionReq(
+    "sessions.patch",
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
+    {
+      context: {
+        workerSessionPlacementService: placementReader(() => placement),
+        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+      },
+    },
+  );
+  expect(archived).toMatchObject({ ok: false, error: { code: "UNAVAILABLE", retryable: true } });
   expect(reclaim).not.toHaveBeenCalled();
   expect(embeddedRunMock.abortCalls).toEqual([]);
   expectNoSessionQueueCleanup();
@@ -300,7 +598,7 @@ test.each([
 
   const archived = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: true },
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
         ...(testCase.gone
@@ -339,7 +637,7 @@ test.each([
 
   const restored = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: false },
+    { key: sessionKey, archived: false, expectedSessionId: sessionId },
     {
       context: {
         ...(testCase.gone
@@ -372,7 +670,7 @@ test("sessions.patch keeps restore blocked for an active cloud placement", async
 
   const restored = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: false },
+    { key: sessionKey, archived: false, expectedSessionId: sessionId },
     { context: { workerSessionPlacementService: placementReader(() => placement) } },
   );
 
@@ -411,7 +709,10 @@ test("sessions.patchMany isolates a reclaim failure and archives a later target 
   }>(
     "sessions.patchMany",
     {
-      targets: [{ key: failedKey }, { key: laterKey }],
+      targets: [
+        { key: failedKey, expectedSessionId: failedSessionId },
+        { key: laterKey, expectedSessionId: laterSessionId },
+      ],
       patch: { archived: true },
     },
     {

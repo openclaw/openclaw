@@ -1,5 +1,5 @@
-// Model load-config tests cover loading config used by model commands.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestRuntime } from "../test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
@@ -58,7 +58,7 @@ describe("models load-config", () => {
         },
       },
     };
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createTestRuntime();
 
     mockResolvedConfigFlow({ sourceConfig, diagnostics: ["diag-one", "diag-two"] });
 

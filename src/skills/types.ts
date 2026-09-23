@@ -1,3 +1,4 @@
+import type { SkillLibraryFile } from "../../packages/gateway-protocol/src/schema/skill-library.js";
 // Skill types expose the shared skill contracts used by discovery, loading, and runtime flows.
 import type { Skill } from "./loading/skill-contract.js";
 
@@ -11,6 +12,7 @@ export type SkillInstallSpec = {
   package?: string;
   module?: string;
   url?: string;
+  sha256?: string;
   archive?: string;
   extract?: boolean;
   stripComponents?: number;
@@ -60,8 +62,15 @@ export type SkillUsagePath = {
   skillSource: SkillTelemetrySource;
 };
 
+export type ExplicitSkillSelection = {
+  name: string;
+  path: string;
+};
+
 export type SkillCommandSpec = {
   name: string;
+  /** Human-readable skill title for display surfaces. */
+  displayName?: string;
   /** Canonical SKILL.md path for file-scoped usage accounting. */
   skillFile?: string;
   skillName: string;
@@ -117,13 +126,16 @@ export type SkillEligibilityContext = {
   };
 };
 
-export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 3;
+export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 6;
 
 export type SkillSnapshot = {
+  librarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
   prompt: string;
   /** Complete eligible sync identities, including skills hidden from the model prompt. */
   skills: Array<{
     name: string;
+    /** Gateway-admitted path for explicit reads of hidden, Gateway-owned skills. */
+    gatewayFilePath?: string;
     /** Config key can differ from the prompt-facing skill name. */
     skillKey?: string;
     primaryEnv?: string;
@@ -136,6 +148,23 @@ export type SkillSnapshot = {
   /** Effective node-exec eligibility used to select connected node-hosted skills. */
   nodeSkillsEligibility?: SkillEligibilityContext["nodeSkills"];
   resolvedSkills?: Skill[];
+  /** Present only when a session merges skills from distinct agent and execution roots. */
+  skillRoots?: {
+    agentWorkspaceDir: string;
+    executionWorkspaceDir: string;
+  };
   version?: number;
   promptFormatVersion?: number;
+};
+
+/** Filesystem reads run on the workspace host; catalog selection stays with the caller. */
+export type SkillResourceSourceReader = {
+  /** Read the instruction path selected by the run, without packaging supporting files. */
+  readInstructions: (filePath: string, options: { signal?: AbortSignal }) => Promise<string>;
+  resolveExplicitSkill: (selection: ExplicitSkillSelection) => Promise<Skill | null>;
+  /** Null means only the requested root vanished, and only when allowMissingRoot is true. */
+  readSkillFiles: (
+    skill: Skill,
+    options: { allowMissingRoot: boolean },
+  ) => Promise<SkillLibraryFile[] | null>;
 };

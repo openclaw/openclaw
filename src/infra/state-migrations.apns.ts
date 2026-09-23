@@ -12,13 +12,14 @@ import {
 import { readLegacyJsonObjectStream } from "./legacy-json-object-stream.js";
 import {
   apnsRegistrationFromRow,
-  apnsRegistrationToRow,
   isValidApnsNodeId,
   normalizeApnsEnvironment,
   normalizeApnsNodeId,
   normalizeCanonicalApnsRegistration,
   type ApnsRegistration,
 } from "./push-apns-store.js";
+import { apnsRegistrationToRow } from "./push-apns-store.rows.js";
+import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   markLegacyMigrationSourceRemoved,
@@ -113,13 +114,6 @@ async function readLegacySourceSnapshot(
   };
 }
 
-function assertOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): void {
-  const unexpected = Object.keys(value).find((key) => !allowed.has(key));
-  if (unexpected) {
-    throw new Error("legacy APNs registration has an unexpected field");
-  }
-}
-
 function isValidLegacyApnsTimestamp(value: unknown): value is number {
   return (
     typeof value === "number" &&
@@ -141,9 +135,11 @@ function parseLegacyApnsRegistration(
   if (transport !== "direct" && transport !== "relay") {
     throw new Error("legacy APNs registration has invalid transport");
   }
-  assertOnlyKeys(
+  assertAllowedJsonFields(
     rawRegistration,
     transport === "relay" ? RELAY_REGISTRATION_KEYS : DIRECT_REGISTRATION_KEYS,
+    "legacy APNs registration",
+    { reportField: false },
   );
   const normalizedNodeId = normalizeApnsNodeId(rawNodeId);
   if (!isValidApnsNodeId(normalizedNodeId)) {
@@ -327,6 +323,18 @@ async function migrateWithExclusiveStateOwnership(params: {
     return { changes, warnings };
   }
 
+  const sourcePath = params.detected.sourcePath;
+  const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
+    stateRoot: params.stateRoot,
+    stateDir: params.stateDir,
+    sourcePath,
+    label: "APNs",
+    includeFilePath: false,
+    claimSuffix: APNS_DOCTOR_CLAIM_SUFFIX,
+    readSnapshot: (snapshotPath) =>
+      readLegacySourceSnapshot(params.stateRoot, params.stateDir, snapshotPath),
+  });
+  await source.recoverLinkedMove();
   const receipt = readLegacyMigrationReceipt(
     resolveLegacyMigrationSourceKey("apns-json", params.detected.sourcePath),
     params.env,
@@ -347,17 +355,6 @@ async function migrateWithExclusiveStateOwnership(params: {
     return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
   }
 
-  const sourcePath = params.detected.sourcePath;
-  const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
-    stateRoot: params.stateRoot,
-    stateDir: params.stateDir,
-    sourcePath,
-    label: "APNs",
-    includeFilePath: false,
-    claimSuffix: APNS_DOCTOR_CLAIM_SUFFIX,
-    readSnapshot: (snapshotPath) =>
-      readLegacySourceSnapshot(params.stateRoot, params.stateDir, snapshotPath),
-  });
   const hasSource = await source.exists();
   const hasClaim = await source.exists(true);
   if (hasSource && hasClaim) {

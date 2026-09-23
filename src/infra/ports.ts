@@ -6,7 +6,7 @@ import { defaultRuntime } from "../runtime.js";
 import { isErrno } from "./errors.js";
 import { formatPortDiagnostics } from "./ports-format.js";
 import { tryListenOnPort } from "./ports-probe.js";
-import type { PortUsage } from "./ports-types.js";
+export type { PortUsage } from "./ports-types.js";
 
 class PortInUseError extends Error {
   port: number;
@@ -30,10 +30,14 @@ export async function describePortOwner(port: number): Promise<string | undefine
 }
 
 /** Probes Node's wildcard bind by default; callers may scope checks to their owned interface. */
-export async function ensurePortAvailable(port: number, host?: string): Promise<void> {
+export async function ensurePortAvailable(
+  port: number,
+  host?: string,
+  signal?: AbortSignal,
+): Promise<void> {
   // Detect EADDRINUSE early with a friendly message.
   try {
-    const probe = host ? { port, host } : { port };
+    const probe = { port, ...(host ? { host } : {}), ...(signal ? { signal } : {}) };
     await tryListenOnPort(probe);
   } catch (err) {
     if (isErrno(err) && err.code === "EADDRINUSE") {
@@ -88,7 +92,6 @@ export async function handlePortError(
 }
 
 export { PortInUseError };
-export type { PortUsage };
 export {
   classifyPortListener,
   formatPortDiagnostics,

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements bus waiters behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type {
   QaBusEvent,
@@ -9,6 +8,10 @@ import type {
 } from "./runtime-api.js";
 
 export const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
+
+export function throwQaBusClosed(): never {
+  throw new Error("qa-bus closed");
+}
 
 export type QaBusWaitMatch = QaBusEvent | QaBusMessage | QaBusThread;
 
@@ -51,9 +54,11 @@ function createQaBusMatcher(
 export function createQaBusWaiterStore(getSnapshot: () => QaBusStateSnapshot) {
   const waiters = new Set<Waiter>();
   const cursorWaiters = new Set<CursorWaiter>();
+  let readSnapshot = getSnapshot;
 
   return {
-    reset(reason = "qa-bus reset") {
+    reset(reason = "qa-bus reset", terminal = false) {
+      readSnapshot = terminal ? throwQaBusClosed : readSnapshot;
       for (const waiter of waiters) {
         clearTimeout(waiter.timer);
         waiter.reject(new Error(reason));
@@ -69,7 +74,7 @@ export function createQaBusWaiterStore(getSnapshot: () => QaBusStateSnapshot) {
       if (waiters.size === 0 && cursorWaiters.size === 0) {
         return;
       }
-      const snapshot = getSnapshot();
+      const snapshot = readSnapshot();
       for (const waiter of Array.from(waiters)) {
         const match = waiter.matcher(snapshot);
         if (!match) {
@@ -93,7 +98,7 @@ export function createQaBusWaiterStore(getSnapshot: () => QaBusStateSnapshot) {
     },
     async waitFor(input: QaBusWaitForInput) {
       const matcher = createQaBusMatcher(input);
-      const immediate = matcher(getSnapshot());
+      const immediate = matcher(readSnapshot());
       if (immediate) {
         return immediate;
       }
@@ -116,7 +121,7 @@ export function createQaBusWaiterStore(getSnapshot: () => QaBusStateSnapshot) {
       timeoutMs: number,
       shouldResolve?: (snapshot: QaBusStateSnapshot) => boolean,
     ) {
-      const snapshot = getSnapshot();
+      const snapshot = readSnapshot();
       if (snapshot.cursor > afterCursor && (!shouldResolve || shouldResolve(snapshot))) {
         return;
       }

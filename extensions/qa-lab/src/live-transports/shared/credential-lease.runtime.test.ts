@@ -114,6 +114,94 @@ describe("credential lease runtime", () => {
     vi.useRealTimers();
   });
 
+  it("releases a credential that expired while its payload was being hydrated", async () => {
+    vi.useFakeTimers();
+    const operations: string[] = [];
+    await expect(
+      acquireQaCredentialLease({
+        kind: "discord",
+        source: "convex",
+        role: "ci",
+        env: {
+          OPENCLAW_QA_CONVEX_SITE_URL: "https://broker.example.test",
+          OPENCLAW_QA_CONVEX_SECRET_CI: "synthetic-secret",
+        },
+        resolveEnvPayload: () => ({}),
+        parsePayload: () => {
+          vi.setSystemTime(Date.now() + 101);
+          return {};
+        },
+        fetchImpl: async (url) => {
+          const operation = new URL(url instanceof Request ? url.url : url).pathname
+            .split("/")
+            .at(-1)!;
+          operations.push(operation);
+          return jsonResponse(
+            operation === "acquire"
+              ? {
+                  status: "ok",
+                  credentialId: "owned",
+                  leaseToken: "synthetic",
+                  payload: {},
+                  leaseTtlMs: 100,
+                }
+              : { status: "ok" },
+          );
+        },
+      }),
+    ).rejects.toThrow("could not be confirmed before use");
+    expect(operations).toEqual(["acquire", "release"]);
+  });
+
+  it("cannot renew an expired lease or retain authority during a pending release", async () => {
+    vi.useFakeTimers();
+    const heartbeatReply = Promise.withResolvers<Response>();
+    const releaseReply = Promise.withResolvers<Response>();
+    const operations: string[] = [];
+    const lease = await acquireQaCredentialLease({
+      kind: "slack",
+      source: "convex",
+      role: "ci",
+      env: {
+        OPENCLAW_QA_CONVEX_SITE_URL: "https://broker.example.test",
+        OPENCLAW_QA_CONVEX_SECRET_CI: "synthetic-secret",
+      },
+      resolveEnvPayload: () => ({}),
+      parsePayload: () => ({}),
+      fetchImpl: async (url) => {
+        const operation = new URL(url instanceof Request ? url.url : url).pathname
+          .split("/")
+          .at(-1)!;
+        operations.push(operation);
+        if (operation === "heartbeat") {
+          return heartbeatReply.promise;
+        }
+        if (operation === "release") {
+          return releaseReply.promise;
+        }
+        return jsonResponse({
+          status: "ok",
+          credentialId: "owned",
+          leaseToken: "synthetic",
+          payload: {},
+          leaseTtlMs: 100,
+        });
+      },
+    });
+    const renewal = lease.heartbeat();
+    vi.setSystemTime(Date.now() + 101);
+    expect(() => lease.assertHealthy()).toThrow("expired");
+    heartbeatReply.resolve(jsonResponse({ status: "ok" }));
+    await expect(renewal).rejects.toThrow("expired");
+    const release = lease.release();
+    expect(() => lease.assertHealthy()).toThrow("released");
+    await expect(lease.heartbeat()).rejects.toThrow("released");
+    const duplicateRelease = lease.release();
+    releaseReply.resolve(jsonResponse({ status: "ok" }));
+    await Promise.all([release, duplicateRelease]);
+    expect(operations).toEqual(["acquire", "heartbeat", "release"]);
+  });
+
   it("uses env credentials by default", async () => {
     const lease = await acquireQaCredentialLease({
       kind: "telegram",
@@ -766,6 +854,7 @@ describe("credential lease runtime", () => {
     await vi.advanceTimersByTimeAsync(55);
     expect(heartbeat.getFailure()).toBeInstanceOf(Error);
     expect(() => heartbeat.throwIfFailed()).toThrow("heartbeat-down");
+    expect((await heartbeat.whenFailed).message).toContain("heartbeat-down");
     await heartbeat.stop();
   });
 

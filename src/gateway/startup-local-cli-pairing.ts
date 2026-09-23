@@ -7,20 +7,18 @@ import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
 } from "../infra/device-identity.js";
-import {
-  approveDevicePairing,
-  getPairedDevice,
-  requestDevicePairing,
-} from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
+import { resolveGatewayClientPlatformIdentity } from "../shared/gateway-client-platform.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 
 type StartupLocalCliPairingResult = "created" | "reused" | "unavailable";
 
-function cacheOperatorToken(params: {
+async function cacheOperatorToken(params: {
   deviceId: string;
   paired: Awaited<ReturnType<typeof getPairedDevice>>;
-}): boolean {
+}): Promise<boolean> {
   const token = params.paired?.tokens?.operator;
   if (
     !token?.token ||
@@ -32,7 +30,7 @@ function cacheOperatorToken(params: {
   ) {
     return false;
   }
-  storeDeviceAuthToken({
+  await storeDeviceAuthToken({
     deviceId: params.deviceId,
     role: "operator",
     token: token.token,
@@ -54,7 +52,7 @@ export async function ensureStartupLocalCliPairing(): Promise<StartupLocalCliPai
     if (existing.publicKey !== publicKey) {
       throw new Error("local CLI pairing identity does not match the canonical device key");
     }
-    return cacheOperatorToken({ deviceId: identity.deviceId, paired: existing })
+    return (await cacheOperatorToken({ deviceId: identity.deviceId, paired: existing }))
       ? "reused"
       : "unavailable";
   }
@@ -63,7 +61,7 @@ export async function ensureStartupLocalCliPairing(): Promise<StartupLocalCliPai
     deviceId: identity.deviceId,
     publicKey,
     displayName: "OpenClaw CLI",
-    platform: process.platform,
+    ...resolveGatewayClientPlatformIdentity(process.platform),
     clientId: GATEWAY_CLIENT_NAMES.CLI,
     clientMode: GATEWAY_CLIENT_MODES.CLI,
     role: "operator",
@@ -82,7 +80,7 @@ export async function ensureStartupLocalCliPairing(): Promise<StartupLocalCliPai
     },
   });
   if (approved?.status === "approved") {
-    if (!cacheOperatorToken({ deviceId: identity.deviceId, paired: approved.device })) {
+    if (!(await cacheOperatorToken({ deviceId: identity.deviceId, paired: approved.device }))) {
       throw new Error("local CLI pairing approval did not issue an operator token");
     }
     return "created";
@@ -93,7 +91,7 @@ export async function ensureStartupLocalCliPairing(): Promise<StartupLocalCliPai
   const pairedAfterApproval = await getPairedDevice(identity.deviceId);
   if (
     pairedAfterApproval?.publicKey === publicKey &&
-    cacheOperatorToken({ deviceId: identity.deviceId, paired: pairedAfterApproval })
+    (await cacheOperatorToken({ deviceId: identity.deviceId, paired: pairedAfterApproval }))
   ) {
     return "reused";
   }

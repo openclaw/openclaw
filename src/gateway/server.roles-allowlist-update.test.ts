@@ -3,15 +3,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
-import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
+import { listDevicePairing } from "../infra/device-pairing.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
+import { getUpdateRun } from "../infra/update-run-ledger.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { captureEnv, deleteTestEnvValue } from "../test-utils/env.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -20,29 +25,85 @@ import {
 } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
 import type { HealthSummary } from "./health/types.js";
+import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
 
-vi.mock("../infra/update-runner.js", () => ({
-  resolveUpdateInstallSurface: vi.fn(async () => ({
-    kind: "git",
-    mode: "git",
-    root: "/repo",
-    packageRoot: "/repo",
-  })),
-  runGatewayUpdate: vi.fn(async () => ({
-    status: "ok",
-    mode: "git",
-    root: "/repo",
-    steps: [],
-    durationMs: 12,
-  })),
+const readonlyPreparation = vi.hoisted(() => ({
+  prepared: [] as Array<{ pathname: string; location?: string; progressed: boolean }>,
+  turns: [] as Promise<void>[],
 }));
 
-import { runGatewayUpdate } from "../infra/update-runner.js";
+vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/sqlite-snapshot-source.js")>();
+  const observe = (pathname: string) => {
+    let progressed = false;
+    readonlyPreparation.turns.push(
+      new Promise<void>((resolve) => {
+        setImmediate(() => {
+          progressed = true;
+          resolve();
+        });
+      }),
+    );
+    return (prepared?: { location: string }) =>
+      readonlyPreparation.prepared.push({
+        pathname,
+        location: prepared?.location,
+        progressed,
+      });
+  };
+  const observeAsync =
+    <Args extends [string, ...unknown[]], Prepared extends { location: string }>(
+      prepare: (...args: Args) => Promise<Prepared>,
+    ) =>
+    async (...args: Args) => {
+      const finish = observe(args[0]);
+      let prepared: Prepared | undefined;
+      try {
+        prepared = await prepare(...args);
+        return prepared;
+      } finally {
+        finish(prepared);
+      }
+    };
+  return {
+    ...actual,
+    prepareSqliteReadOnlyLocationSync(pathname: string) {
+      const finish = observe(pathname);
+      let prepared: ReturnType<typeof actual.prepareSqliteReadOnlyLocationSync> | undefined;
+      try {
+        prepared = actual.prepareSqliteReadOnlyLocationSync(pathname);
+        return prepared;
+      } finally {
+        finish(prepared);
+      }
+    },
+    prepareSqliteReadOnlyLocation: observeAsync(actual.prepareSqliteReadOnlyLocation),
+    prepareSqliteReadOnlyLocationAsync: observeAsync(actual.prepareSqliteReadOnlyLocationAsync),
+  };
+});
+
+const reloadFixture = vi.hoisted<{
+  reconcileRuntimePolicy?: ManagedGatewayConfigReloaderParams["reconcileRuntimePolicy"];
+}>(() => ({}));
+
+vi.mock("./server-reload-managed.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./server-reload-managed.js")>();
+  return {
+    ...actual,
+    startManagedGatewayConfigReloader: (params: ManagedGatewayConfigReloaderParams) => {
+      reloadFixture.reconcileRuntimePolicy = params.reconcileRuntimePolicy;
+      return actual.startManagedGatewayConfigReloader(params);
+    },
+  };
+});
+
+import { registerGatewayUpdateHistoryTests } from "./server.update-history.test-support.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
-import { installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js";
+import { installGatewayTestHooks, rpcReq } from "./test-helpers.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
+const updateDirs = useAutoCleanupTempDirTracker(afterEach);
 const FAST_WAIT_OPTS = { timeout: 5_000, interval: 10 } as const;
 type PollWaitOptions = { timeout: number; interval: number };
 
@@ -155,14 +216,6 @@ const approveAllPendingPairings = async () => {
     });
   }
 };
-
-function getGatewayTestConfigPath(): string {
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("OPENCLAW_CONFIG_PATH is required in the gateway test environment");
-  }
-  return configPath;
-}
 
 const connectNodeClientWithPairing = async (params: Parameters<typeof connectNodeClient>[0]) => {
   try {
@@ -364,11 +417,24 @@ describe("gateway role enforcement", () => {
       expect(invokeRes.ok).toBe(false);
       expect(invokeRes.error?.message ?? "").toContain("unauthorized role");
 
-      nodeClient = await connectNodeClientWithPairing({
+      nodeClient = await connectNodeClientWithNodePairing({
         port,
         commands: [],
         instanceId: "node-role-enforcement",
         displayName: "node-role-enforcement",
+      });
+
+      const unsupportedEvent = await nodeClient.request<{
+        ok: boolean;
+        event?: string;
+        handled?: boolean;
+        reason?: string;
+      }>("node.event", { event: "test.unsupported", payload: { ok: true } });
+      expect(unsupportedEvent).toEqual({
+        ok: true,
+        event: "test.unsupported",
+        handled: false,
+        reason: "unsupported_event",
       });
 
       const binsPayload = await nodeClient.request("skills.bins", {});
@@ -384,75 +450,132 @@ describe("gateway role enforcement", () => {
   });
 });
 
+registerGatewayUpdateHistoryTests(() => port, readonlyPreparation);
+
 describe("gateway update.run", () => {
-  test("writes sentinel and schedules restart", async () => {
+  test("persists the accepted handoff before parking and restarting its foreground owner", async () => {
     await withoutSupervisorHints(async () => {
-      const sigusr1 = vi.fn();
-      process.on("SIGUSR1", sigusr1);
-
-      try {
-        const id = "req-update";
-        ws.send(
-          JSON.stringify({
-            type: "req",
-            id,
-            method: "update.run",
-            params: {
-              sessionKey: "agent:main:whatsapp:dm:+15555550123",
-              restartDelayMs: 0,
-            },
-          }),
-        );
-        const res = await onceMessage(ws, (o) => o.type === "res" && o.id === id);
-        expect(res.ok).toBe(true);
-
-        await vi.waitFor(() => {
-          expect(sigusr1.mock.calls.length).toBeGreaterThan(0);
-        }, FAST_WAIT_OPTS);
-        expect(sigusr1).toHaveBeenCalled();
-
-        const sentinel = await readRestartSentinel();
-        expect(sentinel?.payload.kind).toBe("update");
-        expect(sentinel?.payload.stats?.mode).toBe("git");
-      } finally {
-        process.off("SIGUSR1", sigusr1);
+      const [installSurface, gatewayOwner, handoff, restart] = await Promise.all([
+        import("../infra/update-runner-install-surface.js"),
+        import("../infra/gateway-owner-lease.js"),
+        import("../infra/update-managed-service-handoff.js"),
+        import("../infra/restart.js"),
+      ]);
+      const startedAt = getFileLockProcessStartTime(process.pid);
+      if (startedAt === null) {
+        throw new Error("the foreground fixture requires the current process start identity");
       }
-    });
-  });
-
-  test("uses configured update channel", async () => {
-    await withoutSupervisorHints(async () => {
-      const sigusr1 = vi.fn();
-      process.on("SIGUSR1", sigusr1);
+      const root = updateDirs.make("openclaw-update-role-");
+      const entrypoint = path.join(root, "dist", "index.js");
+      const surface = vi.spyOn(installSurface, "resolveUpdateInstallSurface").mockResolvedValue({
+        kind: "git",
+        mode: "git",
+        root,
+        packageRoot: root,
+      });
+      // The shared server starts below the CLI run loop that publishes its owner.
+      const readOwner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue({
+        owner: "role-update-owner",
+        pid: process.pid,
+        host: os.hostname(),
+        startedAt,
+        port,
+        mode: "foreground",
+        supervisor: null,
+        state: "live",
+        expired: false,
+      });
+      const start = vi
+        .spyOn(handoff, "startManagedServiceUpdateHandoff")
+        .mockImplementation(async (params) => {
+          if (!params.handoffId) {
+            throw new Error("expected an admitted update handoff identity");
+          }
+          return {
+            status: "started",
+            command: "openclaw update --yes --json",
+            logPath: path.join(root, "handoff.log"),
+            handoffId: params.handoffId,
+            installRoot: params.root,
+          };
+        });
+      const transfer = vi
+        .spyOn(handoff, "transferManagedServiceUpdateHandoff")
+        .mockImplementation(async (identity) => {
+          const accepted = start.mock.calls[0]?.[0];
+          expect(identity).toEqual({
+            kind: "managed-update-handoff",
+            handoffId: accepted?.handoffId,
+            installRoot: root,
+          });
+          expect((await readRestartSentinel())?.payload).toMatchObject({
+            kind: "update",
+            status: "skipped",
+            stats: {
+              mode: "git",
+              root,
+              runId: accepted?.runId,
+              handoffId: identity.handoffId,
+              reason: "managed-service-handoff-started",
+            },
+          });
+          return true;
+        });
+      const claim = vi.spyOn(handoff, "claimManagedServiceUpdateHandoff").mockReturnValue(true);
+      const schedule = vi.spyOn(restart, "scheduleGatewayRestart");
+      const restartSignal = vi.fn();
+      process.on("SIGUSR2", restartSignal);
 
       try {
-        const configPath = getGatewayTestConfigPath();
-        await fs.mkdir(path.dirname(configPath), { recursive: true });
-        await fs.writeFile(configPath, JSON.stringify({ update: { channel: "beta" } }, null, 2));
-        const updateMock = vi.mocked(runGatewayUpdate);
-        updateMock.mockClear();
-
-        const id = "req-update-channel";
-        ws.send(
-          JSON.stringify({
-            type: "req",
-            id,
-            method: "update.run",
-            params: {
-              restartDelayMs: 0,
-            },
-          }),
+        await fs.mkdir(path.dirname(entrypoint));
+        await fs.writeFile(entrypoint, "export {};\n");
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          '{"name":"openclaw","version":"1.0.0"}',
         );
-        const res = await onceMessage(ws, (o) => o.type === "res" && o.id === id);
+        const res = await rpcReq<{ runId: string; ok: boolean }>(ws, "update.run", {
+          sessionKey: "agent:main:whatsapp:dm:+15555550123",
+          restartDelayMs: 0,
+        });
         expect(res.ok).toBe(true);
-        await vi.waitFor(() => {
-          expect(updateMock).toHaveBeenCalledOnce();
-        }, FAST_WAIT_OPTS);
-        await vi.waitFor(() => {
-          expect(sigusr1).toHaveBeenCalled();
-        }, FAST_WAIT_OPTS);
+        expect(res.payload).toMatchObject({
+          ok: true,
+          sentinel: { persisted: true },
+          handoff: { status: "started" },
+        });
+        expect(start).toHaveBeenCalledOnce();
+        expect(transfer).toHaveBeenCalledOnce();
+        const accepted = start.mock.calls[0]?.[0];
+        if (!res.payload || !accepted?.beforePark) {
+          throw new Error("expected the accepted handoff's parking callback");
+        }
+        expect(accepted).toMatchObject({
+          root,
+          argv1: entrypoint,
+          runId: res.payload.runId,
+          supervisor: null,
+          foregroundOrigin: { owner: "role-update-owner", pid: process.pid, startedAt, port },
+          meta: { completionOwner: "gateway-restart", runId: res.payload.runId },
+        });
+        expect(getUpdateRun(res.payload.runId)?.status).toBe("running");
+        expect(schedule).not.toHaveBeenCalled();
+        expect(restartSignal).not.toHaveBeenCalled();
+
+        await accepted.beforePark();
+        await vi.waitFor(() => expect(restartSignal).toHaveBeenCalledOnce(), FAST_WAIT_OPTS);
+        expect(restart.consumeGatewayRestartIntent()).toMatchObject({
+          reason: "update.run",
+          successorOwner: transfer.mock.calls[0]?.[0],
+        });
       } finally {
-        process.off("SIGUSR1", sigusr1);
+        restart.resetGatewayRestartStateForInProcessRestart();
+        process.off("SIGUSR2", restartSignal);
+        schedule.mockRestore();
+        claim.mockRestore();
+        transfer.mockRestore();
+        start.mockRestore();
+        readOwner.mockRestore();
+        surface.mockRestore();
       }
     });
   });
@@ -559,6 +682,22 @@ describe("gateway node command allowlist", () => {
       const payload = await invokeCapture.waitForInvoke();
       const requestId = payload?.id ?? "";
       const nodeIdFromReq = payload?.nodeId ?? "node-allowed";
+      for (const [progress, message] of [
+        [{ nodeId: "different-node", seq: 0, chunk: "" }, "nodeId mismatch"],
+        [{ nodeId: nodeIdFromReq, seq: 0, chunk: "🐙".repeat(5_000) }, "progress chunk too large"],
+      ] as const) {
+        await expect(
+          allowedClient.request("node.invoke.progress", { invokeId: requestId, ...progress }),
+        ).rejects.toThrow(message);
+      }
+      await expect(
+        allowedClient.request("node.invoke.progress", {
+          invokeId: requestId,
+          nodeId: nodeIdFromReq,
+          seq: 0,
+          chunk: "",
+        }),
+      ).resolves.toEqual({ ok: true, ignored: true });
       await allowedClient.request("node.invoke.result", {
         id: requestId,
         nodeId: nodeIdFromReq,
@@ -568,23 +707,37 @@ describe("gateway node command allowlist", () => {
       const invokeRes = await invokeResP;
       expect(invokeRes.ok).toBe(true);
 
-      const invokeNullResP = rpcReq(ws, "node.invoke", {
-        nodeId: allowedNodeId,
-        command: "canvas.snapshot",
-        params: { format: "png" },
-        idempotencyKey: "allowlist-null-payloadjson",
-      });
-      const payloadNull = await invokeCapture.waitForInvoke();
-      const requestIdNull = payloadNull?.id ?? "";
-      const nodeIdNull = payloadNull?.nodeId ?? "node-allowed";
-      await allowedClient.request("node.invoke.result", {
-        id: requestIdNull,
-        nodeId: nodeIdNull,
-        ok: true,
-        payloadJSON: null,
-      });
-      const invokeNullRes = await invokeNullResP;
-      expect(invokeNullRes.ok).toBe(true);
+      for (const [id, result, expectedPayload] of [
+        ["null", { payloadJSON: null, error: null }, undefined],
+        ["object", { payloadJSON: { source: "payloadJSON" } }, { source: "payloadJSON" }],
+        [
+          "explicit",
+          { payloadJSON: { source: "payloadJSON" }, payload: { source: "payload" } },
+          { source: "payload" },
+        ],
+      ] as const) {
+        const invokeResult = rpcReq<{ payload?: unknown; payloadJSON?: string | null }>(
+          ws,
+          "node.invoke",
+          {
+            nodeId: allowedNodeId,
+            command: "canvas.snapshot",
+            params: { format: "png" },
+            idempotencyKey: `allowlist-${id}-payloadjson`,
+          },
+        );
+        const captured = await invokeCapture.waitForInvoke();
+        await allowedClient.request("node.invoke.result", {
+          id: captured.id,
+          nodeId: captured.nodeId,
+          ok: true,
+          ...result,
+        });
+        const response = await invokeResult;
+        expect(response.ok).toBe(true);
+        expect(response.payload?.payloadJSON).toBeNull();
+        expect(response.payload?.payload).toEqual(expectedPayload);
+      }
     } finally {
       await systemClient?.stopAndWait();
       await emptyClient?.stopAndWait();
@@ -658,7 +811,11 @@ describe("gateway node command allowlist", () => {
   test("rechecks current allowlist before exposing approved live commands", async () => {
     const displayName = "node-approve-live-commands-current-allowlist";
     let nodeClient: GatewayClient | undefined;
-    let configPath: string | undefined;
+    let originalConfig: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
+    const reconcileRuntimePolicy = reloadFixture.reconcileRuntimePolicy;
+    if (!reconcileRuntimePolicy) {
+      throw new Error("gateway runtime policy reconciliation is required");
+    }
 
     try {
       const deviceIdentity = createDeviceIdentityForTest("openclaw-node-current-allowlist");
@@ -676,16 +833,17 @@ describe("gateway node command allowlist", () => {
 
       const nodeId = await findConnectedNodeIdByDisplayName(displayName);
 
-      configPath = getGatewayTestConfigPath();
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      originalConfig = await readConfigFileSnapshot();
       await fs.writeFile(
-        configPath,
+        originalConfig.path,
         JSON.stringify(
           { gateway: { nodes: { commands: { deny: ["canvas.snapshot"] } } } },
           null,
           2,
         ),
       );
+      // The shared minimal Gateway skips file watching; drive its real commit hook.
+      await reconcileRuntimePolicy((await readConfigFileSnapshot()).config, "committed");
 
       await approvePendingNodePairing(nodeId, ["canvas.snapshot"]);
 
@@ -693,10 +851,11 @@ describe("gateway node command allowlist", () => {
 
       await expectCanvasSnapshotDenied(nodeId, "stale-allowlist-canvas-snapshot");
     } finally {
-      if (configPath) {
-        await fs.writeFile(configPath, "{}\n");
-      }
       await nodeClient?.stopAndWait();
+      if (originalConfig) {
+        await fs.writeFile(originalConfig.path, originalConfig.raw ?? "{}\n");
+        await reconcileRuntimePolicy(originalConfig.config, "committed");
+      }
     }
   });
 

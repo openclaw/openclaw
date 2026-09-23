@@ -1,18 +1,27 @@
 // Status scan overview tests cover overview collection and gateway/runtime summary inputs.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSqliteWalHealth } from "./sqlite-wal-health.test-support.js";
+import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
+
+const sqliteWal = createSqliteWalHealth();
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const mocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(),
   resolveCommandConfigWithSecrets: vi.fn(),
   getStatusCommandSecretTargetIds: vi.fn(),
-  readBestEffortConfigSnapshot: vi.fn(),
+  readCommandConfigSnapshot: vi.fn(),
   resolveGatewayPort: vi.fn(),
   resolveOsSummary: vi.fn(),
   createStatusScanCoreBootstrap: vi.fn(),
   callGateway: vi.fn(),
   collectChannelStatusIssues: vi.fn(),
   buildChannelsTable: vi.fn(),
+  applyLoggingConfig: vi.fn(),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -27,13 +36,20 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getStatusCommandSecretTargetIds: mocks.getStatusCommandSecretTargetIds,
 }));
 
+vi.mock("../cli/command-config-snapshot.js", () => ({
+  readCommandConfigSnapshot: mocks.readCommandConfigSnapshot,
+}));
+
 vi.mock("../config/config.js", () => ({
-  readBestEffortConfigSnapshot: mocks.readBestEffortConfigSnapshot,
   resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
 vi.mock("../infra/os-summary.js", () => ({
   resolveOsSummary: mocks.resolveOsSummary,
+}));
+
+vi.mock("../logging/logger.js", () => ({
+  applyLoggingConfig: mocks.applyLoggingConfig,
 }));
 
 vi.mock("./status.scan.bootstrap-shared.js", () => ({
@@ -59,6 +75,14 @@ function firstGatewayRequest(): { method?: string; url?: string; token?: string 
   return call[0] as { method?: string; url?: string; token?: string };
 }
 
+function gatewayRequest(method: string): { method?: string; url?: string; token?: string } {
+  const call = mocks.callGateway.mock.calls.find(([request]) => request?.method === method);
+  if (!call) {
+    throw new Error(`expected ${method} gateway call`);
+  }
+  return call[0] as { method?: string; url?: string; token?: string };
+}
+
 type ChannelsTableCall = [
   unknown,
   {
@@ -79,12 +103,18 @@ function firstChannelsTableCall(): ChannelsTableCall {
 describe("collectStatusScanOverview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(performance, "now").mockReturnValue(0);
 
     mocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
-    mocks.readBestEffortConfigSnapshot.mockResolvedValue({
-      config: { session: {} },
-      sourceConfig: { session: { raw: true } },
+    mocks.readCommandConfigSnapshot.mockResolvedValue({
+      snapshot: {
+        path: "/tmp/openclaw.json",
+        exists: true,
+        valid: true,
+        runtimeConfig: { session: {} },
+        sourceConfig: { session: { raw: true } },
+      },
     });
     mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
       resolvedConfig: { session: {} },
@@ -121,7 +151,23 @@ describe("collectStatusScanOverview", () => {
       resolveTailscaleHttpsUrl: vi.fn(async () => "https://box.tail.ts.net"),
       skipColdStartNetworkChecks: false,
     });
-    mocks.callGateway.mockResolvedValue({ channelAccounts: {} });
+    mocks.callGateway.mockImplementation(async ({ method }: { method?: string }) =>
+      method === "status"
+        ? {
+            secretEgressProxy: {
+              state: "degraded",
+              caExpiresAt: "2036-09-01T00:00:00.000Z",
+              failedCertificates: 1,
+              message: "Check OpenSSL, then retry.",
+            },
+            degradedSecretOwners: [],
+            degradedPlugins: [],
+            startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
+            installationReplacementWarning: "Installation replaced; draining before handoff.",
+            sqliteWal,
+          }
+        : { channelAccounts: {} },
+    );
     mocks.collectChannelStatusIssues.mockReturnValue([{ channel: "quietchat", message: "boom" }]);
     mocks.buildChannelsTable.mockResolvedValue({ rows: [], details: [] });
   });
@@ -129,20 +175,20 @@ describe("collectStatusScanOverview", () => {
   it("uses gateway fallback overrides for channels.status when requested", async () => {
     const result = await collectStatusScanOverview({
       commandName: "status --all",
-      opts: { timeoutMs: 1234 },
+      opts: createStatusGatewayProbeBudget(1234),
       showSecrets: false,
       useGatewayCallOverridesForChannelsStatus: true,
     });
 
-    expect(mocks.readBestEffortConfigSnapshot).toHaveBeenCalledWith({
-      observe: false,
-      skipPluginValidation: undefined,
-    });
-    expect(mocks.callGateway).toHaveBeenCalledOnce();
-    const gatewayRequest = firstGatewayRequest();
-    expect(gatewayRequest?.method).toBe("channels.status");
-    expect(gatewayRequest?.url).toBe("ws://127.0.0.1:18789");
-    expect(gatewayRequest?.token).toBe("tok");
+    expect(result.runtimeDegradation?.secretEgressProxy?.message).toBe(
+      "Check OpenSSL, then retry.",
+    );
+    expect(result.runtimeDegradation?.sqliteWal).toEqual(sqliteWal);
+    expect(mocks.readCommandConfigSnapshot).toHaveBeenCalledOnce();
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+    const channelsRequest = gatewayRequest("channels.status");
+    expect(channelsRequest?.url).toBe("ws://127.0.0.1:18789");
+    expect(channelsRequest?.token).toBe("tok");
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
     const channelTableCall = firstChannelsTableCall();
     expect(typeof channelTableCall?.[0]).toBe("object");
@@ -150,18 +196,25 @@ describe("collectStatusScanOverview", () => {
     expect(channelTableCall?.[1]?.showSecrets).toBe(false);
     expect(channelTableCall?.[1]?.sourceConfig).toStrictEqual({ session: { raw: true } });
     expect(result.channelIssues).toEqual([{ channel: "quietchat", message: "boom" }]);
+    expect(result.runtimeDegradation?.startupMigrationWarning).toBe(
+      "Retained legacy state; run openclaw doctor --fix.",
+    );
+    expect(result.runtimeDegradation?.installationReplacementWarning).toBe(
+      "Installation replaced; draining before handoff.",
+    );
   });
 
   it("can keep channel overview on metadata-only status paths", async () => {
     const result = await collectStatusScanOverview({
       commandName: "status",
-      opts: { timeoutMs: 1234 },
+      opts: createStatusGatewayProbeBudget(1234),
       showSecrets: false,
       includeLiveChannelStatus: false,
       includeChannelSetupRuntimeFallback: false,
     });
 
-    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+    expect(firstGatewayRequest().method).toBe("status");
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
     const channelTableCall = firstChannelsTableCall();
     expect(typeof channelTableCall?.[0]).toBe("object");
@@ -200,12 +253,110 @@ describe("collectStatusScanOverview", () => {
     });
     const result = await collectStatusScanOverview({
       commandName: "status",
-      opts: {},
+      opts: createStatusGatewayProbeBudget(),
       showSecrets: true,
     });
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(result.channelsStatus).toBeNull();
     expect(result.channelIssues).toStrictEqual([]);
+  });
+
+  it("returns the base overview when a reachable gateway lacks read scope", async () => {
+    mocks.createStatusScanCoreBootstrap.mockResolvedValueOnce({
+      tailscaleMode: "off",
+      tailscaleDnsPromise: Promise.resolve(null),
+      updatePromise: Promise.resolve({ installKind: "git" }),
+      agentStatusPromise: Promise.resolve({
+        defaultId: "main",
+        agents: [],
+        totalSessions: 0,
+        bootstrapPendingCount: 0,
+      }),
+      gatewayProbePromise: Promise.resolve({
+        gatewayConnection: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "default",
+        },
+        remoteUrlMissing: false,
+        gatewayMode: "local",
+        gatewayProbeAuth: {},
+        gatewayProbeAuthWarning: undefined,
+        gatewayProbe: {
+          ok: false,
+          connectLatencyMs: 12,
+          error: "missing scope: operator.read",
+          auth: {
+            role: "operator",
+            scopes: [],
+            capability: "connected_no_operator_scope",
+          },
+        },
+        gatewayReachable: true,
+        gatewaySelf: null,
+      }),
+      resolveTailscaleHttpsUrl: vi.fn(async () => null),
+      skipColdStartNetworkChecks: false,
+    });
+    mocks.callGateway.mockRejectedValueOnce(new Error("missing scope: operator.read"));
+
+    const result = await collectStatusScanOverview({
+      commandName: "status",
+      opts: createStatusGatewayProbeBudget(),
+      showSecrets: false,
+      includeChannelsData: false,
+    });
+
+    expect(result.gatewaySnapshot.gatewayReachable).toBe(true);
+    expect(result.gatewaySnapshot.gatewayProbe).toMatchObject({
+      ok: false,
+      error: "missing scope: operator.read",
+    });
+    expect(result.runtimeDegradation).toBeNull();
+  });
+
+  it("reuses runtime status from a successful fallback probe without another status RPC", async () => {
+    const bootstrap = await mocks.createStatusScanCoreBootstrap();
+    const gatewaySnapshot = await bootstrap.gatewayProbePromise;
+    const status = {
+      heartbeat: {
+        defaultAgentId: "main",
+        agents: [
+          {
+            agentId: "main",
+            enabled: true,
+            every: "30m",
+            everyMs: 1_800_000,
+            waitingForRoute: false,
+          },
+        ],
+      },
+      degradedSecretOwners: [],
+      degradedPlugins: [],
+      startupMigrationWarning: "fallback warning",
+      installationReplacementWarning: "Replacement detected by the running Gateway.",
+      sqliteWal,
+    };
+    mocks.createStatusScanCoreBootstrap.mockResolvedValueOnce({
+      ...bootstrap,
+      gatewayProbePromise: Promise.resolve({
+        ...gatewaySnapshot,
+        gatewayProbe: { ok: true, status },
+      }),
+    });
+    const result = await collectStatusScanOverview({
+      commandName: "status",
+      opts: createStatusGatewayProbeBudget(),
+      showSecrets: false,
+      includeChannelsData: false,
+    });
+    expect(result.runtimeDegradation?.startupMigrationWarning).toBe("fallback warning");
+    expect(result.runtimeDegradation?.installationReplacementWarning).toBe(
+      status.installationReplacementWarning,
+    );
+    expect(result.runtimeDegradation?.sqliteWal).toEqual(sqliteWal);
+    expect(result.runtimeDegradation).toMatchObject({ heartbeat: status.heartbeat });
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(result.cfg).toEqual({ session: {} });
   });
 });

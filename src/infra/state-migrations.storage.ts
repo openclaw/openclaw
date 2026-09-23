@@ -1,7 +1,11 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { SQLInputValue } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   copyPluginInstallRecordMap,
   createPluginInstallRecordMap,
@@ -17,21 +21,45 @@ import {
   INSTALLED_PLUGIN_INDEX_VERSION,
   type InstalledPluginIndex,
 } from "../plugins/installed-plugin-index.js";
+import { repairLegacyTaskIdentifiers } from "../state/openclaw-state-db-task-identifiers.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  LEGACY_DELIVERY_QUEUE_DIRS,
+  listLegacyDeliveryQueueFiles,
+  listLegacyDeliveryQueueDeliveredMarkers,
+  resolveLegacyDeliveryQueuePath,
+} from "./delivery-queue-legacy-files.js";
+import { deliveryQueueMetadata } from "./delivery-queue-sqlite-bound.js";
+import {
+  inferDeliveryQueueFailureRetention,
+  projectDeliveryQueueTerminalEntry,
+} from "./delivery-queue-sqlite.types.js";
+import { hashFileDescriptorSync } from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
-import { fileExists, safeReadDir } from "./state-migrations.fs.js";
+import { migrationFileExists } from "./state-migrations.fs.js";
 import {
+  markLegacyMigrationSourceRemoved,
+  readLegacyMigrationReceiptFromDatabase,
+  recordLegacyMigrationReceipt,
+  resolveLegacyMigrationSourceKey,
+} from "./state-migrations.receipts.js";
+import {
+  assertLegacyMigrationSourceUnchanged,
+  readLegacyMigrationSourceSnapshotSync,
+  type LegacyMigrationSourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
+import {
+  insertFlowRunRowSql,
   insertTaskDeliveryRowSql,
   insertTaskRunRowSql,
-  legacyBindValue,
-  listSqliteColumns,
   normalizeLegacySqliteInteger,
-  pickLegacyColumn,
+  readLegacyFlowRows,
   readLegacyTaskDeliveryRows,
   readLegacyTaskRows,
   type SqliteBindRow,
 } from "./state-migrations.task-sidecar-rows.js";
+import type { MigrationMessages } from "./state-migrations.types.js";
 
 export { normalizeLegacySqliteInteger };
 
@@ -49,14 +77,8 @@ export type LegacyPluginStateSidecarRow = {
 // detected and archived without reopening the migrated database.
 export const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
 export const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES;
-const LEGACY_DELIVERY_QUEUE_DIRS = [
-  { label: "outbound delivery queue", queueName: "outbound", dirName: "delivery-queue" },
-  { label: "session delivery queue", queueName: "session", dirName: "session-delivery-queue" },
-] as const;
-type LegacyDeliveryQueueFile = {
-  sourcePath: string;
-  status: "pending" | "failed";
-};
+// Only the file-to-SQLite cutover expires old intent; live queues have no age TTL.
+const LEGACY_DELIVERY_QUEUE_MAX_AGE_MS = 72 * 60 * 60_000;
 
 class LegacyTaskStateSidecarConflictError extends Error {
   constructor(readonly conflictedKeys: string[]) {
@@ -121,9 +143,9 @@ export function hasPendingSqliteSidecarArchive(
   suffixes: readonly string[],
 ): boolean {
   return (
-    !fileExists(sourcePath) &&
-    fileExists(`${sourcePath}.migrated`) &&
-    suffixes.some((suffix) => suffix !== "" && fileExists(`${sourcePath}${suffix}`))
+    !migrationFileExists(sourcePath) &&
+    migrationFileExists(`${sourcePath}.migrated`) &&
+    suffixes.some((suffix) => suffix !== "" && migrationFileExists(`${sourcePath}${suffix}`))
   );
 }
 
@@ -133,12 +155,12 @@ type LegacyArchiveResolution = {
   action: "archived" | "removed";
 };
 
-function firstFreeArchivePath(sourcePath: string): string {
-  for (let index = 2; ; index++) {
-    const candidate = `${sourcePath}.migrated.${index}`;
-    if (!fs.existsSync(candidate)) {
-      return candidate;
-    }
+function hashLegacyArchiveSource(sourcePath: string): string {
+  const fd = fs.openSync(sourcePath, "r");
+  try {
+    return hashFileDescriptorSync(fd).sha256;
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
@@ -147,21 +169,23 @@ function archiveLegacyFileSource(params: {
   label: string;
   warnings: string[];
 }): LegacyArchiveResolution | null {
-  const archivedPath = `${params.sourcePath}.migrated`;
   try {
-    if (fileExists(archivedPath)) {
-      // Import has already committed before archival. Identical archive bytes
-      // preserve the same snapshot, so the leftover source can be removed.
-      if (fs.readFileSync(params.sourcePath).equals(fs.readFileSync(archivedPath))) {
-        fs.rmSync(params.sourcePath, { force: true });
-        return { sourcePath: params.sourcePath, targetPath: archivedPath, action: "removed" };
+    let sourceSha256: string | undefined;
+    // Reuse any identical archive, including a numbered collision from an earlier run.
+    for (let index = 1; ; index++) {
+      const targetPath =
+        index === 1 ? `${params.sourcePath}.migrated` : `${params.sourcePath}.migrated.${index}`;
+      if (!fs.existsSync(targetPath)) {
+        fs.renameSync(params.sourcePath, targetPath);
+        return { sourcePath: params.sourcePath, targetPath, action: "archived" };
       }
-      const nextArchivePath = firstFreeArchivePath(params.sourcePath);
-      fs.renameSync(params.sourcePath, nextArchivePath);
-      return { sourcePath: params.sourcePath, targetPath: nextArchivePath, action: "archived" };
+      // SQLite sidecars can exceed whole-file allocation limits; hash only collisions.
+      sourceSha256 ??= hashLegacyArchiveSource(params.sourcePath);
+      if (sourceSha256 === hashLegacyArchiveSource(targetPath)) {
+        fs.rmSync(params.sourcePath, { force: true });
+        return { sourcePath: params.sourcePath, targetPath, action: "removed" };
+      }
     }
-    fs.renameSync(params.sourcePath, archivedPath);
-    return { sourcePath: params.sourcePath, targetPath: archivedPath, action: "archived" };
   } catch (err) {
     params.warnings.push(`Failed archiving ${params.label} ${params.sourcePath}: ${String(err)}`);
     return null;
@@ -190,7 +214,7 @@ function archiveLegacySqliteSidecar(params: {
 }): void {
   const existingSources = PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES.map(
     (suffix) => `${params.sourcePath}${suffix}`,
-  ).filter(fileExists);
+  ).filter(migrationFileExists);
   if (existingSources.length === 0) {
     return;
   }
@@ -481,9 +505,9 @@ export function archiveLegacyImportSource(params: {
   label: string;
   changes: string[];
   warnings: string[];
-}): void {
+}): LegacyArchiveResolution | null {
   if (!hardenLegacyImportSource(params)) {
-    return;
+    return null;
   }
   const resolution = archiveLegacyFileSource({
     sourcePath: params.sourcePath,
@@ -491,7 +515,7 @@ export function archiveLegacyImportSource(params: {
     warnings: params.warnings,
   });
   if (!resolution) {
-    return;
+    return null;
   }
   if (resolution.action === "archived") {
     try {
@@ -507,6 +531,7 @@ export function archiveLegacyImportSource(params: {
       ? `Removed already-archived ${params.label} legacy source ${params.sourcePath}`
       : `Archived ${params.label} legacy source → ${resolution.targetPath}`,
   );
+  return resolution;
 }
 
 function legacyKeyValue(value: SQLInputValue): string {
@@ -517,46 +542,6 @@ function legacyKeyValue(value: SQLInputValue): string {
     return `${value}`;
   }
   return "";
-}
-
-function normalizeLegacyFlowRow(row: Record<string, unknown>): SqliteBindRow {
-  const syncMode =
-    row.sync_mode === "task_mirrored" || row.shape === "single_task" ? "task_mirrored" : "managed";
-  const ownerKey =
-    typeof row.owner_key === "string" && row.owner_key.trim()
-      ? row.owner_key.trim()
-      : typeof row.owner_session_key === "string"
-        ? row.owner_session_key.trim()
-        : "";
-  const controllerId =
-    syncMode === "managed"
-      ? typeof row.controller_id === "string" && row.controller_id.trim()
-        ? row.controller_id.trim()
-        : "core/legacy-restored"
-      : null;
-  return {
-    flow_id: legacyBindValue(row.flow_id ?? ""),
-    shape: legacyBindValue(row.shape),
-    sync_mode: syncMode,
-    owner_key: ownerKey,
-    requester_origin_json: legacyBindValue(row.requester_origin_json),
-    controller_id: controllerId,
-    revision: normalizeLegacySqliteInteger(row.revision as number | bigint | null) ?? 0,
-    status: legacyBindValue(row.status ?? ""),
-    notify_policy: legacyBindValue(row.notify_policy ?? ""),
-    goal: legacyBindValue(row.goal ?? ""),
-    current_step: legacyBindValue(row.current_step),
-    blocked_task_id: legacyBindValue(row.blocked_task_id),
-    blocked_summary: legacyBindValue(row.blocked_summary),
-    state_json: legacyBindValue(row.state_json),
-    wait_json: legacyBindValue(row.wait_json),
-    cancel_requested_at: normalizeLegacySqliteInteger(
-      row.cancel_requested_at as number | bigint | null,
-    ),
-    created_at: normalizeLegacySqliteInteger(row.created_at as number | bigint | null) ?? 0,
-    updated_at: normalizeLegacySqliteInteger(row.updated_at as number | bigint | null) ?? 0,
-    ended_at: normalizeLegacySqliteInteger(row.ended_at as number | bigint | null),
-  };
 }
 
 function legacyRowsMatch(
@@ -571,68 +556,11 @@ function legacyRowsMatch(
   );
 }
 
-function readLegacyFlowRows(sourcePath: string): SqliteBindRow[] {
-  const db = openNodeSqliteDatabase(sourcePath, { readOnly: true });
-  try {
-    const columns = listSqliteColumns(db, "flow_runs");
-    if (columns.size === 0) {
-      return [];
-    }
-    const selectColumns = [
-      "flow_id",
-      pickLegacyColumn(columns, "shape"),
-      pickLegacyColumn(columns, "sync_mode"),
-      pickLegacyColumn(columns, "owner_key"),
-      pickLegacyColumn(columns, "owner_session_key"),
-      pickLegacyColumn(columns, "requester_origin_json"),
-      pickLegacyColumn(columns, "controller_id"),
-      pickLegacyColumn(columns, "revision", "0"),
-      "status",
-      "notify_policy",
-      "goal",
-      pickLegacyColumn(columns, "current_step"),
-      pickLegacyColumn(columns, "blocked_task_id"),
-      pickLegacyColumn(columns, "blocked_summary"),
-      pickLegacyColumn(columns, "state_json"),
-      pickLegacyColumn(columns, "wait_json"),
-      pickLegacyColumn(columns, "cancel_requested_at"),
-      "created_at",
-      "updated_at",
-      pickLegacyColumn(columns, "ended_at"),
-    ];
-    return db
-      .prepare(
-        `SELECT ${selectColumns.join(", ")} FROM flow_runs ORDER BY created_at ASC, flow_id ASC`,
-      )
-      .all()
-      .map((row) => normalizeLegacyFlowRow(row as Record<string, unknown>));
-  } finally {
-    db.close();
-  }
-}
-
-function insertFlowRunRowSql(db: DatabaseSync, row: SqliteBindRow): void {
-  db.prepare(
-    `
-      INSERT INTO flow_runs (
-        flow_id, shape, sync_mode, owner_key, requester_origin_json, controller_id, revision,
-        status, notify_policy, goal, current_step, blocked_task_id, blocked_summary, state_json,
-        wait_json, cancel_requested_at, created_at, updated_at, ended_at
-      ) VALUES (
-        @flow_id, @shape, @sync_mode, @owner_key, @requester_origin_json, @controller_id,
-        @revision, @status, @notify_policy, @goal, @current_step, @blocked_task_id,
-        @blocked_summary, @state_json, @wait_json, @cancel_requested_at, @created_at,
-        @updated_at, @ended_at
-      )
-    `,
-  ).run(row);
-}
-
 async function migrateLegacyTaskRunsSidecar(params: {
   stateDir: string;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const sourcePath = resolveLegacyTaskRunsSidecarPath(params.stateDir);
-  if (!fileExists(sourcePath)) {
+  if (!migrationFileExists(sourcePath)) {
     const changes: string[] = [];
     const warnings: string[] = [];
     if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {
@@ -696,7 +624,13 @@ async function migrateLegacyTaskRunsSidecar(params: {
             .prepare(`SELECT ${taskColumns.join(", ")} FROM task_runs WHERE task_id = ?`)
             .get(taskId);
           if (existing) {
-            if (!legacyRowsMatch(existing as Record<string, unknown>, row, taskColumns)) {
+            if (
+              !legacyRowsMatch(
+                { ...existing, run_id: normalizeOptionalString(existing.run_id) ?? null },
+                { ...row, run_id: normalizeOptionalString(row.run_id) ?? null },
+                taskColumns,
+              )
+            ) {
               conflicts.push(taskId);
             }
             continue;
@@ -729,6 +663,7 @@ async function migrateLegacyTaskRunsSidecar(params: {
         if (conflicts.length > 0) {
           throw new LegacyTaskStateSidecarConflictError(conflicts);
         }
+        repairLegacyTaskIdentifiers(db);
       },
       { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
     );
@@ -770,7 +705,7 @@ async function migrateLegacyFlowRunsSidecar(params: {
   stateDir: string;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const sourcePath = resolveLegacyFlowRunsSidecarPath(params.stateDir);
-  if (!fileExists(sourcePath)) {
+  if (!migrationFileExists(sourcePath)) {
     const changes: string[] = [];
     const warnings: string[] = [];
     if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {
@@ -870,108 +805,78 @@ export async function migrateLegacyTaskStateSidecars(params: {
   };
 }
 
-export function resolveLegacyDeliveryQueuePath(stateDir: string, dirName: string): string {
-  return path.join(stateDir, dirName);
-}
-
-export function listLegacyDeliveryQueueFiles(queueDir: string): LegacyDeliveryQueueFile[] {
-  const pending = safeReadDir(queueDir)
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => ({ sourcePath: path.join(queueDir, entry.name), status: "pending" as const }));
-  const failedDir = path.join(queueDir, "failed");
-  const failed = safeReadDir(failedDir)
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => ({
-      sourcePath: path.join(failedDir, entry.name),
-      status: "failed" as const,
-    }));
-  return [...pending, ...failed];
-}
-
-export function listLegacyDeliveryQueueDeliveredMarkers(queueDir: string): string[] {
-  return safeReadDir(queueDir)
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".delivered"))
-    .map((entry) => path.join(queueDir, entry.name));
-}
-
-function readLegacyDeliveryQueueEntry(sourcePath: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(sourcePath, "utf8")) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function legacyQueueMetadata(entry: Record<string, unknown>): {
-  entryKind: string | null;
-  sessionKey: string | null;
-  channel: string | null;
-  target: string | null;
-  accountId: string | null;
-} {
-  const session = entry.session as { key?: unknown } | undefined;
-  const route = entry.route as { channel?: unknown; to?: unknown; accountId?: unknown } | undefined;
-  const deliveryContext = entry.deliveryContext as
-    | { channel?: unknown; to?: unknown; accountId?: unknown }
-    | undefined;
-  const stringOrNull = (value: unknown) => (typeof value === "string" ? value : null);
-  return {
-    entryKind: stringOrNull(entry.kind) ?? "outbound",
-    sessionKey: stringOrNull(entry.sessionKey) ?? stringOrNull(session?.key),
-    channel:
-      stringOrNull(entry.channel) ??
-      stringOrNull(route?.channel) ??
-      stringOrNull(deliveryContext?.channel),
-    target: stringOrNull(entry.to) ?? stringOrNull(route?.to) ?? stringOrNull(deliveryContext?.to),
-    accountId:
-      stringOrNull(entry.accountId) ??
-      stringOrNull(route?.accountId) ??
-      stringOrNull(deliveryContext?.accountId),
-  };
-}
-
 function buildLegacyDeliveryQueueRow(params: {
   queueName: string;
   id: string;
   status: "pending" | "failed";
   entry: Record<string, unknown>;
   now: number;
-}): SqliteBindRow {
-  const enqueuedAt =
-    typeof params.entry.enqueuedAt === "number" ? params.entry.enqueuedAt : params.now;
-  const retryCount = typeof params.entry.retryCount === "number" ? params.entry.retryCount : 0;
-  const failedAt =
-    params.status === "failed"
-      ? typeof params.entry.failedAt === "number"
-        ? params.entry.failedAt
-        : typeof params.entry.lastAttemptAt === "number"
-          ? params.entry.lastAttemptAt
-          : enqueuedAt
-      : null;
-  const meta = legacyQueueMetadata(params.entry);
+}): (SqliteBindRow & { id: string }) | null {
+  const originalEnqueuedAt =
+    asSafeIntegerInRange(params.entry.enqueuedAt, { min: 0 }) ?? params.now;
+  const retryCount = asSafeIntegerInRange(params.entry.retryCount, { min: 0 }) ?? 0;
+  const lastAttemptAt = asSafeIntegerInRange(params.entry.lastAttemptAt, { min: 0 });
+  const platformSendStartedAt = asSafeIntegerInRange(params.entry.platformSendStartedAt, {
+    min: 0,
+  });
+  const failed = params.status === "failed";
+  const retention = failed
+    ? inferDeliveryQueueFailureRetention(params.entry, params.id, params.queueName)
+    : undefined;
+  if (failed && !retention) {
+    return null;
+  }
+  const failedAt = failed
+    ? (asSafeIntegerInRange(params.entry.failedAt, { min: 0 }) ??
+      lastAttemptAt ??
+      originalEnqueuedAt)
+    : null;
+  const enqueuedAt = failedAt ?? originalEnqueuedAt;
+  const meta = failed ? undefined : deliveryQueueMetadata(params.queueName, params.entry);
+  const retainedEntry: Record<string, unknown> = {
+    ...params.entry,
+    id: params.id,
+    enqueuedAt,
+    retryCount,
+  };
+  if (lastAttemptAt === undefined) {
+    delete retainedEntry.lastAttemptAt;
+  } else {
+    retainedEntry.lastAttemptAt = lastAttemptAt;
+  }
+  if (platformSendStartedAt === undefined) {
+    delete retainedEntry.platformSendStartedAt;
+  } else {
+    retainedEntry.platformSendStartedAt = platformSendStartedAt;
+  }
+  const failedEntry = failed
+    ? projectDeliveryQueueTerminalEntry(
+        { id: params.id, retryCount },
+        enqueuedAt,
+        "failed",
+        retention,
+      )
+    : undefined;
   return {
     queue_name: params.queueName,
     id: params.id,
     status: params.status,
-    entry_kind: meta.entryKind,
-    session_key: meta.sessionKey,
-    channel: meta.channel,
-    target: meta.target,
-    account_id: meta.accountId,
+    entry_kind: meta?.entryKind ?? null,
+    session_key: meta?.sessionKey ?? null,
+    channel: meta?.channel ?? null,
+    target: meta?.target ?? null,
+    account_id: meta?.accountId ?? null,
     retry_count: retryCount,
-    last_attempt_at:
-      typeof params.entry.lastAttemptAt === "number" ? params.entry.lastAttemptAt : null,
-    last_error: typeof params.entry.lastError === "string" ? params.entry.lastError : null,
-    recovery_state:
-      typeof params.entry.recoveryState === "string" ? params.entry.recoveryState : null,
-    platform_send_started_at:
-      typeof params.entry.platformSendStartedAt === "number"
-        ? params.entry.platformSendStartedAt
+    last_attempt_at: !failed ? (lastAttemptAt ?? null) : null,
+    last_error:
+      !failed && typeof params.entry.lastError === "string" ? params.entry.lastError : null,
+    recovery_state: failed
+      ? (failedEntry?.recoveryState ?? null)
+      : typeof params.entry.recoveryState === "string"
+        ? params.entry.recoveryState
         : null,
-    entry_json: JSON.stringify({ ...params.entry, id: params.id, enqueuedAt, retryCount }),
+    platform_send_started_at: !failed ? (platformSendStartedAt ?? null) : null,
+    entry_json: JSON.stringify(failedEntry ?? retainedEntry),
     enqueued_at: enqueuedAt,
     updated_at: params.now,
     failed_at: failedAt,
@@ -1010,43 +915,39 @@ function legacyDeliveryQueueRowsMatch(
   });
 }
 
-function removeLegacyDeliveryQueueDir(params: {
-  queueDir: string;
-  label: string;
-  changes: string[];
-  warnings: string[];
-}): void {
-  try {
-    fs.rmSync(params.queueDir, { recursive: true });
-    params.changes.push(`Removed ${params.label} legacy source ${params.queueDir}`);
-  } catch (err) {
-    params.warnings.push(`Failed removing ${params.label} ${params.queueDir}: ${String(err)}`);
+/** Never recursively remove a queue directory containing retained archives or unknown files. */
+function removeEmptyLegacyDeliveryQueueDirs(queueDir: string): void {
+  for (const dir of [path.join(queueDir, "failed"), queueDir]) {
+    try {
+      fs.rmdirSync(dir);
+    } catch (error) {
+      if (
+        !["ENOENT", "ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")
+      ) {
+        throw error;
+      }
+    }
   }
 }
 
-function removeLegacyDeliveryQueueMarkers(
-  markerPaths: string[],
-  label: string,
-  warnings: string[],
-): number | null {
-  let removed = 0;
-  for (const markerPath of markerPaths) {
-    try {
-      fs.rmSync(markerPath, { force: true });
-      removed++;
-    } catch (err) {
-      warnings.push(`Failed removing ${label} marker ${markerPath}: ${String(err)}`);
-      return null;
-    }
-  }
-  return removed;
-}
+type LegacyDeliveryQueueImport = {
+  snapshot: LegacyMigrationSourceSnapshot;
+  sourceKey: string;
+  row: (SqliteBindRow & { id: string }) | null;
+  reason?: string;
+  mediaPaths: string[];
+  mediaBackups?: unknown;
+};
 
 export async function migrateLegacyDeliveryQueues(params: {
   stateDir: string;
-}): Promise<{ changes: string[]; warnings: string[] }> {
+}): Promise<MigrationMessages> {
   const changes: string[] = [];
   const warnings: string[] = [];
+  const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
+  // Both namespaces use the same inclusive cutoff, not the latest retry or file mtime.
+  const now = Date.now();
+  let refused = false;
   for (const queue of LEGACY_DELIVERY_QUEUE_DIRS) {
     const queueDir = resolveLegacyDeliveryQueuePath(params.stateDir, queue.dirName);
     const files = listLegacyDeliveryQueueFiles(queueDir);
@@ -1054,97 +955,311 @@ export async function migrateLegacyDeliveryQueues(params: {
     if (files.length === 0 && markerPaths.length === 0) {
       continue;
     }
-    let imported = 0;
-    let skipped = 0;
+    const imports: LegacyDeliveryQueueImport[] = [];
+    const sourceIds = new Map<string, string>();
+    const unresolvedPendingIds = new Set<string | undefined>();
     const conflicts: string[] = [];
-    try {
-      runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          const insert = db.prepare(
-            `
-            INSERT INTO delivery_queue_entries (
-              queue_name, id, status, entry_kind, session_key, channel, target, account_id,
-              retry_count, last_attempt_at, last_error, recovery_state,
-              platform_send_started_at, entry_json, enqueued_at, updated_at, failed_at
-            ) VALUES (
-              @queue_name, @id, @status, @entry_kind, @session_key, @channel, @target,
-              @account_id, @retry_count, @last_attempt_at, @last_error, @recovery_state,
-              @platform_send_started_at, @entry_json, @enqueued_at, @updated_at, @failed_at
-            )
-          `,
-          );
-          const now = Date.now();
-          for (const file of files) {
-            const entry = readLegacyDeliveryQueueEntry(file.sourcePath);
-            const id =
-              typeof entry?.id === "string" ? entry.id : path.basename(file.sourcePath, ".json");
-            if (!entry || !id) {
-              skipped++;
-              continue;
+    let imported = 0;
+    const deliveredNames = new Set(markerPaths.map((file) => path.basename(file, ".delivered")));
+    const deliveredIds = new Set(deliveredNames);
+    const markerIds = new Map([...deliveredNames].map((name) => [name, new Set([name])]));
+    // Snapshot markers before any retirement. A leftover .json twin is already delivered.
+    for (const file of [
+      ...files,
+      ...markerPaths.map((sourcePath) => ({ sourcePath, status: "delivered" as const })),
+    ]) {
+      try {
+        const snapshot = readLegacyMigrationSourceSnapshotSync({
+          sourcePath: file.sourcePath,
+          label: queue.label,
+        });
+        let reason: string | undefined;
+        let mediaPaths: string[] = [];
+        let row: (SqliteBindRow & { id: string }) | null = null;
+        if (file.status === "delivered") {
+          reason = "delivered";
+          try {
+            const id = asNullableRecord(JSON.parse(snapshot.raw))?.id;
+            if (typeof id === "string" && id) {
+              deliveredIds.add(id);
+              markerIds.get(path.basename(file.sourcePath, ".delivered"))?.add(id);
             }
-            const row = buildLegacyDeliveryQueueRow({
+          } catch {
+            // The delivered filename remains terminal evidence for opaque older markers.
+          }
+        } else {
+          const parsed: unknown = JSON.parse(snapshot.raw);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error("expected a queue entry object");
+          }
+          const entry = parsed as Record<string, unknown>;
+          const id =
+            typeof entry.id === "string" ? entry.id : path.basename(file.sourcePath, ".json");
+          if (!id) {
+            throw new Error("missing queue entry id");
+          }
+          const enqueuedAt = asSafeIntegerInRange(entry.enqueuedAt, { min: 0 });
+          if (file.status === "pending") {
+            sourceIds.set(file.sourcePath, id);
+            if (
+              deliveredNames.has(path.basename(file.sourcePath, ".json")) ||
+              deliveredNames.has(id)
+            ) {
+              reason = "delivered";
+            } else if (enqueuedAt === undefined || enqueuedAt > now) {
+              reason = "unverified enqueue time";
+            } else if (now - enqueuedAt >= LEGACY_DELIVERY_QUEUE_MAX_AGE_MS) {
+              reason = "at least 72 hours old";
+            }
+          }
+          if ((reason && reason !== "delivered") || file.status === "failed") {
+            mediaPaths = (
+              await import("./state-migrations.delivery-queue-media.js")
+            ).resolveLegacyDeliveryQueueMediaPaths(entry, params.stateDir);
+          }
+          if (!reason) {
+            row = buildLegacyDeliveryQueueRow({
               queueName: queue.queueName,
               id,
               status: file.status,
               entry,
               now,
             });
-            const existing = db
-              .prepare(
-                `
-                SELECT status, entry_kind, session_key, channel, target, account_id,
-                       retry_count, last_attempt_at, last_error, recovery_state,
-                       platform_send_started_at, entry_json, enqueued_at, failed_at
-                  FROM delivery_queue_entries
-                 WHERE queue_name = ? AND id = ?
-              `,
-              )
-              .get(queue.queueName, id);
-            if (existing) {
-              if (!legacyDeliveryQueueRowsMatch(existing as Record<string, unknown>, row)) {
-                conflicts.push(id);
+          }
+        }
+        imports.push({
+          snapshot,
+          sourceKey: resolveLegacyMigrationSourceKey(
+            "delivery-queue",
+            file.sourcePath,
+            snapshot.sha256,
+          ),
+          row,
+          reason,
+          mediaPaths,
+        });
+      } catch (error) {
+        if (file.status === "pending") {
+          unresolvedPendingIds.add(sourceIds.get(file.sourcePath));
+        }
+        refused = true;
+        warnings.push(
+          `Left malformed ${queue.label} source ${file.sourcePath} in place: ${String(error)}`,
+        );
+      }
+    }
+    // A marker settles a queue identity, not merely one filename. Resolve aliases
+    // before inserting anything so a second legacy copy cannot replay the same ID.
+    for (const [sourcePath, id] of sourceIds) {
+      if (deliveredNames.has(path.basename(sourcePath, ".json"))) {
+        deliveredIds.add(id);
+        markerIds.get(path.basename(sourcePath, ".json"))?.add(id);
+      }
+    }
+    for (const item of imports) {
+      const id = sourceIds.get(item.snapshot.sourcePath);
+      if (id !== undefined && deliveredIds.has(id)) {
+        item.row = null;
+        item.reason = "delivered";
+        item.mediaPaths = [];
+      }
+    }
+    const committed: LegacyDeliveryQueueImport[] = [];
+    try {
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          const insert = db.prepare(
+            `INSERT INTO delivery_queue_entries (queue_name, id, status, entry_kind, session_key, channel, target, account_id, retry_count, last_attempt_at, last_error, recovery_state, platform_send_started_at, entry_json, enqueued_at, updated_at, failed_at) VALUES (@queue_name, @id, @status, @entry_kind, @session_key, @channel, @target, @account_id, @retry_count, @last_attempt_at, @last_error, @recovery_state, @platform_send_started_at, @entry_json, @enqueued_at, @updated_at, @failed_at)`,
+          );
+          for (const item of imports) {
+            const { snapshot, sourceKey, row } = item;
+            assertLegacyMigrationSourceUnchanged({
+              sourcePath: snapshot.sourcePath,
+              snapshot,
+              label: queue.label,
+            });
+            // Import receipts outlive queue consumption and payload-free terminal compaction.
+            // Retrying cleanup must never recreate an already-delivered row.
+            const receipt = readLegacyMigrationReceiptFromDatabase(db, sourceKey);
+            if (receipt) {
+              const report = asNullableRecord(JSON.parse(receipt.reportJson));
+              const reason = report?.reason;
+              const mediaPaths = report?.mediaPaths;
+              if (
+                typeof reason !== "string" ||
+                !Array.isArray(mediaPaths) ||
+                !mediaPaths.every((value) => typeof value === "string")
+              ) {
+                throw new Error("Legacy delivery import receipt has no verified disposition");
               }
+              committed.push({
+                ...item,
+                reason: reason === "imported" ? undefined : reason,
+                mediaPaths,
+                mediaBackups: report?.mediaBackups,
+              });
               continue;
             }
-            insert.run(row);
-            imported++;
+            if (row) {
+              const existing = db
+                .prepare("SELECT * FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+                .get(queue.queueName, row.id);
+              if (existing && !legacyDeliveryQueueRowsMatch(existing, row)) {
+                conflicts.push(row.id);
+                continue;
+              }
+              if (!existing) {
+                insert.run(row);
+                imported++;
+              }
+            }
+            recordLegacyMigrationReceipt(db, {
+              sourceKey,
+              migrationKind: "delivery-queues",
+              sourcePath: snapshot.sourcePath,
+              targetTable: "delivery_queue_entries",
+              sourceSha256: snapshot.sha256,
+              sourceSizeBytes: snapshot.size,
+              sourceRecordCount: 1,
+              runId: randomUUID(),
+              now,
+              reportJson: JSON.stringify({
+                queueName: queue.queueName,
+                reason: item.reason ?? "imported",
+                mediaPaths: item.mediaPaths,
+                mediaPreserved: item.mediaPaths.length === 0,
+              }),
+            });
+            committed.push(item);
           }
         },
-        { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
+        { env },
       );
-    } catch (err) {
-      warnings.push(`Failed migrating ${queue.label} ${queueDir}: ${String(err)}`);
+    } catch (error) {
+      refused = true;
+      warnings.push(`Failed migrating ${queue.label} ${queueDir}: ${String(error)}`);
       continue;
-    }
-    const removedMarkers = removeLegacyDeliveryQueueMarkers(markerPaths, queue.label, warnings);
-    if (removedMarkers === null) {
-      continue;
-    }
-    if (removedMarkers > 0) {
-      changes.push(
-        `Removed ${removedMarkers} ${queue.label} delivered ${removedMarkers === 1 ? "marker" : "markers"}`,
-      );
     }
     if (imported > 0) {
       changes.push(
         `Migrated ${imported} ${queue.label} ${imported === 1 ? "entry" : "entries"} → shared SQLite state`,
       );
     }
-    if (skipped > 0) {
-      warnings.push(
-        `Skipped ${skipped} malformed ${queue.label} ${skipped === 1 ? "entry" : "entries"}`,
-      );
-      warnings.push(`Left ${queue.label} in place because malformed entries need manual cleanup`);
-      continue;
-    }
     if (conflicts.length > 0) {
+      refused = true;
       warnings.push(
         `Left ${queue.label} in place because ${conflicts.length} ${conflicts.length === 1 ? "entry" : "entries"} already existed in shared state: ${conflicts[0]}`,
       );
-      continue;
     }
-    removeLegacyDeliveryQueueDir({ queueDir, label: queue.label, changes, warnings });
+    for (const { snapshot, sourceKey, reason, mediaPaths, mediaBackups } of committed) {
+      // Keep delivered evidence while its pending twin could still need repair.
+      // Unrelated conflicts must not retain already-settled markers.
+      const ids = markerIds.get(path.basename(snapshot.sourcePath, ".delivered"));
+      // Opaque markers need their JSON twin's ID until malformed duplicates are resolved.
+      if (
+        reason === "delivered" &&
+        [...unresolvedPendingIds].some(
+          (id) => id === undefined || id === sourceIds.get(snapshot.sourcePath) || ids?.has(id),
+        )
+      ) {
+        continue;
+      }
+      if (
+        snapshot.sourcePath.endsWith(".delivered") &&
+        ids &&
+        files.some(
+          (file) =>
+            file.status === "pending" &&
+            (ids.has(path.basename(file.sourcePath, ".json")) ||
+              ids.has(sourceIds.get(file.sourcePath) ?? "")) &&
+            migrationFileExists(file.sourcePath),
+        )
+      ) {
+        continue;
+      }
+      const recordMediaPreservation = (preserved: boolean, copies: unknown) => {
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            // This exact source is present again; reopen custody before any awaited backup check.
+            db.prepare(
+              "UPDATE migration_sources SET report_json = ?, removed_source = 0 WHERE source_key = ?",
+            ).run(
+              JSON.stringify({
+                queueName: queue.queueName,
+                reason: reason ?? "imported",
+                mediaPaths,
+                mediaPreserved: preserved,
+                mediaBackups: copies,
+              }),
+              sourceKey,
+            );
+          },
+          { env },
+        );
+      };
+      try {
+        assertLegacyMigrationSourceUnchanged({
+          sourcePath: snapshot.sourcePath,
+          snapshot,
+          label: queue.label,
+        });
+        if (mediaPaths.length > 0) {
+          recordMediaPreservation(false, mediaBackups);
+        }
+        // Failed-row projection deliberately strips content. Keep the original file as
+        // an ordinary private migration backup, never as another runtime queue/store.
+        const mediaArchive =
+          mediaPaths.length > 0
+            ? await (
+                await import("./state-migrations.delivery-queue-media.js")
+              ).preserveLegacyDeliveryQueueMedia({
+                mediaPaths,
+                previousBackups: mediaBackups,
+                sourcePath: snapshot.sourcePath,
+                stateDir: params.stateDir,
+              })
+            : undefined;
+        if (mediaArchive) {
+          // Publish backup identities before releasing spool custody or retiring JSON.
+          recordMediaPreservation(true, mediaArchive.copies);
+        }
+        assertLegacyMigrationSourceUnchanged({
+          sourcePath: snapshot.sourcePath,
+          snapshot,
+          label: queue.label,
+        });
+        const archive = archiveLegacyImportSource({
+          sourcePath: snapshot.sourcePath,
+          label: queue.label,
+          changes,
+          warnings,
+        });
+        if (archive) {
+          markLegacyMigrationSourceRemoved(sourceKey, env);
+        }
+        if (reason && reason !== "delivered") {
+          warnings.push(
+            `Did not replay ${queue.label} source ${snapshot.sourcePath}: ${reason}. Original content is retained at ${archive?.targetPath ?? snapshot.sourcePath}${mediaArchive ? `; queue-owned media copies: ${mediaArchive.directory}` : ""}; review it before explicitly sending a new message. Do not restore it to the queue.`,
+          );
+        }
+      } catch (error) {
+        // COMMIT recorded the non-replayable source identity; safely retained leftovers
+        // need cleanup, not a failed upgrade or another attempt to send them.
+        warnings.push(
+          `Retained ${queue.label} source or archive ${snapshot.sourcePath}; run openclaw doctor --fix to retry cleanup: ${String(error)}`,
+        );
+      }
+    }
+    try {
+      removeEmptyLegacyDeliveryQueueDirs(queueDir);
+    } catch (error) {
+      warnings.push(`Failed cleaning empty ${queue.label} directory ${queueDir}: ${String(error)}`);
+    }
   }
-  return { changes, warnings };
+  return {
+    changes,
+    warnings,
+    ...(!refused && warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
+  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

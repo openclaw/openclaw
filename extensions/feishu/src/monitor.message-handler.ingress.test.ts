@@ -1,11 +1,21 @@
-import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
-import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Feishu ingress tests cover debounce ownership and constituent claim settlement.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
+import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import * as dedup from "./dedup.js";
 import type { FeishuMessageEvent } from "./event-types.js";
-import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
+import { createFeishuDurableIngress, type FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 
 type MessageReceiveHandlerContext = Parameters<typeof createFeishuMessageReceiveHandler>[0];
@@ -118,6 +128,7 @@ function createHarness(params: {
   for (const handle of params.claims) {
     claim.mockResolvedValueOnce({ kind: "claimed", handle });
   }
+  const hasProcessedMessage = vi.fn(async (_messageId: string | undefined | null) => false);
   const handler = createFeishuMessageReceiveHandler({
     cfg: {} as ClawdbotConfig,
     channelRuntime,
@@ -125,8 +136,9 @@ function createHarness(params: {
     runtime: { ...createNonExitingRuntimeEnv(), error: runtimeError } satisfies RuntimeEnv,
     chatHistories: new Map(),
     handleMessage,
-    resolveDebounceText: () => "hello",
-    hasProcessedMessage: vi.fn(async () => false),
+    resolveDebounceText: ({ event }) =>
+      (JSON.parse(event.message.content) as { text: string }).text,
+    hasProcessedMessage,
     getBotOpenId: () => "ou-bot",
     resolveIngressLifecycle: (data) => {
       const eventId = (data as { event_id?: string }).event_id;
@@ -138,6 +150,7 @@ function createHarness(params: {
     entries,
     handler,
     handleMessage,
+    hasProcessedMessage,
     flush: async () => {
       if (!onFlush) {
         throw new Error("debouncer flush callback missing");
@@ -159,44 +172,94 @@ afterEach(() => {
 });
 
 describe("Feishu durable ingress debounce lifecycle", () => {
-  it("accepts an empty group message body without losing bot mentions or ingress adoption", async () => {
+  it("releases a claim acquired after ingress abandonment instead of enqueueing it", async () => {
     const transport = createLifecycle();
-    const logicalClaim = createClaim("empty-group-mention");
+    const logicalClaim = createClaim("delayed-admission");
+    const pending =
+      createDeferred<Awaited<ReturnType<typeof dedup.claimUnprocessedFeishuMessage>>>();
     const harness = createHarness({
-      lifecycles: new Map([["evt-empty-group-mention", transport.lifecycle]]),
-      claims: [logicalClaim],
+      lifecycles: new Map([["evt-delayed", transport.lifecycle]]),
+      claims: [],
       adoptTurn: true,
     });
-    const event = createTextEvent("evt-empty-group-mention", "om-empty-group-mention", "");
-    event.message.chat_type = "group";
-    event.message.content = "";
-    event.message.mentions = [
-      {
-        key: "@_bot_1",
-        id: { open_id: "ou-bot" },
-        name: "OpenClaw",
-      },
-    ];
+    harness.claim.mockReturnValueOnce(pending.promise);
+    const handling = harness.handler(createTextEvent("evt-delayed", "om-delayed", "hello"));
+    transport.controller.abort();
+    await transport.lifecycle.onAbandoned();
+    pending.resolve({ kind: "claimed", handle: logicalClaim });
 
-    await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
-    await harness.flush();
+    await expect(handling).resolves.toMatchObject({ kind: "failed-retryable" });
+    expect(logicalClaim.release).toHaveBeenCalledOnce();
+    expect(logicalClaim.commit).not.toHaveBeenCalled();
+    expect(harness.entries).toEqual([]);
+    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(transport.calls.adopted).not.toHaveBeenCalled();
+  });
 
-    expect(harness.handleMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            chat_type: "group",
-            content: "",
-            mentions: event.message.mentions,
+  it.each(["group", "topic_group", "private", "p2p"] as const)(
+    "accepts an empty %s message body without losing bot mentions or ingress adoption",
+    async (chatType) => {
+      const transport = createLifecycle();
+      const logicalClaim = createClaim("empty-group-mention");
+      const harness = createHarness({
+        lifecycles: new Map([["evt-empty-group-mention", transport.lifecycle]]),
+        claims: [logicalClaim],
+        adoptTurn: true,
+      });
+      const event = createTextEvent("evt-empty-group-mention", "om-empty-group-mention", "");
+      event.message.chat_type = chatType;
+      event.message.content = "";
+      event.message.mentions = [
+        {
+          key: "@_bot_1",
+          id: { open_id: "ou-bot" },
+          name: "OpenClaw",
+        },
+      ];
+
+      await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
+      await harness.flush();
+
+      expect(harness.handleMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: expect.objectContaining({
+            message: expect.objectContaining({
+              chat_type: chatType,
+              content: "",
+              mentions: event.message.mentions,
+            }),
           }),
         }),
-      }),
-    );
-    expect(logicalClaim.commit).toHaveBeenCalledTimes(1);
-    expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
-    expect(transport.calls.abandoned).not.toHaveBeenCalled();
-    expect(harness.runtimeError).not.toHaveBeenCalled();
-  });
+      );
+      expect(logicalClaim.commit).toHaveBeenCalledTimes(1);
+      expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
+      expect(transport.calls.abandoned).not.toHaveBeenCalled();
+      expect(harness.runtimeError).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([" group ", "GROUP", 42])(
+    "rejects chat type %j with a valid body before claims or dispatch",
+    async (chatType) => {
+      const transport = createLifecycle();
+      const harness = createHarness({
+        lifecycles: new Map([["evt-invalid-chat-type", transport.lifecycle]]),
+        claims: [],
+        adoptTurn: true,
+      });
+      const event = createTextEvent("evt-invalid-chat-type", "om-invalid-chat-type", "hello");
+      Reflect.set(event.message, "chat_type", chatType);
+
+      await expect(harness.handler(event)).rejects.toThrow(
+        "Feishu durable message event payload is malformed.",
+      );
+
+      expect(harness.claim).not.toHaveBeenCalled();
+      expect(harness.entries).toEqual([]);
+      expect(harness.handleMessage).not.toHaveBeenCalled();
+      expect(transport.calls.adopted).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {
@@ -226,36 +289,52 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     expect(transport.calls.adopted).not.toHaveBeenCalled();
   });
 
-  it("returns deferred and fans merged adoption to every constituent claim", async () => {
-    const first = createLifecycle();
-    const second = createLifecycle();
-    const firstClaim = createClaim("first");
-    const secondClaim = createClaim("second");
-    const harness = createHarness({
-      lifecycles: new Map([
-        ["evt-a", first.lifecycle],
-        ["evt-b", second.lifecycle],
-      ]),
-      claims: [firstClaim, secondClaim],
-      adoptTurn: true,
-    });
+  it.each([undefined, 0, 1])(
+    "rechecks replay state and adopts every constituent (processed index: %s)",
+    async (processedIndex) => {
+      const first = createLifecycle();
+      const second = createLifecycle();
+      const firstClaim = createClaim("first");
+      const secondClaim = createClaim("second");
+      const events = [
+        createTextEvent("evt-a", "om-a", "alpha"),
+        createTextEvent("evt-b", "om-b", "beta"),
+      ];
+      const harness = createHarness({
+        lifecycles: new Map([
+          ["evt-a", first.lifecycle],
+          ["evt-b", second.lifecycle],
+        ]),
+        claims: [firstClaim, secondClaim],
+        adoptTurn: true,
+      });
+      for (const event of events) {
+        await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
+      }
+      const keys = harness.claim.mock.calls.map(([params]) => params.messageId);
+      if (processedIndex !== undefined) {
+        harness.hasProcessedMessage.mockImplementation(async (key) => key === keys[processedIndex]);
+      }
+      await harness.flush();
 
-    await expect(harness.handler(createTextEvent("evt-a", "om-a", "alpha"))).resolves.toEqual({
-      kind: "deferred",
-    });
-    await expect(harness.handler(createTextEvent("evt-b", "om-b", "beta"))).resolves.toEqual({
-      kind: "deferred",
-    });
-    await harness.flush();
-
-    expect(harness.handleMessage).toHaveBeenCalledTimes(1);
-    expect(firstClaim.commit).toHaveBeenCalledTimes(1);
-    expect(secondClaim.commit).toHaveBeenCalledTimes(1);
-    expect(first.calls.finalizing).toHaveBeenCalledTimes(1);
-    expect(second.calls.finalizing).toHaveBeenCalledTimes(1);
-    expect(first.calls.adopted).toHaveBeenCalledTimes(1);
-    expect(second.calls.adopted).toHaveBeenCalledTimes(1);
-  });
+      const dispatchIndex = processedIndex === 1 ? 0 : 1;
+      expect(harness.handleMessage).toHaveBeenCalledTimes(1);
+      expect(harness.handleMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: events[dispatchIndex],
+          messageDedupeKey: keys[dispatchIndex],
+          preparedContent:
+            processedIndex === undefined ? "alpha\nbeta" : processedIndex === 0 ? "beta" : "alpha",
+        }),
+      );
+      expect(firstClaim.commit).toHaveBeenCalledTimes(1);
+      expect(secondClaim.commit).toHaveBeenCalledTimes(1);
+      expect(first.calls.finalizing).toHaveBeenCalledTimes(1);
+      expect(second.calls.finalizing).toHaveBeenCalledTimes(1);
+      expect(first.calls.adopted).toHaveBeenCalledTimes(1);
+      expect(second.calls.adopted).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("completes gated no-dispatch transport claims and releases the logical guard", async () => {
     const transport = createLifecycle();
@@ -369,5 +448,145 @@ describe("Feishu durable ingress debounce lifecycle", () => {
 
     expect(harness.handleMessage).toHaveBeenCalledTimes(1);
     expect(second.calls.adopted).not.toHaveBeenCalled();
+  });
+
+  it("preserves abandon retry accounting, backoff, threshold, and restart behavior", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 0, 2);
+    vi.setSystemTime(now);
+    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-abandon-"));
+    const stateDir = await fs.realpath(created);
+    type Queue = NonNullable<Parameters<typeof createFeishuDurableIngress>[0]["queue"]>;
+    type Payload = Parameters<Queue["enqueue"]>[1];
+    const queue = createChannelIngressQueueForTests<Payload>({
+      channelId: "feishu",
+      accountId: "default",
+      stateDir,
+    });
+    const event = {
+      ...createTextEvent("evt-abandon-retry", "om-abandon-retry", "retry me"),
+      event_type: "im.message.receive_v1",
+    };
+    const handleMessage = vi.fn(async () => {
+      throw new Error("Feishu dispatch failed before adoption");
+    });
+    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockImplementation(async () => ({
+      kind: "claimed",
+      handle: createClaim(`retry-${handleMessage.mock.calls.length}`),
+    }));
+
+    const createIntegratedIngress = () => {
+      const channelRuntime = {
+        commands: { isControlCommandMessage: () => false },
+        debounce: {
+          resolveInboundDebounceMs: () => 0,
+          createInboundDebouncer,
+        },
+      } as unknown as PluginRuntime["channel"];
+      const handler = createFeishuMessageReceiveHandler({
+        cfg: {} as ClawdbotConfig,
+        channelRuntime,
+        accountId: "default",
+        runtime: createNonExitingRuntimeEnv(),
+        chatHistories: new Map(),
+        handleMessage,
+        resolveDebounceText: () => "retry me",
+        hasProcessedMessage: vi.fn(async () => false),
+        getBotOpenId: () => "ou-bot",
+        resolveIngressLifecycle: (data) => ingress.resolveLifecycle(data),
+      });
+      const ingress = createFeishuDurableIngress({
+        accountId: "default",
+        queue,
+        dispatcher: { invoke: async (data: unknown) => await handler(data as never) } as never,
+        runtime: { error: vi.fn(), log: vi.fn() },
+        pollIntervalMs: 500,
+      });
+      return ingress;
+    };
+    const pendingAttempt = async (attempts: number) => {
+      let observed: Awaited<ReturnType<typeof queue.listPending>>[number] | undefined;
+      await vi.waitFor(async () => {
+        const pending = await queue.listPending({ limit: "all" });
+        expect(pending).toEqual([
+          expect.objectContaining({
+            id: "evt-abandon-retry",
+            attempts,
+            lastAttemptAt: expect.any(Number),
+            lastError: "turn-abandoned",
+          }),
+        ]);
+        observed = pending[0];
+      });
+      const lastAttemptAt = observed?.lastAttemptAt;
+      if (lastAttemptAt === undefined) {
+        throw new Error(`Missing Feishu retry timestamp for attempt ${attempts}`);
+      }
+      return { ...observed, lastAttemptAt };
+    };
+
+    try {
+      const first = createIntegratedIngress();
+      first.start();
+      await first.invokeWebhook(event);
+      const firstAttempt = await pendingAttempt(1);
+      expect(handleMessage).toHaveBeenCalledTimes(1);
+      await first.stop();
+
+      vi.setSystemTime(firstAttempt.lastAttemptAt + 999);
+      const blocked = createIntegratedIngress();
+      blocked.start();
+      await blocked.invokeWebhook(event);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handleMessage).toHaveBeenCalledTimes(1);
+      await blocked.stop();
+
+      vi.setSystemTime(firstAttempt.lastAttemptAt + 1_001);
+      const second = createIntegratedIngress();
+      second.start();
+      await second.invokeWebhook(event);
+      const secondAttempt = await pendingAttempt(2);
+      expect(handleMessage).toHaveBeenCalledTimes(2);
+      await second.stop();
+
+      for (let attempt = 3; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+        const claim = await queue.claim("evt-abandon-retry", { ownerId: `seed-${attempt}` });
+        if (!claim) {
+          throw new Error(`Expected Feishu seed claim ${attempt}`);
+        }
+        await queue.release(claim, {
+          lastError: "turn-abandoned",
+          releasedAt: secondAttempt.lastAttemptAt,
+        });
+      }
+
+      vi.setSystemTime(secondAttempt.lastAttemptAt + 64_001);
+      const threshold = createIntegratedIngress();
+      threshold.start();
+      await threshold.invokeWebhook(event);
+      const thresholdAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS);
+      expect(handleMessage).toHaveBeenCalledTimes(3);
+      await threshold.stop();
+
+      vi.setSystemTime(thresholdAttempt.lastAttemptAt + 128_001);
+      const beyond = createIntegratedIngress();
+      beyond.start();
+      await beyond.invokeWebhook(event);
+      const beyondAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 1);
+      expect(handleMessage).toHaveBeenCalledTimes(4);
+      await beyond.stop();
+
+      vi.setSystemTime(beyondAttempt.lastAttemptAt + 1_000);
+      const blockedRestart = createIntegratedIngress();
+      blockedRestart.start();
+      await blockedRestart.invokeWebhook(event);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handleMessage).toHaveBeenCalledTimes(4);
+      await blockedRestart.stop();
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
+      vi.useRealTimers();
+    }
   });
 });

@@ -30,7 +30,7 @@ const { inboundBodyResult, recordInboundSessionMock, resolveStorePathMock } = vi
     },
     canDetectMention: false,
     shouldBypassMention: false,
-    hasControlCommand: false,
+    commandSource: undefined,
     stickerCacheHit: false,
     locationData: undefined,
   });
@@ -250,7 +250,10 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
 
     expect(ctx?.ctxPayload.MessageThreadId).toBe(77);
     expect(ctx?.ctxPayload.OriginatingTo).toBe("telegram:-1001234567890:direct-topic:77");
-    expect(ctx?.ctxPayload.SessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:77");
+    expect(ctx?.ctxPayload.From).toBe("telegram:group:-1001234567890:direct-topic:77");
+    expect(ctx?.ctxPayload.SessionKey).toBe(
+      "agent:main:telegram:group:-1001234567890:direct-topic:77",
+    );
     expect(ctx?.turn.record.updateLastRoute).toMatchObject({
       to: "telegram:-1001234567890:direct-topic:77",
       threadId: "77",

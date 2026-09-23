@@ -1,4 +1,7 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+import {
+  createAccountListHelpers,
+  resolveChannelMediaMaxBytes,
+} from "openclaw/plugin-sdk/account-helpers";
 // Tlon type declarations define plugin contracts.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { ResolvedChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -7,27 +10,11 @@ import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   isPrivateNetworkOptInEnabled,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { z } from "zod";
+import type { TlonConfigSchema } from "./config-schema.js";
 
-type TlonAccountConfig = {
-  name?: string;
-  enabled?: boolean;
-  ship?: string;
-  url?: string;
-  code?: string;
-  network?: {
-    dangerouslyAllowPrivateNetwork?: boolean;
-  };
-  groupChannels?: string[];
-  dmAllowlist?: string[];
-  groupInviteAllowlist?: string[];
-  autoDiscoverChannels?: boolean;
-  showModelSignature?: boolean;
-  autoAcceptDmInvites?: boolean;
-  autoAcceptGroupInvites?: boolean;
-  defaultAuthorizedShips?: string[];
-  ownerShip?: string;
+type TlonAccountConfig = z.input<typeof TlonConfigSchema> & {
   implicitMentions?: Partial<ResolvedChannelImplicitMentions>;
-  accounts?: Record<string, TlonAccountConfig>;
 };
 
 export type TlonResolvedAccount = {
@@ -35,6 +22,7 @@ export type TlonResolvedAccount = {
   name: string | null;
   enabled: boolean;
   configured: boolean;
+  mediaMaxBytes?: number;
   ship: string | null;
   url: string | null;
   code: string | null;
@@ -136,6 +124,11 @@ export function resolveTlonAccount(
     name: merged.name ?? null,
     enabled: merged.enabled !== false,
     configured,
+    mediaMaxBytes: resolveChannelMediaMaxBytes({
+      cfg,
+      accountId: resolvedAccountId,
+      resolveChannelLimitMb: () => merged.mediaMaxMb,
+    }),
     ship,
     url,
     code,

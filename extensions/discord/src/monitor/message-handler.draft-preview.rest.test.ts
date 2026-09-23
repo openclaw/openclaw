@@ -1,0 +1,407 @@
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
+import { describe, expect, it, vi } from "vitest";
+import { createChannelMessage, RequestClient } from "../internal/discord.js";
+import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
+
+function createPreviewController(
+  rest: RequestClient,
+  mode: "partial" | "block" | "progress" = "progress",
+  overrides: Partial<Parameters<typeof createDiscordDraftPreviewController>[0]> = {},
+) {
+  return createDiscordDraftPreviewController({
+    cfg: {},
+    discordConfig: { streaming: { mode, progress: { label: false, toolProgress: true } } },
+    accountId: "default",
+    sourceRepliesAreToolOnly: false,
+    textLimit: 2_000,
+    deliveryRest: rest,
+    deliverChannelId: "c1",
+    replyReference: { peek: () => undefined },
+    log: () => {},
+    ...overrides,
+  });
+}
+
+function createContinuationHarness(options?: { missingId?: boolean; textLimit?: number }) {
+  const visible = new Map<string, string>();
+  let nextId = 0;
+  const failures = { edit: false };
+  const rest = new RequestClient("test-token", {
+    queueRequests: false,
+    fetch: async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      const id = url.pathname.split("/").at(-1)!;
+      if (init?.method === "DELETE") {
+        visible.delete(id);
+        return new Response(null, { status: 204 });
+      }
+      if (init?.method === "PATCH" && failures.edit) {
+        return Response.json({ message: "edit unavailable" }, { status: 503 });
+      }
+      if (typeof init?.body !== "string") {
+        throw new Error("Expected a serialized Discord message");
+      }
+      const body = JSON.parse(init.body) as { content: string };
+      const messageId = init.method === "POST" ? String(++nextId) : id;
+      visible.set(messageId, body.content);
+      return Response.json(options?.missingId ? {} : { id: messageId });
+    },
+  });
+  const controller = createPreviewController(rest, "progress", {
+    textLimit: options?.textLimit ?? 2_000,
+  });
+  return { controller, visible, failures };
+}
+
+describe("Discord draft preview REST lifecycle", () => {
+  it.each([true, false])(
+    "transfers a confirmed checklist only on a positive handoff (accepted: %s)",
+    async (accepted) => {
+      const { controller, visible } = createContinuationHarness();
+      const plan = [
+        { step: "Inspect", status: "completed" as const },
+        { step: "Verify", status: "in_progress" as const },
+      ];
+      await controller.pushPlanProgress(plan);
+      controller.freezeProgress();
+      const adopt = vi.fn<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressContinuation"]>>(
+        async (receipt) => {
+          expect(receipt.messageId).toBe("1");
+          expect(receipt.text).toBe(visible.get("1"));
+          expect(receipt.snapshot.plan).toEqual(plan);
+          return accepted;
+        },
+      );
+
+      expect(
+        await controller.adoptProgressContinuation(
+          { text: "Waiting for workers" },
+          { kind: "final", adoptProgressContinuation: adopt },
+          { to: "channel:c1" },
+        ),
+      ).toBe(accepted);
+      await controller.pushPlanProgress([{ step: "Late parent mutation", status: "pending" }]);
+      await controller.cleanup();
+      expect([...visible.keys()]).toEqual(accepted ? ["1"] : []);
+      expect(adopt).toHaveBeenCalledOnce();
+      expect(controller.lifecycle.finalDelivered).toBe(false);
+      if (accepted) {
+        const retained = visible.get("1");
+        controller.handleQueuedFollowupAdmitted();
+        await controller.pushPlanProgress([{ step: "Next turn", status: "in_progress" }]);
+        await controller.flush();
+        expect(visible.get("2")).toContain("Next turn");
+        await controller.cleanup();
+        expect([...visible]).toEqual([["1", retained]]);
+      }
+    },
+  );
+
+  it("keeps the queued preview independent of a late continuation handoff", async () => {
+    const { controller, visible } = createContinuationHarness();
+    const handoffStarted = createDeferred<void>();
+    const finishHandoff = createDeferred<boolean>();
+    await controller.pushPlanProgress([{ step: "Prior turn", status: "in_progress" }]);
+    const retained = visible.get("1");
+    const adopting = controller.adoptProgressContinuation(
+      { text: "Waiting for workers" },
+      {
+        kind: "final",
+        adoptProgressContinuation: async () => {
+          handoffStarted.resolve();
+          return await finishHandoff.promise;
+        },
+      },
+      { to: "channel:c1" },
+    );
+    await handoffStarted.promise;
+    controller.handleQueuedFollowupAdmitted();
+    await controller.pushPlanProgress([{ step: "Queued turn", status: "in_progress" }]);
+    await controller.flush();
+    finishHandoff.resolve(true);
+    expect(await adopting).toBe(true);
+
+    await controller.pushPlanProgress([{ step: "Queued result", status: "completed" }]);
+    await controller.flush();
+    expect(visible.get("2")).toContain("Queued result");
+    await controller.cleanup();
+    expect([...visible]).toEqual([["1", retained]]);
+  });
+
+  it("publishes retained preamble data after the final gate without reopening parent progress", async () => {
+    const { controller, visible } = createContinuationHarness();
+    await controller.pushItemEvent({
+      itemId: "preamble",
+      kind: "preamble",
+      progressText: "Waiting for child verification.",
+    });
+    expect([...visible]).toEqual([]);
+    controller.freezeProgress();
+
+    expect(
+      await controller.adoptProgressContinuation(
+        { text: "Waiting for workers" },
+        { kind: "final", adoptProgressContinuation: async () => true },
+        { to: "channel:c1" },
+      ),
+    ).toBe(true);
+    await controller.cleanup();
+
+    expect([...visible]).toEqual([["1", "Waiting for child verification."]]);
+  });
+
+  it.each(["missing-id", "failed-edit", "oversize"] as const)(
+    "declines unconfirmed progress instead of adopting stale display data (%s)",
+    async (failure) => {
+      const { controller, visible, failures } = createContinuationHarness({
+        missingId: failure === "missing-id",
+        textLimit: failure === "oversize" ? 40 : 2_000,
+      });
+      await controller.pushPlanProgress([{ step: "Inspect", status: "in_progress" }]);
+      if (failure !== "missing-id") {
+        failures.edit = failure === "failed-edit";
+        await controller.pushPlanProgress([
+          {
+            step: "Verify the latest child result before delivering the final answer",
+            status: "pending",
+          },
+        ]);
+      }
+      controller.freezeProgress();
+      const adopt = vi.fn(async () => true);
+
+      expect(
+        await controller.adoptProgressContinuation(
+          { text: "Waiting for workers" },
+          { kind: "final", adoptProgressContinuation: adopt },
+          { to: "channel:c1" },
+        ),
+      ).toBe(false);
+      expect(adopt).not.toHaveBeenCalled();
+      expect(visible.get("1")).toBe("▸ Inspect");
+      await controller.cleanup();
+    },
+  );
+
+  it("rechecks live authority after awaiting the Discord receipt", async () => {
+    const started = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const rest = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async (_input, init) => {
+        if (init?.method === "POST") {
+          started.resolve();
+          await finish.promise;
+          return Response.json({ id: "1" });
+        }
+        return new Response(null, { status: 204 });
+      },
+    });
+    const controller = createPreviewController(rest);
+    const publishing = controller.pushPlanProgress([{ step: "Verify", status: "in_progress" }]);
+    await started.promise;
+    controller.freezeProgress();
+    let current = true;
+    const adopt = vi.fn(async () => true);
+    const adopting = controller.adoptProgressContinuation(
+      { text: "Waiting for workers" },
+      {
+        kind: "final",
+        adoptProgressContinuation: adopt,
+        assertPlatformSendAuthorized: () => {
+          if (!current) {
+            throw new Error("Progress owner retired");
+          }
+        },
+      },
+      { to: "channel:c1" },
+    );
+    current = false;
+    finish.resolve();
+
+    await expect(adopting).rejects.toThrow("Progress owner retired");
+    await publishing;
+    expect(adopt).not.toHaveBeenCalled();
+    await controller.cleanup();
+  });
+
+  it.each(["partial", "block", "progress"] as const)(
+    "publishes and retracts a short complete plan, then resumes in %s mode",
+    async (mode) => {
+      const visible = new Map<string, string>();
+      let nextId = 0;
+      const rest = new RequestClient("test-token", {
+        queueRequests: false,
+        fetch: async (input, init) => {
+          const url = new URL(input instanceof Request ? input.url : input);
+          const id = url.pathname.split("/").at(-1)!;
+          if (init?.method === "DELETE") {
+            visible.delete(id);
+            return new Response(null, { status: 204 });
+          }
+          if (typeof init?.body !== "string") {
+            throw new Error("Expected a serialized Discord message");
+          }
+          const body = JSON.parse(init.body) as { content: string };
+          const messageId = init.method === "POST" ? String(++nextId) : id;
+          visible.set(messageId, body.content);
+          return Response.json({ id: messageId });
+        },
+      });
+      const controller = createPreviewController(rest, mode);
+
+      await controller.pushPlanProgress([]);
+      expect(visible.size).toBe(0);
+      await controller.pushPlanProgress([{ step: "Check", status: "in_progress" }]);
+      await controller.flush();
+      expect([...visible.values()]).toEqual(["▸ Check"]);
+      await controller.pushPlanProgress([], { explanation: "Progress updated" });
+      await controller.flush();
+      expect([...visible.values()]).toEqual(["Progress updated"]);
+      await controller.pushPlanProgress([]);
+      expect(visible.size).toBe(0);
+      await controller.pushPlanProgress([{ step: "Retry", status: "pending" }]);
+      await controller.flush();
+      expect([...visible.values()]).toEqual(["▢ Retry"]);
+      controller.handleAssistantMessageBoundary();
+      await controller.pushItemEvent({
+        itemId: "card-rejected",
+        kind: "tool",
+        name: "progress_card",
+        phase: "end",
+        status: "blocked",
+        meta: '<progress aria-label="private detail"></progress>',
+      });
+      controller.handleAssistantMessageBoundary();
+      await controller.pushItemEvent(
+        projectAgentToolActivity({ toolCallId: "exec-1", name: "exec", phase: "start" }),
+      );
+      await controller.pushToolEvent({ toolCallId: "exec-1", name: "exec", phase: "start" });
+      await controller.flush();
+      expect(visible.size).toBe(1);
+      const withActivity = [...visible.values()][0];
+      expect(withActivity).toContain("▢ Retry");
+      expect(withActivity).toContain("blocked");
+      expect(withActivity).toContain("Exec");
+      expect(withActivity).not.toContain("private detail");
+      controller.handleAssistantMessageBoundary();
+      await controller.pushPlanProgress([]);
+      await controller.flush();
+      expect(visible.size).toBe(1);
+      const afterClear = [...visible.values()][0];
+      expect(afterClear).not.toContain("Retry");
+      expect(afterClear).toContain("blocked");
+      expect(afterClear).toContain("Exec");
+      await controller.cleanup();
+    },
+  );
+
+  it("retains the progress draft after an error final is delivered", async () => {
+    const requests: string[] = [];
+    const rest = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        requests.push(`${init?.method ?? "GET"} ${url.pathname.replace("/api/v10", "")}`);
+        if (init?.method === "POST") {
+          return Response.json({ id: "999" });
+        }
+        return new Response(null, { status: 204 });
+      },
+    });
+    const controller = createPreviewController(rest);
+
+    controller.draftStream?.update("🛠️ Exec: failed");
+    await controller.flush();
+    await controller.lifecycle.deliver({
+      kind: "final",
+      payload: { text: "Something failed", isError: true },
+      isError: true,
+      deliverNormally: async (payload) => {
+        const sent = await createChannelMessage<{ id: string }>(rest, "c1", {
+          body: { content: payload.text },
+        });
+        return { messageIds: [sent.id], visibleReplySent: true };
+      },
+    });
+    controller.draftStream?.update("stale pending update");
+    await controller.cleanup();
+    await controller.flush();
+
+    expect(requests).toEqual(["POST /channels/c1/messages", "POST /channels/c1/messages"]);
+  });
+
+  it.each([
+    ["queued admission", 0],
+    ["queued admission", 1],
+    ["teardown", 0],
+    ["teardown", 1],
+    ["teardown", 2],
+  ] as const)(
+    "removes a late preview after %s (%i delete failures)",
+    async (boundary, deleteFailures) => {
+      const firstCreateStarted = createDeferred<void>();
+      const finishFirstCreate = createDeferred<void>();
+      const visibleMessages = new Map<string, string>();
+      const deletedIds: string[] = [];
+      let createdCount = 0;
+      const rest = new RequestClient("test-token", {
+        fetch: async (input, init) => {
+          const url = new URL(input instanceof Request ? input.url : input);
+          if (init?.method === "POST") {
+            const id = String(++createdCount);
+            if (typeof init.body !== "string") {
+              throw new Error("Expected a serialized Discord JSON request body");
+            }
+            const body = JSON.parse(init.body) as { content: string };
+            visibleMessages.set(id, body.content);
+            if (createdCount === 1) {
+              firstCreateStarted.resolve();
+              await finishFirstCreate.promise;
+            }
+            return Response.json({ id });
+          }
+          if (init?.method === "DELETE") {
+            const id = url.pathname.split("/").at(-1)!;
+            deletedIds.push(id);
+            if (deletedIds.length <= deleteFailures) {
+              return Response.json({ message: "temporarily unavailable" }, { status: 503 });
+            }
+            visibleMessages.delete(id);
+            return new Response(null, { status: 204 });
+          }
+          throw new Error(`Unexpected Discord request: ${init?.method} ${url.pathname}`);
+        },
+      });
+      const controller = createPreviewController(rest);
+
+      controller.draftStream?.update("prior turn progress");
+      await firstCreateStarted.promise;
+      if (boundary === "queued admission") {
+        controller.handleQueuedFollowupAdmitted();
+        controller.draftStream?.update("queued turn progress");
+        finishFirstCreate.resolve();
+        await controller.flush();
+
+        expect(controller.draftStream?.messageId()).toBe("2");
+        expect(visibleMessages.get("2")).toBe("queued turn progress");
+        await controller.lifecycle.observeDelivery({ visibleReplySent: true });
+        await controller.cleanup();
+      } else {
+        const cleanup = controller.cleanup();
+        finishFirstCreate.resolve();
+        await cleanup;
+      }
+
+      if (deleteFailures === 2) {
+        expect(deletedIds).toEqual(["1", "1"]);
+        expect([...visibleMessages]).toEqual([["1", "prior turn progress"]]);
+        await controller.cleanup();
+      }
+      expect([...visibleMessages]).toEqual([]);
+      expect(deletedIds.filter((id) => id === "1")).toHaveLength(deleteFailures + 1);
+    },
+  );
+});

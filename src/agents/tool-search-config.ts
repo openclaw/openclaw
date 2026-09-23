@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 import {
   MAX_TOOL_SEARCH_RESULTS,
   type ToolSearchConfig,
@@ -13,6 +14,10 @@ const DEFAULT_MAX_SEARCH_LIMIT = 20;
 function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> {
   const tools = isRecord(config?.tools) ? config.tools : undefined;
   const toolSearch = tools?.toolSearch;
+  // Only the unauthored default changes; explicit shorthand and objects retain their modes.
+  if (toolSearch === undefined) {
+    return { enabled: true, mode: "tools" };
+  }
   if (toolSearch === true) {
     return { enabled: true };
   }
@@ -22,7 +27,7 @@ function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> 
   return isRecord(toolSearch) ? toolSearch : {};
 }
 
-function readBoolean(value: unknown, fallback: boolean): boolean {
+function resolveBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
@@ -37,7 +42,12 @@ export function isToolSearchCodeModeSupported(): boolean {
   if (toolSearchCodeModeSupportedForTest !== undefined) {
     return toolSearchCodeModeSupportedForTest;
   }
-  return process.allowedNodeEnvironmentFlags.has("--permission");
+  // Electron advertises Node flags but process.execPath remains the host binary,
+  // so the isolated code child cannot be launched as a plain Node process.
+  return (
+    typeof process.versions.electron !== "string" &&
+    resolveNodeRuntimeExecutable({ requiredFlag: "--permission" }) !== undefined
+  );
 }
 
 function resolveMinCodeTimeoutMs(): number {
@@ -57,7 +67,7 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
     Math.min(MAX_TOOL_SEARCH_RESULTS, readInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT)),
   );
   return {
-    enabled: readBoolean(raw.enabled, configured),
+    enabled: resolveBoolean(raw.enabled, configured),
     mode,
     codeTimeoutMs: Math.max(
       resolveMinCodeTimeoutMs(),

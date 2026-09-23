@@ -1,19 +1,22 @@
 // Defines user-facing config field help text for docs and UI surfaces.
+import { META_FIELD_HELP } from "./schema.meta.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
+import { DESKTOP_FIELD_HELP } from "./zod-schema.desktop.js";
+import { TELEMETRY_FIELD_HELP } from "./zod-schema.telemetry.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
+  worktreeRoot:
+    "Global directory for new managed worktrees. Use an absolute path or ~ for your home directory; defaults to <state-dir>/worktrees. Existing worktrees keep their recorded paths when this changes.",
+  worktreeAcceleration:
+    "Use filesystem acceleration for new managed worktrees when supported (default: true). Set false to use normal Git checkout and file copying. Applies only to new worktrees.",
   "channels.discord.activities":
-    "Discord Activities configuration for launching interactive HTML widgets inside Discord. Leave unset to keep all Activity routes, tools, and handlers disabled.",
+    "Discord Activities configuration for presenting core show_widget documents inside Discord. Leave unset to keep Activity routes, presentation, and handlers disabled.",
   "channels.discord.activities.clientSecret":
     "OAuth2 client secret for the Discord application that hosts Activities. Keep this value secret; DISCORD_CLIENT_SECRET is used when this field is unset.",
   "channels.discord.activities.applicationId":
     "Optional Discord application ID for Activities. Defaults to the bot application ID learned from Discord at gateway startup.",
-  meta: "Backward-readable compatibility metadata retained so older binaries can refuse unsafe config downgrades.",
-  "meta.lastTouchedVersion": "OpenClaw version that most recently wrote this config.",
-  "meta.migrations": "Bounded compatibility markers for completed config migrations.",
-  "meta.migrations.modelPolicyAllowlist":
-    "Records that legacy model-map restrictions were preserved or evaluated.",
+  ...META_FIELD_HELP,
   env: "Environment import and override settings used to supply runtime variables to the gateway process. Use this section to control shell-env loading and explicit variable injection behavior.",
   "env.shellEnv":
     "Shell environment import controls for loading variables from your login shell during startup. Keep this enabled when you depend on profile-defined secrets or PATH customizations.",
@@ -23,6 +26,16 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Maximum time in milliseconds allowed for shell environment resolution before fallback behavior applies. Use tighter timeouts for faster startup, or increase when shell initialization is heavy.",
   "env.vars":
     "Explicit key/value environment variable overrides merged into runtime process environment for OpenClaw. Use this for deterministic env configuration instead of relying only on shell profile side effects.",
+  secrets:
+    "Secret reference providers, shared-store behavior, and optional subprocess egress protection.",
+  "secrets.egressProxy":
+    "Gateway-owned loopback proxy that replaces shared-store secret sentinels only at outbound request time. Restart the Gateway after changing this startup-scoped section.",
+  "secrets.egressProxy.enabled":
+    "Enables secret egress substitution for Gateway-hosted agent subprocesses. Default: false.",
+  "secrets.egressProxy.allowedHosts":
+    "Opt-in traffic allowlist for requests and CONNECT tunnels. When present, destinations must appear in this list, a per-secret host binding, or bypassHosts. An empty list permits only bound or bypassed hosts. Restart the Gateway after changing it.",
+  "secrets.egressProxy.bypassHosts":
+    "Exact hostnames that use authenticated blind CONNECT tunnels for certificate-pinned clients. Sentinels remain ciphertext and will fail vendor authentication instead of exposing plaintext.",
   wizard:
     "User-owned setup preferences. Machine-owned wizard history and acknowledgement state live in the shared state database.",
   "wizard.accessMode":
@@ -34,18 +47,16 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "wizard.lastRunCommit": "Source commit used by the last development wizard run.",
   "wizard.lastRunCommand": "Command that invoked the last wizard run.",
   "wizard.lastRunMode": 'Whether the last wizard run targeted "local" or "remote" setup.',
-  "wizard.localModelLeanAutoModel":
-    "Model reference whose lean-mode setting remains owned by onboarding.",
   "wizard.securityAcknowledgedAt":
     "Timestamp of the setup security acknowledgement, committed with the target config.",
   "logging.audit":
     "Bounded metadata-only audit history for operator review. Run and tool records are enabled by default; message lifecycle metadata is a separate privacy-sensitive opt-in. The background writer is best-effort rather than a lossless compliance archive.",
   "logging.audit.enabled":
-    "Records new run, tool, and enabled message audit events. Default: true. Disabling event inserts does not immediately delete existing records; retained rows remain queryable until they expire.",
+    "Records new run, tool, and enabled message audit events. Default: true. Changes apply immediately; accepted writes finish and retained rows remain queryable until they expire.",
   "logging.audit.executionIdentity":
-    "Retains bounded execution-identity attribution for exact-run inspection. Default: false. Requires logging.audit.enabled; restart the Gateway after changing it.",
+    "Retains bounded execution-identity attribution for exact-run inspection. Default: false. Requires logging.audit.enabled and applies to newly admitted runs; existing contexts remain unchanged.",
   "logging.audit.messages":
-    'Controls content-free message lifecycle records: "off" (default), "direct" for known direct conversations only, or "all" for direct, group, channel, and unknown conversation kinds. Both logging.audit.enabled and logging.audit.messages are startup-scoped; restart the Gateway after changing either setting.',
+    'Controls content-free message lifecycle records: "off" (default), "direct" for known direct conversations only, or "all" for direct, group, channel, and unknown conversation kinds. Requires logging.audit.enabled. Changes apply to subsequent lifecycle events.',
   diagnostics:
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
   "diagnostics.otel":
@@ -63,18 +74,22 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "logging.consoleStyle":
     'Console output format style: "pretty" or "json". Use json for machine parsing pipelines and pretty for human-first terminal workflows.',
   "logging.redactPatterns":
-    "Additional custom redact regex patterns applied to log output, persisted transcript text, and safety-boundary UI/tool/diagnostic payloads before emission. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
+    "Custom regex strings replace the default string list for log/transcript output and add to safety-boundary UI/tool/diagnostic rules. Built-in form-body, structured-auth, and AWS bare-key protections always apply. Use this to mask deployment-specific tokens and identifiers.",
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel":
     'Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). Extended-stable is package-only: installation is foreground-only, with optional read-only startup hints.',
   "update.checkOnStart":
-    "Check for npm updates when the gateway starts, including read-only extended-stable hints (default: true).",
+    "Checks for updates when the Gateway starts, including read-only extended-stable hints (default: true). Set false to disable automatic Gateway and headless-node update checks, applies, and anonymous update pings.",
   "update.auto.enabled":
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
+  telemetry:
+    "Explicit consent for anonymous feature statistics attached to the daily update check. Feature statistics are disabled by default and never include messages, credentials, or identifiers.",
+  ...TELEMETRY_FIELD_HELP,
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
   ...CLOUD_WORKER_FIELD_HELP,
+  ...DESKTOP_FIELD_HELP,
   gateway:
     "Gateway runtime surface for bind mode, auth, control UI, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
   "gateway.port":
@@ -90,13 +105,13 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.enabled":
     "Enables serving the gateway Control UI from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
   "gateway.cliAgents":
-    "Experimental Control UI discovery for external CLI session engines exposed by the Gateway session catalog. Keep disabled unless operators should be able to start those engines from the new-session model picker.",
+    "Control UI discovery for external CLI session engines exposed by the Gateway session catalog. Enabled by default; disable to prevent starting those engines from the new-session model picker.",
   "gateway.cliAgents.enabled":
-    "Shows catalog-backed CLI agents in the Control UI new-session model picker when true (default: false). Only catalogs that advertise session creation are listed, and the picker stays hidden when the Gateway does not advertise session catalog support.",
+    "Shows catalog-backed CLI agents in the Control UI new-session model picker when true (default: true). Set false to disable CLI agents and native CLI session creation. Only catalogs that advertise session creation are listed, and the picker stays hidden when the Gateway does not advertise session catalog support.",
   "gateway.terminal":
     "Operator terminal served to Control UI and mobile clients: a PTY-backed shell on the gateway host, restricted to admin-scope operator sessions. It starts in the target agent's workspace and is refused for fully-sandboxed agents (sandbox.mode 'all') rather than handing back an unconfined host shell.",
   "gateway.terminal.enabled":
-    "Enables the operator terminal for admin-scope clients (default: true). This exposes a browser/mobile shell with the gateway process environment; set false to opt out on deployments where admin operators should not get a host shell. Changing this restarts the gateway so connected clients reload with the correct terminal availability and content-security policy.",
+    "Enables the operator terminal for admin-scope clients (default: true). This exposes a browser/mobile shell with the gateway process environment; set false to opt out on deployments where admin operators should not get a host shell. Changes apply without restarting the Gateway.",
   "gateway.terminal.shell":
     "Shell executable the operator terminal launches. Leave unset to use the host login shell ($SHELL on Unix, %ComSpec% on Windows), or pin an explicit interpreter for a consistent operator environment.",
   "gateway.terminal.detachedSessionTimeoutSeconds":
@@ -104,7 +119,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.auth":
     "Authentication policy for gateway HTTP/WebSocket access including mode, credentials, trusted-proxy behavior, and rate limiting. Keep auth enabled for every non-loopback deployment.",
   "gateway.auth.mode":
-    'Gateway auth mode: "none", "token", "password", or "trusted-proxy" depending on your edge architecture. Use token/password for direct exposure, and trusted-proxy only behind hardened identity-aware proxies.',
+    'Gateway auth mode: "none", "token", "password", or "trusted-proxy" depending on your edge architecture. Token/password mode selects the configured secret (gateway.auth.token or gateway.auth.password); clients may send it in either connect auth field. Use token/password for direct exposure, and trusted-proxy only behind hardened identity-aware proxies.',
   "gateway.auth.allowTailscale":
     "Allows trusted Tailscale identity paths to satisfy gateway auth checks when configured. Use this only when your tailnet identity posture is strong and operator workflows depend on it.",
   "gateway.auth.identityScopes":
@@ -113,12 +128,40 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Login/auth attempt throttling controls to reduce credential brute-force risk at the gateway boundary. Keep enabled in exposed environments and tune thresholds to your traffic baseline.",
   "gateway.auth.trustedProxy":
     "Trusted-proxy auth header mapping for upstream identity providers that inject user claims. Use only with known proxy CIDRs and strict header allowlists to prevent spoofed identity headers.",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc":
+    "Optional verified GitHub identity from a selected Cloudflare Access OIDC provider. Requires the standard Access email and assertion headers. Missing claims keep email-only profiles; existing profile roles and co-author preferences are preserved.",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc.issuer":
+    "Exact HTTPS origin of the trusted Cloudflare Access team, such as https://example.cloudflareaccess.com, without a trailing slash. Claims from other issuers do not supply GitHub identity.",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc.providerId":
+    "Exact Access identity-provider ID for the trusted OIDC integration. A provider display name or a matching claim name alone does not establish trust.",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc.githubAccountIdClaim":
+    "Exact forwarded OIDC claim whose value is a verified positive decimal-string GitHub account ID. Configure Access to forward it in oidc_fields; never use an unverified user-editable claim.",
   "gateway.auth.trustedProxy.deviceAutoApprove":
-    "Optional policy for automatically approving new Control UI and WebChat device identities after trusted-proxy authentication. Existing-device scope upgrades always remain manual.",
+    "Optional policy for automatically approving new browser and native UI operator devices and same-key scope upgrades after trusted-proxy authentication. Grants are capped by deviceAutoApprove.scopes and the proxy's x-openclaw-scopes header when present.",
   "gateway.auth.trustedProxy.deviceAutoApprove.enabled":
-    "Automatically approves new browser device identities after the reverse proxy authenticates an allowed user. Default: false. Enable only when the proxy identity boundary is strong enough to replace manual device pairing.",
+    "Automatically approves new browser and native UI operator devices and same-key scope upgrades after the reverse proxy authenticates an allowed user. Default: false. Enable only when the proxy identity boundary is strong enough to replace manual device pairing.",
   "gateway.auth.trustedProxy.deviceAutoApprove.scopes":
-    "Maximum scopes granted to auto-approved browser devices. Requested scopes are capped to this list; requests without scopes receive this list. Explicitly listing operator.admin lets every proxy-authenticated user auto-approve full admin and makes scope-less requests receive full admin automatically; it also triggers a critical security audit finding and Gateway startup warning.",
+    "Maximum scopes granted to auto-approved operator devices. Defaults to operator.read, operator.write, operator.approvals, and operator.questions. Requested scopes are capped to this list; requests without scopes receive this list. When unset, auto-approval also adds operator.questions for older UI clients; an explicit list is never widened. Explicitly listing operator.admin lets every proxy-authenticated user auto-approve full admin and makes scope-less requests receive full admin automatically; it also triggers a critical security audit finding and Gateway startup warning.",
+  "gateway.roles":
+    "Optional profile-bound operator roles for team Gateways. Each named role controls access to other people's sessions, sandbox isolation, session and run agents, and granted operator scopes; omitting this section preserves existing operator behavior.",
+  "gateway.roles.default":
+    "Required role assigned to authenticated profiles without a valid explicit assignment whenever operator roles are configured. Its name must match a configured role definition.",
+  "gateway.roles.definitions":
+    "Nonempty administrator-named role definitions bundling the closed session-sharing, sandbox-isolation, agent-access, and operator-scope policies applied to authenticated user profiles.",
+  "gateway.roles.definitions.*":
+    "One named operator role. Every definition must explicitly provide its session-sharing policy, allowed session and run agents, and operator-scope ceiling, and can require sandbox isolation for newly created sessions and a plugin access policy.",
+  "gateway.roles.definitions.*.sessions":
+    "Session-sharing permissions granted to this role for sessions created by other authenticated people; a person's own sessions remain owner-accessible.",
+  "gateway.roles.definitions.*.sessions.others":
+    'Access to other people\'s sessions: "none" hides them, "view" allows reading, "suggest" permits the suggestion flow, and "write" permits participation. Explicit session membership can grant additional access.',
+  "gateway.roles.definitions.*.sandbox":
+    'Execution isolation for newly created sessions: "inherit" (default) uses the agent policy; "required" permanently requires a sandbox, even when the agent sandbox mode is off, and fails closed if the backend is unavailable.',
+  "gateway.roles.definitions.*.agents":
+    'Agents available when this role creates sessions or starts runs: set "*" to allow every agent, list agent IDs to allow only those agents, or use an empty list to disable both.',
+  "gateway.roles.definitions.*.scopes":
+    "Closed list of operator scopes granted as this role's maximum connection authority. Requested, paired, identity-granted, and upgraded scopes are intersected with this list.",
+  "gateway.roles.definitions.*.accessPolicyPlugin":
+    "Optional exact plugin ID whose Gateway access policy must authorize this role. Access is denied when the plugin is missing, disabled, fails to load, or supplies no current authority. Unavailable plugin IDs remain valid configuration so independent staff roles and the Gateway owner can repair access. Omitting this field adds no plugin dependency.",
   "gateway.trustedProxies":
     "CIDR/IP allowlist of upstream proxies permitted to provide forwarded client identity headers. Keep this list narrow so untrusted hops cannot impersonate users.",
   "gateway.allowRealIpFallback":
@@ -133,12 +176,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Tailscale integration settings for Serve/Funnel exposure and lifecycle handling on gateway start/exit. Keep off unless your deployment intentionally relies on Tailscale ingress.",
   "gateway.tailscale.mode":
     'Tailscale publish mode: "off", "serve", or "funnel" for private or public exposure paths. Use "serve" for tailnet-only access and "funnel" only when public internet reachability is required.',
-  "gateway.tailscale.resetOnExit":
-    "Resets Tailscale Serve/Funnel state on gateway exit to avoid stale published routes after shutdown. Keep enabled unless another controller manages publish lifecycle outside the gateway.",
-  "gateway.tailscale.serviceName":
-    'Optional Tailscale Service name for Serve mode, such as "svc:openclaw". The value must use Tailscale\'s svc:<dns-label> format. When set, OpenClaw passes it to tailscale serve --service and reports the derived Service URL.',
   "gateway.tailscale.preserveFunnel":
-    "When mode='serve' and an externally configured Tailscale Funnel route already covers the gateway port, skip re-applying tailscale serve on startup. Lets operators keep Funnel exposure managed outside OpenClaw without losing it across gateway restarts.",
+    "Deprecated migration guard for mode='serve'. If an external Funnel still targets the ordinary Gateway listener, OpenClaw leaves exposure unchanged and warns that only plugin-authenticated webhooks remain usable until password auth is configured and mode is migrated to 'funnel'.",
   "gateway.remote":
     "Remote gateway connection settings for direct or SSH transport when this instance proxies to another runtime host. Use remote mode only when split-host operation is intentionally configured.",
   "gateway.remote.transport":
@@ -167,9 +206,11 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Value for the Strict-Transport-Security response header. Set only on HTTPS origins that you fully control; use false to explicitly disable.",
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
   "gateway.remote.token":
-    "Bearer token used to authenticate this client to a remote gateway in token-auth deployments. Store via secret/env substitution and rotate alongside remote gateway auth changes.",
+    "Shared secret sent in the token field to authenticate this client to a remote gateway. The server's gateway.auth.mode selects its configured secret; either client token or password field is accepted. Store via secret/env substitution and rotate alongside remote gateway auth changes.",
   "gateway.remote.password":
-    "Password credential used for remote gateway authentication when password mode is enabled. Keep this secret managed externally and avoid plaintext values in committed config.",
+    "Shared secret sent in the password field to authenticate this client to a remote gateway. The server's gateway.auth.mode selects its configured secret; either client token or password field is accepted. Keep this secret managed externally and avoid plaintext values in committed config.",
+  "gateway.remote.edgeAuth":
+    "Secret-backed HTTP headers presented to an identity-aware proxy in front of the configured remote Gateway. Headers are sent only to the exact gateway.remote.url origin over WSS and never follow redirects.",
   "gateway.remote.tlsFingerprint":
     "Expected sha256 TLS fingerprint for the remote gateway (pin to avoid MITM).",
   "gateway.remote.sshTarget":
@@ -251,16 +292,20 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
   agents:
     "Agent runtime configuration root. Root siblings own infrastructure and cross-agent defaults; agents.defaults owns agent-loop behavior; agent entries may override either where supported.",
+  "agents.ownership":
+    'Durable multi-agent ownership generation marker. "explicit" means ambient channels, heartbeat, system-agent consults, Talk, cron, and bare CLI operations must resolve a surface-specific owner or fail closed. OpenClaw stamps this automatically when creating or migrating a fleet; omit it for a sole agent.',
   "agents.defaults":
     "Shared default settings inherited by agents unless overridden per entry in agents.entries. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
   "agents.defaults.skills":
     "Optional default skill allowlist inherited by agents that omit agents.entries.*.skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.entries.*.skills replaces this default instead of merging with it.",
   "agents.defaults.subagents.delegationMode":
-    'Prompt-only sub-agent delegation strength. "suggest" keeps the default guidance; "prefer" strongly instructs the main agent to delegate anything more involved than a direct reply via sessions_spawn.',
+    'Prompt-only sub-agent delegation strength. Defaults to "prefer" in each agent\'s main session and "suggest" elsewhere; "prefer" strongly instructs the agent to delegate non-trivial work via sessions_spawn.',
   "agents.entries.*.subagents.delegationMode":
-    "Per-agent override for sub-agent delegation strength. Use this for coordinator agents that should stay responsive and push non-trivial work into spawned sub-agents.",
+    'Per-agent override for sub-agent delegation strength. Omit to use "prefer" in this agent\'s main session and "suggest" elsewhere; explicit "prefer" or "suggest" always wins.',
   "agents.entries.*.contextInjection":
-    "Per-agent override for when workspace bootstrap files are injected into this agent's system prompt. Omit to inherit agents.defaults.contextInjection.",
+    "Per-agent override for workspace bootstrap-file injection in the embedded runtime. Omit to inherit agents.defaults.contextInjection. Does not control CLI-backed prompt preparation.",
+  "agents.entries.*.cwd":
+    "Working directory for this agent's reply runs. Overrides agents.defaults.cwd but not session-spawned cwd; bootstrap and memory files stay in workspace. Supports ~ and relative paths; a distinct cwd requires an unsandboxed run.",
   "agents.entries.*.bootstrapMaxChars":
     "Per-agent override for max characters of each workspace bootstrap file injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapMaxChars.",
   "agents.entries.*.bootstrapTotalMaxChars":
@@ -268,7 +313,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.experimental":
     "Per-agent experimental flags. Omitted fields inherit agents.defaults.experimental.",
   "agents.entries.*.experimental.localModelLean":
-    "Per-agent override for lean local-model mode. Enable it for one smaller local-model agent without trimming tools from every agent.",
+    "Per-agent troubleshooting override for lean local-model mode. Enable it only when restricting optional tools resolves a demonstrated model failure, without trimming tools from every agent.",
   "agents.defaults.contextLimits":
     "Focused per-agent-context budget defaults for selected high-volume excerpts and injected prompt blocks. Use this to tune bounded read/injection sizes without reopening any unbounded call paths.",
   "agents.defaults.contextLimits.memoryGetMaxChars":
@@ -318,9 +363,17 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.heartbeat.timeoutSeconds":
     "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat timeout, then agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
   "agents.defaults.systemAgent":
-    "Target settings for ambient OpenClaw system-agent and Custodian inference.",
+    "Target settings for ambient OpenClaw system-agent and Custodian inference plus selected unscoped operator reads.",
   "agents.defaults.systemAgent.agentId":
-    "Agent whose model and credentials own ambient system-agent and Custodian consults. Delegated consults still use their requesting agent.",
+    "Agent whose model and credentials own ambient system-agent and Custodian consults. Also used when models.list, models.authStatus, skills.status, doctor.memory.status, or an infer CLI command that resolves agent-owned model or auth state omits agentId or --agent; explicit request agentId always wins.",
+  "agents.defaults.authInheritance":
+    "Upgrade compatibility owner for the inherited credential store until credentials are relocated per agent.",
+  "agents.defaults.authInheritance.agentId":
+    "Agent whose legacy credential store remains the inheritance source after default-marker retirement. Written automatically during upgrade when the former owner was not main.",
+  "agents.defaults.sessionStore":
+    "Upgrade compatibility owner for retired main-agent rows and fixed legacy session stores.",
+  "agents.defaults.sessionStore.agentId":
+    "Agent that owns retired main-agent rows or unscoped rows in a fixed legacy session store after default-marker retirement. Written automatically during upgrade when the former owner was not main or the sole agent.",
   "talk.agentId":
     "Agent that owns Talk sessions created without an explicit agent-scoped session key.",
 };

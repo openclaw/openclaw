@@ -1,28 +1,21 @@
+import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { clampText } from "../lib/format.ts";
 
 const SIDEBAR_NARRATION_MAX_LENGTH = 120;
 
-function stripMarkdown(text: string): string {
-  return text
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/```/g, " ")
-    .replace(/`([^`]*)`/g, "$1")
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/gm, "")
-    .replace(/[*_~]+/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 /** Compact the newest prose into one quiet, stable sidebar line. */
 export function deriveSidebarNarrationLine(text: string): string {
-  const paragraphs = text
-    .replace(/```[\s\S]*?```/g, " ")
-    .split(/\n\s*\n/)
-    .map((paragraph) => stripMarkdown(paragraph))
-    .filter(Boolean);
-  const paragraph = paragraphs.at(-1) ?? "";
+  // Fences are dropped before the paragraph split, not just by the shared
+  // flattener: a fenced block contains blank lines, so splitting first would
+  // let code fragments become the "newest paragraph" and win the line.
+  const paragraphs = text.replace(/```[\s\S]*?```/g, " ").split(/\n\s*\n/);
+  let paragraph = "";
+  for (let index = paragraphs.length - 1; index >= 0; index -= 1) {
+    paragraph = flattenMarkdownToPlainText(paragraphs[index] ?? "");
+    if (paragraph) {
+      break;
+    }
+  }
   if (!paragraph) {
     return "";
   }

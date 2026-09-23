@@ -1,12 +1,8 @@
-import {
-  GATEWAY_CLIENT_CAPS,
-  hasGatewayClientCap,
-} from "../../../packages/gateway-protocol/src/client-info.js";
 import { validateAgentParams } from "../../../packages/gateway-protocol/src/index.js";
 import { prepareAgentRequestPreflight } from "../agent-turn/agent-request-preflight.js";
 import { createAgentTurnService } from "../agent-turn/agent-turn-service.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
-import { captureAgentTurnPrincipal } from "../agent-turn/principal.js";
+import { captureAgentTurnPrincipal, resolveAgentTurnRunObserver } from "../agent-turn/principal.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -17,7 +13,16 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   context,
   client,
   isWebchatConnect,
+  hasCurrentClientAuthority,
+  sessionMutationCommitGuard,
 }) => {
+  const assertAdmissionCurrent = () => {
+    sessionMutationCommitGuard?.();
+    if (hasCurrentClientAuthority?.() === false) {
+      throw new Error("Gateway caller authority is no longer active.");
+    }
+  };
+  assertAdmissionCurrent();
   const io = createAgentTurnIo(respond);
   if (
     !assertValidParams(params, validateAgentParams, "agent", (ok, payload, error, meta) =>
@@ -32,12 +37,13 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   if (!preflight) {
     return;
   }
-  const connId = principal?.connId;
-  const onRunObserved =
-    connId && hasGatewayClientCap(principal?.connect?.caps, GATEWAY_CLIENT_CAPS.TOOL_EVENTS)
-      ? (runId: string) => context.registerToolEventRecipient(runId, connId)
-      : undefined;
+  const onRunObserved = resolveAgentTurnRunObserver({
+    principal,
+    registerToolEventRecipient: context.registerToolEventRecipient,
+  });
   await createAgentTurnService({ context, isWebchatConnect }).startTurn({
+    assertAdmissionCurrent,
+    hasCurrentClientAuthority,
     preflight,
     principal,
     io,

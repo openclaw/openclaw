@@ -21,6 +21,7 @@ const legacyReaderNames = new Set([
   "readSessionStoreReadOnly",
   "readSessionStoreSnapshot",
   "resolveSessionStoreEntry",
+  "resolveSessionStoreEntryCore",
 ]);
 const legacyWholeStoreAccessNames = new Set([
   ...legacyReaderNames,
@@ -67,7 +68,10 @@ const sessionStoreRuntimeFileBackedCompatNames = new Set([
   "updateSessionStore",
 ]);
 const embeddedAgentSessionFileRuntimeNames = new Set(["resolveSessionFilePath"]);
-const materializingSessionEntryAccessorNames = new Set(["listSessionEntries", "loadSessionEntry"]);
+const materializingSessionEntryAccessorNames = new Set([
+  "listSessionEntriesCore",
+  "loadSessionEntry",
+]);
 
 // Shipped beta.5 official plugins import these deprecated helpers during
 // doctor migrations. Remove this ratchet with the compatibility bridge once
@@ -82,8 +86,6 @@ export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
 const gatewaySessionServerMethodFiles = [
   "src/gateway/server-methods/sessions-abort.ts",
   "src/gateway/server-methods/sessions-compact.ts",
-  "src/gateway/server-methods/sessions-compaction-checkpoints.ts",
-  "src/gateway/server-methods/sessions-compaction-queries.ts",
   "src/gateway/server-methods/sessions-compaction-runner.ts",
   "src/gateway/server-methods/sessions-create.ts",
   "src/gateway/server-methods/sessions-delete.ts",
@@ -109,8 +111,8 @@ export const migratedSessionAccessorFiles = new Set([
   "src/agents/embedded-agent-runner/transcript-rewrite.ts",
   "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
   "src/agents/live-model-switch.ts",
-  "src/agents/subagent-control.ts",
-  "src/agents/subagent-registry-helpers.ts",
+  "src/agents/subagents/registry/subagent-control.ts",
+  "src/agents/subagents/registry/subagent-registry-helpers.ts",
   "src/auto-reply/reply/abort.ts",
   "src/auto-reply/reply/agent-runner-helpers.ts",
   "src/auto-reply/reply/agent-runner.ts",
@@ -130,7 +132,6 @@ export const migratedSessionAccessorFiles = new Set([
   "src/config/sessions/goals.ts",
   "src/cron/isolated-agent/delivery-target.ts",
   "src/cron/service/timer.ts",
-  "src/gateway/session-compaction-checkpoints.ts",
   "src/gateway/session-history-state.ts",
   "src/gateway/sessions-history-http.ts",
   "src/gateway/session-utils.ts",
@@ -163,7 +164,6 @@ export const migratedBundledPluginSessionAccessorFiles = new Set([
   "extensions/mattermost/src/mattermost/model-picker.ts",
   "extensions/matrix/src/matrix/monitor/handler.ts",
   "extensions/matrix/src/session-route.ts",
-  "extensions/qqbot/src/engine/group/activation.ts",
   "extensions/slack/src/monitor/slash.ts",
   "extensions/telegram/src/bot-core.ts",
   "extensions/telegram/src/bot-handlers.runtime.ts",
@@ -187,13 +187,13 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/agents/embedded-agent-subscribe.handlers.compaction.runtime.ts",
   "src/agents/embedded-agent-runner/run/attempt.ts",
   "src/agents/live-model-switch.ts",
-  "src/agents/main-session-restart-recovery-checkpoint.ts",
-  "src/agents/main-session-restart-recovery-marking.ts",
-  "src/agents/main-session-restart-recovery-store.ts",
+  "src/agents/main-session-recovery/main-session-restart-recovery-checkpoint.ts",
+  "src/agents/main-session-recovery/main-session-restart-recovery-marking.ts",
+  "src/agents/main-session-recovery/main-session-restart-recovery-store.ts",
   "src/agents/session-suspension.ts",
   "src/auto-reply/reply/abort.ts",
-  "src/agents/subagent-control.ts",
-  "src/agents/subagent-registry-helpers.ts",
+  "src/agents/subagents/registry/subagent-control.ts",
+  "src/agents/subagents/registry/subagent-registry-helpers.ts",
   "src/agents/tools/session-status-tool.ts",
   "src/auto-reply/reply/abort-cutoff.runtime.ts",
   "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
@@ -222,7 +222,6 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/gateway/server-methods/chat.ts",
   ...gatewaySessionServerMethodFiles,
   "src/gateway/server-node-events.ts",
-  "src/gateway/session-compaction-checkpoints.ts",
   "src/infra/outbound/outbound-session.ts",
   "src/plugins/host-hook-cleanup.ts",
   "src/plugins/host-hook-state.ts",
@@ -265,7 +264,7 @@ export const readOnlyGatewaySessionAccessorFiles = new Set([
   "src/gateway/server-methods/sessions-subscriptions.ts",
   "src/gateway/server-methods/task-suggestions.ts",
   "src/gateway/server-methods/tools-effective.ts",
-  "src/gateway/server-methods/usage.ts",
+  "src/gateway/server-methods/usage-session-selection.ts",
   "src/gateway/server-session-events.ts",
 ]);
 

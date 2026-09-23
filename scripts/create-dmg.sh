@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 # Create a styled DMG containing the app bundle + /Applications symlink.
@@ -142,35 +142,33 @@ cleanup_dmg() {
 trap cleanup_dmg EXIT
 
 detach_dmg() {
-  local attempt
-  for attempt in {1..15}; do
+  local delay
+  # Mount writers have exited and the shell never enters MOUNT_POINT.
+  # Flush writes, then give Finder/Spotlight up to 54s to release the volume.
+  sync
+  for delay in 2 3 4 5 6 7 8 9 10; do
+    sleep "$delay"
     if hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null; then
       MOUNTED=0
       return
     fi
-    if (( attempt >= 3 )) && hdiutil detach "$MOUNT_POINT" -force 2>/dev/null; then
-      MOUNTED=0
-      return
-    fi
-    # Finder can retain the just-closed volume briefly on macOS runners.
-    sleep 2
   done
-  return 1
+  echo "WARN: DMG mount still busy; forcing detach: $MOUNT_POINT" >&2
+  hdiutil detach "$MOUNT_POINT" -force || return 1
+  MOUNTED=0
 }
 
 mkdir -p "$DMG_SOURCE" "$MOUNT_POINT"
 cp -R "$APP_PATH" "$DMG_SOURCE/"
 ln -s /Applications "$DMG_SOURCE/Applications"
 
-APP_SIZE_MB=$(du -sm "$APP_PATH" | awk '{print $1}')
-DMG_SIZE_MB=$((APP_SIZE_MB + 80))
-
+# Let -srcfolder account for filesystem overhead; du plus fixed slack can
+# underallocate bundles containing many small runtime files.
 hdiutil create \
   -volname "$DMG_VOLUME_NAME" \
   -srcfolder "$DMG_SOURCE" \
   -ov \
   -format UDRW \
-  -size "${DMG_SIZE_MB}m" \
   "$DMG_RW_PATH"
 
 hdiutil attach "$DMG_RW_PATH" -mountpoint "$MOUNT_POINT" -nobrowse

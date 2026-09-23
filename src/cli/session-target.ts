@@ -3,8 +3,13 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
-import type { AgentsListResult } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  AgentsListResult,
+  SessionsResolveResult,
+} from "../../packages/gateway-protocol/src/index.js";
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { formatTextCell } from "../commands/text-format.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -14,6 +19,7 @@ import {
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.js";
+import { normalizeAgentIdStrict, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   parseSessionTargetInput,
   SessionTargetParseError,
@@ -30,13 +36,9 @@ export type SessionTargetGateway = {
 
 type ResolvedSessionTarget = {
   sessionKey: string;
+  agentId: string;
   gateway: SessionTargetGateway;
-  parsed: SessionTargetInput;
 };
-
-type SessionsResolveResult =
-  | { ok: true; key: string }
-  | { ok: false; candidates?: Array<{ key: string; displayName?: string }> };
 
 function gatewayUrlForTarget(target: SessionTargetInput): string | undefined {
   return target.kind === "url" ? `${target.origin}${target.basePath}` : undefined;
@@ -83,16 +85,15 @@ function formatAmbiguousCandidates(
   gatewayUrl: string | undefined,
 ): string {
   const rows = candidates.map((candidate) => ({
-    name: sanitizeTerminalText(candidate.displayName?.trim() || "(unnamed)")
-      .replace(/\s+/gu, " ")
-      .slice(0, 40),
+    name: sanitizeTerminalText(candidate.displayName?.trim() || "(unnamed)").replace(/\s+/gu, " "),
     id: candidateId(candidate.key),
   }));
-  const width = Math.max("SESSION".length, ...rows.map((row) => row.name.length));
+  const nameWidth = Math.max(...rows.map((row) => visibleWidth(row.name)));
+  const width = Math.max("SESSION".length, Math.min(40, nameWidth));
   return [
     "Session reference is ambiguous:",
     `${"SESSION".padEnd(width)}  ID PREFIX`,
-    ...rows.map((row) => `${row.name.padEnd(width)}  ${row.id}`),
+    ...rows.map((row) => `${formatTextCell(row.name, width)}  ${row.id}`),
     `Pass a longer reference. ${sessionsListHint(gatewayUrl)}`,
   ].join("\n");
 }
@@ -167,6 +168,9 @@ function shapeTargetError(
     ...(error instanceof GatewayTransportError ? { reason: error.reason } : {}),
     message: error.message,
   });
+  if (failure.kind === "identity-proxy") {
+    return new Error(`${failure.userMessage}\n${failure.remediation}`);
+  }
   if (failure.kind === "unreachable") {
     const effectiveGatewayUrl =
       gatewayUrl ??
@@ -201,8 +205,8 @@ export async function resolveSessionTarget(params: {
       requiredScope: params.requiredScope ?? "operator.read",
     });
     return {
-      parsed,
       gateway,
+      agentId: parsed.agentId,
       sessionKey: resolveCanonicalMainSessionKey({
         agentId: parsed.agentId,
         mainKey: agents.mainKey,
@@ -227,7 +231,12 @@ export async function resolveSessionTarget(params: {
     shortRef: ref.kind === "short",
   });
   if (result.ok) {
-    return { parsed, gateway, sessionKey: result.key };
+    const keyOwner = parseAgentSessionKey(result.key)?.agentId;
+    const owner = normalizeAgentIdStrict(result.agentId ?? keyOwner);
+    if (!owner.ok || (keyOwner && keyOwner !== owner.value)) {
+      throw new Error("Gateway returned a session without a consistent agent identity.");
+    }
+    return { gateway, sessionKey: result.key, agentId: owner.value };
   }
   if (result.candidates?.length) {
     throw new Error(formatAmbiguousCandidates(result.candidates, gateway.url));

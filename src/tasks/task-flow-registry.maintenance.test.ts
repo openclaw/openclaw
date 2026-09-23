@@ -1,9 +1,11 @@
 // Covers maintenance reconciliation for managed task-flow records.
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
-import { createRunningTaskRun as createRunningTaskRunOrNull } from "./task-executor.js";
+import { createRunningTaskRunCore as createRunningTaskRunOrNull } from "./task-executor.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
@@ -17,11 +19,12 @@ import {
   runTaskFlowRegistryMaintenance,
 } from "./task-flow-registry.maintenance.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
-import { finalizeTaskRunByRunId } from "./task-registry.js";
+import { runTaskRegistryWorkerMutation } from "./task-registry-state.js";
+import { finalizeTaskRecordByRunId } from "./task-registry.js";
+import { getTaskRegistryStore } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   createFlowRecord as createFlowRecordOrNull,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
   resetTaskFlowRegistryForTests,
 } from "./task-runtime.test-helpers.js";
@@ -65,15 +68,13 @@ async function withTaskFlowMaintenanceStateDir(
       prefix: "openclaw-task-flow-maintenance-",
     },
     async (state) => {
-      resetTaskRegistryDeliveryRuntimeForTests();
-      resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
       try {
         await run(state.stateDir);
       } finally {
-        resetTaskRegistryDeliveryRuntimeForTests();
-        resetTaskRegistryForTests();
-        resetTaskFlowRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
       }
     },
   );
@@ -82,9 +83,8 @@ async function withTaskFlowMaintenanceStateDir(
 describe("task-flow-registry maintenance", () => {
   afterEach(() => {
     ORIGINAL_ENV.restore();
-    resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("finalizes cancel-requested managed flows once no child tasks remain active", async () => {
@@ -282,6 +282,81 @@ describe("task-flow-registry maintenance", () => {
       expect(storedFlow.endedAt).toBe(200);
       expect(storedFlow.updatedAt).toBe(200);
       expect(getInspectableTaskFlowAuditSummary().byCode.inconsistent_timestamps).toBe(0);
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({ reconciled: 0, pruned: 1 });
+      expect(getTaskFlowById(flow.flowId)).toBeUndefined();
+    });
+  });
+
+  it("retains matching child publication while unrelated flows make progress", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:publication",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Wait for child publication",
+        status: "running",
+      });
+      const child = createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: flow.ownerKey,
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:publication-child",
+        runId: "publication-child",
+        task: "Complete before publishing",
+      });
+      expect(
+        requestFlowCancel({ flowId: flow.flowId, expectedRevision: flow.revision }).applied,
+      ).toBe(true);
+      const old = Date.now() - 8 * 24 * 60 * 60_000;
+      const expired = createManagedTaskFlow({
+        ownerKey: "agent:main:unrelated-expired",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Prune unrelated history",
+        status: "succeeded",
+        createdAt: old,
+        updatedAt: old,
+        endedAt: old,
+      });
+      const cancelling = createManagedTaskFlow({
+        ownerKey: "agent:main:unrelated-cancellation",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Settle unrelated cancellation",
+        status: "running",
+        cancelRequestedAt: Date.now(),
+      });
+      const context = captureOpenClawStateWorkerContext();
+      const store = getTaskRegistryStore();
+      const reading = createDeferred();
+      const release = createDeferred();
+      const completed: TaskRecord = { ...child, status: "succeeded", endedAt: Date.now() };
+      const publication = runTaskRegistryWorkerMutation(
+        {
+          admission: context.admission,
+          scope: { taskId: child.taskId },
+          publicationRecords: () => new Map([[child.taskId, completed]]),
+        },
+        async () => {
+          store.upsertTaskWithDeliveryState({ task: completed });
+        },
+        async () => {
+          const snapshot = await store.loadMutationSnapshotAsync(context, { taskId: child.taskId });
+          reading.resolve();
+          await release.promise;
+          return snapshot;
+        },
+      );
+      await reading.promise;
+      try {
+        expect(await runTaskFlowRegistryMaintenance()).toEqual({ reconciled: 1, pruned: 1 });
+        expect(getTaskFlowById(flow.flowId)?.status).toBe("running");
+        expect(getTaskFlowById(expired.flowId)).toBeUndefined();
+        expect(getTaskFlowById(cancelling.flowId)?.status).toBe("cancelled");
+      } finally {
+        release.resolve();
+        await publication;
+      }
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({ reconciled: 1, pruned: 0 });
+      expect(getTaskFlowById(flow.flowId)?.status).toBe("cancelled");
     });
   });
 
@@ -362,7 +437,7 @@ describe("task-flow-registry maintenance", () => {
         startedAt: 100,
         lastEventAt: 100,
       });
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: child.runId!,
         runtime: "subagent",
         sessionKey: child.childSessionKey,

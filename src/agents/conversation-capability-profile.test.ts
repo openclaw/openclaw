@@ -6,15 +6,52 @@ import { createAccountListHelpers } from "../channels/plugins/account-helpers.js
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createAccountCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
+import {
+  createAccountCronScheduledToolPolicy,
+  type CronScheduledToolCallerOrigin,
+} from "../cron/scheduled-tool-policy.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { resolvePluginHarnessPolicyToolsAllow } from "./harness/execution-environment.js";
+import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
 
 describe("resolveConversationCapabilityProfile", () => {
+  it("intersects base and provider profile contributions from plugin manifests", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: {
+        tools: {
+          profile: "coding",
+          byProvider: { openai: { profile: "messaging" } },
+        },
+      },
+      modelProvider: "openai",
+      pluginMetadataSnapshot: {
+        plugins: [
+          {
+            contracts: { tools: ["coding_only", "messaging_only", "shared"] },
+            toolMetadata: {
+              coding_only: { profiles: ["coding"] },
+              messaging_only: { profiles: ["messaging"] },
+              shared: { profiles: ["coding", "messaging"] },
+            },
+          },
+        ],
+      } as never,
+    });
+
+    expect(
+      projectConversationToolNames({
+        capabilityProfile: profile,
+        toolNames: ["coding_only", "messaging_only", "shared"],
+        warn: () => undefined,
+      }),
+    ).toEqual(["shared"]);
+  });
+
   it("intersects a prepared direct policy with existing tool policy", () => {
     const profile = resolveConversationCapabilityProfile({
       config: { tools: { deny: ["write"] } },
@@ -461,12 +498,83 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
     expect(scheduledProfile({ work: {} }).policy.groupPolicy).toEqual({ allow: ["read"] });
   });
 
-  it("denies every tool for a scheduled run after its owner account is removed", () => {
-    const groupPolicy = scheduledProfile({}).policy.groupPolicy;
-
-    expect(groupPolicy).toEqual({ allow: [], deny: ["*"] });
-    for (const toolName of ["read", "write", "exec", "apply_patch"]) {
-      expect(isToolAllowedByPolicyName(toolName, groupPolicy)).toBe(false);
-    }
+  it("rejects a scheduled run after its owner account is removed", () => {
+    expect(() => scheduledProfile({})).toThrow('Scheduled account "work" is unavailable');
   });
+
+  it.each<{
+    name: string;
+    origin: CronScheduledToolCallerOrigin["kind"];
+    configured: boolean;
+    delivery: string;
+  }>([
+    { name: "configured creator", origin: "external", configured: true, delivery: "telegram" },
+    { name: "unknown creator origin", origin: "unknown", configured: true, delivery: "whatsapp" },
+    {
+      name: "removed creator account",
+      origin: "external",
+      configured: false,
+      delivery: "telegram",
+    },
+    { name: "local creator", origin: "local", configured: true, delivery: "whatsapp" },
+    {
+      name: "removed local resource account",
+      origin: "local",
+      configured: false,
+      delivery: "whatsapp",
+    },
+  ])(
+    "preserves scheduled creator authority for $name across tool consumers",
+    ({ origin, configured, delivery }) => {
+      const config: OpenClawConfig = {
+        channels: { whatsapp: { accounts: configured ? { work: {} } : {} } },
+      };
+      const ownerOrigin: CronScheduledToolCallerOrigin =
+        origin === "external" ? { kind: origin, channel: "whatsapp" } : { kind: origin };
+      const params = {
+        config,
+        sessionKey: "agent:main:cron:job:run:turn",
+        agentId: "main",
+        agentAccountId: "default",
+        messageProvider: delivery,
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey:
+            origin === "local" ? "agent:main:main" : "agent:main:whatsapp:direct:sender",
+          ownerAccountId: "work",
+          ownerOrigin,
+        } satisfies ScheduledToolPolicyContext,
+      };
+      const conversationTools = () =>
+        projectConversationToolNames({
+          capabilityProfile: resolveConversationCapabilityProfile({
+            ...params,
+            config: { ...params.config, tools: { allow: ["read"] } },
+          }),
+          toolNames: ["read", "write"],
+          warn: () => undefined,
+        });
+      const webSearch = () =>
+        resolveWebSearchToolPolicy({ ...params, runtimeToolAllowlist: ["web_search"] });
+      const harnessTools = () =>
+        resolvePluginHarnessPolicyToolsAllow({
+          ...params,
+          provider: "fixture",
+          modelId: "fixture-model",
+          senderId: "sender",
+          conversationToolPolicy: { deny: ["*"] },
+        });
+
+      if (origin === "unknown" || !configured) {
+        for (const resolve of [conversationTools, webSearch, harnessTools]) {
+          expect(resolve).toThrow('Scheduled account "work" is unavailable');
+        }
+        return;
+      }
+      expect(conversationTools()).toEqual(["read"]);
+      expect(webSearch()).toEqual({ allowed: true, persistentAllowed: true });
+      expect(harnessTools()).toEqual([]);
+    },
+  );
 });

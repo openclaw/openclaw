@@ -1,26 +1,21 @@
 // Tracks queue state for active, pending, and recently deduped reply runs.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { ModelCatalogEntry } from "../../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
+import { resolveThinkingSelection } from "../../../agents/model-thinking-default.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
-import {
-  normalizeThinkLevel,
-  resolveSupportedThinkingLevel,
-  resolveThinkingDefaultForModel,
-  type ThinkingCatalogEntry,
-} from "../../thinking.js";
-import {
-  completeFollowupRunLifecycle,
-  type FollowupRun,
-  type QueueDropPolicy,
-  type QueueSettings,
-} from "./types.js";
+import { normalizeThinkLevel } from "../../thinking.js";
+import { completeFollowupRunLifecycle } from "./lifecycle.js";
+import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./types.js";
 
 type FollowupQueueState = {
   abortController: AbortController;
   items: FollowupRun[];
   draining: boolean;
+  /** Exact operational drain generation; recovery may retire only this owner. */
+  drainOwner?: object;
   /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
   inFlight: Set<FollowupRun>;
   lastEnqueuedAt: number;
@@ -213,7 +208,7 @@ export function refreshQueuedFollowupSession(params: {
   nextAuthProfileIdSource?: "auto" | "user";
   nextThinking?: {
     level?: string;
-    catalog?: ThinkingCatalogEntry[];
+    catalog?: ModelCatalogEntry[];
     agentRuntime?: string | null;
   };
 }): void {
@@ -279,21 +274,19 @@ export function refreshQueuedFollowupSession(params: {
       }
       if (params.nextThinking) {
         run.thinkingCatalog = params.nextThinking.catalog;
-        const explicitLevel = normalizeThinkLevel(params.nextThinking.level);
-        run.thinkLevel = explicitLevel
-          ? resolveSupportedThinkingLevel({
-              provider: run.provider,
-              model: run.model,
-              level: explicitLevel,
-              catalog: params.nextThinking.catalog,
-              agentRuntime: params.nextThinking.agentRuntime,
-            })
-          : resolveThinkingDefaultForModel({
-              provider: run.provider,
-              model: run.model,
-              catalog: params.nextThinking.catalog,
-              agentRuntime: params.nextThinking.agentRuntime,
-            });
+        const explicitLevel =
+          run.thinkLevelOverride === "default"
+            ? undefined
+            : (run.thinkLevelOverride ?? normalizeThinkLevel(params.nextThinking.level));
+        run.thinkLevel = resolveThinkingSelection({
+          cfg: run.config,
+          agentId: run.agentId,
+          provider: run.provider,
+          model: run.model,
+          catalog: params.nextThinking.catalog,
+          agentRuntime: params.nextThinking.agentRuntime,
+          level: explicitLevel,
+        }).level;
       }
     }
   };

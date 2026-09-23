@@ -1,4 +1,3 @@
-// Discord plugin module implements thread bindings behavior.
 export type {
   ThreadBindingManager,
   ThreadBindingRecord,
@@ -40,9 +39,6 @@ export {
 
 export type { AcpThreadBindingReconciliationResult } from "./thread-bindings.lifecycle.js";
 
-export {
-  testing,
-  createNoopThreadBindingManager,
-  createThreadBindingManager,
-  getThreadBindingManager,
-} from "./thread-bindings.manager.js";
+export { createThreadBindingManager, getThreadBindingManager } from "./thread-bindings.manager.js";
+
+export { createNoopThreadBindingManager } from "./thread-bindings.session-adapter.js";

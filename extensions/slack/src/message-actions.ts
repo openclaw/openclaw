@@ -1,4 +1,3 @@
-// Slack plugin module implements message actions behavior.
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -46,6 +45,7 @@ export function listSlackMessageActions(
     actions.add("reactions");
   }
   if (isActionEnabled("messages")) {
+    actions.add("conversation-open");
     actions.add("read");
     actions.add("edit");
     actions.add("delete");

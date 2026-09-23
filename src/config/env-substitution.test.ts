@@ -6,6 +6,12 @@ import {
   containsEnvVarReference,
   resolveConfigEnvVars,
 } from "./env-substitution.js";
+import {
+  createConfigResolutionFacts,
+  getAuthoredConfigSecretRef,
+  getResolvedConfigEnvSecretRef,
+  setConfigResolutionFacts,
+} from "./resolution-facts.js";
 
 type SubstitutionScenario = {
   name: string;
@@ -114,6 +120,36 @@ describe("resolveConfigEnvVars", () => {
     });
   });
 
+  it("retains sparse arrays, literal keys, escaping and depth-first callback order", () => {
+    const items: unknown[] = [];
+    items.length = 3;
+    items[1] = { missing: "${FIRST}", resolved: "${LATER}", escaped: "$${LATER}" };
+    const env = { LATER: "before-callback" };
+    const warnings: EnvSubstitutionWarning[] = [];
+    const result = resolveConfigEnvVars({ items, tail: "${LAST}", "${KEY}": "literal-key" }, env, {
+      onMissing: (warning) => {
+        warnings.push(warning);
+        env.LATER = "after-callback";
+      },
+    });
+    const expectedItems: unknown[] = [];
+    expectedItems.length = 3;
+    expectedItems[1] = {
+      missing: "${FIRST}",
+      resolved: "after-callback",
+      escaped: "${LATER}",
+    };
+    expect(result).toStrictEqual({
+      items: expectedItems,
+      tail: "${LAST}",
+      "${KEY}": "literal-key",
+    });
+    expect(warnings).toEqual([
+      { varName: "FIRST", configPath: "items[1].missing" },
+      { varName: "LAST", configPath: "tail" },
+    ]);
+  });
+
   describe("missing env var handling", () => {
     it("throws MissingEnvVarError with var name and config path details", () => {
       const scenarios: MissingEnvScenario[] = [
@@ -137,6 +173,65 @@ describe("resolveConfigEnvVars", () => {
           env: { OK: "val" },
           varName: "MISSING",
           configPath: "items[1]",
+        },
+        {
+          name: "dotted plugin ID remains one record key",
+          config: { plugins: { entries: { "foo.config.bar": { token: "${MISSING}" } } } },
+          env: {},
+          varName: "MISSING",
+          configPath: 'plugins.entries["foo.config.bar"].token',
+        },
+        {
+          name: "dotted header remains one record key",
+          config: {
+            plugins: { entries: { fixture: { config: { headers: { "X.Trace": "${MISSING}" } } } } },
+          },
+          env: {},
+          varName: "MISSING",
+          configPath: 'plugins.entries.fixture.config.headers["X.Trace"]',
+        },
+        {
+          name: "nested header segments remain dotted",
+          config: {
+            plugins: {
+              entries: { fixture: { config: { headers: { X: { Trace: "${MISSING}" } } } } },
+            },
+          },
+          env: {},
+          varName: "MISSING",
+          configPath: "plugins.entries.fixture.config.headers.X.Trace",
+        },
+        {
+          name: "numeric-looking record key is not an array index",
+          config: {
+            plugins: { entries: { fixture: { config: { headers: { "0": "${MISSING}" } } } } },
+          },
+          env: {},
+          varName: "MISSING",
+          configPath: 'plugins.entries.fixture.config.headers["0"]',
+        },
+        {
+          name: "dotted non-plugin record key is one quoted segment",
+          config: { "root.key": "${MISSING}" },
+          env: {},
+          varName: "MISSING",
+          configPath: '["root.key"]',
+        },
+        {
+          name: "plugin config array indices remain canonical",
+          config: {
+            plugins: { entries: { fixture: { config: { headers: ["${MISSING}"] } } } },
+          },
+          env: {},
+          varName: "MISSING",
+          configPath: "plugins.entries.fixture.config.headers[0]",
+        },
+        {
+          name: "hyphenated record key keeps its existing dotted spelling",
+          config: { providers: { "vercel-gateway": { apiKey: "${MISSING}" } } },
+          env: {},
+          varName: "MISSING",
+          configPath: "providers.vercel-gateway.apiKey",
         },
         {
           name: "empty string env value treated as missing",
@@ -272,11 +367,75 @@ describe("resolveConfigEnvVars", () => {
   });
 
   describe("graceful missing env var handling (onMissing)", () => {
+    it("keeps pending and resolved SecretRef provenance distinct across config paths", () => {
+      const pendingEnvSecretRefs = new Map<string, string>();
+      const resolvedEnvSecretRefs = new Map<string, string>();
+      const config = resolveConfigEnvVars(
+        {
+          plugins: {
+            entries: {
+              "foo.config.bar": { config: { token: "$ATTACKER" } },
+              foo: {
+                config: {
+                  bar: { config: { token: "$VICTIM" } },
+                  headers: {
+                    "X.Trace": "$DOTTED_HEADER",
+                    X: { Trace: "$NESTED_HEADER" },
+                  },
+                },
+              },
+            },
+          },
+          models: {
+            providers: {
+              "alpha:beta": {
+                apiKey: "$CORE_PROVIDER",
+                headers: { "X.Trace": "$CORE_HEADER" },
+              },
+            },
+          },
+          resolved: "${RESOLVED_SECRET}",
+        },
+        { RESOLVED_SECRET: "resolved-value" },
+        {
+          onPendingEnvSecretRef: (id, configPath) => pendingEnvSecretRefs.set(configPath, id),
+          onResolvedEnvSecretRef: (id, configPath) => resolvedEnvSecretRefs.set(configPath, id),
+        },
+      );
+      setConfigResolutionFacts(
+        config,
+        createConfigResolutionFacts([], pendingEnvSecretRefs, undefined, resolvedEnvSecretRefs),
+      );
+
+      expect([...pendingEnvSecretRefs]).toEqual([
+        ['plugins.entries["foo.config.bar"].config.token', "ATTACKER"],
+        ["plugins.entries.foo.config.bar.config.token", "VICTIM"],
+        ['plugins.entries.foo.config.headers["X.Trace"]', "DOTTED_HEADER"],
+        ["plugins.entries.foo.config.headers.X.Trace", "NESTED_HEADER"],
+        ["models.providers.alpha:beta.apiKey", "CORE_PROVIDER"],
+        ['models.providers.alpha:beta.headers["X.Trace"]', "CORE_HEADER"],
+      ]);
+      expect([...resolvedEnvSecretRefs]).toEqual([["resolved", "RESOLVED_SECRET"]]);
+      for (const [configPath, id] of pendingEnvSecretRefs) {
+        expect(getAuthoredConfigSecretRef(config, configPath), configPath).toEqual({
+          source: "env",
+          provider: "default",
+          id,
+        });
+      }
+      expect(getAuthoredConfigSecretRef(config, "resolved")).toBeNull();
+      expect(getResolvedConfigEnvSecretRef(config, "resolved")).toEqual({
+        source: "env",
+        provider: "default",
+        id: "RESOLVED_SECRET",
+      });
+    });
+
     it("collects warnings and preserves placeholder when onMissing is set", () => {
       const warnings: EnvSubstitutionWarning[] = [];
       const result = resolveConfigEnvVars(
         { key: "${MISSING_VAR}", present: "${PRESENT}" },
-        { PRESENT: "ok" } as NodeJS.ProcessEnv,
+        { PRESENT: "ok" },
         { onMissing: (w) => warnings.push(w) },
       );
       expect(result).toEqual({ key: "${MISSING_VAR}", present: "ok" });
@@ -293,7 +452,7 @@ describe("resolveConfigEnvVars", () => {
           },
           gateway: { token: "${GW_TOKEN}" },
         },
-        { GW_TOKEN: "secret" } as NodeJS.ProcessEnv,
+        { GW_TOKEN: "secret" },
         { onMissing: (w) => warnings.push(w) },
       );
       expect(result).toEqual({
@@ -309,9 +468,7 @@ describe("resolveConfigEnvVars", () => {
     });
 
     it("still throws when onMissing is not set", () => {
-      expect(() => resolveConfigEnvVars({ key: "${MISSING}" }, {} as NodeJS.ProcessEnv)).toThrow(
-        MissingEnvVarError,
-      );
+      expect(() => resolveConfigEnvVars({ key: "${MISSING}" }, {})).toThrow(MissingEnvVarError);
     });
   });
 

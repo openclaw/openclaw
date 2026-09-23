@@ -1,13 +1,13 @@
 {
-  "originHash" : "b9da0800ad69c2e9ac7aef5828a9c6037cc84e36bfe110280567a3484a98773b",
+  "originHash" : "8d4d1e1f45aca658adc8283df1f4701c95c1cf238e78aa712d7643e0c1c862ea",
   "pins" : [
     {
       "identity" : "axorcist",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/openclaw/AXorcist.git",
       "state" : {
-        "revision" : "dba24f0a2dd4a0ccfb285d7e11cf899f8b603ef6",
-        "version" : "0.1.6"
+        "revision" : "37d7ae82ff1443b4b36344ca6f3bf0ad33f13b12",
+        "version" : "0.1.9"
       }
     },
     {
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/steipete/ElevenLabsKit",
       "state" : {
-        "revision" : "0f1e4c039bd0e22b03c0cb7f43c00c1865858f0b",
-        "version" : "0.1.1"
+        "revision" : "a1dd671d0e382d5aa869334f00f74ee22afc978a",
+        "version" : "0.1.3"
       }
     },
     {
@@ -42,26 +42,17 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sindresorhus/KeyboardShortcuts",
       "state" : {
-        "revision" : "49c3fc04ea827f816df67843bfcc57286b47ff06",
-        "version" : "3.0.1"
-      }
-    },
-    {
-      "identity" : "menubarextraaccess",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/orchetect/MenuBarExtraAccess",
-      "state" : {
-        "revision" : "33bb0e4b1e407feac791e047dcaaf9c69b25fd26",
-        "version" : "1.3.0"
+        "revision" : "772133d9dbe800fdac0473226822994c5c162c58",
+        "version" : "3.1.0"
       }
     },
     {
       "identity" : "peekaboo",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/steipete/Peekaboo.git",
+      "location" : "https://github.com/openclaw/Peekaboo.git",
       "state" : {
-        "revision" : "416247a4e08088dfa227d07658a08e427bc04353",
-        "version" : "3.9.8"
+        "revision" : "d82dbd88832688252cbed2254af6433ed9699abd",
+        "version" : "4.4.0"
       }
     },
     {
@@ -69,8 +60,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sparkle-project/Sparkle",
       "state" : {
-        "revision" : "b6496a74a087257ef5e6da1c5b29a447a60f5bd7",
-        "version" : "2.9.4"
+        "revision" : "eef1a539a373c1f1a320624b1130fc5de7b2e100",
+        "version" : "2.10.0"
       }
     },
     {
@@ -105,8 +96,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-log.git",
       "state" : {
-        "revision" : "a878e7f8f46cfc0e1125e565b5c08e7d5272dc9a",
-        "version" : "1.14.0"
+        "revision" : "9c6fb14227f55d8f711ce3847dc2f419fb0ecacb",
+        "version" : "1.15.1"
       }
     },
     {
@@ -132,8 +123,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftlang/swift-subprocess.git",
       "state" : {
-        "revision" : "11633673a41f509f8945f23c96c7acd4adafd679",
-        "version" : "0.5.0"
+        "revision" : "b3937ab85dd32f6e9435914599c1519074769c1a",
+        "version" : "1.0.0"
       }
     },
     {
@@ -141,8 +132,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-system",
       "state" : {
-        "revision" : "b5544ba79a70a0cb3563e75bf26dc198d6b40ed3",
-        "version" : "1.7.4"
+        "revision" : "869129b7bf4ecc57b97d0193ad29690ca2134750",
+        "version" : "1.8.1"
       }
     },
     {

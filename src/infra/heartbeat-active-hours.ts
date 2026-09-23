@@ -9,21 +9,28 @@ type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
 const ACTIVE_HOURS_TIME_PATTERN = /^(?:([01]\d|2[0-3]):([0-5]\d)|24:00)$/;
 
-/** Resolve the timezone used to evaluate heartbeat active hours. */
-export function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
-  const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "user") {
-    return resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
-  }
-  if (trimmed === "local") {
+/** Resolve the formatter used to evaluate heartbeat active hours. */
+function resolveActiveHoursFormatter(
+  cfg: OpenClawConfig,
+  raw?: string,
+): Intl.DateTimeFormat | null {
+  let timeZone = raw?.trim();
+  const isExplicit = timeZone && timeZone !== "user" && timeZone !== "local";
+  if (!timeZone || timeZone === "user") {
+    timeZone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
+  } else if (timeZone === "local") {
     const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return host?.trim() || "UTC";
+    timeZone = host?.trim() || "UTC";
   }
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
-    return trimmed;
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
   } catch {
-    return resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
+    return isExplicit ? resolveActiveHoursFormatter(cfg) : null;
   }
 }
 
@@ -66,57 +73,36 @@ function resolveMinutesInTimeZone(nowMs: number, formatter: Intl.DateTimeFormat)
   }
 }
 
-/** Prepare one active-hours predicate for repeated schedule probes. */
-export function createActiveHoursPredicate(
-  cfg: OpenClawConfig,
-  heartbeat?: HeartbeatConfig,
-): (nowMs: number) => boolean {
-  const active = heartbeat?.activeHours;
-  if (!active) {
-    return () => true;
-  }
-
-  const startMin = parseActiveHoursTime({ allow24: false }, active.start);
-  const endMin = parseActiveHoursTime({ allow24: true }, active.end);
-  if (startMin === null || endMin === null) {
-    return () => true;
-  }
-  if (startMin === endMin) {
-    return () => false;
-  }
-
-  const timeZone = resolveActiveHoursTimezone(cfg, active.timezone);
-  let formatter: Intl.DateTimeFormat;
-  try {
-    // Schedule seeking can call this predicate thousands of times. Reusing the
-    // formatter avoids blocking the event loop on repeated Intl construction.
-    formatter = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    });
-  } catch {
-    return () => true;
-  }
-
-  return (nowMs: number) => {
-    const currentMin = resolveMinutesInTimeZone(nowMs, formatter);
-    if (currentMin === null) {
-      return true;
-    }
-    if (endMin > startMin) {
-      return currentMin >= startMin && currentMin < endMin;
-    }
-    return currentMin >= startMin || currentMin < endMin;
-  };
-}
-
 /** Return true when the current time is inside the configured heartbeat window. */
 export function isWithinActiveHours(
   cfg: OpenClawConfig,
   heartbeat?: HeartbeatConfig,
   nowMs?: number,
 ): boolean {
-  return createActiveHoursPredicate(cfg, heartbeat)(nowMs ?? Date.now());
+  const active = heartbeat?.activeHours;
+  if (!active) {
+    return true;
+  }
+
+  const startMin = parseActiveHoursTime({ allow24: false }, active.start);
+  const endMin = parseActiveHoursTime({ allow24: true }, active.end);
+  if (startMin === null || endMin === null) {
+    return true;
+  }
+  if (startMin === endMin) {
+    return false;
+  }
+
+  const formatter = resolveActiveHoursFormatter(cfg, active.timezone);
+  if (!formatter) {
+    return true;
+  }
+
+  const currentMin = resolveMinutesInTimeZone(nowMs ?? Date.now(), formatter);
+  if (currentMin === null) {
+    return true;
+  }
+  return endMin > startMin
+    ? currentMin >= startMin && currentMin < endMin
+    : currentMin >= startMin || currentMin < endMin;
 }

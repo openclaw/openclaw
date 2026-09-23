@@ -1,9 +1,17 @@
-// Telegram plugin module implements client fetch behavior.
 import type { ApiClientOptions } from "grammy";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramTransport } from "./fetch.js";
-import { isTelegramMisdirectedRequestError, tagTelegramNetworkError } from "./network-errors.js";
+import {
+  isTelegramMisdirectedRequestError,
+  TelegramRequestNotStartedError,
+} from "./network-errors.js";
+import {
+  assertTelegramRequestAuthority,
+  findTelegramRequestAuthorityError,
+  getTelegramRequestAuthority,
+  withoutTelegramRequestAuthority,
+} from "./request-authority.js";
 import { resolveTelegramRequestTimeoutMs } from "./request-timeouts.js";
 
 type TelegramFetchInput = Parameters<NonNullable<ApiClientOptions["fetch"]>>[0];
@@ -120,7 +128,7 @@ export function createTelegramClientFetch(params: {
   fetchImpl?: TelegramClientFetch;
   timeoutSeconds?: unknown;
   shutdownSignal?: unknown;
-  transport?: Pick<TelegramTransport, "forceFallback">;
+  transport?: Partial<Pick<TelegramTransport, "forceFallback" | "sourceFetch">>;
 }): TelegramCompatFetch | undefined {
   if (!params.fetchImpl && !params.shutdownSignal) {
     return undefined;
@@ -129,7 +137,11 @@ export function createTelegramClientFetch(params: {
   const callFetch = asTelegramCompatFetch(
     params.fetchImpl ?? asTelegramClientFetch(globalThis.fetch),
   );
+  const isRawSourceFetch =
+    params.transport?.sourceFetch !== undefined &&
+    params.fetchImpl === asTelegramClientFetch(params.transport.sourceFetch);
   const wrappedFetch = async (input: TelegramFetchInput, init?: TelegramFetchInit) => {
+    const assertCurrent = getTelegramRequestAuthority(init);
     const method = extractTelegramApiMethod(input);
     const requestTimeoutMs = resolveTelegramRequestTimeoutMs(method, params.timeoutSeconds);
     const shutdownSignal = isTelegramAbortSignalLike(params.shutdownSignal)
@@ -142,7 +154,8 @@ export function createTelegramClientFetch(params: {
       !requestSignal?.aborted &&
       params.transport?.forceFallback?.(reason) === true;
 
-    const runFetch = async () => {
+    const runFetch = async (allowMisdirectedFallback = false): Promise<Response> => {
+      assertTelegramRequestAuthority(assertCurrent);
       const controller = new AbortController();
       const abortWith = (signal: Pick<TelegramAbortSignalLike, "reason">) =>
         controller.abort(signal.reason);
@@ -192,9 +205,21 @@ export function createTelegramClientFetch(params: {
 
       try {
         const response = await callFetch(input, {
-          ...init,
+          ...(isRawSourceFetch ? withoutTelegramRequestAuthority(init) : init),
           signal: controller.signal,
         });
+        if (response.status === 421) {
+          const retry =
+            allowMisdirectedFallback && canForceTransportFallback("misdirected-request");
+          // HTTP 421 permits retrying a non-idempotent request;
+          // arbitrary thrown 421 shapes do not own that fact.
+          await response.body?.cancel().catch(() => undefined);
+          if (retry) {
+            await releaseRequest();
+            return runFetch();
+          }
+          throw new TelegramRequestNotStartedError();
+        }
         // grammY consumes JSON after fetch resolves; keep its deadline and
         // cancellation linked until the response body settles.
         return responseWithRelease(response, releaseRequest);
@@ -208,13 +233,11 @@ export function createTelegramClientFetch(params: {
     };
 
     try {
-      const response = await runFetch();
-      if (response.status === 421 && canForceTransportFallback("misdirected-request")) {
-        await response.body?.cancel().catch(() => undefined);
-        return await runFetch();
-      }
-      return response;
+      return await runFetch(true);
     } catch (err) {
+      if (findTelegramRequestAuthorityError(err)) {
+        throw err;
+      }
       if (
         requestTimeoutMs &&
         shouldRetryTimedOutTelegramControlRequest(method) &&
@@ -232,18 +255,5 @@ export function createTelegramClientFetch(params: {
     }
   };
 
-  return (input: TelegramFetchInput, init?: TelegramFetchInit) => {
-    return Promise.resolve(wrappedFetch(input, init)).catch((err: unknown) => {
-      try {
-        tagTelegramNetworkError(err, {
-          method: extractTelegramApiMethod(input),
-          url: readRequestUrl(input),
-        });
-      } catch {
-        // Tagging is best-effort; preserve the original fetch failure if the
-        // error object cannot accept extra metadata.
-      }
-      throw err;
-    });
-  };
+  return wrappedFetch;
 }

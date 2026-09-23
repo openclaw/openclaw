@@ -1,16 +1,22 @@
 /**
  * Tests chat abort authorization checks for gateway clients and session owners.
  */
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createChatRunState } from "../server-chat-state.js";
+import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
+import {
+  type AbortResponsePayload,
+  createSingleAbortContext,
+  expectAbortPayload,
+  invokeAbort,
+  requireLastRespondCall,
+} from "./chat.abort-authorization.test-helpers.js";
 import {
   createActiveRun,
   createChatAbortContext,
   invokeChatAbortHandler,
 } from "./chat.abort.test-helpers.js";
-import { chatHandlers } from "./chat.js";
 
 vi.mock("../session-utils.js", async () => {
   return {
@@ -19,93 +25,15 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
-type AbortResponsePayload = {
-  aborted?: boolean;
-  runIds?: string[];
-};
-type AbortRespond = Awaited<ReturnType<typeof invokeChatAbortHandler>>;
-
-async function invokeAbort({
-  context,
-  sessionKey = "main",
-  runId,
-  connId,
-  deviceId,
-  preserveSideRuns,
-  scopes = ["operator.write"],
-  onAuthorizedAfterQueuedAbort,
-  excludeRunIds,
-}: {
-  context: ReturnType<typeof createChatAbortContext>;
-  sessionKey?: string;
-  runId?: string;
-  connId: string;
-  deviceId: string;
-  preserveSideRuns?: boolean;
-  scopes?: string[];
-  onAuthorizedAfterQueuedAbort?: () => boolean;
-  excludeRunIds?: ReadonlySet<string>;
-}) {
-  return await invokeChatAbortHandler({
-    handler:
-      onAuthorizedAfterQueuedAbort || excludeRunIds
-        ? (options) =>
-            handleChatAbortRequestWithLifecycle(options, {
-              onAuthorizedAfterQueuedAbort,
-              excludeRunIds,
-            })
-        : expectDefined(chatHandlers["chat.abort"], 'chatHandlers["chat.abort"] test invariant'),
-    context,
-    request: {
-      sessionKey,
-      ...(runId ? { runId } : {}),
-      ...(preserveSideRuns ? { preserveSideRuns: true } : {}),
-    },
-    client: {
-      connId,
-      connect: { device: { id: deviceId }, scopes },
-    },
-  });
-}
-
-function createSingleAbortContext() {
-  return createChatAbortContext({
-    chatAbortControllers: new Map([
-      [
-        "run-1",
-        createActiveRun("main", { owner: { connId: "conn-owner", deviceId: "dev-owner" } }),
-      ],
-    ]),
-  });
-}
-
-function requireLastRespondCall(respond: AbortRespond) {
-  const calls = respond.mock.calls;
-  const call = calls[calls.length - 1];
-  if (!call) {
-    throw new Error("expected respond call");
-  }
-  return call;
-}
-
-function expectAbortPayload(
-  payload: unknown,
-  expected: { aborted: boolean; runIds: string[] },
-): void {
-  const abortPayload = payload as AbortResponsePayload | undefined;
-  expect(abortPayload?.aborted).toBe(expected.aborted);
-  expect(abortPayload?.runIds).toEqual(expected.runIds);
-}
-
 describe("chat.abort authorization", () => {
   it("rejects non-admin worker-only inference aborts", async () => {
     const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
     const context = createChatAbortContext({
-      workerEnvironmentService: {
+      workerEnvironmentService: createWorkerInferenceCancellationService(
+        "main-session",
+        ["worker-run"],
         cancelInferenceForSession,
-        hasInferenceForSession: () => true,
-        resolveInferenceSessionForRunId: () => "main-session",
-      },
+      ),
     });
     for (const runId of [undefined, "worker-run"]) {
       const respond = await invokeAbort({
@@ -517,11 +445,11 @@ describe("chat.abort queued-turn contract", () => {
     const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
     const cancelInferenceForSession = vi.fn(() => ["run-1"]);
     const context = createSingleAbortContext();
-    context.workerEnvironmentService = {
+    context.workerEnvironmentService = createWorkerInferenceCancellationService(
+      "main-session",
+      ["run-1"],
       cancelInferenceForSession,
-      hasInferenceForSession: (sessionId: string, runId?: string) =>
-        sessionId === "main-session" && (!runId || runId === "run-1"),
-    } as never;
+    );
 
     const respond = await invokeAbort({
       context,
@@ -542,10 +470,11 @@ describe("chat.abort queued-turn contract", () => {
     const onAuthorizedAfterQueuedAbort = vi.fn(() => false);
     const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
     const context = createChatAbortContext({
-      workerEnvironmentService: {
+      workerEnvironmentService: createWorkerInferenceCancellationService(
+        "main-session",
+        ["worker-run"],
         cancelInferenceForSession,
-        hasInferenceForSession: () => true,
-      },
+      ),
     });
 
     const respond = await invokeAbort({
@@ -571,11 +500,11 @@ describe("chat.abort queued-turn contract", () => {
     });
     const context = createChatAbortContext({
       chatAbortControllers: new Map([["run-hidden", hidden]]),
-      workerEnvironmentService: {
+      workerEnvironmentService: createWorkerInferenceCancellationService(
+        "main-session",
+        ["run-hidden"],
         cancelInferenceForSession,
-        hasInferenceForSession: (sessionId: string, runId?: string) =>
-          sessionId === "main-session" && (!runId || runId === "run-hidden"),
-      },
+      ),
     });
 
     const lifecycleRespond = await invokeAbort({
@@ -1063,5 +992,77 @@ describe("chat.abort queued-turn contract", () => {
     expect(mine.signal.aborted).toBe(true);
     expect(foreign.signal.aborted).toBe(false);
     expect(context.chatQueuedTurns.has("queued-foreign")).toBe(true);
+  });
+
+  it("rejects an ownerless global abort on an explicit fleet", async () => {
+    const active = createActiveRun("global", { agentId: "research" });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-research", active]]),
+      getRuntimeConfig: () => ({
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+        session: { scope: "global" },
+      }),
+    });
+    const respond = await invokeChatAbortHandler({
+      handler: handleChatAbortRequestWithLifecycle,
+      context,
+      request: { sessionKey: "global", runId: "run-research" },
+    });
+    expect(respond.mock.calls.at(-1)?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("has no explicit owner"),
+    });
+    expect(active.controller.signal.aborted).toBe(false);
+  });
+
+  it("uses the persisted fixed-store owner for a bare global abort", async () => {
+    const active = createActiveRun("global", { agentId: "ops" });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-ops", active]]),
+      getRuntimeConfig: () => ({
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+        session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
+      }),
+    });
+
+    const respond = await invokeChatAbortHandler({
+      handler: handleChatAbortRequestWithLifecycle,
+      context,
+      request: { sessionKey: "global", runId: "run-ops" },
+    });
+
+    expect(respond.mock.calls.at(-1)?.[0]).toBe(true);
+    expect(active.controller.signal.aborted).toBe(true);
+  });
+
+  it("rejects a bare global abort owned by a retired fixed-store agent", async () => {
+    const active = createActiveRun("global", { agentId: "research" });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-research", active]]),
+      getRuntimeConfig: () => ({
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "retired" } },
+          entries: { ops: {}, research: {} },
+        },
+        session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
+      }),
+    });
+
+    const respond = await invokeChatAbortHandler({
+      handler: handleChatAbortRequestWithLifecycle,
+      context,
+      request: { sessionKey: "global", runId: "run-research" },
+    });
+
+    expect(respond.mock.calls.at(-1)?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: 'session key belongs to retired agent "retired"',
+    });
+    expect(active.controller.signal.aborted).toBe(false);
   });
 });

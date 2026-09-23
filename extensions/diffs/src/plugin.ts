@@ -25,6 +25,11 @@ const DIFF_ARTIFACT_MAX_BYTES_PER_ENTRY = 32 * 1024 * 1024;
 const DIFF_ARTIFACT_MAX_BYTES_PER_NAMESPACE = 256 * 1024 * 1024;
 
 export function registerDiffsPlugin(api: OpenClawPluginApi): void {
+  // CLI metadata has no runtime state, and this plugin exposes no CLI commands.
+  if (api.registrationMode === "cli-metadata") {
+    return;
+  }
+
   const store = new DiffArtifactStore({
     rootDir: path.join(resolvePreferredOpenClawTmpDir(), "openclaw-diffs"),
     blobStore: api.runtime.state.openBlobStore<DiffArtifactBlobMetadata>({
@@ -35,6 +40,11 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
       overflowPolicy: "reject-new",
     }),
     logger: api.logger,
+  });
+  api.registerService({
+    id: "diffs-artifact-cleanup",
+    start: () => store.startCleanup(),
+    stop: () => store.stopCleanup(),
   });
   const resolveCurrentPluginConfig = () =>
     resolveLivePluginConfigObject(
@@ -59,7 +69,11 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
     (ctx) => {
       const pluginConfig = resolveCurrentPluginConfig();
       return createDiffsTool({
-        api,
+        getConfig: () =>
+          (ctx.getRuntimeConfig?.() ??
+            ctx.runtimeConfig ??
+            ctx.config ??
+            api.runtime.config.current()) as OpenClawConfig, // SAFETY: The tool only reads this immutable runtime snapshot.
         store,
         defaults: resolveDiffsPluginDefaults(pluginConfig),
         viewerBaseUrl: resolveDiffsPluginViewerBaseUrl(pluginConfig),

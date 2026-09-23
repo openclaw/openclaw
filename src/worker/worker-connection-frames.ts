@@ -1,40 +1,58 @@
 import { randomUUID } from "node:crypto";
+import type { Static } from "typebox";
 import { Value } from "typebox/value";
 import { WebSocket } from "ws";
 import {
   type WorkerConnectParams,
   type WorkerHeartbeatParams,
-  type WorkerHeartbeatResponseFrame,
   WorkerHeartbeatResponseFrameSchema,
   type WorkerLiveEventParams,
-  type WorkerLiveEventResponseFrame,
   WorkerLiveEventResponseFrameSchema,
+  type WorkerPortalParams,
+  WorkerPortalResponseFrameSchema,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  type WorkerSessionsSendParams,
+  WorkerSessionsSendResponseFrameSchema,
+  type WorkerSessionsSpawnParams,
+  WorkerSessionsSpawnResponseFrameSchema,
   type WorkerTranscriptCommitParams,
-  type WorkerTranscriptCommitResponseFrame,
   WorkerTranscriptCommitResponseFrameSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
+  type WorkerComputerParams,
+  WorkerComputerResponseFrameSchema,
+} from "../../packages/gateway-protocol/src/schema/worker-computer.js";
+import {
   type WorkerInferenceCancelParams,
-  type WorkerInferenceCancelResponseFrame,
   WorkerInferenceCancelResponseFrameSchema,
   type WorkerInferenceEventFrame,
   type WorkerInferenceStartParams,
-  type WorkerInferenceStartResponseFrame,
   WorkerInferenceStartResponseFrameSchema,
   type WorkerInferenceTerminalFrame,
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
   validateWorkerInferenceEventFrame,
   validateWorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WorkerSkillWorkshopResponseFrameSchema,
+  type WorkerSkillWorkshopParams,
+} from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
+import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { notifyListeners } from "../shared/listeners.js";
 import {
   createPendingRequestRegistry,
   type PendingRequestEntry,
 } from "../shared/pending-request-registry.js";
-import { WorkerConnectionInterruptedError, toError } from "./worker-connection-contract.js";
+import {
+  WorkerConnectionInterruptedError,
+  toWorkerConnectionError,
+} from "./worker-connection-contract.js";
 
 const WORKER_REQUEST_SPECS = {
+  "skill-workshop": {
+    method: "worker.skill-workshop",
+    responseSchema: WorkerSkillWorkshopResponseFrameSchema,
+  },
   heartbeat: {
     method: "worker.heartbeat",
     responseSchema: WorkerHeartbeatResponseFrameSchema,
@@ -46,6 +64,22 @@ const WORKER_REQUEST_SPECS = {
   "live-event": {
     method: "worker.live-event",
     responseSchema: WorkerLiveEventResponseFrameSchema,
+  },
+  "sessions-spawn": {
+    method: "worker.sessions.spawn",
+    responseSchema: WorkerSessionsSpawnResponseFrameSchema,
+  },
+  "sessions-send": {
+    method: "worker.sessions.send",
+    responseSchema: WorkerSessionsSendResponseFrameSchema,
+  },
+  portal: {
+    method: "worker.portal",
+    responseSchema: WorkerPortalResponseFrameSchema,
+  },
+  computer: {
+    method: "worker.computer",
+    responseSchema: WorkerComputerResponseFrameSchema,
   },
   "inference-start": {
     method: "worker.inference.start",
@@ -59,22 +93,24 @@ const WORKER_REQUEST_SPECS = {
 
 type WorkerRequestKind = keyof typeof WORKER_REQUEST_SPECS;
 type WorkerRequestParams = {
+  "skill-workshop": WorkerSkillWorkshopParams;
   heartbeat: WorkerHeartbeatParams;
   transcript: WorkerTranscriptCommitParams;
   "live-event": WorkerLiveEventParams;
+  "sessions-spawn": WorkerSessionsSpawnParams;
+  "sessions-send": WorkerSessionsSendParams;
+  portal: WorkerPortalParams;
+  computer: WorkerComputerParams;
   "inference-start": WorkerInferenceStartParams;
   "inference-cancel": WorkerInferenceCancelParams;
 };
 type WorkerResponseFrames = {
-  heartbeat: WorkerHeartbeatResponseFrame;
-  transcript: WorkerTranscriptCommitResponseFrame;
-  "live-event": WorkerLiveEventResponseFrame;
-  "inference-start": WorkerInferenceStartResponseFrame;
-  "inference-cancel": WorkerInferenceCancelResponseFrame;
+  [K in WorkerRequestKind]: Static<(typeof WORKER_REQUEST_SPECS)[K]["responseSchema"]>;
 };
 type WorkerResponseFrame = WorkerResponseFrames[WorkerRequestKind];
 type PendingRequestValue = {
   kind: WorkerRequestKind;
+  timeoutMs?: number;
   // Durable replay can emit its terminal as the next socket frame. Reset the
   // consumer cursor synchronously after validation, before Promise continuation.
   beforeResolve?: (frame: WorkerResponseFrame) => void;
@@ -169,16 +205,30 @@ export class WorkerConnectionFrameDispatcher {
     kind: K,
     params: WorkerRequestParams[K],
     beforeResolve?: (frame: WorkerResponseFrames[K]) => void,
+    timeoutMs?: number,
   ): Promise<WorkerResponseFrames[K]> {
     const id = randomUUID();
     const spec = WORKER_REQUEST_SPECS[kind];
     const frame = { type: "req", id, method: spec.method, params };
+    if (
+      kind === "transcript" &&
+      !isWorkerTranscriptFrameWithinBudget({
+        type: "req",
+        id,
+        method: "worker.transcript.commit",
+        // SAFETY: The generic request kind selects its matching WorkerRequestParams member.
+        params: params as WorkerTranscriptCommitParams,
+      })
+    ) {
+      return Promise.reject(new Error("worker transcript exceeds the protocol payload limit"));
+    }
     const wrappedBeforeResolve = beforeResolve
       ? (response: WorkerResponseFrame) => beforeResolve(response as WorkerResponseFrames[K])
       : undefined;
     return this.sendRequest(id, frame, {
       kind,
       ...(wrappedBeforeResolve ? { beforeResolve: wrappedBeforeResolve } : {}),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
     }) as Promise<WorkerResponseFrames[K]>;
   }
 
@@ -195,7 +245,7 @@ export class WorkerConnectionFrameDispatcher {
     try {
       completed.value.beforeResolve?.(response);
     } catch (error) {
-      completed.reject(toError(error));
+      completed.reject(toWorkerConnectionError(error));
       return true;
     }
     completed.resolve(response);
@@ -220,10 +270,10 @@ export class WorkerConnectionFrameDispatcher {
     try {
       encoded = JSON.stringify(frame);
     } catch (error) {
-      return Promise.reject(toError(error));
+      return Promise.reject(toWorkerConnectionError(error));
     }
     const payloadLimit =
-      value.kind === "inference-start"
+      value.kind === "inference-start" || value.kind === "transcript"
         ? WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES
         : WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
     if (Buffer.byteLength(encoded, "utf8") > payloadLimit) {
@@ -231,7 +281,7 @@ export class WorkerConnectionFrameDispatcher {
     }
     const pending = this.pending.add(id, {
       value,
-      timeoutMs: this.options.requestTimeoutMs,
+      timeoutMs: value.timeoutMs ?? this.options.requestTimeoutMs,
       timeoutError: () =>
         new WorkerConnectionInterruptedError(`worker ${value.kind} response timed out`),
       onTimeout: () => this.options.interruptReadySocket(readySocket),
@@ -254,7 +304,7 @@ export class WorkerConnectionFrameDispatcher {
     } catch (error) {
       this.pending
         .take(id, pending)
-        ?.reject(new WorkerConnectionInterruptedError(toError(error).message));
+        ?.reject(new WorkerConnectionInterruptedError(toWorkerConnectionError(error).message));
       this.options.interruptReadySocket(readySocket);
     }
     return pending.promise;

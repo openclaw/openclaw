@@ -1,23 +1,32 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
+import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { drainWorkerSessionPlacement } from "./placement-drain.js";
+import { createPlacementMoveOps } from "./placement-move-intent.js";
 import { createPlacementPendingFailureOps } from "./placement-pending-failure.js";
+import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import {
-  assertRecordShape,
+  isCurrentPlacementTurnClaim,
   nextGeneration,
   normalizeEpoch,
+  normalizeWorkerPlacementExecutionMode,
   normalizeIdentity,
+  placementTurnOwner,
+  projectWorkerSessionTurnClaim,
   required,
-  type WorkerSessionPlacementIdentity,
+  resolvePlacementTurnEnvironment,
+  type WorkerSessionPlacementDispatchIdentity,
   type WorkerSessionPlacementRecord,
   type WorkerSessionPlacementTransitionPatch,
   type WorkerSessionTurnClaim,
-  type WorkerWorkspaceResultConflict,
 } from "./placement-record.js";
 import {
   ensureLocal,
@@ -29,22 +38,40 @@ import {
 } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
+  assertNoRunningWorkerSessionToolOperations,
+  clearWorkerTurnToolState,
+} from "./placement-session-tool-operations.js";
+import {
   canTransitionWorkerSessionPlacement,
   type WorkerSessionPlacementState,
 } from "./placement-state.js";
-import { createPlacementTurnClaimOps, signalTurnClaimRelease } from "./placement-turn-claims.js";
+import { attachWorkerTurnExecutionIdentityStore } from "./placement-turn-claim-events.js";
 import {
-  clearWorkerWorkspaceReconciliation,
-  createPlacementWorkspaceJournalOps,
-} from "./placement-workspace-journal.js";
+  createPlacementTurnClaimOps,
+  registerWorkerTurnClaimClosedHandler,
+  signalWorkerTurnClaimClosed,
+} from "./placement-turn-claims.js";
+import { createPlacementWorkspaceJournalOps } from "./placement-workspace-journal.js";
+import {
+  assertSessionWorkspaceUnreserved,
+  createPlacementWorkspaceReservationOps,
+} from "./placement-workspace-reservation.js";
 import {
   createPlacementWorkspaceResultOps,
+  hasCurrentWorkspaceResultClaim,
   hasWorkerWorkspacePendingResult,
+  readWorkerWorkspaceReconciliationFacts,
 } from "./placement-workspace-result.js";
+import { consumePreparedEnvironment } from "./prepared-environment-store.js";
+import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
+import type { PreparedEnvironmentSelection } from "./store.js";
 import { boundedWorkerError } from "./worker-error.js";
-import { projectWorkspaceResultConflict } from "./workspace-conflicts.js";
+import {
+  projectWorkspaceResultConflict,
+  type WorkerWorkspaceResultConflict,
+} from "./workspace-conflicts.js";
 
-const RETIRABLE_PLACEMENT_STATES = ["local", "reclaimed", "failed"] as const;
+const RETIRABLE_PLACEMENT_STATES = ["local", "requested", "reclaimed", "failed"] as const;
 
 export type WorkerSessionPlacementRetirement = {
   sessionId: string;
@@ -82,7 +109,39 @@ function updateTransition(
   if (result.numAffectedRows !== 1n) {
     throw new Error(`Worker session placement ${current.sessionId} changed during transition`);
   }
-  return getRequired(db, current.sessionId);
+  const updated = getRequired(db, current.sessionId);
+  if (updated.state === "active") {
+    // Activation and demand are one commit. Teardown may run before refill observes
+    // the placement, so cleanup timestamps cannot stand in for successful demand.
+    const activated = executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<Pick<StateDatabase, "worker_environments">>(db)
+        .updateTable("worker_environments")
+        .set((eb) => ({
+          last_activated_at_ms: eb
+            .case()
+            .when("last_activated_at_ms", ">", nowMs)
+            .then(eb.ref("last_activated_at_ms"))
+            .else(nowMs)
+            .end(),
+        }))
+        .where("environment_id", "=", updated.environmentId)
+        .where("state", "=", "attached")
+        .where("destroy_requested_at_ms", "is", null)
+        .where("owner_epoch", "=", updated.activeOwnerEpoch)
+        .where("attached_session_ids_json", "=", JSON.stringify([updated.sessionId]))
+        .returning("last_activated_at_ms"),
+    );
+    if (activated.rows.length !== 1) {
+      throw new Error(
+        `Worker session placement ${current.sessionId} lost its attached environment`,
+      );
+    }
+    publishWorkerEnvironmentNativeMutation(db, updated.environmentId!, {
+      lastActivatedAtMs: activated.rows[0]!.last_activated_at_ms,
+    });
+  }
+  return updated;
 }
 
 export function createWorkerSessionPlacementStore(
@@ -98,43 +157,96 @@ export function createWorkerSessionPlacementStore(
     write: (operation) => runOpenClawStateWriteTransaction(({ db }) => operation(db), { path }),
   };
   const { read, write } = runtime;
-  const workspaceResultConflicts = new Map<string, WorkerWorkspaceResultConflict>();
+  const workspaceResultConflicts = new Map<
+    string,
+    {
+      conflict: WorkerWorkspaceResultConflict;
+      placement: WorkerSessionPlacementRecord;
+      claim: WorkerSessionTurnClaim;
+    }
+  >();
   const withWorkspaceResultConflict = (
     record: WorkerSessionPlacementRecord | undefined,
   ): WorkerSessionPlacementRecord | undefined => {
     if (!record) {
       return undefined;
     }
-    const conflict = workspaceResultConflicts.get(record.sessionId);
+    const conflict = workspaceResultConflicts.get(record.sessionId)?.conflict;
     return conflict ? { ...record, workspaceResultConflict: conflict } : record;
   };
 
-  const requireClaimOwner = (claim: WorkerSessionTurnClaim): void => {
-    const current = find(read(), required(claim.sessionId, "session id"));
-    const persisted = current?.turnClaim;
-    if (
-      claim.owner.kind !== "worker" ||
-      (current?.state !== "active" && current?.state !== "draining") ||
-      current.environmentId !== claim.owner.environmentId ||
-      current.activeOwnerEpoch !== claim.owner.ownerEpoch ||
-      persisted?.owner !== "worker" ||
-      persisted.claimId !== claim.claimId ||
-      persisted.runId !== claim.runId ||
-      persisted.generation !== claim.placementGeneration ||
-      persisted.ownerEpoch !== claim.owner.ownerEpoch
-    ) {
-      throw new Error(`Session ${claim.sessionId} workspace result conflict owner changed`);
-    }
-  };
-
-  return {
+  const store = {
+    ...createPlacementWorkspaceReservationOps(runtime),
     ...createPlacementTurnClaimOps(runtime),
     ...createPlacementPendingFailureOps(runtime),
+    ...createPlacementMoveOps(runtime),
     ...createPlacementWorkspaceJournalOps(runtime),
     ...createPlacementWorkspaceResultOps(runtime),
 
+    registerTurnClaimClosedHandler(handler: (claim: WorkerSessionTurnClaim) => void): () => void {
+      return registerWorkerTurnClaimClosedHandler(path, handler);
+    },
+
     get(sessionId: string): WorkerSessionPlacementRecord | undefined {
       return withWorkspaceResultConflict(find(read(), required(sessionId, "session id")));
+    },
+
+    async readProjection(sessionIds: readonly string[]): Promise<WorkerSessionPlacementProjection> {
+      const requestedIds = new Map(sessionIds.map((id) => [id, required(id, "session id")]));
+      const ids = [...new Set(requestedIds.values())];
+      const conflicts = new Map(
+        ids.flatMap((id) => {
+          const conflict = workspaceResultConflicts.get(id);
+          return conflict ? [[id, conflict] as const] : [];
+        }),
+      );
+      const result = await executeExistingOpenClawStateRead(
+        { path },
+        {
+          type: "workers.placementProjection",
+          sessionIds: ids,
+          conflictBindings: [...conflicts.values()].map(({ placement, claim }) => ({
+            placement: {
+              sessionId: placement.sessionId,
+              generation: placement.generation,
+              environmentId: placement.environmentId,
+              activeOwnerEpoch: placement.activeOwnerEpoch,
+            },
+            claim: { ...claim },
+          })),
+        },
+      );
+      if (!result || !result.ok || result.type !== "workers.placementProjection") {
+        throw new Error("Worker placement projection source is unavailable");
+      }
+      const { projection, conflictSessionIds } = result.result;
+      const placements = new Map(projection.placements);
+      for (const [id, captured] of conflicts) {
+        const record = placements.get(id);
+        if (record && conflictSessionIds.has(id) && workspaceResultConflicts.get(id) === captured) {
+          placements.set(id, { ...record, workspaceResultConflict: captured.conflict });
+        }
+      }
+      const byRequestedId = <T>(records: ReadonlyMap<string, T>) => {
+        const requested = new Map<string, T>();
+        for (const [original, normalized] of requestedIds) {
+          const value = records.get(normalized);
+          if (value !== undefined) {
+            requested.set(original, value);
+          }
+        }
+        return requested;
+      };
+      return {
+        ...projection,
+        placements: byRequestedId(placements),
+        moves: byRequestedId(projection.moves),
+        workspaceResultReconcilingSessionIds: new Set(
+          [...requestedIds].flatMap(([original, normalized]) =>
+            projection.workspaceResultReconcilingSessionIds.has(normalized) ? [original] : [],
+          ),
+        ),
+      };
     },
 
     getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord> {
@@ -157,6 +269,13 @@ export function createWorkerSessionPlacementStore(
         }
       }
       return records;
+    },
+
+    getWorkspaceResultReconcilingSessionIds(sessionIds: readonly string[]): ReadonlySet<string> {
+      const normalizedIds = [
+        ...new Set(sessionIds.map((sessionId) => required(sessionId, "session id"))),
+      ];
+      return readWorkerWorkspaceReconciliationFacts(read(), normalizedIds).reconcilingSessionIds;
     },
 
     retireSessionPlacement(input: WorkerSessionPlacementRetirement): void {
@@ -189,9 +308,17 @@ export function createWorkerSessionPlacementStore(
       claim: WorkerSessionTurnClaim,
       conflict: WorkerWorkspaceResultConflict | undefined,
     ): void {
-      requireClaimOwner(claim);
+      const db = read();
+      const current = find(db, required(claim.sessionId, "session id"));
+      if (
+        !current ||
+        (!isCurrentPlacementTurnClaim(current, claim) && !hasCurrentWorkspaceResultClaim(db, claim))
+      ) {
+        throw new Error(`Session ${claim.sessionId} workspace result conflict owner changed`);
+      }
       if (!conflict) {
         workspaceResultConflicts.delete(claim.sessionId);
+        sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey });
         return;
       }
       const paths = conflict.paths.map(exactConflictPath);
@@ -202,16 +329,38 @@ export function createWorkerSessionPlacementStore(
       ) {
         throw new Error("Cloud workspace result conflict projection is invalid");
       }
-      workspaceResultConflicts.set(
-        claim.sessionId,
-        projectWorkspaceResultConflict(paths, stagedResultRef, conflict.totalCount),
-      );
+      workspaceResultConflicts.set(claim.sessionId, {
+        conflict: projectWorkspaceResultConflict(paths, stagedResultRef, conflict.totalCount),
+        placement: current,
+        claim: { ...claim },
+      });
+      sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey });
     },
 
-    startDispatch(input: WorkerSessionPlacementIdentity): WorkerSessionPlacementRecord {
+    bindPreparedEnvironment(
+      input: PreparedEnvironmentSelection,
+    ): WorkerSessionPlacementRecord | undefined {
+      return write((db) => {
+        const nowMs = now();
+        const current = consumePreparedEnvironment(db, input, nowMs);
+        return current
+          ? updateTransition(
+              db,
+              current,
+              "provisioning",
+              { environmentId: input.environmentId },
+              nowMs,
+            )
+          : undefined;
+      });
+    },
+
+    startDispatch(input: WorkerSessionPlacementDispatchIdentity): WorkerSessionPlacementRecord {
       const identity = normalizeIdentity(input);
+      const executionMode = normalizeWorkerPlacementExecutionMode(input.executionMode);
       return write((db) => {
         const current = ensureLocal(db, identity, now());
+        assertSessionWorkspaceUnreserved(db, identity.sessionId);
         if (
           current.state !== "local" &&
           current.state !== "reclaimed" &&
@@ -230,6 +379,7 @@ export function createWorkerSessionPlacementStore(
             .updateTable("worker_session_placements")
             .set({
               state: "requested",
+              execution_mode: executionMode,
               environment_id: null,
               transition_generation: nextGeneration(current.generation),
               active_owner_epoch: null,
@@ -297,99 +447,39 @@ export function createWorkerSessionPlacementStore(
       expectedGeneration: number;
       workspaceBaseManifestRef?: string;
     }): WorkerSessionPlacementRecord {
-      const sessionId = required(input.sessionId, "session id");
-      const environmentId = required(input.environmentId, "environment id");
-      const ownerEpoch = normalizeEpoch(input.ownerEpoch, "active owner epoch");
-      return write((db) => {
-        const current = getRequired(db, sessionId);
-        if (
-          current.state !== "active" ||
-          current.generation !== input.expectedGeneration ||
-          current.environmentId !== environmentId ||
-          current.activeOwnerEpoch !== ownerEpoch
-        ) {
-          throw new Error(`Cannot drain stale worker placement for session ${sessionId}`);
-        }
-        if (hasWorkerWorkspacePendingResult(db, sessionId)) {
-          throw new Error(
-            `Cannot drain session ${sessionId} with a pending cloud workspace result`,
-          );
-        }
-        // Draining closes new admission first. The already-admitted worker may
-        // finish under its old claim before reconciliation advances ownership.
-        const values = transitionValues(
-          current,
-          "draining",
-          input.workspaceBaseManifestRef === undefined
-            ? {}
-            : { workspaceBaseManifestRef: input.workspaceBaseManifestRef },
-          now(),
-        );
-        const turnClaim = current.turnClaim;
-        if (turnClaim) {
-          values.turn_claim_owner = turnClaim.owner;
-          values.turn_claim_id = turnClaim.claimId;
-          values.turn_claim_run_id = turnClaim.runId;
-          values.turn_claim_generation = turnClaim.generation;
-          values.turn_claim_owner_epoch = turnClaim.ownerEpoch;
-        }
-        assertRecordShape({
-          state: "draining",
-          environmentId,
-          activeOwnerEpoch: ownerEpoch,
-          workspaceBaseManifestRef: values.workspace_base_manifest_ref,
-          remoteWorkspaceDir: values.remote_workspace_dir,
-          workerBundleHash: values.worker_bundle_hash,
-          lastTranscriptAckCursor: values.last_transcript_ack_cursor,
-          lastLiveEventAckCursor: values.last_live_event_ack_cursor,
-          recoveryError: values.recovery_error,
-          terminalReason: values.terminal_reason,
-          terminalAtMs: values.terminal_at_ms,
-          turnClaim,
-        });
-        const result = executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable("worker_session_placements")
-            .set(values)
-            .where("session_id", "=", sessionId)
-            .where("state", "=", "active")
-            .where("transition_generation", "=", current.generation)
-            .where("environment_id", "=", environmentId)
-            .where("active_owner_epoch", "=", ownerEpoch),
-        );
-        if (result.numAffectedRows !== 1n) {
-          throw new Error(`Worker session placement ${sessionId} changed during drain`);
-        }
-        if (input.workspaceBaseManifestRef !== undefined) {
-          clearWorkerWorkspaceReconciliation(db, sessionId, input.workspaceBaseManifestRef);
-        }
-        return getRequired(db, sessionId);
-      });
+      return write((db) => drainWorkerSessionPlacement(db, input, now()));
     },
 
-    finishReclaim(input: {
-      sessionId: string;
-      environmentId: string;
-      ownerEpoch: number;
-      expectedGeneration: number;
-    }): WorkerSessionPlacementRecord {
-      const sessionId = required(input.sessionId, "session id");
-      const environmentId = required(input.environmentId, "environment id");
-      const ownerEpoch = normalizeEpoch(input.ownerEpoch, "active owner epoch");
+    startWorkspaceResultDrain(claim: WorkerSessionTurnClaim): WorkerSessionPlacementRecord {
       return write((db) => {
-        const current = getRequired(db, sessionId);
-        if (
-          current.state !== "active" ||
-          current.generation !== input.expectedGeneration ||
-          current.environmentId !== environmentId ||
-          current.activeOwnerEpoch !== ownerEpoch ||
-          current.turnClaim !== null ||
-          hasWorkerWorkspacePendingResult(db, sessionId)
-        ) {
-          throw new Error(`Cannot finish stale worker reclaim for session ${sessionId}`);
+        const current = getRequired(db, required(claim.sessionId, "session id"));
+        const ownsWorkspaceResult = hasCurrentWorkspaceResultClaim(db, claim);
+        const currentOwner = resolvePlacementTurnEnvironment(current, claim);
+        const owner =
+          currentOwner ??
+          (ownsWorkspaceResult &&
+          current.state === "active" &&
+          current.environmentId &&
+          current.activeOwnerEpoch !== null
+            ? {
+                environmentId: current.environmentId,
+                ownerEpoch: current.activeOwnerEpoch,
+              }
+            : undefined);
+        if (current.state !== "active" || !owner || !ownsWorkspaceResult) {
+          throw new Error(`Cannot drain stale workspace result for session ${claim.sessionId}`);
         }
-        return updateTransition(db, current, "reclaimed", {}, now());
+        return drainWorkerSessionPlacement(
+          db,
+          {
+            sessionId: current.sessionId,
+            environmentId: owner.environmentId,
+            ownerEpoch: owner.ownerEpoch,
+            expectedGeneration: current.generation,
+            allowPendingWorkspaceResult: true,
+          },
+          now(),
+        );
       });
     },
 
@@ -398,6 +488,7 @@ export function createWorkerSessionPlacementStore(
       environmentId: string;
       ownerEpoch: number;
       expectedGeneration: number;
+      forceLocalClaim?: true;
     }): WorkerSessionPlacementRecord {
       const sessionId = required(input.sessionId, "session id");
       const environmentId = required(input.environmentId, "environment id");
@@ -419,7 +510,20 @@ export function createWorkerSessionPlacementStore(
         }
         // Clear the last claim in the same CAS that opens post-worker
         // reconciliation. Pending results block this authority fence.
-        const releasedClaim = current.turnClaim !== null;
+        const claim = current.turnClaim;
+        if (claim?.owner === "local" && input.forceLocalClaim !== true) {
+          throw new Error(`Cannot reconcile session ${sessionId} while its local turn is active`);
+        }
+        if (claim) {
+          assertNoRunningWorkerSessionToolOperations(db, {
+            sessionId,
+            claimId: claim.claimId,
+          });
+          clearWorkerTurnToolState(db, {
+            sessionId,
+            claimId: claim.claimId,
+          });
+        }
         const values = transitionValues(current, "reconciling", {}, now());
         const update = query(db)
           .updateTable("worker_session_placements")
@@ -429,22 +533,37 @@ export function createWorkerSessionPlacementStore(
           .where("transition_generation", "=", current.generation)
           .where("environment_id", "=", environmentId)
           .where("active_owner_epoch", "=", ownerEpoch);
-        const guardedUpdate = current.turnClaim
+        const guardedUpdate = claim
           ? update
-              .where("turn_claim_owner", "=", "worker")
-              .where("turn_claim_id", "=", current.turnClaim.claimId)
-              .where("turn_claim_run_id", "=", current.turnClaim.runId)
-              .where("turn_claim_generation", "=", current.turnClaim.generation)
-              .where("turn_claim_owner_epoch", "=", current.turnClaim.ownerEpoch)
+              .where("turn_claim_owner", "=", claim.owner)
+              .where("turn_claim_id", "=", claim.claimId)
+              .where("turn_claim_run_id", "=", claim.runId)
+              .where("turn_claim_generation", "=", claim.generation)
+              .where(
+                "turn_claim_owner_epoch",
+                claim.owner === "worker" ? "=" : "is",
+                claim.ownerEpoch,
+              )
           : update.where("turn_claim_owner", "is", null);
         const result = executeSqliteQuerySync(db, guardedUpdate);
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker session placement ${sessionId} changed during reconcile`);
         }
-        return { record: getRequired(db, sessionId), releasedClaim };
+        return {
+          record: getRequired(db, sessionId),
+          releasedClaim: claim
+            ? {
+                sessionId,
+                claimId: claim.claimId,
+                runId: claim.runId,
+                placementGeneration: claim.generation,
+                owner: placementTurnOwner(current),
+              }
+            : undefined,
+        };
       });
       if (outcome.releasedClaim) {
-        signalTurnClaimRelease(path, sessionId);
+        signalWorkerTurnClaimClosed(path, outcome.releasedClaim);
       }
       return outcome.record;
     },
@@ -490,7 +609,7 @@ export function createWorkerSessionPlacementStore(
           if (result.numAffectedRows !== 1n) {
             throw new Error(`Worker session placement ${sessionId} changed during failure update`);
           }
-          return { record: getRequired(db, sessionId), releasedClaim: false };
+          return { record: getRequired(db, sessionId), releasedClaim: undefined };
         }
         if (!canTransitionWorkerSessionPlacement(current.state, "failed")) {
           throw new Error(`Cannot fail worker session placement from ${current.state}`);
@@ -524,11 +643,11 @@ export function createWorkerSessionPlacementStore(
         }
         return {
           record: getRequired(db, sessionId),
-          releasedClaim: current.turnClaim?.owner === "worker",
+          releasedClaim: projectWorkerSessionTurnClaim(current),
         };
       });
       if (outcome.releasedClaim) {
-        signalTurnClaimRelease(path, sessionId);
+        signalWorkerTurnClaimClosed(path, outcome.releasedClaim);
       }
       return outcome.record;
     },
@@ -554,16 +673,18 @@ export function createWorkerSessionPlacementStore(
       return current;
     },
 
-    listForReconcile(): WorkerSessionPlacementRecord[] {
+    listForReconcile(sessionKey?: string): WorkerSessionPlacementRecord[] {
       const db = read();
+      let select = query(db)
+        .selectFrom("worker_session_placements")
+        .selectAll()
+        .where("state", "not in", ["local", "reclaimed"]);
+      if (sessionKey !== undefined) {
+        select = select.where("session_key", "=", sessionKey);
+      }
       return executeSqliteQuerySync(
         db,
-        query(db)
-          .selectFrom("worker_session_placements")
-          .selectAll()
-          .where("state", "not in", ["local", "reclaimed"])
-          .orderBy("updated_at_ms")
-          .orderBy("session_id"),
+        select.orderBy("updated_at_ms").orderBy("session_id"),
       ).rows.map((row) => withWorkspaceResultConflict(fromRow(row))!);
     },
 
@@ -574,7 +695,21 @@ export function createWorkerSessionPlacementStore(
         query(db).selectFrom("worker_session_placements").selectAll().orderBy("session_id"),
       ).rows.map((row) => withWorkspaceResultConflict(fromRow(row))!);
     },
+
+    async readChangeSnapshot() {
+      const reply = await executeExistingOpenClawStateRead(
+        { path },
+        { type: "workerPlacements.changeSnapshot" },
+        { current: true },
+      );
+      if (!reply || !reply.ok || reply.type !== "workerPlacements.changeSnapshot") {
+        throw new Error("Worker placement change snapshot is unavailable");
+      }
+      return reply.placements;
+    },
   };
+  attachWorkerTurnExecutionIdentityStore(store, path);
+  return store;
 }
 
 export type WorkerSessionPlacementStore = ReturnType<typeof createWorkerSessionPlacementStore>;

@@ -1,15 +1,25 @@
-// Agent Core module implements branch summarization behavior.
 import type { Model, StreamFn } from "@openclaw/llm-core";
 import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringChars,
+} from "@openclaw/normalization-core/cjk-chars";
+import {
   type AgentCoreCompletionRuntimeDeps,
+  consumeAgentCoreStream,
   resolveAgentCoreCompleteFn,
 } from "../../runtime-deps.js";
 import type { AgentMessage } from "../../types.js";
 import { convertToLlm } from "../messages.js";
 import { projectSessionEntryMessage } from "../session/session.js";
-import type { BranchSummaryResult, SessionTreeEntry } from "../types.js";
-import { BranchSummaryError, err, ok, type Result } from "../types.js";
-import { estimateTokens, SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.js";
+import {
+  type BranchSummaryResult,
+  type SessionTreeEntry,
+  BranchSummaryError,
+  err,
+  ok,
+  type Result,
+} from "../types.js";
+import { SUMMARIZATION_SYSTEM_PROMPT } from "./summarization-prompts.js";
 import {
   computeFileLists,
   createFileOps,
@@ -118,24 +128,22 @@ export function prepareBranchEntries(
     }
     extractFileOpsFromMessage(message, fileOps);
 
-    const tokens = estimateTokens(message);
+    // Budget the summary input, where tool output is bounded and reasoning is omitted.
+    const rendered = serializeConversation(convertToLlm([message]));
+    const tokens = rendered
+      ? Math.ceil(
+          (estimateStringChars(rendered) + (totalTokens > 0 ? 2 : 0)) / CHARS_PER_TOKEN_ESTIMATE,
+        )
+      : 0;
     if (tokenBudget > 0 && totalTokens + tokens > tokenBudget) {
-      // Prefer already-compressed summaries when the budget is almost filled; they
-      // preserve older branch context better than dropping the whole prefix.
-      if (entry.type === "compaction" || entry.type === "branch_summary") {
-        if (totalTokens < tokenBudget * 0.9) {
-          messages.unshift(message);
-          totalTokens += tokens;
-        }
-      }
       break;
     }
 
-    messages.unshift(message);
+    messages.push(message);
     totalTokens += tokens;
   }
 
-  return { messages, fileOps, totalTokens };
+  return { messages: messages.toReversed(), fileOps, totalTokens };
 }
 
 const BRANCH_SUMMARY_PREAMBLE = `The user explored a different conversation branch before returning here.
@@ -186,6 +194,20 @@ export async function generateBranchSummary(
     replaceInstructions,
     reserveTokens = 16384,
   } = options;
+  let instructions: string;
+  if (replaceInstructions && customInstructions) {
+    instructions = customInstructions;
+  } else if (customInstructions) {
+    instructions = `${BRANCH_SUMMARY_PROMPT}\n\nAdditional focus: ${customInstructions}`;
+  } else {
+    instructions = BRANCH_SUMMARY_PROMPT;
+  }
+  const promptPrefix = "<conversation>\n";
+  const promptSuffix = `\n</conversation>\n\n${instructions}`;
+  const fixedInputTokens = Math.ceil(
+    estimateStringChars(`${SUMMARIZATION_SYSTEM_PROMPT}${promptPrefix}${promptSuffix}`) /
+      CHARS_PER_TOKEN_ESTIMATE,
+  );
   const contextWindow = model.contextWindow || 128000;
   const maxSummaryOutputTokens = Math.min(
     2048,
@@ -196,25 +218,38 @@ export async function generateBranchSummary(
   // fall back before its nonpositive budget disables history bounds entirely.
   const usableReserveTokens =
     reserveTokens < contextWindow ? reserveTokens : Math.floor(contextWindow / 2);
-  const effectiveReserveTokens = Math.max(maxSummaryOutputTokens, usableReserveTokens);
-  const tokenBudget = Math.max(1, contextWindow - effectiveReserveTokens);
+  const effectiveReserveTokens = Math.max(
+    maxSummaryOutputTokens + fixedInputTokens,
+    usableReserveTokens,
+  );
+  const tokenBudget = contextWindow - effectiveReserveTokens;
+  if (tokenBudget <= 0) {
+    return err(
+      new BranchSummaryError(
+        "summarization_failed",
+        "Branch summary instructions and output reservation exceed the model context window.",
+      ),
+    );
+  }
 
   const { messages, fileOps } = prepareBranchEntries(entries, tokenBudget);
-
-  if (messages.length === 0) {
+  const conversationText = serializeConversation(convertToLlm(messages));
+  if (!conversationText) {
+    const hasVisibleHistory = entries.some((entry) => {
+      const message = projectSessionEntryMessage(entry);
+      return message && serializeConversation(convertToLlm([message])).length > 0;
+    });
+    if (hasVisibleHistory) {
+      return err(
+        new BranchSummaryError(
+          "summarization_failed",
+          "The latest branch content cannot fit beside the summary instructions and output. Reduce the focus instructions or select a larger context window.",
+        ),
+      );
+    }
     return ok({ summary: "No content to summarize", readFiles: [], modifiedFiles: [] });
   }
-  const llmMessages = convertToLlm(messages);
-  const conversationText = serializeConversation(llmMessages);
-  let instructions: string;
-  if (replaceInstructions && customInstructions) {
-    instructions = customInstructions;
-  } else if (customInstructions) {
-    instructions = `${BRANCH_SUMMARY_PROMPT}\n\nAdditional focus: ${customInstructions}`;
-  } else {
-    instructions = BRANCH_SUMMARY_PROMPT;
-  }
-  const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${instructions}`;
+  const promptText = `${promptPrefix}${conversationText}${promptSuffix}`;
 
   const summarizationMessages = [
     {
@@ -226,8 +261,10 @@ export async function generateBranchSummary(
   const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
   const streamOptions = { apiKey, headers, signal, maxTokens: maxSummaryOutputTokens };
   const response = options.streamFn
-    ? await (await options.streamFn(model, context, streamOptions)).result()
+    ? await consumeAgentCoreStream(options.streamFn(model, context, streamOptions), options.runtime)
     : await resolveAgentCoreCompleteFn(options.runtime)(model, context, streamOptions);
+  // Usage belongs to the completed provider request even when its summary is invalid.
+  options.runtime?.internalUsageSink?.(response.usage);
   if (response.stopReason === "aborted") {
     return err(
       new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted"),

@@ -6,13 +6,17 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
-import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
+import { resolveSessionStorePathForAcp } from "../acp/runtime/session-meta.js";
+import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
-import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
-import { resolveContextTokensForModelFromCache as resolveContextTokensForModel } from "../agents/context-resolution.js";
+import {
+  resolveAuthoredModelContextTokens,
+  resolveContextTokensForModelFromCache as resolveContextTokensForModel,
+} from "../agents/context-resolution.js";
 import { waitForContextWindowCacheLoad } from "../agents/context.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveConfiguredPrimaryProviderFallback } from "../agents/model-selection-shared.js";
 import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -89,10 +93,13 @@ function resolveConfiguredStatusModelRef(params: {
     }
   }
 
-  const fallbackProvider = resolveConfiguredProviderFallback({
+  const fallbackProvider = resolveConfiguredPrimaryProviderFallback({
     cfg: params.cfg,
+    agentId: params.agentId,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
   });
   if (fallbackProvider) {
     return fallbackProvider;
@@ -151,18 +158,11 @@ function resolveStatusModelComparisonLabel(params: {
 }
 
 function resolveSessionModelRef(
-  cfg: OpenClawConfig,
+  resolved: { provider: string; model: string },
   entry?:
     | SessionEntry
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
-  agentId?: string,
 ): { provider: string; model: string } {
-  const resolved = resolveConfiguredStatusModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-    agentId,
-  });
   const defaultProvider = resolved.provider || DEFAULT_PROVIDER;
   const providerlessPersisted =
     resolveProviderlessPersistedStatusModelRef({
@@ -192,14 +192,14 @@ function resolveSessionModelRef(
   );
 }
 
-function resolveSessionRuntimeLabel(params: {
+function resolveSessionRuntime(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   provider: string;
   model: string;
   agentId?: string;
   sessionKey: string;
-}): string {
+}): { id: string | undefined; label: string } {
   const acpSessionKey = params.agentId
     ? resolveStoredSessionKeyForAgentStore({
         cfg: params.cfg,
@@ -207,34 +207,49 @@ function resolveSessionRuntimeLabel(params: {
         sessionKey: params.sessionKey,
       })
     : params.sessionKey;
-  const acpMeta = readAcpSessionMeta({ sessionKey: acpSessionKey });
-  const runtime = resolveModelAgentRuntimeMetadata({
+  const { agentId: acpAgentId } = resolveSessionStorePathForAcp({
     cfg: params.cfg,
-    agentId: params.agentId ?? "",
-    sessionEntry: params.entry,
+    sessionKey: acpSessionKey,
+  });
+  // The summary already captured the session generation. Rereading its store
+  // could pair runtime metadata with a replacement row and reopen cold history.
+  const acpMeta = readAcpSessionMetaForEntry({
+    cfg: params.cfg,
+    sessionKey: acpSessionKey,
+    agentId: acpAgentId,
+    entry: params.entry,
+  });
+  const runtime = resolveCurrentSessionAgentRuntimeMetadata({
+    cfg: params.cfg,
+    agentId: params.agentId ?? acpAgentId,
     provider: params.provider,
     model: params.model,
     sessionKey: acpSessionKey,
+    sessionEntry: params.entry,
     acpRuntime: acpMeta != null,
     acpBackend: acpMeta?.backend,
   });
   const id = normalizeOptionalLowercaseString(runtime.id);
   // OpenClaw/auto are generic labels; concrete harness ids give better operator signal.
   const resolvedHarness = id && id !== "openclaw" && id !== "auto" ? id : undefined;
-  return resolveAgentRuntimeLabel({
-    config: params.cfg,
-    sessionEntry: params.entry,
-    resolvedHarness,
-    fallbackProvider: params.provider,
-  });
+  return {
+    id,
+    label: resolveAgentRuntimeLabel({
+      config: params.cfg,
+      sessionEntry: params.entry,
+      resolvedHarness,
+      fallbackProvider: params.provider,
+    }),
+  };
 }
 
 export const statusSummaryRuntime = {
   waitForContextWindowCacheLoad,
+  resolveAuthoredModelContextTokens,
   resolveContextTokensForModel,
   classifySessionKey: classifySessionKind,
   resolveSessionModelRef,
-  resolveSessionRuntimeLabel,
+  resolveSessionRuntime,
   resolveConfiguredStatusModelRef,
   resolveStatusModelLookupRef,
   resolveStatusModelComparisonLabel,

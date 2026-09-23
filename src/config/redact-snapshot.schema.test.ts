@@ -5,9 +5,47 @@ import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
 import { REDACTED_SENTINEL, redactConfigSnapshot } from "./redact-snapshot.js";
 import { makeSnapshot, restoreRedactedValues } from "./redact-snapshot.test-helpers.js";
-import { buildConfigSchema } from "./schema.js";
+import { buildConfigSchemaCore } from "./schema.js";
 
 describe("realredactConfigSnapshot_real", () => {
+  it.each(["url-secret", " URL-SECRET "])(
+    "redacts and restores custom plugin endpoints with authored tag %j",
+    (tag) => {
+      const hints = buildConfigSchemaCore({
+        plugins: [
+          {
+            id: "endpoint-proof",
+            configSchema: {
+              type: "object",
+              properties: { endpoint: { type: "string" } },
+            },
+            configUiHints: { endpoint: { sensitive: false, tags: [tag] } },
+          },
+        ],
+      }).uiHints;
+      const snapshot = makeSnapshot({
+        plugins: {
+          entries: {
+            "endpoint-proof": {
+              config: {
+                endpoint: "https://proof-user:proof-password@example.test/v1?token=proof-token",
+              },
+            },
+          },
+        },
+      });
+
+      const result = redactConfigSnapshot(snapshot, hints);
+      expect(result.config.plugins?.entries?.["endpoint-proof"]?.config?.endpoint).toBe(
+        REDACTED_SENTINEL,
+      );
+      for (const secret of ["proof-user", "proof-password", "proof-token"]) {
+        expect(JSON.stringify(result)).not.toContain(secret);
+      }
+      expect(restoreRedactedValues(result.config, snapshot.config, hints)).toEqual(snapshot.config);
+    },
+  );
+
   it("main schema redact works (samples)", () => {
     const snapshot = makeSnapshot({
       memory: {
@@ -50,7 +88,7 @@ describe("realredactConfigSnapshot_real", () => {
   });
 
   it("redacts bundled channel private keys from generated schema hints", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const snapshot = makeSnapshot({
       channels: {
         nostr: {
@@ -72,8 +110,27 @@ describe("realredactConfigSnapshot_real", () => {
     );
   });
 
+  it("redacts remote edge-auth header values from generated schema hints", () => {
+    const hints = buildConfigSchemaCore().uiHints;
+    const snapshot = makeSnapshot({
+      gateway: {
+        remote: {
+          edgeAuth: { "X-Edge-Auth": "test-secret" },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const gateway = expectDefined(result.config.gateway, "redacted gateway config");
+    const remote = expectDefined(gateway.remote, "redacted remote gateway config");
+    const edgeAuth = expectDefined(remote.edgeAuth, "redacted edge auth config");
+    expect(edgeAuth["X-Edge-Auth"]).toBe(REDACTED_SENTINEL);
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.gateway.remote.edgeAuth["X-Edge-Auth"]).toBe("test-secret");
+  });
+
   it("redacts Discord Activity client secrets registered on plain string schemas", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     expect(hints["channels.discord.activities.clientSecret"]?.sensitive).toBe(true);
     const snapshot = makeSnapshot({
       channels: {
@@ -93,7 +150,7 @@ describe("realredactConfigSnapshot_real", () => {
   });
 
   it("redacts and restores web fetch operator headers from generated schema hints", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     expect(hints["tools.web.fetch.headers.*"]?.sensitive).toBe(true);
     const snapshot = makeSnapshot({
       tools: {

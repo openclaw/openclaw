@@ -1,17 +1,15 @@
-// Round-trips each CronSchedule kind through the SQLite column codec so the
-// on-exit command/cwd persistence (v1 reuses schedule_expr/schedule_tz) is
-// covered alongside the existing kinds.
+// Round-trips each CronSchedule kind through canonical SQLite job JSON.
 import { describe, expect, it } from "vitest";
 import { makeCronJob } from "../delivery.test-helpers.js";
-import type { CronSchedule } from "../types.js";
+import type { CronSchedule, CronToolsAllowProvenance } from "../types.js";
 import { projectCronJobThroughStorageCodec } from "./row-codec.js";
 
 function roundTrip(schedule: CronSchedule): CronSchedule | null {
   return projectCronJobThroughStorageCodec(makeCronJob({ schedule })).schedule;
 }
 
-describe("schedule column codec round-trip", () => {
-  it("round-trips the creator account through the additive job_json envelope", () => {
+describe("canonical cron schedule JSON round-trip", () => {
+  it("round-trips the creator account through canonical job JSON", () => {
     const job = projectCronJobThroughStorageCodec(
       makeCronJob({
         owner: {
@@ -29,7 +27,7 @@ describe("schedule column codec round-trip", () => {
     });
   });
 
-  it("round-trips scheduled authority through the additive job_json envelope", () => {
+  it("round-trips scheduled authority through canonical job JSON", () => {
     const job = projectCronJobThroughStorageCodec(
       makeCronJob({
         owner: {
@@ -55,7 +53,51 @@ describe("schedule column codec round-trip", () => {
     });
   });
 
-  it("round-trips pacing through the additive job_json envelope", () => {
+  it.each(["final-executable-surface", "authenticated-requester"] as const)(
+    "round-trips private %s provenance through canonical job JSON",
+    (source) => {
+      const channelRequester = {
+        version: 1 as const,
+        channel: "discord",
+        accountId: "work",
+        senderId: "123456789012345678",
+      };
+      const provenance: CronToolsAllowProvenance =
+        source === "final-executable-surface"
+          ? { version: 1, source, callerOrigin: { kind: "local" }, channelRequester }
+          : { version: 1, source, channelRequester };
+      const job = projectCronJobThroughStorageCodec({
+        ...makeCronJob({}),
+        toolsAllowProvenance: provenance,
+      });
+
+      expect(job.toolsAllowProvenance).toEqual(provenance);
+    },
+  );
+
+  it("keeps private runtime authority out of job_json", () => {
+    const runtimeAuthority = {
+      version: 1 as const,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    };
+    const job = projectCronJobThroughStorageCodec({
+      ...makeCronJob({}),
+      runtimeAuthority,
+      runtimeAuthorityRecoveryRequired: true,
+    });
+    expect(job.runtimeAuthority).toBeUndefined();
+    expect(job.runtimeAuthorityRecoveryRequired).toBeUndefined();
+
+    const malformed = projectCronJobThroughStorageCodec({
+      ...makeCronJob({}),
+      runtimeAuthority: { ...runtimeAuthority, version: 2 } as never,
+    });
+    expect(malformed.runtimeAuthority).toBeUndefined();
+  });
+
+  it("round-trips pacing through canonical job JSON", () => {
     const job = projectCronJobThroughStorageCodec(
       makeCronJob({ pacing: { min: "15m", max: "4h" } }),
     );
@@ -78,18 +120,8 @@ describe("schedule column codec round-trip", () => {
     });
   });
 
-  it("round-trips a stream schedule through job_json without new columns", () => {
-    expect(
-      roundTrip({
-        kind: "stream",
-        command: ["node", "events.mjs"],
-        cwd: "/repo",
-        mode: "match",
-        match: "^ready:",
-        batchMs: 100,
-        maxBatchBytes: 2_048,
-      }),
-    ).toEqual({
+  it("round-trips a paced stream without aliasing input config or runtime state", () => {
+    const schedule: CronSchedule = {
       kind: "stream",
       command: ["node", "events.mjs"],
       cwd: "/repo",
@@ -97,10 +129,33 @@ describe("schedule column codec round-trip", () => {
       match: "^ready:",
       batchMs: 100,
       maxBatchBytes: 2_048,
+    };
+    const triggerState = { cursor: { position: 7 }, items: ["first"] };
+    const input = makeCronJob({
+      schedule,
+      pacing: { min: "15m", max: "4h" },
+      state: { lastStatus: "ok", triggerState, nextRunAtMs: 123_000 },
+    });
+    const before = structuredClone(input);
+    const projected = projectCronJobThroughStorageCodec(input);
+
+    expect(projected.schedule).toStrictEqual(schedule);
+    expect(projected.pacing).toStrictEqual(input.pacing);
+    expect(projected.state).toStrictEqual({ ...input.state, lastRunStatus: "ok" });
+    expect(input).toStrictEqual(before);
+    expect(Object.is(projected.schedule, input.schedule)).toBe(false);
+    expect(Object.is(projected.pacing, input.pacing)).toBe(false);
+    expect(Object.is(projected.state, input.state)).toBe(false);
+    expect(Object.is(projected.state.triggerState, triggerState)).toBe(false);
+    triggerState.cursor.position = 9;
+    triggerState.items.push("second");
+    expect(projected.state.triggerState).toStrictEqual({
+      cursor: { position: 7 },
+      items: ["first"],
     });
   });
 
-  it("keeps existing kinds intact (no cross-talk from on-exit column reuse)", () => {
+  it("keeps existing schedule kinds intact", () => {
     expect(roundTrip({ kind: "every", everyMs: 60_000 })).toEqual({
       kind: "every",
       everyMs: 60_000,
@@ -114,10 +169,5 @@ describe("schedule column codec round-trip", () => {
       kind: "at",
       at: "2026-01-01T00:00:00.000Z",
     });
-  });
-
-  it("an on-exit row is decoded as on-exit, not cron (schedule_kind disambiguates)", () => {
-    const decoded = roundTrip({ kind: "on-exit", command: "sleep 5" });
-    expect(decoded?.kind).toBe("on-exit");
   });
 });

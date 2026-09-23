@@ -1,4 +1,3 @@
-// Discord plugin module implements message forwarded behavior.
 import type { APIAttachment, APIStickerItem } from "discord-api-types/v10";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Message } from "../internal/discord.js";
@@ -52,7 +51,8 @@ export function resolveDiscordMessageStickers(message: Message): APIStickerItem[
 }
 
 export function resolveDiscordSnapshotStickers(snapshot: DiscordSnapshotMessage): APIStickerItem[] {
-  return normalizeDiscordStickerItems(snapshot.stickers ?? snapshot.sticker_items);
+  const stickers = normalizeDiscordStickerItems(snapshot.stickers);
+  return stickers.length > 0 ? stickers : normalizeDiscordStickerItems(snapshot.sticker_items);
 }
 
 export function hasDiscordMessageStickers(message: Message): boolean {
@@ -89,6 +89,18 @@ export function resolveDiscordReferencedReplyMessage(message: Message): Message 
   return Number(referenceType) === FORWARD_MESSAGE_REFERENCE_TYPE
     ? null
     : (message.referencedMessage ?? null);
+}
+
+export function resolveDiscordReferencedReplyMessageId(message: Message): string | null {
+  const referenceType = message.messageReference?.type;
+  if (Number(referenceType) === FORWARD_MESSAGE_REFERENCE_TYPE) {
+    return null;
+  }
+  return (
+    normalizeOptionalString(message.messageReference?.message_id) ??
+    normalizeOptionalString(message.referencedMessage?.id) ??
+    null
+  );
 }
 
 export function formatDiscordSnapshotAuthor(

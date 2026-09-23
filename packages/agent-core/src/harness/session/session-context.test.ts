@@ -1,5 +1,6 @@
 import type { AssistantMessage, ProviderReplayState } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { findCutPoint } from "../compaction/compaction.js";
 import { convertToLlm } from "../messages.js";
 import type { SessionTreeEntry } from "../types.js";
 import { buildSessionContext, projectSessionEntryMessage } from "./session.js";
@@ -133,6 +134,114 @@ function toolResultEntry(
 }
 
 describe("buildSessionContext", () => {
+  it.each([false, true])(
+    "keeps runtime carriers with their user at compaction boundaries (carrier=%s)",
+    (runtimeContextCarrier) => {
+      const entries: SessionTreeEntry[] = [
+        userEntry("entry-0", null, "original request"),
+        {
+          type: "custom_message",
+          id: "entry-1",
+          parentId: "entry-0",
+          timestamp,
+          customType: runtimeContextCarrier ? "openclaw.runtime-context" : "extension-context",
+          content: "metadata ".repeat(100),
+          display: false,
+          details: { runtimeContextCarrier },
+        },
+        assistantEntry("entry-2", "entry-1", "done"),
+      ];
+      for (const keepRecentTokens of [100, 1, 1_000]) {
+        const cut = findCutPoint(entries, 0, entries.length, keepRecentTokens);
+        const expectedIndex =
+          keepRecentTokens === 1_000 ? 0 : keepRecentTokens === 1 || runtimeContextCarrier ? 2 : 1;
+        expect(cut).toEqual({
+          firstKeptEntryIndex: expectedIndex,
+          turnStartIndex: expectedIndex === 2 ? (runtimeContextCarrier ? 0 : 1) : -1,
+          isSplitTurn: expectedIndex === 2,
+        });
+        const firstKeptEntry = entries[cut.firstKeptEntryIndex];
+        if (!firstKeptEntry) {
+          throw new Error("Expected a retained compaction boundary");
+        }
+        const replay = buildSessionContext([
+          ...entries,
+          {
+            type: "compaction",
+            id: "compacted",
+            parentId: "entry-2",
+            timestamp,
+            summary: "Earlier conversation",
+            firstKeptEntryId: firstKeptEntry.id,
+            tokensBefore: 1_000,
+          },
+        ]);
+        if (runtimeContextCarrier) {
+          expect(replay.messages.some((message) => message.role === "custom")).toBe(
+            replay.messages.some((message) => message.role === "user"),
+          );
+        }
+      }
+    },
+  );
+
+  it("keeps display-only custom activity out of model input", () => {
+    const activity = {
+      role: "custom" as const,
+      customType: "openclaw.context-compaction",
+      content: `Context compacted ${"x".repeat(80_000)}`,
+      display: true,
+      excludeFromContext: true,
+      timestamp: Date.parse(timestamp),
+    };
+    const runtimeContext = {
+      role: "custom" as const,
+      customType: "openclaw.runtime-context",
+      content: "Model-visible runtime context",
+      display: false,
+      details: { runtimeContextCarrier: true },
+      timestamp: Date.parse(timestamp),
+    };
+    const activityEntry: SessionTreeEntry = {
+      type: "message",
+      id: "activity",
+      parentId: "initial",
+      timestamp,
+      message: activity,
+    };
+    const runtimeContextEntry: SessionTreeEntry = {
+      type: "message",
+      id: "runtime-context",
+      parentId: "activity",
+      timestamp,
+      message: runtimeContext,
+    };
+    const entries = [
+      userEntry("initial", null, "original request"),
+      activityEntry,
+      runtimeContextEntry,
+      userEntry("latest", "runtime-context", "continue"),
+    ];
+    const messages = buildSessionContext(entries).messages;
+
+    expect(convertToLlm([activity])).toEqual([]);
+    expect(projectSessionEntryMessage(activityEntry)).toBeUndefined();
+    expect(projectSessionEntryMessage(runtimeContextEntry)).toBe(runtimeContext);
+    expect(messages.map((message) => message.role)).toEqual(["user", "custom", "user"]);
+    expect(JSON.stringify(messages)).toContain("Model-visible runtime context");
+    expect(JSON.stringify(messages)).not.toContain("Context compacted");
+    expect(convertToLlm(messages)).toMatchObject([
+      { role: "user", content: "original request" },
+      {
+        role: "user",
+        content: [{ type: "text", text: "Model-visible runtime context" }],
+        runtimeContextCarrier: true,
+      },
+      { role: "user", content: "continue" },
+    ]);
+    expect(JSON.stringify(entries)).toContain("Context compacted");
+  });
+
   it("keeps private shell executions in history without projecting them into context", () => {
     const hiddenEntry = bashEntry("hidden", "initial", "private shell output", true);
     const visibleEntry = bashEntry("visible", "hidden", "visible shell output", false);
@@ -157,6 +266,10 @@ describe("buildSessionContext", () => {
 
   it("replays only the retained tail and newer entries after compaction", () => {
     const retainedCheckpoint = replayState("openai-responses-compaction", "retained-checkpoint");
+    const retainedAnthropicCheckpoint = replayState(
+      "anthropic-compaction",
+      "retained-anthropic-checkpoint",
+    );
     const retainedSuppression = replayState("openai-responses-compaction-suppression", "rejected");
     const postBoundaryCheckpoint = replayState(
       "openai-responses-compaction",
@@ -167,8 +280,14 @@ describe("buildSessionContext", () => {
       userEntry("kept", "old", "retained"),
       assistantEntry("retained-checkpoint", "kept", "retained checkpoint", retainedCheckpoint),
       assistantEntry(
-        "retained-suppression",
+        "retained-anthropic-checkpoint",
         "retained-checkpoint",
+        "retained Anthropic checkpoint",
+        retainedAnthropicCheckpoint,
+      ),
+      assistantEntry(
+        "retained-suppression",
+        "retained-anthropic-checkpoint",
         "retained suppression",
         retainedSuppression,
       ),
@@ -210,12 +329,14 @@ describe("buildSessionContext", () => {
       "assistant",
       "assistant",
       "assistant",
+      "assistant",
       "user",
     ]);
     expect(context.messages).toMatchObject([
       { summary: "older context" },
       { content: "retained" },
       { content: [{ text: "retained checkpoint" }] },
+      { content: [{ text: "retained Anthropic checkpoint" }] },
       { content: [{ text: "retained suppression" }] },
       { content: [{ text: "post-boundary checkpoint" }] },
       { content: "new turn" },
@@ -224,8 +345,9 @@ describe("buildSessionContext", () => {
       (message): message is AssistantMessage => message.role === "assistant",
     );
     expect(assistants[0]).not.toHaveProperty("providerReplay");
-    expect(assistants[1]?.providerReplay).toEqual(retainedSuppression);
-    expect(assistants[2]?.providerReplay).toEqual(postBoundaryCheckpoint);
+    expect(assistants[1]).not.toHaveProperty("providerReplay");
+    expect(assistants[2]?.providerReplay).toEqual(retainedSuppression);
+    expect(assistants[3]?.providerReplay).toEqual(postBoundaryCheckpoint);
   });
 
   it("treats the latest reset as a hard cut with a user/assistant-only kept tail", () => {

@@ -29,6 +29,7 @@ import {
 import type {
   ActiveNativeHookRelayRegistration,
   NativeHookRelayEvent,
+  NativeHookRelayExecutionAdmission,
   NativeHookRelayInvocation,
   NativeHookRelayProcessResponse,
   NativeHookRelayProviderAdapter,
@@ -41,9 +42,24 @@ function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_too
   return registry ? getToolHookMatcherScope(registry, hookName) : undefined;
 }
 
-function nativePreToolUseMayRunLoopDetection(
-  registration: ActiveNativeHookRelayRegistration,
-): boolean {
+type NativeHookRelayPolicy = Pick<
+  ActiveNativeHookRelayRegistration,
+  "preToolUseLoopDetection" | "sessionKey" | "config" | "agentId"
+> & { executionAdmissionToolNames?: readonly string[] };
+
+/** Snapshot the same canonical native tool family for planning and receipt admission. */
+export function snapshotNativeHookRelayExecutionAdmission(
+  admission: NativeHookRelayExecutionAdmission | undefined,
+): NativeHookRelayExecutionAdmission | undefined {
+  return admission
+    ? {
+        toolNames: [...new Set(admission.toolNames.map(normalizeNativeHookToolName))],
+        admit: admission.admit,
+      }
+    : undefined;
+}
+
+function nativePreToolUseMayRunLoopDetection(registration: NativeHookRelayPolicy): boolean {
   if (!registration.preToolUseLoopDetection || !registration.sessionKey) {
     return false;
   }
@@ -51,17 +67,19 @@ function nativePreToolUseMayRunLoopDetection(
     cfg: registration.config,
     agentId: registration.agentId,
   });
-  return loopDetection?.enabled !== false;
+  return loopDetection?.enabled === true;
 }
 
 export function nativeHookRelayEventHasLocalWork(
-  registration: ActiveNativeHookRelayRegistration,
+  registration: NativeHookRelayPolicy,
   event: NativeHookRelayEvent,
 ): boolean {
   if (event === "pre_tool_use") {
-    // Avoid spawning a native hook relay for every Codex tool call when there
-    // is no before_tool_call hook, trusted-tool policy, or loop detector work.
-    return hasBeforeToolCallPolicy() || nativePreToolUseMayRunLoopDetection(registration);
+    return (
+      Boolean(registration.executionAdmissionToolNames?.length) ||
+      hasBeforeToolCallPolicy() ||
+      nativePreToolUseMayRunLoopDetection(registration)
+    );
   }
   if (event === "post_tool_use") {
     return hasGlobalHooks("after_tool_call") || listAgentToolResultMiddlewares("codex").length > 0;
@@ -73,7 +91,7 @@ export function nativeHookRelayEventHasLocalWork(
 }
 
 export function nativeHookRelayEventToolMatcher(
-  registration: ActiveNativeHookRelayRegistration,
+  registration: NativeHookRelayPolicy,
   event: NativeHookRelayEvent,
 ): readonly string[] | undefined {
   if (event === "pre_tool_use") {
@@ -85,6 +103,9 @@ export function nativeHookRelayEventToolMatcher(
     const scope = mergePluginToolMatcherScopes([
       getGlobalToolHookMatcherScope("before_tool_call"),
       getTrustedToolPolicyMatcherScope(policyRegistry),
+      registration.executionAdmissionToolNames?.length
+        ? { matchAll: false, toolNames: registration.executionAdmissionToolNames }
+        : undefined,
     ]);
     return scope?.matchAll ? undefined : scope?.toolNames;
   }
@@ -102,6 +123,8 @@ export async function processNativeHookRelayInvocation(params: {
   registration: NativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
+  executionAdmission?: NativeHookRelayExecutionAdmission;
+  assertExecutionAdmissionCurrent: () => void;
 }): Promise<NativeHookRelayProcessResponse> {
   if (params.invocation.event === "pre_tool_use") {
     return runNativeHookRelayPreToolUse(params);
@@ -119,31 +142,52 @@ async function runNativeHookRelayPreToolUse(params: {
   registration: NativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
+  executionAdmission?: NativeHookRelayExecutionAdmission;
+  assertExecutionAdmissionCurrent: () => void;
 }): Promise<NativeHookRelayProcessResponse> {
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
   const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
   const originalToolInputFingerprint = stableStringify(toolInput);
   const approvalMode = readNativeHookRelayApprovalMode(params.invocation.rawPayload);
-  const outcome = await runBeforeToolCallHook({
+  const policyRequest = {
     toolName,
     params: toolInput,
     ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
-    ...(approvalMode === "report" ? { approvalMode: "defer" } : {}),
     signal: params.registration.signal,
-    ctx: {
-      ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
-      sessionId: params.registration.sessionId,
-      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
-      ...(params.registration.config ? { config: params.registration.config } : {}),
-      runId: params.registration.runId,
-      ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
-      ...(params.registration.requester ? { requester: params.registration.requester } : {}),
-      ...params.registration.approvalContext,
-      ...(params.invocation.cwd
-        ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
-        : {}),
-    },
-  });
+  };
+  const outcome = params.registration.runBeforeToolCall
+    ? await params.registration.runBeforeToolCall({
+        ...policyRequest,
+        ...(approvalMode === "report" ? { approvalMode: "defer" } : {}),
+        ...(params.invocation.cwd ? { nativeOperation: { cwd: params.invocation.cwd } } : {}),
+      })
+    : await runBeforeToolCallHook({
+        ...policyRequest,
+        ...(approvalMode === "report" ? { approvalMode: "defer" } : {}),
+        ctx: {
+          ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+          sessionId: params.registration.sessionId,
+          ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+          ...(params.registration.config ? { config: params.registration.config } : {}),
+          runId: params.registration.runId,
+          ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
+          ...(params.registration.requester ? { requester: params.registration.requester } : {}),
+          ...params.registration.approvalContext,
+          ...(params.invocation.cwd
+            ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
+            : {}),
+        },
+      });
+  try {
+    params.registration.signal?.throwIfAborted();
+    params.registration.assertActive?.();
+  } catch (error) {
+    // A disconnected request cannot leave an approval for a later tool to consume.
+    if (!outcome.blocked && outcome.deferredApproval) {
+      cancelDeferredPluginToolApproval(outcome.deferredApproval);
+    }
+    throw error;
+  }
   if (outcome.blocked) {
     return params.adapter.renderPreToolUseBlockResponse(
       outcome.reason,
@@ -151,6 +195,29 @@ async function runNativeHookRelayPreToolUse(params: {
         ? outcome.disposition
         : undefined,
     );
+  }
+  if (
+    !outcome.deferredApproval &&
+    nativeHookRelayParamsWereRewritten(originalToolInputFingerprint, outcome.params)
+  ) {
+    // Native execution must not retain custody of rewritten inputs it will not use.
+    return params.adapter.renderPreToolUseBlockResponse(
+      "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+    );
+  }
+  try {
+    if (params.executionAdmission?.toolNames.includes(toolName)) {
+      // Accepted execution outlives the one-shot hook transport, while this
+      // request must still be current before returning or publishing approval.
+      params.executionAdmission.admit(params.invocation, params.assertExecutionAdmissionCurrent);
+      params.registration.signal?.throwIfAborted();
+      params.registration.assertActive?.();
+    }
+  } catch (error) {
+    if (outcome.deferredApproval) {
+      cancelDeferredPluginToolApproval(outcome.deferredApproval);
+    }
+    throw error;
   }
   if (outcome.deferredApproval) {
     if (
@@ -167,13 +234,6 @@ async function runNativeHookRelayPreToolUse(params: {
       );
     }
     return params.adapter.renderNoopResponse(params.invocation.event);
-  }
-  if (nativeHookRelayParamsWereRewritten(originalToolInputFingerprint, outcome.params)) {
-    // Codex app-server may continue with the original params when updatedInput
-    // is unsupported, so rewrites must fail closed here.
-    return params.adapter.renderPreToolUseBlockResponse(
-      "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
-    );
   }
   return params.adapter.renderNoopResponse(params.invocation.event);
 }

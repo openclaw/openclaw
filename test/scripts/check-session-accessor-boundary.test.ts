@@ -32,14 +32,14 @@ describe("session accessor boundary guard", () => {
     ).toBe(true);
     expect(
       findReadOnlySessionAccessorViolations(`
-        import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
-        listSessionEntries({ storePath });
+        import { listSessionEntriesCore, loadSessionEntry } from "../config/sessions/session-accessor.js";
+        listSessionEntriesCore({ storePath });
         sessionUtils.loadSessionEntry(sessionKey);
       `),
     ).toEqual([
-      { line: 2, reason: 'imports materializing session entry accessor "listSessionEntries"' },
+      { line: 2, reason: 'imports materializing session entry accessor "listSessionEntriesCore"' },
       { line: 2, reason: 'imports materializing session entry accessor "loadSessionEntry"' },
-      { line: 3, reason: 'calls materializing session entry accessor "listSessionEntries"' },
+      { line: 3, reason: 'calls materializing session entry accessor "listSessionEntriesCore"' },
       { line: 4, reason: 'references materializing session entry accessor "loadSessionEntry"' },
     ]);
     expect(
@@ -66,8 +66,8 @@ describe("session accessor boundary guard", () => {
         "src/agents/embedded-agent-runner/transcript-rewrite.ts",
         "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
         "src/agents/live-model-switch.ts",
-        "src/agents/subagent-control.ts",
-        "src/agents/subagent-registry-helpers.ts",
+        "src/agents/subagents/registry/subagent-control.ts",
+        "src/agents/subagents/registry/subagent-registry-helpers.ts",
         "src/auto-reply/reply/abort.ts",
         "src/auto-reply/reply/agent-runner-helpers.ts",
         "src/auto-reply/reply/agent-runner.ts",
@@ -87,7 +87,6 @@ describe("session accessor boundary guard", () => {
         "src/config/sessions/goals.ts",
         "src/cron/isolated-agent/delivery-target.ts",
         "src/cron/service/timer.ts",
-        "src/gateway/session-compaction-checkpoints.ts",
         "src/gateway/session-history-state.ts",
         "src/gateway/sessions-history-http.ts",
         "src/gateway/session-utils.ts",
@@ -99,8 +98,6 @@ describe("session accessor boundary guard", () => {
         "src/gateway/server-methods/sessions-files.ts",
         "src/gateway/server-methods/sessions-abort.ts",
         "src/gateway/server-methods/sessions-compact.ts",
-        "src/gateway/server-methods/sessions-compaction-checkpoints.ts",
-        "src/gateway/server-methods/sessions-compaction-queries.ts",
         "src/gateway/server-methods/sessions-compaction-runner.ts",
         "src/gateway/server-methods/sessions-create.ts",
         "src/gateway/server-methods/sessions-delete.ts",
@@ -137,7 +134,6 @@ describe("session accessor boundary guard", () => {
         "extensions/mattermost/src/mattermost/model-picker.ts",
         "extensions/matrix/src/matrix/monitor/handler.ts",
         "extensions/matrix/src/session-route.ts",
-        "extensions/qqbot/src/engine/group/activation.ts",
         "extensions/slack/src/monitor/slash.ts",
         "extensions/telegram/src/bot-core.ts",
         "extensions/telegram/src/bot-handlers.runtime.ts",
@@ -167,13 +163,13 @@ describe("session accessor boundary guard", () => {
         "src/agents/embedded-agent-runner/run/attempt.ts",
         "src/agents/embedded-agent-subscribe.handlers.compaction.runtime.ts",
         "src/agents/live-model-switch.ts",
-        "src/agents/main-session-restart-recovery-checkpoint.ts",
-        "src/agents/main-session-restart-recovery-marking.ts",
-        "src/agents/main-session-restart-recovery-store.ts",
+        "src/agents/main-session-recovery/main-session-restart-recovery-checkpoint.ts",
+        "src/agents/main-session-recovery/main-session-restart-recovery-marking.ts",
+        "src/agents/main-session-recovery/main-session-restart-recovery-store.ts",
         "src/agents/session-suspension.ts",
         "src/auto-reply/reply/abort.ts",
-        "src/agents/subagent-control.ts",
-        "src/agents/subagent-registry-helpers.ts",
+        "src/agents/subagents/registry/subagent-control.ts",
+        "src/agents/subagents/registry/subagent-registry-helpers.ts",
         "src/agents/tools/session-status-tool.ts",
         "src/auto-reply/reply/abort-cutoff.runtime.ts",
         "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
@@ -202,8 +198,6 @@ describe("session accessor boundary guard", () => {
         "src/gateway/server-methods/chat.ts",
         "src/gateway/server-methods/sessions-abort.ts",
         "src/gateway/server-methods/sessions-compact.ts",
-        "src/gateway/server-methods/sessions-compaction-checkpoints.ts",
-        "src/gateway/server-methods/sessions-compaction-queries.ts",
         "src/gateway/server-methods/sessions-compaction-runner.ts",
         "src/gateway/server-methods/sessions-create.ts",
         "src/gateway/server-methods/sessions-delete.ts",
@@ -215,7 +209,6 @@ describe("session accessor boundary guard", () => {
         "src/gateway/server-methods/sessions-shared.ts",
         "src/gateway/server-methods/sessions-subscriptions.ts",
         "src/gateway/server-node-events.ts",
-        "src/gateway/session-compaction-checkpoints.ts",
         "src/infra/outbound/outbound-session.ts",
         "src/plugins/host-hook-cleanup.ts",
         "src/plugins/host-hook-state.ts",
@@ -358,6 +351,7 @@ describe("session accessor boundary guard", () => {
         sessions["loadSessionStore"](storePath);
         readSessionStoreReadOnly(storePath);
         resolveSessionStoreEntry({ store, sessionKey });
+        resolveSessionStoreEntryCore({ store, sessionKey });
       `),
     ).toEqual([
       { line: 2, reason: 'calls legacy session store access "loadSessionStore"' },
@@ -365,6 +359,7 @@ describe("session accessor boundary guard", () => {
       { line: 4, reason: 'references legacy session store access "loadSessionStore"' },
       { line: 5, reason: 'calls legacy session store access "readSessionStoreReadOnly"' },
       { line: 6, reason: 'calls legacy session store access "resolveSessionStoreEntry"' },
+      { line: 7, reason: 'calls legacy session store access "resolveSessionStoreEntryCore"' },
     ]);
   });
 
@@ -400,8 +395,8 @@ describe("session accessor boundary guard", () => {
   it("allows migrated accessor reads", () => {
     expect(
       findSessionAccessorBoundaryViolations(`
-        import { listSessionEntries } from "../config/sessions/session-accessor.js";
-        listSessionEntries({ storePath });
+        import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
+        listSessionEntriesCore({ storePath });
       `),
     ).toEqual([]);
   });
@@ -453,7 +448,7 @@ describe("session accessor boundary guard", () => {
     expect(
       findMemoryHostSessionCorpusBoundaryViolations(`
         function listSessionTranscriptCorpusEntriesForAgentSync(agentId) {
-          return listSessionEntries({ agentId });
+          return listSessionEntriesCore({ agentId });
         }
         export async function listSessionFilesForAgent(agentId) {
           return (await listSessionTranscriptCorpusEntriesForAgent(agentId)).map((entry) => entry.sessionFile);

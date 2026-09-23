@@ -1,6 +1,5 @@
-// Matrix plugin module implements accounts behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveConfiguredMatrixAccountIds,
@@ -14,7 +13,13 @@ import {
   resolveMatrixBaseConfig,
 } from "./account-config.js";
 import { resolveGlobalMatrixEnvConfig, resolveScopedMatrixEnvConfig } from "./client/env-auth.js";
-import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials-read.js";
+import {
+  captureMatrixCredentialsEnv,
+  credentialsMatchConfig,
+  loadMatrixCredentials,
+  loadMatrixCredentialsAsync,
+} from "./credentials-read.js";
+import type { MatrixStoredCredentials } from "./credentials-state.js";
 
 export type ResolvedMatrixAccount = {
   accountId: string;
@@ -72,23 +77,14 @@ function resolveMatrixAccountAuthView(params: {
   };
 }
 
-function resolveMatrixAccountUserId(params: {
-  cfg: CoreConfig;
-  accountId: string;
-  env?: NodeJS.ProcessEnv;
-}): string | null {
-  const env = params.env ?? process.env;
-  const authView = resolveMatrixAccountAuthView({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    env,
-  });
+function resolveMatrixAccountUserId(
+  authView: ReturnType<typeof resolveMatrixAccountAuthView>,
+  stored: MatrixStoredCredentials | null,
+): string | null {
   const configuredUserId = authView.userId.trim();
   if (configuredUserId) {
     return configuredUserId;
   }
-
-  const stored = loadMatrixCredentials(env, params.accountId);
   if (!stored) {
     return null;
   }
@@ -110,44 +106,48 @@ export function resolveDefaultMatrixAccountId(cfg: CoreConfig): string {
   return normalizeAccountId(resolveMatrixDefaultOrOnlyAccountId(cfg));
 }
 
-export function resolveConfiguredMatrixBotUserIds(params: {
+export async function resolveConfiguredMatrixBotUserIds(params: {
   cfg: CoreConfig;
   accountId?: string | null;
   env?: NodeJS.ProcessEnv;
-}): Set<string> {
+  abortSignal?: AbortSignal;
+}): Promise<Set<string>> {
   const env = params.env ?? process.env;
   const currentAccountId = normalizeAccountId(params.accountId);
-  const accountIds = new Set(resolveConfiguredMatrixAccountIds(params.cfg, env));
-  if (resolveMatrixAccount({ cfg: params.cfg, accountId: DEFAULT_ACCOUNT_ID, env }).configured) {
-    accountIds.add(DEFAULT_ACCOUNT_ID);
-  }
+  const accountIds = new Set([
+    ...resolveConfiguredMatrixAccountIds(params.cfg, env),
+    DEFAULT_ACCOUNT_ID,
+  ]);
+  // Capture config/env facts before storage yields; each identity uses one credential observation.
+  const accounts = [...accountIds]
+    .filter((accountId) => normalizeAccountId(accountId) !== currentAccountId)
+    .map((accountId) => prepareMatrixAccount({ cfg: params.cfg, accountId, env }));
   const ids = new Set<string>();
-
-  for (const accountId of accountIds) {
-    if (normalizeAccountId(accountId) === currentAccountId) {
+  if (accounts.length === 0 || params.abortSignal?.aborted) {
+    return ids;
+  }
+  const credentialsEnv = captureMatrixCredentialsEnv(env);
+  for (const prepared of accounts) {
+    if (params.abortSignal?.aborted) {
+      break;
+    }
+    const stored = await loadMatrixCredentialsAsync(credentialsEnv, prepared.account.accountId);
+    if (!isMatrixAccountConfigured(prepared, stored)) {
       continue;
     }
-    if (!resolveMatrixAccount({ cfg: params.cfg, accountId, env }).configured) {
-      continue;
-    }
-    const userId = resolveMatrixAccountUserId({
-      cfg: params.cfg,
-      accountId,
-      env,
-    });
+    const userId = resolveMatrixAccountUserId(prepared.authView, stored);
     if (userId) {
       ids.add(userId);
     }
   }
-
   return ids;
 }
 
-export function resolveMatrixAccount(params: {
+function prepareMatrixAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;
   env?: NodeJS.ProcessEnv;
-}): ResolvedMatrixAccount {
+}) {
   const env = params.env ?? process.env;
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultMatrixAccountId(params.cfg),
@@ -172,7 +172,26 @@ export function resolveMatrixAccount(params: {
   const hasPassword = Boolean(authView.password);
   const hasPasswordAuth =
     hasUserId && (hasPassword || hasConfiguredSecretInput(explicitAuthConfig.password));
-  const stored = loadMatrixCredentials(env, accountId);
+  return {
+    authView,
+    hasHomeserver,
+    hasConfiguredAuth: hasAccessToken || hasPasswordAuth,
+    account: {
+      accountId,
+      enabled,
+      name: normalizeOptionalString(base.name),
+      homeserver: authView.homeserver || undefined,
+      userId: authView.userId || undefined,
+      config: base,
+    },
+  };
+}
+
+function isMatrixAccountConfigured(
+  prepared: ReturnType<typeof prepareMatrixAccount>,
+  stored: MatrixStoredCredentials | null,
+): boolean {
+  const { authView } = prepared;
   const hasStored =
     stored && authView.homeserver
       ? credentialsMatchConfig(stored, {
@@ -180,16 +199,17 @@ export function resolveMatrixAccount(params: {
           userId: authView.userId || "",
         })
       : false;
-  const configured = hasHomeserver && (hasAccessToken || hasPasswordAuth || hasStored);
-  return {
-    accountId,
-    enabled,
-    name: normalizeOptionalString(base.name),
-    configured,
-    homeserver: authView.homeserver || undefined,
-    userId: authView.userId || undefined,
-    config: base,
-  };
+  return prepared.hasHomeserver && (prepared.hasConfiguredAuth || hasStored);
+}
+
+export function resolveMatrixAccount(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
+}): ResolvedMatrixAccount {
+  const prepared = prepareMatrixAccount(params);
+  const stored = loadMatrixCredentials(params.env ?? process.env, prepared.account.accountId);
+  return { ...prepared.account, configured: isMatrixAccountConfigured(prepared, stored) };
 }
 
 export { resolveMatrixAccountConfig } from "./account-config.js";

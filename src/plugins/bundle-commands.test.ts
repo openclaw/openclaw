@@ -16,7 +16,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: () => ({ diagnostics: [], plugins: mocks.plugins }),
+  loadPluginManifestRegistryCore: () => ({ diagnostics: [], plugins: mocks.plugins }),
 }));
 
 vi.mock("./plugin-registry-contributions.js", () => ({
@@ -110,7 +110,7 @@ describe("loadEnabledClaudeBundleCommands", () => {
           pluginId: "compound-bundle",
           commands: [
             {
-              relativePath: "commands/office-hours.md",
+              relativePath: "commands/office-hours.MD",
               contents: [
                 "---",
                 "description: Help with scoping and architecture",
@@ -147,6 +147,14 @@ describe("loadEnabledClaudeBundleCommands", () => {
             {
               relativePath: "commands/not-frontmatter.md",
               contents: ["---not", "name: nope", "---not", "Treat this as Markdown."],
+            },
+            {
+              relativePath: "commands/.hidden.md",
+              contents: ["Hidden file."],
+            },
+            {
+              relativePath: "commands/.hidden/nested.md",
+              contents: ["Hidden directory."],
             },
           ],
         });
@@ -191,7 +199,7 @@ describe("loadEnabledClaudeBundleCommands", () => {
             sourceFilePath: path.join(
               resolveBundlePluginRoot(homeDir, "compound-bundle"),
               "commands",
-              "office-hours.md",
+              "office-hours.MD",
             ),
           },
           {

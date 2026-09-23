@@ -3,6 +3,7 @@
  *
  * Resolves whether a session is sandboxed and explains policy blocks before tool execution.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -10,6 +11,16 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../../config/sessions/main-session.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import {
+  loadExactSessionEntryCandidatesReadOnlyBatch,
+  resolveSessionEntry,
+} from "../../config/sessions/session-accessor.sqlite-exact-read.js";
+import {
+  sessionCreatorProfileId,
+  type SessionCreatedActor,
+} from "../../config/sessions/session-entry-provenance.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { auditSandboxToolPolicyBlock, escapeControlCharsVisible } from "../tool-policy-audit.js";
@@ -18,10 +29,38 @@ import {
   classifyToolAgainstSandboxToolPolicy,
   resolveSandboxToolPolicyForAgent,
 } from "./tool-policy.js";
-import type { SandboxConfig, SandboxToolPolicyResolved } from "./types.js";
+import type {
+  SandboxConfig,
+  SandboxIsolationSubject,
+  SandboxToolPolicyResolved,
+  SandboxWorkspaceAccess,
+} from "./types.js";
 
-function shouldSandboxSession(cfg: SandboxConfig, sessionKey: string, mainSessionKey: string) {
-  if (cfg.mode === "off") {
+type SandboxRuntimeIsolation =
+  | {
+      sandboxRequired: false;
+      isolationSubject?: never;
+      createdActor?: never;
+      workspaceAccess?: never;
+    }
+  | {
+      sandboxRequired: true;
+      isolationSubject: SandboxIsolationSubject;
+      createdActor?: SessionCreatedActor;
+      workspaceAccess: SandboxWorkspaceAccess;
+    };
+
+function shouldSandboxSession(
+  cfg: SandboxConfig,
+  sessionKey: string,
+  mainSessionKey: string,
+  sandboxRequired: boolean,
+  sandboxMode?: SessionEntry["sandboxMode"],
+) {
+  if (sandboxRequired) {
+    return true;
+  }
+  if (sandboxMode === "off" || cfg.mode === "off") {
     return false;
   }
   if (cfg.mode === "all") {
@@ -55,42 +94,146 @@ function resolveComparableSessionKeyForSandbox(params: {
   });
 }
 
-/** Resolves sandbox mode, effective session scope, and tool policy for a session. */
-export function resolveSandboxRuntimeStatus(params: {
+type SandboxRuntimeStatusParams = {
   cfg?: OpenClawConfig;
   sessionKey?: string;
   agentId?: string;
-}): {
+  /** Independent execution identity used for sandbox mode and policy classification. */
+  classificationSessionKey?: string;
+  classificationAgentId?: string;
+  /** Trusted canonical candidate for the classification identity; null means no stored entry. */
+  preparedSessionEntry?: Pick<SessionEntry, "sandbox" | "sandboxMode" | "createdActor"> | null;
+};
+
+/** Resolves sandbox mode, effective session scope, and tool policy for a session. */
+export function resolveSandboxRuntimeStatus(params: SandboxRuntimeStatusParams) {
+  return resolveSandboxRuntimeStatusWithRead(params, resolveSessionEntry);
+}
+
+/** Classifies durable canonical keys without admitting the same store once per session. */
+export function resolveSandboxRuntimeStatusesForPersistedSessions(
+  requests: readonly {
+    cfg: OpenClawConfig;
+    agentId: string;
+    sessionKeys: readonly string[];
+    env: NodeJS.ProcessEnv;
+  }[],
+) {
+  const results = loadExactSessionEntryCandidatesReadOnlyBatch(
+    requests.map((params) => ({
+      agentId: params.agentId,
+      env: params.env,
+      storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+        agentId: params.agentId,
+        env: params.env,
+      }),
+      projection: "list" as const,
+      sessionKeys: params.sessionKeys.map((sessionKey) =>
+        resolveComparableSessionKeyForSandbox({ ...params, sessionKey }),
+      ),
+    })),
+  );
+  return requests.map((params, index) => {
+    const result = expectDefined(results[index], "sandbox session read result");
+    if (!result.ok) {
+      throw result.error;
+    }
+    const byKey = new Map(result.value.map(({ sessionKey, entry }) => [sessionKey, entry]));
+    const readSession: typeof resolveSessionEntry = ({ sessionKey }) => ({
+      existing: byKey.get(sessionKey),
+      normalizedKey: sessionKey,
+      legacyKeys: [],
+    });
+    // Retained or removed entries still need the configured mode classification.
+    return params.sessionKeys.map((sessionKey) =>
+      resolveSandboxRuntimeStatusWithRead({ ...params, sessionKey }, readSession),
+    );
+  });
+}
+
+function resolveSandboxRuntimeStatusWithRead(
+  params: SandboxRuntimeStatusParams,
+  readSession: typeof resolveSessionEntry,
+): {
   agentId: string;
   sessionKey: string;
+  classificationAgentId: string;
+  classificationSessionKey: string;
   mainSessionKey: string;
   mode: SandboxConfig["mode"];
   sandboxed: boolean;
   toolPolicy: SandboxToolPolicyResolved;
-} {
+} & SandboxRuntimeIsolation {
   const sessionKey = params.sessionKey?.trim() ?? "";
   const agentId = resolveSessionAgentId({
     sessionKey,
     config: params.cfg,
     agentId: params.agentId,
   });
+  const classificationSessionKey = params.classificationSessionKey?.trim() || sessionKey;
+  const classificationAgentId = resolveSessionAgentId({
+    sessionKey: classificationSessionKey,
+    config: params.cfg,
+    agentId: params.classificationAgentId,
+    // Reuse the owner only for this session; independent targets still need their own identity.
+    fallbackAgentId: classificationSessionKey === sessionKey ? agentId : undefined,
+  });
   const cfg = params.cfg;
-  const sandboxCfg = resolveSandboxConfigForAgent(cfg, agentId);
-  const mainSessionKey = resolveMainSessionKeyForSandbox({ cfg, agentId });
-  const sandboxed = sessionKey
+  const sandboxCfg = resolveSandboxConfigForAgent(cfg, classificationAgentId);
+  const mainSessionKey = resolveMainSessionKeyForSandbox({ cfg, agentId: classificationAgentId });
+  const comparableSessionKey = resolveComparableSessionKeyForSandbox({
+    cfg,
+    agentId: classificationAgentId,
+    sessionKey: classificationSessionKey,
+  });
+  // Creation owns this immutable requirement; current callers and agent mode cannot relax it.
+  const session =
+    params.preparedSessionEntry !== undefined
+      ? { existing: params.preparedSessionEntry ?? undefined, normalizedKey: comparableSessionKey }
+      : classificationSessionKey
+        ? readSession(
+            {
+              agentId: classificationAgentId,
+              clone: false,
+              sessionKey: comparableSessionKey,
+              storePath: resolveSessionStorePathCore(cfg?.session?.store, {
+                agentId: classificationAgentId,
+              }),
+            },
+            { readOnly: true },
+          )
+        : undefined;
+  const sandboxRequired = session?.existing?.sandbox === "required";
+  const profileId = sessionCreatorProfileId(session?.existing?.createdActor)?.trim();
+  const isolation: SandboxRuntimeIsolation = sandboxRequired
+    ? {
+        sandboxRequired: true,
+        createdActor: session.existing?.createdActor,
+        isolationSubject: profileId
+          ? { kind: "profile", profileId }
+          : { kind: "session", sessionKey: session.normalizedKey },
+        workspaceAccess: sandboxCfg.workspaceAccess === "rw" ? "ro" : sandboxCfg.workspaceAccess,
+      }
+    : { sandboxRequired: false };
+  const sandboxed = classificationSessionKey
     ? shouldSandboxSession(
         sandboxCfg,
-        resolveComparableSessionKeyForSandbox({ cfg, agentId, sessionKey }),
+        comparableSessionKey,
         mainSessionKey,
+        sandboxRequired,
+        session?.existing?.sandboxMode,
       )
     : false;
   return {
     agentId,
     sessionKey,
+    classificationAgentId,
+    classificationSessionKey,
     mainSessionKey,
     mode: sandboxCfg.mode,
+    ...isolation,
     sandboxed,
-    toolPolicy: resolveSandboxToolPolicyForAgent(cfg, agentId),
+    toolPolicy: resolveSandboxToolPolicyForAgent(cfg, classificationAgentId),
   };
 }
 
@@ -124,6 +267,7 @@ function shellEscapeSingleArg(value: string): string {
 export function formatSandboxToolPolicyBlockedMessage(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string;
+  agentId?: string;
   toolName: string;
   audit?: boolean;
 }): string | undefined {
@@ -135,6 +279,7 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
   });
   if (!runtime.sandboxed) {
     return undefined;
@@ -181,18 +326,21 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
   lines.push(`Session: ${redactSessionKey(runtime.sessionKey)}`);
   lines.push(`Reason: ${reasons.join(" + ")}`);
   lines.push("Fix:");
-  lines.push(`- agents.defaults.sandbox.mode=off (disable sandbox)`);
+  lines.push(
+    runtime.sandboxRequired
+      ? "- This session requires a sandbox; create a new session under an authorized role."
+      : "- agents.defaults.sandbox.mode=off (disable sandbox)",
+  );
   for (const fix of fixes) {
     lines.push(`- ${fix}`);
   }
-  if (runtime.mode === "non-main") {
+  if (runtime.mode === "non-main" && !runtime.sandboxRequired) {
     lines.push("- Use the agent main session instead of a non-main session.");
   }
-  const explainCommand = runtime.sessionKey
-    ? hasUnsafeControlChars(runtime.sessionKey)
-      ? `openclaw sandbox explain --agent ${runtime.agentId}`
-      : `openclaw sandbox explain --session ${shellEscapeSingleArg(runtime.sessionKey)}`
-    : "openclaw sandbox explain";
+  const explainCommand =
+    runtime.sessionKey && !hasUnsafeControlChars(runtime.sessionKey)
+      ? `openclaw sandbox explain --session ${shellEscapeSingleArg(runtime.sessionKey)} --agent ${runtime.agentId}`
+      : `openclaw sandbox explain --agent ${runtime.agentId}`;
   lines.push(`- See: ${formatCliCommand(explainCommand)}`);
 
   return lines.join("\n");

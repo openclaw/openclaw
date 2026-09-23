@@ -10,9 +10,13 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
+import {
+  createQaGatewayChild,
+  type QaGatewayChild,
+} from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import { getFreePort } from "../../../../src/test-utils/ports.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const FIXTURE_PLUGIN_ID = "qa-voice-call-runtime";
@@ -121,15 +125,23 @@ function findStringByKey(value: unknown, key: string): string | undefined {
   return undefined;
 }
 
-async function waitForFinalToolResult(filePath: string) {
+async function waitForFinalToolResult(params: {
+  filePath: string;
+  bridgeCallsPath: string;
+  streamUrl: string;
+  mediaStream: WebSocket;
+  gatewayLogs: () => string;
+}) {
   const deadline = Date.now() + 30_000;
+  let latestEntries: Array<Record<string, unknown>> = [];
   while (Date.now() < deadline) {
-    const raw = await fs.readFile(filePath, "utf8").catch(() => "");
+    const raw = await fs.readFile(params.filePath, "utf8").catch(() => "");
     const entries = raw
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean)
       .map((line) => JSON.parse(line) as Record<string, unknown>);
+    latestEntries = entries;
     const final = entries.find(
       (entry) =>
         entry.callId === "qa-consult-call" &&
@@ -145,7 +157,10 @@ async function waitForFinalToolResult(filePath: string) {
       setTimeout(resolve, 100);
     });
   }
-  throw new Error("timed out waiting for final Voice Call consult tool result");
+  const bridgeCalls = await fs.readFile(params.bridgeCallsPath, "utf8").catch(() => "");
+  throw new Error(
+    `timed out waiting for final Voice Call consult tool result; streamUrl=${params.streamUrl}; websocketState=${params.mediaStream.readyState}; bridgeCalls=${bridgeCalls}; entries=${JSON.stringify(latestEntries)}\n${params.gatewayLogs()}`,
+  );
 }
 
 async function openRealtimeMediaStream(params: {
@@ -153,7 +168,8 @@ async function openRealtimeMediaStream(params: {
   servePort: number;
   streamUrl: string;
 }) {
-  const streamPath = new URL(params.streamUrl).pathname;
+  const issuedStreamUrl = new URL(params.streamUrl);
+  const streamPath = `${issuedStreamUrl.pathname}${issuedStreamUrl.search}`;
   const ws = new WebSocket(`ws://127.0.0.1:${params.servePort}${streamPath}`);
   await new Promise<void>((resolve, reject) => {
     ws.once("open", resolve);
@@ -168,15 +184,61 @@ async function openRealtimeMediaStream(params: {
   return ws;
 }
 
+async function postMockVoiceEvents(
+  servePort: number,
+  events: Array<Record<string, unknown>>,
+): Promise<void> {
+  const response = await fetch(`http://127.0.0.1:${servePort}/voice/webhook`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ events }),
+  });
+  if (!response.ok) {
+    throw new Error(`mock voice webhook returned ${response.status}: ${await response.text()}`);
+  }
+}
+
+async function waitForMockRequest(
+  mockBaseUrl: string,
+  marker: string,
+  gatewayLogs: () => string,
+): Promise<{ allInputText: string; instructions: string; requestCount: number }> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const requests = (await fetch(`${mockBaseUrl}/debug/requests`).then((response) =>
+      response.json(),
+    )) as Array<{ allInputText?: string; instructions?: string }>;
+    const request = requests.findLast((entry) => entry.allInputText?.includes(marker));
+    if (request) {
+      return {
+        allInputText: request.allInputText ?? "",
+        instructions: request.instructions ?? "",
+        requestCount: requests.length,
+      };
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+  }
+  throw new Error(
+    `timed out waiting for mock provider request containing ${marker}\n${gatewayLogs()}`,
+  );
+}
+
+function countOccurrences(text: string, marker: string): number {
+  return text.split(marker).length - 1;
+}
+
 async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-call-gateway-"));
   const fixture = createFixturePlugin(options.repoRoot, fixtureRoot);
   const mock = await startQaMockOpenAiServer();
   const servePort = await getFreePort();
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   let mediaStream: WebSocket | undefined;
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -250,12 +312,103 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
     if (!stream.providerCallId || !stream.streamUrl) {
       throw new Error(`Voice Call stream issuer returned invalid data: ${JSON.stringify(stream)}`);
     }
+    const classicCallId = providerCallIds[0];
+    if (!classicCallId) {
+      throw new Error("Voice Call status omitted the CLI-created provider call id");
+    }
+    const openingMarker = "VOICE-OPENING-CANARY-42";
+    const firstMarker = "VOICE-CLASSIC-FIRST-42";
+    const secondMarker = "VOICE-CLASSIC-SECOND-42";
+    await postMockVoiceEvents(servePort, [
+      {
+        id: "qa-classic-opening",
+        type: "call.assistant-speech",
+        callId: classicCallId,
+        providerCallId: classicCallId,
+        timestamp: Date.now(),
+        transcript: `Welcome. Opening marker: ${openingMarker}`,
+      },
+      {
+        id: "qa-classic-first",
+        type: "call.speech",
+        callId: classicCallId,
+        providerCallId: classicCallId,
+        timestamp: Date.now() + 1,
+        transcript: `Reply with exact marker: \`${firstMarker}\``,
+        isFinal: true,
+      },
+    ]);
+    const firstClassicRequest = await waitForMockRequest(mock.baseUrl, firstMarker, gateway.logs);
+    if (!firstClassicRequest.allInputText.includes("[Audible call-opening context]")) {
+      throw new Error("first classic turn omitted its audible opening context");
+    }
+    for (const marker of [openingMarker, firstMarker]) {
+      if (firstClassicRequest.instructions.includes(marker)) {
+        throw new Error(`classic voice data reached system instructions: ${marker}`);
+      }
+    }
+
+    await postMockVoiceEvents(servePort, [
+      {
+        id: "qa-classic-second",
+        type: "call.speech",
+        callId: classicCallId,
+        providerCallId: classicCallId,
+        timestamp: Date.now() + 3,
+        transcript: `Reply with exact marker: \`${secondMarker}\``,
+        isFinal: true,
+      },
+    ]);
+    const secondClassicRequest = await waitForMockRequest(mock.baseUrl, secondMarker, gateway.logs);
+    if (countOccurrences(secondClassicRequest.allInputText, firstMarker) !== 1) {
+      throw new Error("classic voice history duplicated the first caller turn");
+    }
+    if (countOccurrences(secondClassicRequest.allInputText, secondMarker) !== 1) {
+      throw new Error("classic voice history duplicated the current caller turn");
+    }
+    if (secondClassicRequest.allInputText.includes("[Voice-call transcript context]")) {
+      throw new Error("classic voice replayed a cumulative transcript envelope");
+    }
+    for (const marker of [openingMarker, firstMarker, secondMarker]) {
+      if (secondClassicRequest.instructions.includes(marker)) {
+        throw new Error(`classic voice data reached system instructions: ${marker}`);
+      }
+    }
+
+    await postMockVoiceEvents(servePort, [
+      {
+        id: "qa-classic-blank",
+        type: "call.speech",
+        callId: classicCallId,
+        providerCallId: classicCallId,
+        timestamp: Date.now() + 4,
+        transcript: "  \t\n",
+        isFinal: true,
+      },
+    ]);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
+    const requestCountAfterBlank = (
+      (await fetch(`${mock.baseUrl}/debug/requests`).then((response) =>
+        response.json(),
+      )) as unknown[]
+    ).length;
+    if (requestCountAfterBlank !== secondClassicRequest.requestCount) {
+      throw new Error("blank final speech created an agent turn");
+    }
     mediaStream = await openRealtimeMediaStream({
       providerCallId: stream.providerCallId,
       servePort,
       streamUrl: stream.streamUrl,
     });
-    const toolResults = await waitForFinalToolResult(fixture.toolResultsPath);
+    const toolResults = await waitForFinalToolResult({
+      filePath: fixture.toolResultsPath,
+      bridgeCallsPath: fixture.bridgeCallsPath,
+      streamUrl: stream.streamUrl,
+      mediaStream,
+      gatewayLogs: gateway.logs,
+    });
     const finalToolResult = toolResults.final.result as Record<string, unknown>;
     if (typeof finalToolResult.error === "string") {
       throw new Error(`embedded consult failed: ${finalToolResult.error}`);
@@ -292,12 +445,12 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
         throw new Error(`embedded consult prompt missed ${marker}: ${promptText}`);
       }
     }
-    return `real CLI, voicecall.initiate, and tools.invoke created ${status.calls.length} mock-provider calls; runtime-issued media stream invoked embedded consult with transcript/provider context; tool results=${toolResults.entries.length}`;
+    return `real CLI, voicecall.initiate, and tools.invoke created ${status.calls.length} mock-provider calls; classic two-turn webhook kept caller history exactly once and ignored blank speech; runtime-issued media stream invoked embedded consult with transcript/provider context; tool results=${toolResults.entries.length}`;
   } finally {
     if (mediaStream && mediaStream.readyState < WebSocket.CLOSING) {
       mediaStream.close();
     }
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
     await fs.rm(fixtureRoot, { force: true, recursive: true });
   }

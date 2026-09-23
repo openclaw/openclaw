@@ -101,6 +101,7 @@ describe("resolveSlackThreadContextData", () => {
 
     const result = await resolveSlackThreadContextData({
       ctx,
+      agentId: "main",
       account: createSlackTestAccount({ thread: { initialHistoryLimit: 20 } }),
       message: createThreadMessage(),
       isGroupDm: params.isGroupDm ?? false,
@@ -159,9 +160,13 @@ describe("resolveSlackThreadContextData", () => {
       hydrates: true,
     },
   ])("$title", async ({ sessionState, sessionLastInteractionAt, hydrates }) => {
-    const resolveSlackMedia = vi
-      .spyOn(mediaModule, "resolveSlackMedia")
-      .mockResolvedValue(starterMedia);
+    const resolveSlackAttachmentContent = vi
+      .spyOn(mediaModule, "resolveSlackAttachmentContent")
+      .mockResolvedValue({
+        text: "",
+        media: starterMedia,
+        unavailableMediaCount: 0,
+      });
     const { result } = await resolveAllowlistedThreadContext({
       repliesMessages: [],
       threadStarter: { text: "starter with image", userId: "U1", files: starterFiles },
@@ -172,7 +177,7 @@ describe("resolveSlackThreadContextData", () => {
     });
 
     expect(result.threadStarterMedia).toEqual(hydrates ? starterMedia : null);
-    expect(resolveSlackMedia).toHaveBeenCalledTimes(hydrates ? 1 : 0);
+    expect(resolveSlackAttachmentContent).toHaveBeenCalledTimes(hydrates ? 1 : 0);
   });
 
   it("omits non-allowlisted starter, follow-ups, and unrelated current-bot replies", async () => {
@@ -399,6 +404,7 @@ describe("resolveSlackThreadContextData", () => {
 
     const result = await resolveSlackThreadContextData({
       ctx,
+      agentId: "main",
       account: createSlackTestAccount({ thread: { initialHistoryLimit: 20 } }),
       message: createThreadMessage(),
       isGroupDm: false,
@@ -446,6 +452,7 @@ describe("resolveSlackThreadContextData", () => {
 
     const result = await resolveSlackThreadContextData({
       ctx,
+      agentId: "main",
       account: createSlackTestAccount({ thread: { initialHistoryLimit: 1 } }),
       message: createThreadMessage(),
       isGroupDm: false,
@@ -472,7 +479,7 @@ describe("resolveSlackThreadContextData", () => {
     expect(result.threadHistoryBody).not.toContain("current message");
   });
 
-  it("keeps third-party bot starter text in a new thread session", async () => {
+  it("keeps explicitly allowlisted third-party bot starter text in a new thread session", async () => {
     const { result } = await resolveAllowlistedThreadContext({
       repliesMessages: [
         { text: "other bot starter", bot_id: "B2", ts: "100.000" },
@@ -484,7 +491,7 @@ describe("resolveSlackThreadContextData", () => {
         botId: "B2",
         ts: "100.000",
       },
-      allowFromLower: ["u1"],
+      allowFromLower: ["u1", "b2"],
       allowNameMatching: false,
     });
 
@@ -566,6 +573,7 @@ describe("resolveSlackThreadContextData", () => {
 
     const result = await resolveSlackThreadContextData({
       ctx,
+      agentId: "main",
       account: createSlackTestAccount({ thread: { initialHistoryLimit: 20 } }),
       message: createThreadMessage({
         channel: "D123",

@@ -1,6 +1,11 @@
 // Slack tests cover channels plugin behavior.
 import type { AllMiddlewareArgs } from "@slack/bolt";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { beforeAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { createSlackRuntimeContextReader } from "../runtime-policy.js";
 
 const { enqueueSystemEventMock, mutateConfigFileMock, readConfigSnapshotMock } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
@@ -12,7 +17,11 @@ let registerSlackChannelIdChangedEvent: typeof import("./channels.js").registerS
 let createSlackSystemEventTestHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  enqueueRoutedSystemEvent: (
+    text: unknown,
+    route: { sessionKey: unknown },
+    options: Record<string, unknown>,
+  ) => enqueueSystemEventMock(text, { ...options, sessionKey: route.sessionKey }),
 }));
 vi.mock("openclaw/plugin-sdk/channel-config-writes", () => ({
   resolveChannelConfigWrites: () => true,
@@ -53,6 +62,7 @@ function requireChannelHandler(handler: SlackChannelHandler | null): SlackChanne
 }
 
 describe("registerSlackChannelEvents", () => {
+  afterEach(() => clearRuntimeConfigSnapshot());
   beforeAll(async () => {
     ({ registerSlackChannelEvents, registerSlackChannelIdChangedEvent } =
       await import("./channels.js"));
@@ -111,10 +121,12 @@ describe("registerSlackChannelEvents", () => {
       enterpriseId: "E_GRID",
     };
     const resolveSessionKey = vi.fn(
-      (input: Parameters<typeof ctx.resolveSlackSystemEventSessionKey>[0]) =>
-        `session:${input.eventScope?.teamId ?? "workspace"}`,
+      (input: Parameters<typeof ctx.resolveSlackSystemEventRoute>[0]) => ({
+        agentId: "main",
+        sessionKey: `session:${input.eventScope?.teamId ?? "workspace"}`,
+      }),
     );
-    ctx.resolveSlackSystemEventSessionKey = resolveSessionKey;
+    ctx.resolveSlackSystemEventRoute = resolveSessionKey;
 
     const cases = [
       {
@@ -189,9 +201,9 @@ describe("registerSlackChannelEvents", () => {
     },
   );
 
-  it("keeps live config unchanged when channel-ID persistence fails, then retries", async () => {
-    const oldChannelId = "C_OLD";
-    const newChannelId = "C_NEW";
+  it("publishes channel-ID migration without rewriting an admitted policy, including after retry", async () => {
+    const oldChannelId = "COLD12345";
+    const newChannelId = "CNEW12345";
     const initialConfig = {
       channels: { slack: { channels: { [oldChannelId]: { enabled: true } } } },
     };
@@ -210,6 +222,7 @@ describe("registerSlackChannelEvents", () => {
           const draft = structuredClone(persistedConfig);
           const result = params.mutate(draft);
           persistedConfig = draft;
+          setRuntimeConfigSnapshot(draft, draft);
           return { result, nextConfig: draft };
         },
       );
@@ -217,6 +230,9 @@ describe("registerSlackChannelEvents", () => {
     ctx.cfg = structuredClone(initialConfig) as never;
     ctx.accountId = "default";
     ctx.runtime.error = vi.fn();
+    setRuntimeConfigSnapshot(ctx.cfg, ctx.cfg);
+    ctx.readRuntimeContext = createSlackRuntimeContextReader(ctx, "synthetic-lookup");
+    const admitted = await ctx.readRuntimeContext();
     const handler = requireChannelHandler(getHandler("channel_id_changed"));
     const turnAdoptionLifecycle = {
       admission: "exclusive",
@@ -241,8 +257,11 @@ describe("registerSlackChannelEvents", () => {
     expect(persistedConfig.channels.slack.channels).toHaveProperty(oldChannelId);
 
     await expect(handler(args)).resolves.toBeUndefined();
-    expect(ctx.cfg.channels?.slack?.channels).not.toHaveProperty(oldChannelId);
-    expect(ctx.cfg.channels?.slack?.channels).toHaveProperty(newChannelId);
+    expect(admitted.cfg.channels?.slack?.channels).toHaveProperty(oldChannelId);
+    expect(admitted.cfg.channels?.slack?.channels).not.toHaveProperty(newChannelId);
+    const current = await ctx.readRuntimeContext();
+    expect(current.channelsConfig).not.toHaveProperty(oldChannelId);
+    expect(current.channelsConfig).toHaveProperty(newChannelId);
     expect(persistedConfig.channels.slack.channels).not.toHaveProperty(oldChannelId);
     expect(persistedConfig.channels.slack.channels).toHaveProperty(newChannelId);
     expect(mutateConfigFileMock).toHaveBeenCalledTimes(2);

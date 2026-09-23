@@ -478,7 +478,10 @@ describeLive("xai plugin live", () => {
 
   it("runs realtime voice audio, tool, barge-in, and resumed-context flow", async () => {
     const { speechProviders } = await registerXaiPlugin();
-    const realtimeProvider = registerXaiRealtimeVoiceProvider();
+    const { buildXaiRealtimeVoiceProvider } = await import("./realtime-voice-provider.js");
+    // Socket failure injection belongs to the transport owner. The tool-call live
+    // case below separately exercises the registered lazy provider.
+    const realtimeProvider = buildXaiRealtimeVoiceProvider();
     const speechProvider = requireRegisteredProvider(speechProviders, "xai");
     const cfg = createLiveConfig();
     const marker = "OPENCLAW_XAI_RESUME_42";
@@ -710,7 +713,7 @@ describeLive("xai plugin live", () => {
       );
       expect(errors).toStrictEqual([]);
     } finally {
-      bridge.close();
+      await bridge.close();
     }
   }, 240_000);
 
@@ -772,7 +775,7 @@ describeLive("xai plugin live", () => {
       );
       expect(errors).toStrictEqual([]);
     } finally {
-      bridge.close();
+      await bridge.close();
     }
   }, 120_000);
 

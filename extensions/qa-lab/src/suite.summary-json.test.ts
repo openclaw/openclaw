@@ -21,8 +21,19 @@ describe("buildQaSuiteSummaryJson", () => {
     concurrency: 2,
   };
 
+  it("rejects the removed channel-driver selection input", () => {
+    expect(() =>
+      buildQaSuiteSummaryJson(
+        Object.assign({}, baseParams, {
+          channelDriverSelection: { channel: "discord", driver: "crabline" },
+        }),
+      ),
+    ).toThrow("channelDriverSelection was removed");
+  });
+
   it("records provider/model/mode so parity gates can verify labels", () => {
     const json = buildQaSuiteSummaryJson(baseParams);
+    expect(json.run.status).toBe("completed");
     expect(json.run.startedAt).toBe("2026-04-11T00:00:00.000Z");
     expect(json.run.finishedAt).toBe("2026-04-11T00:05:00.000Z");
     expect(json.run.providerMode).toBe("mock-openai");
@@ -41,22 +52,25 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.scenarioIds).toBeNull();
   });
 
+  it("distinguishes an in-progress artifact from terminal suite output", () => {
+    const json = buildQaSuiteSummaryJson({ ...baseParams, status: "running" });
+
+    expect(json.run.status).toBe("running");
+  });
+
   it("records Crabline channel-driver metadata when selected", () => {
     const json = buildQaSuiteSummaryJson({
       ...baseParams,
       channelDriver: "crabline",
-      channelDriverSelection: {
-        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
-        channel: "telegram",
-        channelDriver: "crabline",
-        smokeArtifactPath: "crabline-fake-provider-smoke.json",
-      },
+      channel: "telegram",
+      channelCapabilityMatrixPath: "crabline-channel-driver-capabilities.json",
+      channelDriverSmokePath: "crabline-provider-readiness.json",
     });
 
     expect(json.run.channelDriver).toBe("crabline");
     expect(json.run.channel).toBe("telegram");
-    expect(json.run.channelCapabilityMatrixPath).toBe("crabline-fake-provider-capabilities.json");
-    expect(json.run.channelDriverSmokePath).toBe("crabline-fake-provider-smoke.json");
+    expect(json.run.channelCapabilityMatrixPath).toBe("crabline-channel-driver-capabilities.json");
+    expect(json.run.channelDriverSmokePath).toBe("crabline-provider-readiness.json");
   });
 
   it("records realized non-Crabline channel metadata", () => {

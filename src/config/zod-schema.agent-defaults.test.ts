@@ -27,6 +27,112 @@ function expectSchemaFailurePath(result: SchemaParseResult, expectedPathPrefix: 
 }
 
 describe("agent defaults schema", () => {
+  it("accepts bounded explicit picker runtimes only on exact model refs", () => {
+    const models = {
+      "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" }, pickerRuntimes: ["codex"] },
+    };
+    expect(AgentDefaultsSchema.parse({ models })?.models).toEqual(models);
+    expect(AgentEntrySchema.parse({ id: "ops", models }).models).toEqual(models);
+    for (const pickerRuntimes of [["auto"], [""], ["unknown runtime"], Array(9).fill("codex")]) {
+      expectSchemaFailurePath(
+        AgentDefaultsSchema.safeParse({ models: { "openai/gpt-5.6-sol": { pickerRuntimes } } }),
+        "models.openai/gpt-5.6-sol.pickerRuntimes",
+      );
+    }
+    for (const key of ["openai/*", "model"]) {
+      expectSchemaFailurePath(
+        AgentEntrySchema.safeParse({ id: "ops", models: { [key]: { pickerRuntimes: ["codex"] } } }),
+        `models.${key}.pickerRuntimes`,
+      );
+    }
+  });
+
+  it("preserves separate run directories through config validation and list projection", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: { workspace: "/agent-workspace", cwd: "/default-repo" },
+        entries: { worker: { cwd: "/agent-repo" } },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(JSON.stringify(result.issues));
+    }
+    expect(result.config.agents?.defaults).toMatchObject({
+      workspace: "/agent-workspace",
+      cwd: "/default-repo",
+    });
+    expect(result.config.agents?.entries?.worker?.cwd).toBe("/agent-repo");
+    expect(result.config.agents?.list?.[0]?.cwd).toBe("/agent-repo");
+  });
+
+  it.each([true, false])("rejects Code Mode %s without an exact model entry", (codeMode) => {
+    for (const key of ["openai/*", "openrouter/provider/*", "*", "model", "provider/", "/model"]) {
+      const models = { [key]: { codeMode } };
+      expectSchemaFailurePath(AgentDefaultsSchema.safeParse({ models }), `models.${key}.codeMode`);
+      expectSchemaFailurePath(
+        AgentEntrySchema.safeParse({ id: "ops", models }),
+        `models.${key}.codeMode`,
+      );
+    }
+    const models = { "openai/*": { agentRuntime: { id: "openclaw" } } };
+    expect(AgentDefaultsSchema.parse({ models })?.models).toEqual(models);
+    expect(AgentEntrySchema.parse({ id: "ops", models }).models).toEqual(models);
+  });
+
+  it.each([undefined, true, false])(
+    "preserves the optional per-model Code Mode override %s on defaults and agents",
+    (codeMode) => {
+      const entry = {
+        alias: "test",
+        params: { temperature: 0.5 },
+        agentRuntime: { id: "openclaw" },
+        streaming: false,
+        ...(codeMode === undefined ? {} : { codeMode }),
+      };
+      const models = { "example/model": entry };
+
+      expect(AgentDefaultsSchema.parse({ models })?.models).toEqual(models);
+      expect(AgentEntrySchema.parse({ id: "ops", models }).models).toEqual(models);
+    },
+  );
+
+  it.each(["auto", "true", null, { enabled: true }])(
+    "rejects non-boolean per-model Code Mode override %j",
+    (codeMode) => {
+      const models = { "example/model": { codeMode } };
+
+      expectSchemaFailurePath(
+        AgentDefaultsSchema.safeParse({ models }),
+        "models.example/model.codeMode",
+      );
+      expectSchemaFailurePath(
+        AgentEntrySchema.safeParse({ id: "ops", models }),
+        "models.example/model.codeMode",
+      );
+    },
+  );
+
+  it.each([undefined, "session", "agent", "global"] as const)(
+    "preserves the optional model selection scope %s",
+    (modelSelectionScope) => {
+      const input = modelSelectionScope === undefined ? {} : { modelSelectionScope };
+      const defaults = AgentDefaultsSchema.parse(input)!;
+
+      expect(defaults.modelSelectionScope).toBe(modelSelectionScope);
+      expect(Object.hasOwn(defaults, "modelSelectionScope")).toBe(
+        modelSelectionScope !== undefined,
+      );
+    },
+  );
+
+  it("rejects unsupported model selection scopes", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ modelSelectionScope: "default" }),
+      "modelSelectionScope",
+    );
+  });
+
   it("accepts utility models on defaults and agent entries", () => {
     const defaults = AgentDefaultsSchema.parse({ utilityModel: "openai/gpt-5.4-mini" })!;
     const agent = AgentEntrySchema.parse({
@@ -241,7 +347,7 @@ describe("agent defaults schema", () => {
     );
   });
 
-  it("accepts experimental.localModelLean", () => {
+  it("accepts experimental agent flags", () => {
     const result = AgentDefaultsSchema.parse({
       experimental: {
         localModelLean: true,
@@ -360,6 +466,7 @@ describe("agent defaults schema", () => {
     "adaptive",
     "max",
     "ultra",
+    "inherit",
   ] as const)("accepts compaction.thinkingLevel=%s", (thinkingLevel) => {
     const result = AgentDefaultsSchema.parse({ compaction: { thinkingLevel } })!;
     expect(result.compaction?.thinkingLevel).toBe(thinkingLevel);
@@ -500,28 +607,6 @@ describe("agent defaults schema", () => {
     );
   });
 
-  it("preserves per-agent contextTokens through config validation", () => {
-    const result = validateConfigObject({
-      agents: {
-        entries: {
-          ops: {
-            default: true,
-            contextTokens: 1_048_576,
-          },
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("expected config validation to succeed");
-    }
-    const config = result.config as {
-      agents?: { entries?: Record<string, { contextTokens?: number }> };
-    };
-    expect(config.agents?.entries?.ops?.contextTokens).toBe(1_048_576);
-  });
-
   it("accepts per-agent tools.codeMode config", () => {
     expectSchemaSuccess(
       AgentEntrySchema.safeParse({
@@ -541,9 +626,8 @@ describe("agent defaults schema", () => {
         tools: {
           codeMode: {
             enabled: true,
-            runtime: "quickjs-wasi",
+            executor: "quickjs",
             timeoutMs: 5000,
-            languages: ["javascript"],
           },
         },
       }),
@@ -551,11 +635,19 @@ describe("agent defaults schema", () => {
     expectSchemaFailurePath(
       AgentEntrySchema.safeParse({
         id: "ops",
-        tools: { codeMode: { unknownKey: 1 } },
+        tools: { codeMode: { languages: ["javascript"] } },
       }),
       "tools.codeMode",
     );
   });
+
+  it.each([undefined, {}, { maxConcurrent: 3 }, false, { enabled: false }])(
+    "preserves per-agent Swarm config %j for inherited enablement",
+    (swarm) => {
+      const tools = swarm === undefined ? {} : { swarm };
+      expect(AgentEntrySchema.parse({ id: "ops", tools }).tools?.swarm).toEqual(swarm);
+    },
+  );
 
   it("accepts per-agent tools.swarm config", () => {
     expectSchemaSuccess(
@@ -566,21 +658,5 @@ describe("agent defaults schema", () => {
       AgentEntrySchema.safeParse({ id: "ops", tools: { swarm: { unknownKey: 1 } } }),
       "tools.swarm",
     );
-  });
-
-  it("rejects non-positive contextTokens on agent entries and defaults", () => {
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({ id: "ops", contextTokens: 0 }),
-      "contextTokens",
-    );
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({ id: "ops", contextTokens: -1 }),
-      "contextTokens",
-    );
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({ id: "ops", contextTokens: 1.5 }),
-      "contextTokens",
-    );
-    expectSchemaFailurePath(AgentDefaultsSchema.safeParse({ contextTokens: 0 }), "contextTokens");
   });
 });

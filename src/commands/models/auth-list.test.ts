@@ -1,6 +1,10 @@
 // Model auth-list tests cover provider auth listing and output formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../../runtime.js";
 import { modelsAuthListCommand } from "./auth-list.js";
@@ -10,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   externalCliDiscoveryForProviderAuth: vi.fn(() => ({ kind: "none" })),
   loadModelsConfig: vi.fn(),
   resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
+  resolveAuthStatePathForDisplay: vi.fn((agentDir: string) => `${agentDir}/openclaw-agent.sqlite`),
   resolveModelsTargetAgent: vi.fn((_cfg: OpenClawConfig, rawAgentId?: string) => {
     const agentId = rawAgentId ?? "main";
     return { agentDir: `/tmp/openclaw/agents/${agentId}`, agentId };
@@ -25,7 +30,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
   externalCliDiscoveryForProviderAuth: mocks.externalCliDiscoveryForProviderAuth,
   resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
-  resolveAuthStatePathForDisplay: (agentDir: string) => `${agentDir}/openclaw-agent.sqlite`,
+  resolveAuthStatePathForDisplay: mocks.resolveAuthStatePathForDisplay,
 }));
 
 vi.mock("./load-config.js", () => ({
@@ -62,6 +67,9 @@ describe("modelsAuthListCommand", () => {
     mocks.ensureAuthProfileStore.mockReset();
     mocks.externalCliDiscoveryForProviderAuth.mockClear();
     mocks.resolveAuthProfileDisplayLabel.mockClear();
+    mocks.resolveAuthStatePathForDisplay
+      .mockReset()
+      .mockImplementation((agentDir: string) => `${agentDir}/openclaw-agent.sqlite`);
     mocks.resolveModelsTargetAgent.mockClear();
   });
 
@@ -94,6 +102,9 @@ describe("modelsAuthListCommand", () => {
 
     await modelsAuthListCommand({ provider: "OpenAI", agent: "coder", json: true }, runtime);
 
+    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(expect.anything(), "coder", {
+      kind: "read",
+    });
     expect(mocks.externalCliDiscoveryForProviderAuth).toHaveBeenCalledWith({
       cfg: {},
       provider: "openai",
@@ -162,6 +173,43 @@ describe("modelsAuthListCommand", () => {
     });
   });
 
+  it("shows exact WHAM classification without hiding the canonical reason in JSON", async () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:expired": {
+          type: "oauth",
+          provider: "openai",
+          access: "secret",
+          refresh: "secret",
+          expires: 1_900_000_000_000,
+        },
+      },
+      usageStats: {
+        "openai:expired": {
+          cooldownUntil: 1_900_000_100_000,
+          cooldownReason: "auth",
+          cooldownClassification: "wham_token_expired",
+        },
+      },
+    } satisfies AuthProfileStore);
+
+    const textRuntime = createRuntime();
+    await modelsAuthListCommand({}, textRuntime);
+    expect(textRuntime.logs.at(-1)).toContain("cooldown:wham_token_expired");
+
+    const jsonRuntime = createRuntime();
+    await modelsAuthListCommand({ json: true }, jsonRuntime);
+    expect(jsonRuntime.jsonPayloads[0]).toMatchObject({
+      profiles: [
+        expect.objectContaining({
+          cooldownReason: "auth",
+          cooldownClassification: "wham_token_expired",
+        }),
+      ],
+    });
+  });
+
   it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
@@ -197,29 +245,22 @@ describe("modelsAuthListCommand", () => {
   });
 
   it("treats the OpenAI filter as the friendly view over API-key and OAuth profiles", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:user@example.com": {
-          type: "oauth",
-          provider: "openai",
-          access: "access-secret",
-          refresh: "refresh-secret",
-          expires: 1_800_000_000_000,
-          email: "user@example.com",
-        },
-        "openai:api-key-backup": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-secret",
-        },
-        "anthropic:manual": {
-          type: "token",
-          provider: "anthropic",
-          token: "token-secret",
-        },
+    const store: AuthProfileStore = createAuthProfileStoreFixture({
+      "openai:user@example.com": {
+        type: "oauth",
+        provider: "openai",
+        access: "access-secret",
+        refresh: "refresh-secret",
+        expires: 1_800_000_000_000,
+        email: "user@example.com",
       },
-    };
+      "openai:api-key-backup": createApiKeyCredential("openai", "sk-secret"),
+      "anthropic:manual": {
+        type: "token",
+        provider: "anthropic",
+        token: "token-secret",
+      },
+    });
     mocks.ensureAuthProfileStore.mockReturnValue(store);
     const runtime = createRuntime();
 
@@ -256,15 +297,19 @@ describe("modelsAuthListCommand", () => {
     expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("secret");
   });
 
-  it("prints an empty profile list without failing", async () => {
+  it.each([
+    ["agent-local", "/tmp/openclaw/agents/main/openclaw-agent.sqlite"],
+    ["shared", "/tmp/openclaw/state/openclaw.sqlite"],
+  ])("prints an empty profile list with the %s auth path", async (_shape, authStatePath) => {
     mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
+    mocks.resolveAuthStatePathForDisplay.mockReturnValue(authStatePath);
     const runtime = createRuntime();
 
     await modelsAuthListCommand({}, runtime);
 
     expect(runtime.logs).toEqual([
       "Agent: main",
-      "Auth state store: /tmp/openclaw/agents/main/openclaw-agent.sqlite",
+      `Auth state store: ${authStatePath}`,
       "Profiles: (none)",
     ]);
   });

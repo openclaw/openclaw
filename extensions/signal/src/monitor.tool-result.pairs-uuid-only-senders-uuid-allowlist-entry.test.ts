@@ -1,4 +1,3 @@
-// Signal tests cover monitor.tool result.pairs uuid only senders uuid allowlist entry plugin behavior.
 import { Buffer } from "node:buffer";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -177,6 +176,7 @@ describe("monitorSignalProvider tool results", () => {
   it("drains an inline inbound message accepted before the monitor stops", async () => {
     const abortController = new AbortController();
     setSignalToolResultTestConfig({
+      messages: { visibleReplies: "automatic" },
       channels: { signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"] } },
     });
     replyMock.mockResolvedValue({ text: "accepted reply" });
@@ -249,6 +249,7 @@ describe("monitorSignalProvider tool results", () => {
     const maxBytes = 2 * 1024 * 1024;
     const expectedMaxResponseBytes = Math.ceil((maxBytes * 4) / 3) + 64 * 1024;
     setSignalToolResultTestConfig({
+      messages: { visibleReplies: "automatic" },
       channels: {
         signal: {
           transport: { kind: "container", url: "http://container:8080" },

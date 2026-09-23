@@ -2,6 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  canonicalPathFromExistingAncestor,
+  isPathInside,
+} from "openclaw/plugin-sdk/file-access-runtime";
+import {
   createMigrationItem,
   createMigrationManualItem,
   hasMigrationConfigPatchConflict,
@@ -9,16 +13,13 @@ import {
   readMigrationConfigPath,
   summarizeMigrationItems,
 } from "openclaw/plugin-sdk/migration";
+import { resolvePlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type {
   MigrationItem,
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  canonicalPathFromExistingAncestor,
-  extractErrorCode,
-  isPathInside,
-} from "openclaw/plugin-sdk/security-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { asBoolean, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexAuthItems } from "./auth.js";
@@ -30,7 +31,6 @@ import {
   hasCodexSource,
   type CodexPluginSource,
 } from "./source.js";
-import { resolveCodexMigrationTargets } from "./targets.js";
 
 export const CODEX_PLUGIN_CONFIG_ITEM_ID = "config:codex-plugins";
 export const CODEX_PLUGIN_CONFIG_PATH = ["plugins", "entries", "codex"] as const;
@@ -530,32 +530,41 @@ function buildPluginConfigItem(
 export async function buildCodexMigrationPlan(
   ctx: MigrationProviderContext,
 ): Promise<MigrationPlan> {
-  const targets = resolveCodexMigrationTargets(ctx);
+  const targets = resolvePlannedMigrationTargets(ctx);
   const memoryOnly =
     ctx.itemKinds !== undefined &&
     ctx.itemKinds.length > 0 &&
     ctx.itemKinds.every((kind) => kind === "memory");
+  const authOnly =
+    ctx.itemKinds !== undefined &&
+    ctx.itemKinds.length > 0 &&
+    ctx.itemKinds.every((kind) => kind === "auth");
   const source = await discoverCodexSource({
     input: ctx.source,
     memoryOnly,
-    evaluatePluginMigrationEligibility: !memoryOnly,
+    authOnly,
+    evaluatePluginMigrationEligibility: !memoryOnly && !authOnly,
     verifyPluginApps: shouldVerifyPluginApps(ctx),
   });
-  if (!hasCodexSource(source)) {
+  if (!hasCodexSource(source) && !authOnly) {
     throw new Error(
       `Codex state was not found at ${source.root}. Pass --from <path> if it lives elsewhere.`,
     );
   }
   const items: MigrationItem[] = [];
-  items.push(
-    ...(await buildCodexMemoryItems({
-      memoryFiles: source.memoryFiles,
-      workspaceDir: targets.workspaceDir,
-      overwrite: ctx.overwrite,
-    })),
-  );
+  if (!authOnly) {
+    items.push(
+      ...(await buildCodexMemoryItems({
+        memoryFiles: source.memoryFiles,
+        workspaceDir: targets.workspaceDir,
+        overwrite: ctx.overwrite,
+      })),
+    );
+  }
   if (!memoryOnly) {
     items.push(...(await buildCodexAuthItems({ ctx, source, targets })));
+  }
+  if (!memoryOnly && !authOnly) {
     items.push(
       ...(await buildCodexSkillItems({
         skills: source.skills,
@@ -585,11 +594,6 @@ export async function buildCodexMigrationPlan(
     }
   }
   const warnings = [
-    ...(!ctx.includeSecrets && items.some((item) => item.kind === "auth")
-      ? [
-          "Auth credentials were detected but skipped. Re-run interactively or pass --include-secrets to import supported credentials.",
-        ]
-      : []),
     ...(items.some((item) => item.status === "conflict")
       ? [
           "Conflicts were found. Re-run with --overwrite to replace conflicting migration targets after item-level backups.",

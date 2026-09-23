@@ -1,10 +1,12 @@
 // Nostr plugin module implements nostr bus behavior.
 import { SimplePool, finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
+import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   createDirectDmPreCryptoGuardPolicy,
   type DirectDmPreCryptoGuardPolicyOverrides,
 } from "openclaw/plugin-sdk/direct-dm-guard-policy";
+import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import {
@@ -23,7 +25,6 @@ import {
 } from "./nostr-ingress.js";
 import { validatePrivateKey } from "./nostr-key-utils.js";
 import { publishProfile as publishProfileFn, type ProfilePublishResult } from "./nostr-profile.js";
-import { createFixedWindowRateLimiter } from "./nostr-rate-limiter.js";
 import { createNostrRelaySubscriptionGroup } from "./nostr-relay-subscription.js";
 import {
   readNostrBusState,
@@ -32,7 +33,6 @@ import {
   readNostrProfileState,
   writeNostrProfileState,
 } from "./nostr-state-store.js";
-import { publishNostrEventToRelay } from "./relay-publish.js";
 
 // ============================================================================
 // Constants
@@ -91,13 +91,18 @@ interface NostrBusOptions {
   trackIngressTask?: (task: Promise<void>) => void;
 }
 
+type NostrDmSendOptions = Pick<
+  ChannelOutboundContext,
+  "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
+>;
+
 export interface NostrBusHandle {
   /** Stop the bus and close relay connections */
   close: () => Promise<void>;
   /** Get the bot's public key */
   publicKey: string;
   /** Send a DM to a pubkey */
-  sendDm: (toPubkey: string, text: string) => Promise<string>;
+  sendDm: (toPubkey: string, text: string, options?: NostrDmSendOptions) => Promise<string>;
   /** Get current metrics snapshot */
   getMetrics: () => MetricsSnapshot;
   /** Publish a profile (kind:0) to all relays */
@@ -437,7 +442,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         circuitBreakers,
         healthTracker,
         onError,
-        event.id,
+        { replyToEventId: event.id },
       );
     };
 
@@ -659,7 +664,11 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   }
 
   // Public sendDm function
-  const sendDm = async (toPubkey: string, text: string): Promise<string> => {
+  const sendDm = async (
+    toPubkey: string,
+    text: string,
+    sendOptions?: NostrDmSendOptions,
+  ): Promise<string> => {
     return await sendEncryptedDm(
       pool,
       sk,
@@ -670,6 +679,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       circuitBreakers,
       healthTracker,
       onError,
+      sendOptions,
     );
   };
 
@@ -750,13 +760,13 @@ async function sendEncryptedDm(
   circuitBreakers: Map<string, CircuitBreaker>,
   healthTracker: RelayHealthTracker,
   onError?: (error: Error, context: string) => void,
-  replyToEventId?: string,
+  options?: NostrDmSendOptions & { replyToEventId?: string },
 ): Promise<string> {
   const ciphertext = encrypt(sk, toPubkey, text);
   // NIP-04 uses an e tag to keep a reply attached to its verified inbound event.
   const tags = [["p", toPubkey]];
-  if (replyToEventId) {
-    tags.push(["e", replyToEventId]);
+  if (options?.replyToEventId) {
+    tags.push(["e", options.replyToEventId]);
   }
   const reply = finalizeEvent(
     {
@@ -774,6 +784,7 @@ async function sendEncryptedDm(
   // Try relays in order of health, respecting circuit breakers
   let lastError: Error | undefined;
   for (const relay of sortedRelays) {
+    options?.assertDirectAdapterHandoff?.();
     const cb = circuitBreakers.get(relay);
 
     // Skip if circuit breaker is open
@@ -782,8 +793,30 @@ async function sendEncryptedDm(
     }
 
     const startTime = Date.now();
+    const recordFailure = (err: unknown) => {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      const latency = Date.now() - startTime;
+      cb?.recordFailure();
+      healthTracker.recordFailure(relay);
+      metrics.emit("relay.error", 1, { relay, latency });
+      onError?.(lastError, `publish to ${relay}`);
+    };
+    // Keep connection preparation separate from the recipient-visible EVENT handoff.
+    const connection = await pool
+      .ensureRelay(relay, { connectionTimeout: pool.maxWaitForConnection })
+      .catch((err: unknown) => {
+        recordFailure(new Error(`connection failure: ${String(err)}`));
+      });
+    if (!connection) {
+      continue;
+    }
+    options?.assertDirectAdapterHandoff?.();
+    if (options?.onPlatformSendDispatch) {
+      await options.onPlatformSendDispatch();
+      options.assertDirectAdapterHandoff?.();
+    }
     try {
-      await publishNostrEventToRelay(pool, relay, reply);
+      await connection.publish(reply);
       const latency = Date.now() - startTime;
 
       // Record success
@@ -792,15 +825,7 @@ async function sendEncryptedDm(
 
       return reply.id;
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      const latency = Date.now() - startTime;
-
-      // Record failure
-      cb?.recordFailure();
-      healthTracker.recordFailure(relay);
-      metrics.emit("relay.error", 1, { relay, latency });
-
-      onError?.(lastError, `publish to ${relay}`);
+      recordFailure(err);
     }
   }
 

@@ -1,6 +1,5 @@
 // @vitest-environment node
 // Control UI tests cover chat model ref behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   createAmbiguousModelCatalog,
@@ -12,7 +11,6 @@ import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
   buildQualifiedChatModelValue,
-  createChatModelOverride,
   formatCatalogChatModelDisplayFromLookup,
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
@@ -25,16 +23,6 @@ const catalog = createModelCatalog(OPENAI_GPT5_MINI_MODEL, {
 });
 
 describe("chat-model-ref helpers", () => {
-  it("builds provider-qualified options with catalog labels", () => {
-    const lookup = buildCatalogDisplayLookup(catalog);
-    expect(
-      buildChatModelOptionFromLookup(expectDefined(catalog[0], "first model fixture"), lookup),
-    ).toEqual({
-      value: "openai/gpt-5-mini",
-      label: "GPT-5 Mini",
-    });
-  });
-
   it("preserves provider-native nested ids and prefers aliases", () => {
     const nested = {
       id: "moonshotai/kimi-k2.5",
@@ -86,40 +74,43 @@ describe("chat-model-ref helpers", () => {
     },
   );
 
-  it("disambiguates duplicate names by provider and model id", () => {
-    const duplicateProviders = createModelCatalog(
-      { id: "claude-sonnet", name: "Claude Sonnet", provider: "anthropic" },
-      { id: "claude-sonnet", name: "Claude Sonnet", provider: "openrouter" },
-    );
-    const duplicateModels = createModelCatalog(
-      { id: "claude-sonnet", name: "Claude Sonnet", provider: "anthropic" },
-      { id: "claude-sonnet-thinking", name: "Claude Sonnet", provider: "anthropic" },
-    );
+  it.each([
+    {
+      names: ["Lowercase model", "Uppercase model"],
+      labels: ["Lowercase model", "Uppercase model"],
+    },
+    {
+      names: ["Shared name", "Shared name"],
+      labels: ["Shared name · model-a · custom", "Shared name · Model-A · custom"],
+    },
+  ] as const)(
+    "keeps case-distinct catalog display identities with names $names",
+    ({ names, labels }) => {
+      const entries = [
+        { id: "model-a", name: names[0], provider: "custom" },
+        { id: "Model-A", name: names[1], provider: "custom" },
+      ];
+      const lookup = buildCatalogDisplayLookup(entries);
 
-    expect(
-      buildChatModelOptionFromLookup(
-        expectDefined(duplicateProviders[0], "first duplicate-provider fixture"),
-        buildCatalogDisplayLookup(duplicateProviders),
-      ).label,
-    ).toBe("Claude Sonnet · anthropic");
-    expect(
-      formatCatalogChatModelDisplayFromLookup(
-        "anthropic/claude-sonnet-thinking",
-        buildCatalogDisplayLookup(duplicateModels),
-      ),
-    ).toBe("Claude Sonnet · claude-sonnet-thinking · anthropic");
-  });
+      expect(entries.map((entry) => buildChatModelOptionFromLookup(entry, lookup))).toEqual([
+        { value: "custom/model-a", label: labels[0] },
+        { value: "custom/Model-A", label: labels[1] },
+      ]);
+      expect(formatCatalogChatModelDisplayFromLookup("CUSTOM/Model-A", lookup)).toBe(labels[1]);
+      expect(formatCatalogChatModelDisplayFromLookup("custom/MODEL-A", lookup)).toBe(
+        "MODEL-A · custom",
+      );
+    },
+  );
 
   it("normalizes raw overrides when the catalog match is unique", () => {
-    expect(normalizeChatModelOverrideValue(createChatModelOverride("gpt-5-mini"), catalog)).toBe(
-      "openai/gpt-5-mini",
-    );
+    expect(normalizeChatModelOverrideValue("gpt-5-mini", catalog)).toBe("openai/gpt-5-mini");
   });
 
   it("keeps ambiguous raw overrides unchanged", () => {
     expect(
       normalizeChatModelOverrideValue(
-        createChatModelOverride("gpt-5-mini"),
+        "gpt-5-mini",
         createAmbiguousModelCatalog("gpt-5-mini", "openai", "openrouter"),
       ),
     ).toBe("gpt-5-mini");

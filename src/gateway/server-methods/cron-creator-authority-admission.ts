@@ -1,51 +1,95 @@
+import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
+import {
+  consumeRequesterCronAuthorityAdmission,
+  revokeRequesterCronAuthority,
+} from "../../agents/subagents/requester-cron-authority.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayClient } from "./shared-types.js";
 
-export type GatewayCronCreatorAuthorityAdmission = Readonly<{ runId: string }>;
+export type GatewayCronCreatorAuthorityAdmission = Readonly<{
+  runId: string;
+  callerOrigin: { kind: "local" } | { kind: "unknown" };
+  managementEntitlement?: CronCreatorAuthorityCapability["managementEntitlement"];
+  requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
+  /** Fresh remote user input may create under its existing caller restrictions. */
+  callerScopedCreation?: true;
+  isCurrent?: () => boolean;
+  bindRunScope?: (scope: CronCreatorAuthorityCapability) => void;
+}>;
 
-type DirectLocalOperatorAuthorityParams = {
+type DirectOperatorAuthorityParams = {
   runId: string;
   resolvedSessionKey?: string;
   spawnedBy?: string;
   client?: GatewayClient | null;
+  isCurrent?: () => boolean;
   inputProvenance?: InputProvenance;
   disallowed: boolean;
 };
 
-function resolveDirectLocalOperatorAuthority(
-  params: DirectLocalOperatorAuthorityParams,
-): GatewayCronCreatorAuthorityAdmission | undefined {
+function isDirectGatewayUserTurn(params: DirectOperatorAuthorityParams): boolean {
   const internal = params.client?.internal;
-  const runId = params.runId.trim();
-  const isDirectLocalOperator =
-    runId.length > 0 &&
-    clientHasAdminScope(params.client ?? null) &&
-    internal?.isLocalClient === true &&
+  return (
+    params.runId.trim().length > 0 &&
+    params.client != null &&
     Boolean(params.resolvedSessionKey?.trim()) &&
     !params.spawnedBy?.trim() &&
     params.inputProvenance === undefined &&
     !params.disallowed &&
-    internal.syntheticClient !== true &&
-    internal.senderAttribution === undefined &&
-    internal.approvalRuntime !== true &&
-    internal.cronRunContinuation !== true &&
-    internal.agentRuntimeIdentity === undefined &&
-    internal.pluginRuntimeOwnerId === undefined &&
-    internal.agentRunTracking === undefined &&
-    internal.pluginSubagentRequester === undefined &&
-    internal.runtimePluginToolGrant === undefined &&
-    internal.delegatedToolPolicyHandoffId === undefined;
-  return isDirectLocalOperator ? Object.freeze({ runId }) : undefined;
+    internal?.syntheticClient !== true &&
+    internal?.senderAttribution === undefined &&
+    internal?.approvalRuntime !== true &&
+    internal?.cronRunContinuation !== true &&
+    internal?.agentRuntimeIdentity === undefined &&
+    internal?.pluginRuntimeOwnerId === undefined &&
+    internal?.agentRunTracking === undefined &&
+    internal?.pluginSubagentRequester === undefined &&
+    internal?.runtimePluginToolGrant === undefined &&
+    internal?.delegatedToolPolicyHandoffId === undefined
+  );
 }
 
-/** Mints fresh cron authority only for an admitted direct local agent RPC turn. */
+function resolveDirectOperatorAuthority(
+  params: DirectOperatorAuthorityParams,
+): GatewayCronCreatorAuthorityAdmission | undefined {
+  const internal = params.client?.internal;
+  const runId = params.runId.trim();
+  const isDirectTurn = isDirectGatewayUserTurn(params);
+  if (isDirectTurn && params.resolvedSessionKey) {
+    // A new user admission replaces pending task authority, including for a non-admin caller.
+    revokeRequesterCronAuthority(params.resolvedSessionKey);
+  }
+  const isDirectOperator =
+    isDirectTurn &&
+    clientHasAdminScope(params.client ?? null) &&
+    (internal?.isLocalClient === true || internal?.controlUiAdmin === true);
+  return isDirectOperator
+    ? Object.freeze({
+        runId,
+        // Remote management admission does not confer the direct-local creator/operator capability.
+        callerOrigin:
+          internal?.isLocalClient === true
+            ? { kind: "local" as const }
+            : { kind: "unknown" as const },
+        ...(internal?.controlUiAdmin === true
+          ? { managementEntitlement: { source: "control-ui-admin" as const } }
+          : {}),
+        ...(internal?.isLocalClient !== true ? { callerScopedCreation: true as const } : {}),
+        ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
+      })
+    : undefined;
+}
+
+/** Mints cron authority for an admitted local operator or authenticated Control UI admin turn. */
 export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   runId: string;
   resolvedSessionKey?: string;
+  sessionId?: string;
   spawnedBy?: string;
   client?: GatewayClient | null;
+  isCurrent?: () => boolean;
   request: AgentRunRequest;
   inputProvenance?: InputProvenance;
   hasRestoredCronContinuation: boolean;
@@ -53,11 +97,28 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   isRestartRecoveryResumeRun: boolean;
 }): GatewayCronCreatorAuthorityAdmission | undefined {
   const request = params.request;
-  return resolveDirectLocalOperatorAuthority({
+  if (
+    params.client?.internal?.syntheticClient === true &&
+    !params.hasRestoredCronContinuation &&
+    !params.isOneShotModelRun &&
+    !params.isRestartRecoveryResumeRun
+  ) {
+    const continuation = consumeRequesterCronAuthorityAdmission({
+      runId: params.runId,
+      sessionKey: params.resolvedSessionKey,
+      sessionId: params.sessionId,
+      inputProvenance: params.inputProvenance,
+    });
+    if (continuation) {
+      return continuation;
+    }
+  }
+  return resolveDirectOperatorAuthority({
     runId: params.runId,
     resolvedSessionKey: params.resolvedSessionKey,
     spawnedBy: params.spawnedBy,
     client: params.client,
+    isCurrent: params.isCurrent,
     inputProvenance: params.inputProvenance,
     disallowed:
       params.hasRestoredCronContinuation ||
@@ -67,6 +128,7 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
       request.acpTurnSource !== undefined ||
       request.internalRuntimeHandoffId !== undefined ||
       request.internalExecutionIdentityRetry === true ||
+      request.internalExecutionIdentityRecoveryAttempt !== undefined ||
       request.execApprovalFollowupExpectedSessionId !== undefined ||
       request.internalEvents !== undefined ||
       request.sessionEffects === "internal" ||
@@ -76,12 +138,12 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   });
 }
 
-/** Mints the same authority for an admitted ordinary local chat.send turn. */
-export function resolveGatewayChatCronCreatorAuthorityAdmission(params: {
+type GatewayChatUserTurn = {
   runId: string;
   resolvedSessionKey?: string;
   spawnedBy?: string;
   client?: GatewayClient | null;
+  isCurrent?: () => boolean;
   inputProvenance?: InputProvenance;
   hasExplicitOrigin: boolean;
   hasRestoredCronContinuation: boolean;
@@ -90,8 +152,11 @@ export function resolveGatewayChatCronCreatorAuthorityAdmission(params: {
   isSystemGenerated: boolean;
   turnKind: "btw" | "main";
   isDirectExternalUser: boolean;
-}): GatewayCronCreatorAuthorityAdmission | undefined {
-  return resolveDirectLocalOperatorAuthority({
+};
+
+/** Current external user input, independently of the permission being admitted. */
+export function isDirectGatewayChatUserTurn(params: GatewayChatUserTurn): boolean {
+  return isDirectGatewayUserTurn({
     runId: params.runId,
     resolvedSessionKey: params.resolvedSessionKey,
     spawnedBy: params.spawnedBy,
@@ -101,9 +166,18 @@ export function resolveGatewayChatCronCreatorAuthorityAdmission(params: {
       !params.isDirectExternalUser ||
       params.hasExplicitOrigin ||
       params.hasRestoredCronContinuation ||
-      params.isIncognito ||
-      params.isReconnectResume ||
       params.isSystemGenerated ||
       params.turnKind !== "main",
+  });
+}
+
+/** Mints the same authority for an admitted ordinary operator chat.send turn. */
+export function resolveGatewayChatCronCreatorAuthorityAdmission(
+  params: GatewayChatUserTurn,
+): GatewayCronCreatorAuthorityAdmission | undefined {
+  return resolveDirectOperatorAuthority({
+    ...params,
+    disallowed:
+      params.isIncognito || params.isReconnectResume || !isDirectGatewayChatUserTurn(params),
   });
 }

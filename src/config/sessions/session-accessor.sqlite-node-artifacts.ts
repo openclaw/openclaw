@@ -1,11 +1,109 @@
+import { createHash } from "node:crypto";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { hasLegacyAcpMigrationProvenanceColumn } from "../../state/openclaw-agent-legacy-acp-schema.js";
+import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "../../state/openclaw-agent-progress-card-schema.js";
+import { ensureSessionParticipantsSchema } from "../../state/openclaw-agent-session-participants-schema.js";
+import { copyLegacyAcpMigrationSourcesForRepair } from "./session-accessor.sqlite-acp-provenance.js";
+import {
+  copySessionInputCompletionsForRepair,
+  copySessionPendingInputsForRepair,
+} from "./session-accessor.sqlite-pending-inputs-repair.js";
+import { deleteSessionPendingInputs } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { mergeParticipantAggregate } from "./session-participant-identity.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
+
+type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
+
+/** Logical-node facts survive history cleanup and are fenced at final entry deletion. */
+export function readSessionNodeArtifactFingerprint(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionKey: string,
+): string {
+  const db = getSessionKysely(database.db);
+  const present = readSessionNodeArtifactTables(database);
+  const fingerprint = createHash("sha256");
+  const inventories = {
+    board_tabs: db
+      .selectFrom("board_tabs")
+      .selectAll()
+      .where("session_key", "=", sessionKey)
+      .orderBy("tab_id"),
+    heartbeat_outcomes: db
+      .selectFrom("heartbeat_outcomes")
+      .selectAll()
+      .where("session_key", "=", sessionKey),
+    session_members: db
+      .selectFrom("session_members")
+      .selectAll()
+      .where("session_key", "=", sessionKey)
+      .orderBy("identity_id"),
+    session_participants: db
+      .selectFrom("session_participants")
+      .selectAll()
+      .where("session_key", "=", sessionKey)
+      .orderBy("identity_namespace")
+      .orderBy("actor_id"),
+    session_progress_cards: db
+      .selectFrom("session_progress_cards")
+      .selectAll()
+      .where("session_key", "=", sessionKey),
+    session_suggestions: db
+      .selectFrom("session_suggestions")
+      .selectAll()
+      .where("session_key", "=", sessionKey)
+      .orderBy("state")
+      .orderBy("created_at")
+      .orderBy("id"),
+  };
+  for (const [table, query] of Object.entries(inventories)) {
+    fingerprint.update(table).update("\n");
+    if (present.has(table)) {
+      for (const row of iterateSqliteQuerySync<unknown>(database.db, query)) {
+        fingerprint.update(JSON.stringify(row)).update("\n");
+      }
+    }
+  }
+  fingerprint.update("board_widgets\n");
+  if (present.has("board_widgets")) {
+    for (const { html, ...metadata } of iterateSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("board_widgets")
+        .selectAll()
+        .where("session_key", "=", sessionKey)
+        .orderBy("name"),
+    )) {
+      fingerprint.update(JSON.stringify(metadata)).update("\n");
+      // JSON would expand each HTML byte into text; hash the stored bytes directly.
+      fingerprint.update(html === null ? "null\n" : `bytes:${html.byteLength}\n`);
+      if (html !== null) {
+        fingerprint.update(html).update("\n");
+      }
+    }
+  }
+  const provenance = hasLegacyAcpMigrationProvenanceColumn(database.db)
+    ? executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_nodes")
+          .select("legacy_acp_migration_json")
+          .where("session_key", "=", sessionKey),
+      )?.legacy_acp_migration_json
+    : undefined;
+  return fingerprint
+    .update("legacy_acp_migration_json\n")
+    .update(JSON.stringify(provenance ?? null))
+    .digest("hex");
+}
 
 export function clearSessionCollaborationForKey(
   database: OpenClawAgentDatabase,
@@ -28,169 +126,68 @@ export function clearSessionCollaborationForKey(
   }
 }
 
-export function rehomeLegacySessionNodeArtifacts(
-  database: OpenClawAgentDatabase,
-  legacyKey: string,
-  canonicalKey: string,
-  options: { rehomeMembers?: boolean },
-): void {
-  const db = getSessionKysely(database.db);
-  const presentTables = readSessionNodeArtifactTables(database);
-  if (presentTables.has("board_tabs") && presentTables.has("board_widgets")) {
-    const tabs = executeSqliteQuerySync(
-      database.db,
-      db.selectFrom("board_tabs").selectAll().where("session_key", "=", legacyKey),
-    ).rows;
-    for (const tab of tabs) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("board_tabs")
-          .values({ ...tab, session_key: canonicalKey })
-          .onConflict((conflict) =>
-            conflict
-              .columns(["session_key", "tab_id"])
-              .doUpdateSet({
-                title: tab.title,
-                position: tab.position,
-                chat_dock: tab.chat_dock,
-                created_by: tab.created_by,
-                revision: tab.revision,
-              })
-              .where("revision", "<", tab.revision),
-          ),
-      );
-    }
-    const widgets = executeSqliteQuerySync(
-      database.db,
-      db.selectFrom("board_widgets").selectAll().where("session_key", "=", legacyKey),
-    ).rows;
-    for (const widget of widgets) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("board_widgets")
-          .values({ ...widget, session_key: canonicalKey })
-          .onConflict((conflict) =>
-            conflict
-              .columns(["session_key", "name"])
-              .doUpdateSet({
-                tab_id: widget.tab_id,
-                title: widget.title,
-                content_kind: widget.content_kind,
-                html: widget.html,
-                descriptor_json: widget.descriptor_json,
-                sha256: widget.sha256,
-                view_generation: widget.view_generation,
-                revision: widget.revision,
-                size_w: widget.size_w,
-                size_h: widget.size_h,
-                position: widget.position,
-                manifest: widget.manifest,
-                grant_state: widget.grant_state,
-                granted_sha: widget.granted_sha,
-                created_by: widget.created_by,
-                created_at: widget.created_at,
-                updated_at: widget.updated_at,
-              })
-              .where((eb) =>
-                eb.or([
-                  eb("revision", "<", widget.revision),
-                  eb.and([
-                    eb("revision", "=", widget.revision),
-                    eb("updated_at", "<", widget.updated_at),
-                  ]),
-                ]),
-              ),
-          ),
-      );
-    }
-  }
-  if (presentTables.has("heartbeat_outcomes")) {
-    const heartbeat = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db.selectFrom("heartbeat_outcomes").selectAll().where("session_key", "=", legacyKey),
-    );
-    if (heartbeat) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("heartbeat_outcomes")
-          .values({ ...heartbeat, session_key: canonicalKey })
-          .onConflict((conflict) =>
-            conflict
-              .column("session_key")
-              .doUpdateSet({
-                run_session_key: heartbeat.run_session_key,
-                outcome: heartbeat.outcome,
-                summary: heartbeat.summary,
-                response_reason: heartbeat.response_reason,
-                priority: heartbeat.priority,
-                next_check: heartbeat.next_check,
-                task_names_json: heartbeat.task_names_json,
-                wake_source: heartbeat.wake_source,
-                wake_reason: heartbeat.wake_reason,
-                occurred_at: heartbeat.occurred_at,
-                context_run_id: heartbeat.context_run_id,
-                context_claimed_at: heartbeat.context_claimed_at,
-                updated_at: heartbeat.updated_at,
-              })
-              .where((eb) =>
-                eb.or([
-                  eb("updated_at", "<", heartbeat.updated_at),
-                  eb.and([
-                    eb("updated_at", "=", heartbeat.updated_at),
-                    eb("occurred_at", "<", heartbeat.occurred_at),
-                  ]),
-                ]),
-              ),
-          ),
-      );
-    }
-  }
-  if (options.rehomeMembers !== false && presentTables.has("session_members")) {
-    const members = executeSqliteQuerySync(
-      database.db,
-      db.selectFrom("session_members").selectAll().where("session_key", "=", legacyKey),
-    ).rows;
-    for (const member of members) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("session_members")
-          .values({ ...member, session_key: canonicalKey })
-          .onConflict((conflict) => conflict.columns(["session_key", "identity_id"]).doNothing()),
-      );
-    }
-  }
-  if (presentTables.has("session_suggestions")) {
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("session_suggestions")
-        .set({ session_key: canonicalKey })
-        .where("session_key", "=", legacyKey),
-    );
-  }
-}
-
-/** Copy logical-session artifacts while doctor moves a node between agent databases. */
+/** Copy logical-session artifacts into their canonical node within one agent store or across two. */
 export function copySessionNodeArtifactsForRepair(
-  source: OpenClawAgentDatabase,
+  source: Pick<OpenClawAgentDatabase, "db" | "path">,
   destination: OpenClawAgentDatabase,
   sourceKeys: readonly string[],
   canonicalKey: string,
-  options: { includeMembers?: boolean } = {},
+  options: { includeMembers?: boolean; includeParticipants?: boolean } = {},
 ): void {
   const keys = [...new Set(sourceKeys)];
   if (keys.length === 0) {
     return;
   }
+  copySessionPendingInputsForRepair(source, destination, keys, canonicalKey);
+  copySessionInputCompletionsForRepair(source, destination, keys, canonicalKey);
+  copyLegacyAcpMigrationSourcesForRepair(source, destination, keys, canonicalKey);
   const sourceDb = getSessionKysely(source.db);
   const destinationDb = getSessionKysely(destination.db);
   const sourceKeyReferences = new Set(keys.flatMap((key) => [key, key.trim()]));
   const sourceTables = readSessionNodeArtifactTables(source);
-  const destinationTables = readSessionNodeArtifactTables(destination);
+  let destinationTables = readSessionNodeArtifactTables(destination);
+  if (
+    options.includeParticipants !== false &&
+    sourceTables.has("session_participants") &&
+    !destinationTables.has("session_participants")
+  ) {
+    ensureSessionParticipantsSchema(destination.db);
+    destinationTables = readSessionNodeArtifactTables(destination);
+  }
+  if (sourceTables.has("session_progress_cards")) {
+    const progressCards = executeSqliteQuerySync(
+      source.db,
+      sourceDb.selectFrom("session_progress_cards").selectAll().where("session_key", "in", keys),
+    ).rows;
+    // Keep destination storage dormant unless an owned row actually needs transfer.
+    if (progressCards.length > 0 && !destinationTables.has("session_progress_cards")) {
+      ensureOpenClawAgentProgressCardSchemaInTransaction(destination.db);
+      destinationTables = readSessionNodeArtifactTables(destination);
+    }
+    for (const progressCard of progressCards) {
+      const canonicalProgressCard = { ...progressCard, session_key: canonicalKey };
+      executeSqliteQuerySync(
+        destination.db,
+        destinationDb
+          .insertInto("session_progress_cards")
+          .values(canonicalProgressCard)
+          .onConflict((conflict) =>
+            conflict
+              .column("session_key")
+              .doUpdateSet(canonicalProgressCard)
+              .where((eb) =>
+                eb.or([
+                  eb("revision", "<", progressCard.revision),
+                  eb.and([
+                    eb("revision", "=", progressCard.revision),
+                    eb("updated_at", "<", progressCard.updated_at),
+                  ]),
+                ]),
+              ),
+          ),
+      );
+    }
+  }
   if (
     sourceTables.has("board_tabs") &&
     sourceTables.has("board_widgets") &&
@@ -293,27 +290,22 @@ export function copySessionNodeArtifactsForRepair(
       source.db,
       sourceDb.selectFrom("heartbeat_outcomes").selectAll().where("session_key", "in", keys),
     ).rows) {
+      const canonicalHeartbeat = {
+        ...heartbeat,
+        session_key: canonicalKey,
+        run_session_key: sourceKeyReferences.has(heartbeat.run_session_key)
+          ? canonicalKey
+          : heartbeat.run_session_key,
+      };
       executeSqliteQuerySync(
         destination.db,
         destinationDb
           .insertInto("heartbeat_outcomes")
-          .values({
-            ...heartbeat,
-            session_key: canonicalKey,
-            run_session_key: sourceKeyReferences.has(heartbeat.run_session_key)
-              ? canonicalKey
-              : heartbeat.run_session_key,
-          })
+          .values(canonicalHeartbeat)
           .onConflict((conflict) =>
             conflict
               .column("session_key")
-              .doUpdateSet({
-                ...heartbeat,
-                session_key: canonicalKey,
-                run_session_key: sourceKeyReferences.has(heartbeat.run_session_key)
-                  ? canonicalKey
-                  : heartbeat.run_session_key,
-              })
+              .doUpdateSet(canonicalHeartbeat)
               .where((eb) =>
                 eb.or([
                   eb("updated_at", "<", heartbeat.updated_at),
@@ -323,6 +315,49 @@ export function copySessionNodeArtifactsForRepair(
                   ]),
                 ]),
               ),
+          ),
+      );
+    }
+  }
+  if (
+    options.includeParticipants !== false &&
+    sourceTables.has("session_participants") &&
+    destinationTables.has("session_participants")
+  ) {
+    for (const participant of executeSqliteQuerySync(
+      source.db,
+      sourceDb.selectFrom("session_participants").selectAll().where("session_key", "in", keys),
+    ).rows) {
+      if (source.db === destination.db && participant.session_key === canonicalKey) {
+        continue;
+      }
+      const existing = executeSqliteQueryTakeFirstSync(
+        destination.db,
+        destinationDb
+          .selectFrom("session_participants")
+          .select(["contribution_count", "first_prompted_at", "last_prompted_at"])
+          .where("session_key", "=", canonicalKey)
+          .where("identity_namespace", "=", participant.identity_namespace)
+          .where("actor_id", "=", participant.actor_id),
+      );
+      const aggregate = mergeParticipantAggregate(
+        existing,
+        participant,
+        source.db === destination.db ? "sum" : "copy",
+      );
+      executeSqliteQuerySync(
+        destination.db,
+        destinationDb
+          .insertInto("session_participants")
+          .values({
+            ...participant,
+            ...aggregate,
+            session_key: canonicalKey,
+          })
+          .onConflict((conflict) =>
+            conflict
+              .columns(["session_key", "identity_namespace", "actor_id"])
+              .doUpdateSet(aggregate),
           ),
       );
     }
@@ -357,16 +392,34 @@ export function deleteSessionDeliveryArtifacts(
     normalizeStoreSessionKey(trimmedKey),
     ...additionalKeys,
   ]);
-  const competingIdentities = new Set(
-    executeSqliteQuerySync(
-      database.db,
-      db.selectFrom("session_nodes").select("session_key"),
-    ).rows.flatMap((row) =>
-      row.session_key === sessionKey ? [] : [normalizeStoreSessionKey(row.session_key.trim())],
-    ),
-  );
-  const sessionKeys = lookupKeys.filter(
-    (key) => key === sessionKey || !competingIdentities.has(normalizeStoreSessionKey(key.trim())),
+  let sessionKeys = lookupKeys;
+  if (lookupKeys.some((key) => key !== sessionKey)) {
+    const competingIdentities = new Set(
+      executeSqliteQuerySync(
+        database.db,
+        db.selectFrom("session_nodes").select("session_key"),
+      ).rows.flatMap((row) =>
+        row.session_key === sessionKey ? [] : [normalizeStoreSessionKey(row.session_key.trim())],
+      ),
+    );
+    sessionKeys = lookupKeys.filter(
+      (key) => key === sessionKey || !competingIdentities.has(normalizeStoreSessionKey(key.trim())),
+    );
+  }
+  const cache = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    cache
+      .deleteFrom("cache_entries")
+      .where("scope", "=", "conversation-progress")
+      .where(
+        "key",
+        "in",
+        db
+          .selectFrom("conversation_deliveries")
+          .select("operation_id")
+          .where("source_session_key", "in", sessionKeys),
+      ),
   );
   executeSqliteQuerySync(
     database.db,
@@ -378,6 +431,7 @@ export function deleteSessionNodeArtifacts(
   database: OpenClawAgentDatabase,
   sessionKey: string,
 ): void {
+  deleteSessionPendingInputs(database, sessionKey);
   const db = getSessionKysely(database.db);
   const presentTables = readSessionNodeArtifactTables(database);
   if (presentTables.has("board_tabs") && presentTables.has("board_widgets")) {
@@ -390,16 +444,21 @@ export function deleteSessionNodeArtifacts(
       db.deleteFrom("board_tabs").where("session_key", "=", sessionKey),
     );
   }
-  if (presentTables.has("heartbeat_outcomes")) {
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("heartbeat_outcomes").where("session_key", "=", sessionKey),
-    );
+  for (const table of [
+    "heartbeat_outcomes",
+    "session_participants",
+    "session_progress_cards",
+    "session_members",
+    "session_suggestions",
+  ] as const) {
+    if (!presentTables.has(table)) {
+      continue;
+    }
+    executeSqliteQuerySync(database.db, db.deleteFrom(table).where("session_key", "=", sessionKey));
   }
-  clearSessionCollaborationForKey(database, sessionKey);
 }
 
-function readSessionNodeArtifactTables(database: OpenClawAgentDatabase): Set<string> {
+function readSessionNodeArtifactTables(database: Pick<OpenClawAgentDatabase, "db">): Set<string> {
   const db = getSessionKysely(database.db);
   return new Set(
     executeSqliteQuerySync(
@@ -413,6 +472,8 @@ function readSessionNodeArtifactTables(database: OpenClawAgentDatabase): Set<str
           "board_widgets",
           "heartbeat_outcomes",
           "session_members",
+          "session_participants",
+          "session_progress_cards",
           "session_suggestions",
         ]),
     ).rows.flatMap((row) => (row.name ? [row.name] : [])),

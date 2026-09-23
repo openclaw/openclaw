@@ -6,7 +6,7 @@ read_when:
 title: "Elevated mode"
 ---
 
-When an agent runs inside a sandbox, its `exec` commands are confined to the sandbox environment. **Elevated mode** lets the agent break out and run commands outside the sandbox instead, with configurable approval gates.
+When an agent runs inside a sandbox, its `exec` commands are confined to the sandbox environment. **Elevated mode** lets the agent break out of ordinary agent-configured sandboxing and run commands outside the sandbox instead, with configurable approval gates. Sessions whose creator role requires sandboxing cannot use elevated mode to escape.
 
 <Info>
   Elevated mode only changes behavior when the agent is **sandboxed**. For unsandboxed agents, exec already runs on the host.
@@ -52,13 +52,13 @@ Send `/elevated` with no argument to see the current level.
   <Step title="Set the level">
     Send a directive-only message to set the session default:
 
-    ```
+    ```text
     /elevated full
     ```
 
     Or use it inline (applies to that message only):
 
-    ```
+    ```text
     /elevated on run the deployment script
     ```
 
@@ -102,6 +102,7 @@ Allowlist entry formats:
 ## What elevated does not control
 
 - **Tool policy**: if `exec` is denied by tool policy, elevated cannot override it.
+- **Required role sandboxing**: if the authenticated session creator's operator role required a sandbox, elevated mode cannot run commands on the Gateway or a node.
 - **Host selection policy**: elevated does not turn `auto` into a free cross-host override. It uses the configured/session exec target rules, choosing `node` only when the target is already `node`.
 - **Separate from `/exec`**: the `/exec` directive adjusts per-session exec defaults (host, security, ask, node) for authorized senders and does not require elevated mode.
 
@@ -123,5 +124,11 @@ Allowlist entry formats:
   </Card>
   <Card title="Sandbox vs Tool Policy vs Elevated" href="/gateway/sandbox-vs-tool-policy-vs-elevated" icon="scale-balanced">
     How the three gates compose during a tool call.
+  </Card>
+  <Card title="Multi-agent sandbox and tools" href="/tools/multi-agent-sandbox-tools" icon="shield">
+    Per-agent sandbox and tool limits.
+  </Card>
+  <Card title="Thinking levels" href="/tools/thinking" icon="brain">
+    The reasoning budget an elevated run uses.
   </Card>
 </CardGroup>

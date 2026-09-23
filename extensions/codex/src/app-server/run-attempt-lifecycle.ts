@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { emitAgentHarnessAttemptEvent } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   awaitAgentEndSideEffects,
   embeddedAgentLog,
-  emitAgentEvent as emitGlobalAgentEvent,
   runAgentEndSideEffects,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
@@ -63,27 +63,14 @@ export async function ensureCodexWorkspaceDirOnce(workspaceDir: string): Promise
   codexWorkspaceDirCache.add(normalized);
 }
 
-export async function emitCodexAppServerEvent(
+export function emitCodexAppServerEvent(
   params: EmbeddedRunAttemptParams,
   event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
 ): Promise<void> {
-  try {
-    emitGlobalAgentEvent({
-      runId: params.runId,
-      stream: event.stream,
-      data: event.data,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    });
-  } catch (error) {
-    embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
-  }
-  try {
-    await params.onAgentEvent?.(event);
-  } catch (error) {
-    // Event consumers are observational; they must not abort or strand the
-    // canonical app-server turn lifecycle.
-    embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
-  }
+  return emitAgentHarnessAttemptEvent(params, event, {
+    label: "codex app-server",
+    log: embeddedAgentLog,
+  });
 }
 
 type CodexAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];

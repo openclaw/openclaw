@@ -2,8 +2,9 @@
 import { installChannelOutboundPayloadContractSuite } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createSlackOutboundPayloadHarness as createHarness, slackOutbound } from "../test-api.js";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
+import { slackOutbound } from "./outbound-adapter.js";
+import { createSlackOutboundPayloadHarness as createHarness } from "./outbound-payload.test-harness.js";
 import type { SlackReplyBlockSegment } from "./reply-blocks.js";
 import { sendMessageSlack } from "./send.js";
 
@@ -482,9 +483,9 @@ describe("slackOutbound sendPayload", () => {
     expect(client.chat.postMessage.mock.calls.length).toBeGreaterThanOrEqual(3);
     expect(capturedSendOptions).not.toHaveLength(0);
     expect(capturedSendOptions.every((opts) => opts.deliveryQueueId === undefined)).toBe(true);
-    expect(capturedSendOptions.every((opts) => opts.onPlatformSendDispatch === undefined)).toBe(
-      true,
-    );
+    expect(
+      capturedSendOptions.every((opts) => opts.onPlatformSendDispatch === onPlatformSendDispatch),
+    ).toBe(true);
     expect(postedSlackMessage(client, 0)).toMatchObject({
       text: expect.stringContaining("Pipeline <!channel>"),
       mrkdwn: false,
@@ -618,29 +619,39 @@ describe("slackOutbound sendPayload", () => {
     expect(linkButton).not.toHaveProperty("value");
   });
 
-  it.each([
-    {
-      name: "title",
-      presentation: { title: "x".repeat(151), blocks: [] },
-    },
-    {
-      name: "text block",
-      presentation: { blocks: [{ type: "text", text: "x".repeat(3001) }] },
-    },
-    {
-      name: "context block",
-      presentation: { blocks: [{ type: "context", text: "x".repeat(3001) }] },
-    },
-  ] satisfies Array<{
-    name: string;
-    presentation: NonNullable<ReplyPayload["presentation"]>;
-  }>)("keeps the portable fallback for an oversized $name", async ({ presentation }) => {
-    const payload: ReplyPayload = { presentation };
-
+  it("keeps the portable fallback for an oversized title", async () => {
+    const payload: ReplyPayload = { presentation: { title: "x".repeat(151), blocks: [] } };
     const segments = renderedPresentationSegments(await renderPresentation(payload));
     expect(segments).toHaveLength(1);
     expect(segments[0]).toMatchObject({ kind: "text", mrkdwn: false });
   });
+
+  it.each(["text", "context"] as const)(
+    "renders oversized %s blocks as complete bounded native Slack blocks",
+    async (type) => {
+      const text = "x".repeat(3_001);
+      const payload: ReplyPayload = { presentation: { blocks: [{ type, text }] } };
+      const segments = renderedPresentationSegments(await renderPresentation(payload));
+      const [segment] = segments;
+
+      expect(segments).toHaveLength(1);
+      expect(segment?.kind).toBe("blocks");
+      if (segment?.kind !== "blocks") {
+        throw new Error("Expected native Slack blocks");
+      }
+      expect(segment.blocks).toHaveLength(2);
+      const chunks = segment.blocks.flatMap((block) => {
+        if (block.type === "section" && "text" in block && block.text?.type === "mrkdwn") {
+          return [block.text.text];
+        }
+        const element =
+          block.type === "context" && "elements" in block ? block.elements[0] : undefined;
+        return element?.type === "mrkdwn" ? [element.text] : [];
+      });
+      expect(chunks.join("")).toBe(text);
+      expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+    },
+  );
 
   it("starts a new segment when presentation content crosses Slack's block limit", async () => {
     const payload: ReplyPayload = {
@@ -660,6 +671,37 @@ describe("slackOutbound sendPayload", () => {
       kind: "blocks",
       blocks: [{ type: "divider" }, { type: "actions" }],
     });
+  });
+
+  it("refreshes dispatch custody before each structured fanout request", async () => {
+    const payload: ReplyPayload = {
+      channelData: {
+        slack: { blocks: Array.from({ length: 49 }, () => ({ type: "divider" })) },
+      },
+      presentation: { title: "Deploy status", blocks: [{ type: "divider" }] },
+      interactive: interactiveButtons("Allow", "pluginbind:approval-123:o"),
+    };
+    const onPlatformSendDispatch = vi.fn(async () => undefined);
+
+    const { capturedSendOptions, client } = await sendThroughRealSlack({
+      payload,
+      deliveryQueueId: "queue-1",
+      onPlatformSendDispatch,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(capturedSendOptions).toHaveLength(2);
+    expect(capturedSendOptions.every((opts) => opts.deliveryQueueId === undefined)).toBe(true);
+    expect(
+      capturedSendOptions.every((opts) => opts.onPlatformSendDispatch === onPlatformSendDispatch),
+    ).toBe(true);
+    expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
+    for (const [
+      index,
+      dispatchOrder,
+    ] of onPlatformSendDispatch.mock.invocationCallOrder.entries()) {
+      expect(dispatchOrder).toBeLessThan(client.chat.postMessage.mock.invocationCallOrder[index]!);
+    }
   });
 
   it("uses the full ordered table fallback when preserved siblings exceed the block limit", async () => {
@@ -816,32 +858,95 @@ describe("slackOutbound sendPayload", () => {
     const controlsSent = sentSlackMessage(sendMock, 1);
     expect(controlsSent.to).toBe(to);
     expect(controlsSent.text).toBe("Approval required\n\nAllow");
+    expect(controlsSent.options).not.toHaveProperty("mediaUrl");
     expect(controlsSent.options.blocks?.map((block) => block.type)).toEqual(["section", "actions"]);
     expect(result.channel).toBe("slack");
     expect(result.messageId).toBe("sl-controls");
   });
 
-  it("rolls over authored blocks instead of dropping over-limit content", async () => {
-    const { run, sendMock } = createHarness({
-      payload: {
-        channelData: {
-          slack: { blocks: Array.from({ length: 50 }, () => ({ type: "divider" })) },
+  it.each(["blocks", "table", "chart"] as const)(
+    "rolls over the %s budget while keeping control indexes reply-wide",
+    async (budget) => {
+      const rawData =
+        budget === "blocks"
+          ? Array.from({ length: 48 }, () => ({ type: "divider" }))
+          : budget === "table"
+            ? [
+                {
+                  type: "data_table",
+                  caption: "Existing table",
+                  rows: [
+                    [{ type: "raw_text", text: "N" }],
+                    [{ type: "raw_text", text: "x".repeat(9_999) }],
+                  ],
+                },
+              ]
+            : Array.from({ length: 2 }, () => ({
+                type: "data_visualization",
+                title: "Existing chart",
+                chart: { type: "pie", segments: [{ label: "Open", value: 5 }] },
+              }));
+      const rawBlocks = [
+        ...rawData,
+        { type: "divider", block_id: "openclaw_reply_buttons_7suffix" },
+        { type: "divider", block_id: "openclaw_reply_select_11" },
+      ];
+      const { run, sendMock, to } = createHarness({
+        payload: {
+          channelData: {
+            slack: { blocks: rawBlocks },
+          },
+          presentation: {
+            blocks: [
+              budget === "chart"
+                ? createPipelineChart()
+                : { type: "table", caption: "Accounts", headers: ["Account"], rows: [["Acme"]] },
+              valueButtons("Stage", "stage"),
+              { type: "select", options: [{ label: "Production", value: "production" }] },
+            ],
+          },
+          interactive: {
+            blocks: [
+              valueButtons("Approve", "approve"),
+              { type: "select", options: [{ label: "Recent", value: "recent" }] },
+            ],
+          },
         },
-        presentation: {
-          blocks: [{ type: "table", caption: "Accounts", headers: ["Account"], rows: [["Acme"]] }],
-        },
-        interactive: interactiveButtons("Allow", "pluginbind:approval-123:o"),
-      },
-    });
+        sendResults: [{ messageId: "sl-first" }, { messageId: "sl-second" }],
+      });
 
-    await expect(run()).resolves.toMatchObject({ messageId: "sl-1" });
-    expect(sendMock).toHaveBeenCalledTimes(2);
-    expect(sentSlackMessage(sendMock, 0).options.blocks).toHaveLength(50);
-    expect(sentSlackMessage(sendMock, 1).options.blocks?.map((block) => block.type)).toEqual([
-      "data_table",
-      "actions",
-    ]);
-  });
+      await expect(run()).resolves.toMatchObject({ channel: "slack", messageId: "sl-second" });
+      expect(sendMock).toHaveBeenCalledTimes(2);
+      expect(sentSlackMessage(sendMock, 0)).toMatchObject({ to, options: { blocks: rawBlocks } });
+      const second = sentSlackMessage(sendMock, 1);
+      expect(second.to).toBe(to);
+      expect(second.options.blocks?.map((block) => block.type)).toEqual([
+        budget === "chart" ? "data_visualization" : "data_table",
+        "actions",
+        "actions",
+        "actions",
+        "actions",
+      ]);
+      expect(second.options.blocks?.slice(1)).toMatchObject([
+        {
+          block_id: "openclaw_reply_buttons_8",
+          elements: [{ action_id: "openclaw:reply_button:8:1" }],
+        },
+        {
+          block_id: "openclaw_reply_select_12",
+          elements: [{ action_id: "openclaw:reply_select:12" }],
+        },
+        {
+          block_id: "openclaw_reply_buttons_9",
+          elements: [{ action_id: "openclaw:reply_button:9:1" }],
+        },
+        {
+          block_id: "openclaw_reply_select_13",
+          elements: [{ action_id: "openclaw:reply_select:13" }],
+        },
+      ]);
+    },
+  );
 
   it("offsets presentation controls against native Slack blocks before standalone interactive controls", async () => {
     const { run, sendMock, to } = createHarness({

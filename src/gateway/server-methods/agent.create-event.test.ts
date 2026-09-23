@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
@@ -41,12 +42,26 @@ vi.mock("../../commands/agent.js", () => ({
   agentCommandFromIngress: agentIngressMocks.agentCommandFromIngress,
 }));
 
+vi.mock("../../agents/prepared-model-runtime.js", () => ({
+  acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
+    [Symbol.asyncDispose]: vi.fn(async () => {}),
+    snapshot: {},
+  })),
+  loadPublishedGatewayReplyDispatchRuntime: vi.fn(async ({ agentId }: { agentId: string }) => ({
+    agentId,
+    agentDir: configMocks.workspaceDir,
+    config: configMocks.getRuntimeConfig(),
+    pluginGeneration: { pluginMetadataSnapshot: {} },
+    workspaceDir: configMocks.workspaceDir,
+  })),
+}));
+
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {},
 }));
 
 vi.mock("../../tasks/detached-task-runtime.js", () => ({
-  createRunningTaskRun: vi.fn(),
+  prepareRunningTaskRun: vi.fn(() => ({ kind: "receipt", create: async () => null })),
 }));
 
 import { agentHandlers } from "./agent.js";
@@ -92,6 +107,7 @@ describe("agent handler session create events", () => {
         },
         respond,
         context: {
+          trackExecution: trackAsyncWork,
           dedupe: new Map(),
           deps: {} as never,
           logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as never,
@@ -111,7 +127,7 @@ describe("agent handler session create events", () => {
     const responseCall = firstMockCall(respond) as
       | [boolean, { status?: string; runId?: string }, unknown, { runId?: string }]
       | undefined;
-    expect(responseCall?.[0]).toBe(true);
+    expect(responseCall?.[0], JSON.stringify(responseCall)).toBe(true);
     expect(responseCall?.[1]?.status).toBe("accepted");
     expect(responseCall?.[1]?.runId).toBe("idem-agent-create-event");
     expect(responseCall?.[2]).toBeUndefined();
@@ -131,8 +147,8 @@ describe("agent handler session create events", () => {
         expect(call?.[1]?.reason).toBe("create");
         expect(call?.[2]).toEqual(new Set(["conn-1"]));
         expect(call?.[3]).toEqual({
+          agentId: "main",
           dropIfSlow: true,
-          sessionKeys: ["agent:main:subagent:create-test"],
         });
       },
       { timeout: 2_000, interval: 5 },

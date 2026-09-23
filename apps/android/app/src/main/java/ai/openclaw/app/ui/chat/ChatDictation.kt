@@ -9,13 +9,16 @@ import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -25,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -56,13 +60,24 @@ internal sealed interface ChatDictationState {
 
   data object Listening : ChatDictationState
 
+  data object Transcribing : ChatDictationState
+
   data class Failure(
     val reason: ChatDictationFailure,
   ) : ChatDictationState
 }
 
+internal val ChatDictationState.isActive: Boolean
+  get() = this is ChatDictationState.Starting || this is ChatDictationState.Listening || this is ChatDictationState.Transcribing
+
 internal sealed interface ChatDictationRecognitionEvent {
   data object Ready : ChatDictationRecognitionEvent
+
+  data object EndOfSpeech : ChatDictationRecognitionEvent
+
+  data class PartialTranscript(
+    val text: String,
+  ) : ChatDictationRecognitionEvent
 
   data class Transcript(
     val text: String,
@@ -98,10 +113,6 @@ internal class AndroidChatDictationRecognizer(
     generation += 1
     val operation = generation
     retireRecognizer()
-    if (!isAvailable) {
-      onEvent(ChatDictationRecognitionEvent.Error(SpeechRecognizer.ERROR_SERVER_DISCONNECTED))
-      return
-    }
     val active = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
     active.setRecognitionListener(
       object : RecognitionListener {
@@ -127,15 +138,22 @@ internal class AndroidChatDictationRecognizer(
           emit(operation, onEvent, ChatDictationRecognitionEvent.Error(error))
         }
 
-        override fun onBeginningOfSpeech() = Unit
+        override fun onBeginningOfSpeech() {
+          emit(operation, onEvent, ChatDictationRecognitionEvent.Ready)
+        }
 
         override fun onRmsChanged(rmsdB: Float) = Unit
 
         override fun onBufferReceived(buffer: ByteArray?) = Unit
 
-        override fun onEndOfSpeech() = Unit
+        override fun onEndOfSpeech() {
+          emit(operation, onEvent, ChatDictationRecognitionEvent.EndOfSpeech)
+        }
 
-        override fun onPartialResults(partialResults: Bundle?) = Unit
+        override fun onPartialResults(partialResults: Bundle?) {
+          val transcript = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
+          emit(operation, onEvent, ChatDictationRecognitionEvent.PartialTranscript(transcript))
+        }
 
         override fun onEvent(
           eventType: Int,
@@ -149,7 +167,7 @@ internal class AndroidChatDictationRecognizer(
         Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
           putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
           putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
-          putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+          putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
           putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
           putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
           putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, appContext.packageName)
@@ -164,7 +182,7 @@ internal class AndroidChatDictationRecognizer(
   }
 
   override fun finish() {
-    runCatching { recognizer?.stopListening() }
+    recognizer?.stopListening()
   }
 
   override fun cancel() {
@@ -202,8 +220,8 @@ internal class ChatDictationController(
   private val lock = Any()
   private val _state = MutableStateFlow<ChatDictationState>(ChatDictationState.Idle)
   val state: StateFlow<ChatDictationState> = _state.asStateFlow()
-  val isAvailable: Boolean
-    get() = recognizer.isAvailable
+  private val _partialTranscript = MutableStateFlow("")
+  val partialTranscript: StateFlow<String> = _partialTranscript.asStateFlow()
 
   private var completion: CompletableDeferred<String?>? = null
   private var ownsMic = false
@@ -212,8 +230,9 @@ internal class ChatDictationController(
   suspend fun start(): String? {
     val operation =
       synchronized(lock) {
-        if (_state.value is ChatDictationState.Starting || _state.value is ChatDictationState.Listening) return null
+        if (_state.value.isActive) return null
         generation += 1
+        _partialTranscript.value = ""
         _state.value = ChatDictationState.Starting
         generation
       }
@@ -243,7 +262,6 @@ internal class ChatDictationController(
         ownsMic = true
         CompletableDeferred<String?>().also {
           completion = it
-          _state.value = ChatDictationState.Listening
         }
       }
     try {
@@ -260,10 +278,31 @@ internal class ChatDictationController(
   }
 
   fun finish() {
-    when (state.value) {
-      ChatDictationState.Starting -> cancel()
-      ChatDictationState.Listening -> recognizer.finish()
-      else -> Unit
+    val operation =
+      synchronized(lock) {
+        when (_state.value) {
+          ChatDictationState.Listening -> {
+            _state.value = ChatDictationState.Transcribing
+            generation
+          }
+
+          ChatDictationState.Starting, ChatDictationState.Transcribing -> {
+            null
+          }
+
+          else -> {
+            return
+          }
+        }
+      }
+    if (operation == null) {
+      cancel()
+    } else {
+      try {
+        recognizer.finish()
+      } catch (_: Throwable) {
+        fail(operation, ChatDictationFailure.Generic)
+      }
     }
   }
 
@@ -273,6 +312,7 @@ internal class ChatDictationController(
         generation += 1
         val active = completion
         completion = null
+        _partialTranscript.value = ""
         _state.value = ChatDictationState.Idle
         active
       }
@@ -290,9 +330,33 @@ internal class ChatDictationController(
     event: ChatDictationRecognitionEvent,
   ) {
     when (event) {
-      ChatDictationRecognitionEvent.Ready -> Unit
-      is ChatDictationRecognitionEvent.Transcript -> complete(operation, event.text)
-      is ChatDictationRecognitionEvent.Error -> fail(operation, dictationFailureForError(event.code))
+      ChatDictationRecognitionEvent.Ready -> {
+        synchronized(lock) {
+          if (operation == generation && _state.value is ChatDictationState.Starting) {
+            _state.value = ChatDictationState.Listening
+          }
+        }
+      }
+
+      ChatDictationRecognitionEvent.EndOfSpeech -> {
+        synchronized(lock) {
+          if (operation == generation && _state.value.isActive) _state.value = ChatDictationState.Transcribing
+        }
+      }
+
+      is ChatDictationRecognitionEvent.PartialTranscript -> {
+        synchronized(lock) {
+          if (operation == generation && _state.value.isActive) _partialTranscript.value = event.text.trim()
+        }
+      }
+
+      is ChatDictationRecognitionEvent.Transcript -> {
+        complete(operation, event.text)
+      }
+
+      is ChatDictationRecognitionEvent.Error -> {
+        fail(operation, dictationFailureForError(event.code))
+      }
     }
   }
 
@@ -306,6 +370,7 @@ internal class ChatDictationController(
         generation += 1
         val active = completion ?: return
         completion = null
+        _partialTranscript.value = ""
         _state.value = ChatDictationState.Idle
         active
       }
@@ -323,6 +388,7 @@ internal class ChatDictationController(
         generation += 1
         val active = completion
         completion = null
+        _partialTranscript.value = ""
         _state.value = ChatDictationState.Failure(reason)
         active
       }
@@ -347,17 +413,22 @@ internal class ChatDictationController(
 internal fun dictationFailureForError(code: Int): ChatDictationFailure =
   when (code) {
     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> ChatDictationFailure.PermissionRequired
+
     SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> ChatDictationFailure.Busy
+
     SpeechRecognizer.ERROR_NETWORK,
     SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
     -> ChatDictationFailure.Network
+
     SpeechRecognizer.ERROR_NO_MATCH,
     SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
     -> ChatDictationFailure.NoSpeech
+
     SpeechRecognizer.ERROR_SERVER_DISCONNECTED,
     SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
     SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE,
     -> ChatDictationFailure.Unavailable
+
     else -> ChatDictationFailure.Generic
   }
 
@@ -390,15 +461,17 @@ internal fun rememberChatDictationController(viewModel: MainViewModel): ChatDict
 
 @Composable
 internal fun ChatComposerMicButton(
-  dictationActive: Boolean,
+  dictationState: ChatDictationState,
   dictationEnabled: Boolean,
   voiceNoteEnabled: Boolean,
   onToggleDictation: () -> Unit,
   onStartVoiceNote: () -> Unit,
   modifier: Modifier = Modifier,
+  onOpenVoiceOptions: (() -> Unit)? = null,
 ) {
+  val dictationActive = dictationState.isActive
   val hapticFeedback = LocalHapticFeedback.current
-  val interactionEnabled = dictationActive || dictationEnabled || voiceNoteEnabled
+  val interactionEnabled = dictationActive || dictationEnabled || voiceNoteEnabled || onOpenVoiceOptions != null
   val longPressAction: (() -> Unit)? =
     if (voiceNoteEnabled) {
       {
@@ -409,7 +482,9 @@ internal fun ChatComposerMicButton(
       null
     }
   val dictationActionLabel =
-    if (dictationActive) {
+    if (dictationState is ChatDictationState.Starting || dictationState is ChatDictationState.Transcribing) {
+      nativeString("Cancel dictation")
+    } else if (dictationActive) {
       nativeString("Stop Dictation")
     } else {
       nativeString("Dictation")
@@ -423,26 +498,41 @@ internal fun ChatComposerMicButton(
           enabled = interactionEnabled,
           onClickLabel = dictationActionLabel,
           role = Role.Button,
-          onLongClickLabel = if (voiceNoteEnabled) voiceNoteRecordLabel() else null,
-          onLongClick = longPressAction,
+          onLongClickLabel =
+            if (onOpenVoiceOptions != null) {
+              nativeString("Voice options")
+            } else if (voiceNoteEnabled) {
+              voiceNoteRecordLabel()
+            } else {
+              null
+            },
+          onLongClick = if (dictationActive) null else onOpenVoiceOptions ?: longPressAction,
           onClick = {
-            if (dictationActive || dictationEnabled) onToggleDictation()
+            if (dictationActive || dictationEnabled) onToggleDictation() else onOpenVoiceOptions?.invoke()
           },
         ),
     shape = CircleShape,
-    color = if (dictationActive) ClawTheme.colors.primary else ClawTheme.colors.surfaceRaised,
+    color = Color.Transparent,
     contentColor =
       when {
-        dictationActive -> ClawTheme.colors.primaryText
-        dictationEnabled || voiceNoteEnabled -> ClawTheme.colors.text
+        dictationActive -> ClawTheme.colors.primary
+        dictationEnabled || voiceNoteEnabled -> ClawTheme.colors.textMuted
         else -> ClawTheme.colors.textSubtle
       },
   ) {
-    Box(contentAlignment = Alignment.Center) {
+    Box(
+      modifier = Modifier.padding(8.dp),
+      contentAlignment = Alignment.Center,
+    ) {
       Icon(
-        imageVector = if (dictationActive) Icons.Default.Stop else Icons.Default.Mic,
+        imageVector =
+          when (dictationState) {
+            ChatDictationState.Starting, ChatDictationState.Transcribing -> Icons.Default.Close
+            ChatDictationState.Listening -> Icons.Default.Stop
+            else -> Icons.Outlined.MicNone
+          },
         contentDescription = null,
-        modifier = Modifier.size(18.dp),
+        modifier = Modifier.size(20.dp),
       )
     }
   }
@@ -455,10 +545,10 @@ internal fun ChatDictationError(state: ChatDictationState) {
     when (reason) {
       ChatDictationFailure.Unavailable -> nativeString("On-device speech recognition is unavailable.")
       ChatDictationFailure.PermissionRequired -> nativeString("Microphone permission is required.")
-      ChatDictationFailure.Busy -> nativeString("Recognizer busy")
-      ChatDictationFailure.Network -> nativeString("Network error")
-      ChatDictationFailure.NoSpeech -> nativeString("No matches")
-      ChatDictationFailure.Generic -> nativeString("Speech recognition")
+      ChatDictationFailure.Busy -> nativeString("Microphone is busy. Stop other recording and try again.")
+      ChatDictationFailure.Network -> nativeString("Speech recognition lost its connection. Tap the microphone to try again.")
+      ChatDictationFailure.NoSpeech -> nativeString("No speech detected. Tap the microphone and try again.")
+      ChatDictationFailure.Generic -> nativeString("Dictation failed. Tap the microphone to try again.")
     }
   Text(text = message, style = ClawTheme.type.caption, color = ClawTheme.colors.danger)
 }

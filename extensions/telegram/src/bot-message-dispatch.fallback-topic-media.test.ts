@@ -1,7 +1,10 @@
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { dispatchReplyWithBufferedBlockDispatcher as dispatchThroughSharedOwner } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
@@ -15,13 +18,176 @@ import {
   dispatchWithContext,
   generateTopicLabel,
   loadSessionStore,
+  observeInboundDelivery,
   telegramDepsForTest,
 } from "./bot-message-dispatch.test-harness.js";
 import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
 
+function createMessageToolOnlyGroupContext(): TelegramMessageContext {
+  return createContext({
+    chatId: -1001234,
+    isGroup: true,
+    ctxPayload: {
+      SessionKey: "agent:test:telegram:group:-1001234",
+      ChatType: "group",
+    } as TelegramMessageContext["ctxPayload"],
+    primaryCtx: {
+      message: { chat: { id: -1001234, type: "supergroup" } },
+    } as TelegramMessageContext["primaryCtx"],
+    msg: {
+      chat: { id: -1001234, type: "supergroup" },
+      message_id: 456,
+    } as TelegramMessageContext["msg"],
+    threadSpec: { id: undefined, scope: "none" },
+    replyThreadId: undefined,
+  });
+}
+
 describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
+  it.each([
+    { name: "cancelled final", events: ["cancel-final"], fallback: false },
+    { name: "empty final after sending hook", events: ["empty-hook-final"], fallback: false },
+    {
+      name: "cancelled tool then failed final",
+      events: ["cancel-tool", "fail-final"],
+      fallback: true,
+    },
+    {
+      name: "cancelled block then failed final",
+      events: ["cancel-block", "fail-final"],
+      fallback: true,
+    },
+    {
+      name: "failed final then cancelled final",
+      events: ["fail-final", "cancel-final"],
+      fallback: true,
+    },
+    {
+      name: "failed tool then cancelled final",
+      events: ["fail-tool", "cancel-final"],
+      fallback: false,
+    },
+    { name: "partially delivered final", events: ["partial-final"], fallback: false },
+    { name: "empty metadata reply", events: ["empty-final"], fallback: true },
+  ])("preserves ordinary message fallback outcome for $name", async ({ events, fallback }) => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      const onDelivered = observeInboundDelivery.mock.calls.at(-1)?.[0].onDelivered;
+      for (const event of events) {
+        switch (event) {
+          case "cancel-final":
+            await onDelivered?.(
+              { text: "Cancelled" },
+              { kind: "final" },
+              {
+                visibleReplySent: false,
+                suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+              },
+            );
+            break;
+          case "cancel-tool":
+            await onDelivered?.(
+              { text: "Cancelled" },
+              { kind: "tool" },
+              {
+                visibleReplySent: false,
+                suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+              },
+            );
+            break;
+          case "cancel-block":
+            await onDelivered?.(
+              { text: "Cancelled" },
+              { kind: "block" },
+              {
+                visibleReplySent: false,
+                suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+              },
+            );
+            break;
+          case "empty-hook-final":
+            await onDelivered?.(
+              { text: "Emptied by hook" },
+              { kind: "final" },
+              {
+                visibleReplySent: false,
+                suppression: { reason: "empty_after_reply_payload_sending_hook" },
+              },
+            );
+            break;
+          case "fail-final":
+            await dispatcherOptions.onError?.(new Error("Delivery failed"), { kind: "final" });
+            break;
+          case "fail-tool":
+            await dispatcherOptions.onError?.(new Error("Delivery failed"), { kind: "tool" });
+            break;
+          case "partial-final":
+            await dispatcherOptions.onError?.(
+              createChannelPartialDeliveryError(new Error("Delivery failed"), {
+                visibleReplySent: true,
+              }),
+              { kind: "final" },
+            );
+            break;
+          case "empty-final":
+            dispatcherOptions.onSkip?.({}, { kind: "final", reason: "empty" });
+            break;
+        }
+      }
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+        noVisibleReplyFallbackEligible: events.includes("partial-final"),
+      };
+    });
+    const context = createContext();
+    context.ctxPayload.RawBody = "Check this please";
+    context.ctxPayload.BodyForAgent = "Check this please";
+    await expect(
+      dispatchWithContext({ context, streamMode: "off", retryDispatchErrors: true }),
+    ).resolves.toEqual({ kind: "completed" });
+    expect(deliverReplies).toHaveBeenCalledTimes(Number(fallback));
+    if (fallback) {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "No response generated. Please try again." }],
+        }),
+      );
+    }
+  });
+
+  it("does not send an empty fallback after an ordinary final is cancelled by a payload hook", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) =>
+      dispatchThroughSharedOwner({
+        ...params,
+        replyResolver: async () => ({ text: "Here is the answer" }),
+        dispatcherOptions: {
+          ...params.dispatcherOptions,
+          deliver: async (payload, info) => {
+            const result = {
+              visibleReplySent: false as const,
+              suppression: { reason: "cancelled_by_reply_payload_sending_hook" as const },
+            };
+            await observeInboundDelivery.mock.calls
+              .at(-1)?.[0]
+              .onDelivered?.(payload, info, result);
+            return result;
+          },
+        },
+      }),
+    );
+    const context = createContext({ ctxPayload: createDirectSessionPayload() });
+    context.ctxPayload.RawBody = "Check this please";
+    context.ctxPayload.BodyForAgent = "Check this please";
+
+    await dispatchWithContext({ context, streamMode: "off" });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("uses resolved DM config for auto-topic-label overrides", async () => {
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: true,
+    });
     loadSessionStore.mockReturnValue({ s1: {} });
     const bot = createBot();
 
@@ -57,7 +223,9 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     loadSessionStore.mockReturnValue({
       [sessionKey]: { sessionId: "s1", updatedAt: 1 },
     });
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: true,
+    });
     const bot = createBot();
     const base = "a".repeat(499);
     const rawBody = `${base}😀tail`;
@@ -139,28 +307,37 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     });
 
     await dispatchWithContext({
-      context: createContext({
-        chatId: -1001234,
-        isGroup: true,
-        ctxPayload: {
-          SessionKey: "agent:test:telegram:group:-1001234",
-          ChatType: "group",
-        } as TelegramMessageContext["ctxPayload"],
-        primaryCtx: {
-          message: { chat: { id: -1001234, type: "supergroup" } },
-        } as TelegramMessageContext["primaryCtx"],
-        msg: {
-          chat: { id: -1001234, type: "supergroup" },
-          message_id: 456,
-        } as TelegramMessageContext["msg"],
-        threadSpec: { id: undefined, scope: "none" },
-        replyThreadId: undefined,
-      }),
+      context: createMessageToolOnlyGroupContext(),
       streamMode: "off",
     });
 
     expect(deliverReplies).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "honors send-policy denial when fallback delivery fails=%s",
+    async (deliveryFailed) => {
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        dispatcherOptions.onSkip?.({}, { kind: "final", reason: "empty" });
+        if (deliveryFailed) {
+          await dispatcherOptions.onError?.(new Error("Final delivery failed"), { kind: "final" });
+        }
+        return {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+          sendPolicyDenied: true,
+        };
+      });
+
+      await dispatchWithContext({
+        cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+        context: createMessageToolOnlyGroupContext(),
+        streamMode: "off",
+      });
+
+      expect(deliverReplies).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains the failure fallback when message-tool-only delivery also fails", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -186,6 +363,40 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [{ text: "No response generated. Please try again." }],
+      }),
+    );
+  });
+
+  it("delivers exactly one replay fallback when the provider fails before visible output", async () => {
+    const providerError = new Error("provider returned HTTP 500");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) =>
+      dispatchThroughSharedOwner({
+        ...params,
+        replyResolver: async (_ctx, options) => {
+          options?.onAgentRunTerminalOutcome?.("failed");
+          throw providerError;
+        },
+      }),
+    );
+
+    await dispatchWithContext({
+      cfg: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      context: createMessageToolOnlyGroupContext(),
+      retryDispatchErrors: true,
+      streamMode: "off",
+      suppressFailureFallback: true,
+      telegramCfg: { silentErrorReplies: true },
+    });
+
+    expect(deliverReplies).toHaveBeenCalledOnce();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        silent: true,
+        replies: [
+          {
+            text: "Something went wrong while processing your request. Please try again.",
+          },
+        ],
       }),
     );
   });
@@ -277,7 +488,6 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     };
 
     it("deduplicates block-sent media from final reply", async () => {
-      deliverReplies.mockResolvedValue({ delivered: true });
       deliverInboundReplyWithMessageSendContext.mockResolvedValue({
         status: "handled_visible",
         delivery: { messageIds: ["101"], visibleReplySent: true },
@@ -297,13 +507,14 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
         telegramDeps: telegramDepsForTest,
       });
 
-      expect(finalDeliveryPayload().mediaUrls).toEqual([]);
+      const finalPayload = finalDeliveryPayload();
+      expect(resolveSendableOutboundReplyParts(finalPayload).mediaUrls).toEqual([]);
+      expect(finalPayload.text).toBe("Here is the image");
     });
 
     it("does not restore block-sent legacy media when the final includes another attachment", async () => {
       const sentMediaUrl = "/tmp/cat.jpg";
       const remainingMediaUrl = "/tmp/dog.jpg";
-      deliverReplies.mockResolvedValue({ delivered: true });
       deliverInboundReplyWithMessageSendContext.mockResolvedValue({
         status: "handled_visible",
         delivery: { messageIds: ["101"], visibleReplySent: true },
@@ -341,7 +552,6 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
 
     it("preserves final media when block delivery reports no visible send", async () => {
       deliverReplies.mockResolvedValueOnce({ delivered: false });
-      deliverReplies.mockResolvedValue({ delivered: true });
       deliverInboundReplyWithMessageSendContext.mockResolvedValue({
         status: "handled_visible",
         delivery: { messageIds: ["101"], visibleReplySent: true },
@@ -366,7 +576,6 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
 
     it("preserves final media when block delivery fails", async () => {
       deliverReplies.mockRejectedValueOnce(new Error("Telegram API error"));
-      deliverReplies.mockResolvedValue({ delivered: true });
       deliverInboundReplyWithMessageSendContext.mockResolvedValue({
         status: "handled_visible",
         delivery: { messageIds: ["101"], visibleReplySent: true },

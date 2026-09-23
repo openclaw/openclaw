@@ -1,11 +1,16 @@
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { CodexThread, CodexThreadTurnsListResponse } from "./app-server/protocol.js";
+import type {
+  CodexThread,
+  CodexThreadStatus,
+  CodexThreadTurnsListResponse,
+} from "./app-server/protocol.js";
 import {
   CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES,
   CODEX_INTERACTIVE_THREAD_SOURCE_KINDS,
 } from "./app-server/protocol.js";
+import { detachCodexCatalogString } from "./session-catalog-limits.js";
 import type {
   CodexSessionCatalogError,
   CodexSessionCatalogPage,
@@ -18,6 +23,7 @@ const DEFAULT_PAGE_LIMIT = 50;
 export const CODEX_APP_SERVER_THREADS_CAPABILITY = "codex-app-server-threads";
 export const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
 export const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
+export const CODEX_CATALOG_TRANSCRIPT_READ_COMMAND = "codex.sessionCatalog.transcript.read.v1";
 export const CODEX_LOCAL_SESSION_HOST_ID = "gateway:local";
 export const CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT = 100;
 // Cold Codex state scans can outlive the Mac node's native 60-second deadline.
@@ -27,17 +33,17 @@ export const MAX_CURSOR_LENGTH = 4096;
 const MAX_CURSOR_COUNT = 100;
 export const MAX_HOST_COUNT = 100;
 const MAX_HOST_ID_LENGTH = 256;
-const MAX_CWD_LENGTH = 4096;
+export const MAX_CWD_LENGTH = 4096;
 export const MAX_SESSION_ID_LENGTH = 256;
 const MAX_SESSION_NAME_LENGTH = 500;
 const MAX_SESSION_PREVIEW_LENGTH = 500;
+const SESSION_PREVIEW_PREFIX_LENGTH = 2_048;
 const MAX_SESSION_KEY_LENGTH = 1024;
 const MAX_METADATA_LENGTH = 500;
 const MAX_ACTIVE_FLAGS = 16;
-export const MAX_ACTION_CATALOG_PAGES = 100;
 export const DEFAULT_TRANSCRIPT_PAGE_LIMIT = 20;
 export const MAX_TRANSCRIPT_PAGE_LIMIT = 50;
-const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
+export const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_TITLE_SEARCH_CATALOG_PAGES = 20;
 
 export class CatalogParamsError extends Error {}
@@ -49,7 +55,7 @@ export function readControlCursor(value: unknown, label: string): string | undef
   if (typeof value !== "string" || !value.trim() || value.length > MAX_CURSOR_LENGTH) {
     throw new CatalogParamsError(`invalid Codex session catalog ${label} cursor`);
   }
-  return value;
+  return detachCodexCatalogString(value);
 }
 
 export function boundedCatalogString(
@@ -65,17 +71,38 @@ export function boundedCatalogString(
     return undefined;
   }
   if (normalized.length <= maxLength) {
-    return normalized;
+    return detachCodexCatalogString(normalized);
   }
-  return overflow === "truncate" ? truncateUtf16Safe(normalized, maxLength) : undefined;
+  return overflow === "truncate"
+    ? detachCodexCatalogString(truncateUtf16Safe(normalized, maxLength))
+    : undefined;
 }
 
-function catalogPreview(value: unknown): string | undefined {
+function catalogPreview(value: unknown, sanitize: typeof sanitizeTerminalText): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const singleLine = sanitizeTerminalText(value.replace(/\s+/g, " "));
+  const singleLine = sanitize(value.replace(/\s+/g, " "));
   return boundedCatalogString(singleLine, MAX_SESSION_PREVIEW_LENGTH, "truncate");
+}
+
+/** Select a bounded input only for the canonical terminal sanitizer. */
+export function selectCodexCatalogPreviewInput(value: string): string {
+  if (value.length <= SESSION_PREVIEW_PREFIX_LENGTH) {
+    return value;
+  }
+  const prefix = value.slice(0, SESSION_PREVIEW_PREFIX_LENGTH).replace(/\s+/g, " ").trim();
+  // Without controls the sanitizer is identity; the extra unit preserves trim
+  // and surrogate lookahead at the output boundary, regardless of the raw tail.
+  return prefix.length > MAX_SESSION_PREVIEW_LENGTH && !/\p{Cc}/u.test(prefix) ? prefix : value;
+}
+
+/** Detach the small preview from V8's potentially large sliced-string backing store. */
+export function truncateCodexCatalogPreview(
+  value: unknown,
+  sanitize: typeof sanitizeTerminalText,
+): string {
+  return Buffer.from(catalogPreview(value, sanitize) ?? "", "utf8").toString("utf8");
 }
 
 type CodexInteractiveThreadSource =
@@ -104,9 +131,36 @@ export function isInteractiveThreadSource(source: unknown): boolean {
   return normalizeInteractiveThreadSource(source) !== undefined;
 }
 
+export function codexCatalogThreadName(value: unknown): string | null | undefined {
+  return value === null ? null : boundedCatalogString(value, MAX_SESSION_NAME_LENGTH, "truncate");
+}
+
+export function codexCatalogThreadStatus(
+  status: CodexThreadStatus | null | undefined,
+): Pick<CodexSessionCatalogSession, "status" | "activeFlags"> {
+  const activeFlags: string[] = [];
+  if (status?.type === "active" && Array.isArray(status.activeFlags)) {
+    for (const flag of status.activeFlags) {
+      const normalized = boundedCatalogString(flag, 128);
+      if (normalized) {
+        activeFlags.push(normalized);
+      }
+      if (activeFlags.length === MAX_ACTIVE_FLAGS) {
+        break;
+      }
+    }
+  }
+  return {
+    status: boundedCatalogString(status?.type, 64) ?? "notLoaded",
+    ...(activeFlags.length ? { activeFlags } : {}),
+  };
+}
+
 export function toCatalogSession(
   thread: CodexThread,
   archived: boolean,
+  sanitize: typeof sanitizeTerminalText,
+  preparedPreview?: { value: string | undefined },
 ): CodexSessionCatalogSession | undefined {
   // Codex models Atlas and ChatGPT as custom sources but includes both in its
   // interactive default. Normalize those objects for the string-only catalog.
@@ -114,46 +168,39 @@ export function toCatalogSession(
   if (!source) {
     return undefined;
   }
-  const record = thread as CodexThread & Record<string, unknown>;
   const threadId = boundedCatalogString(thread.id, MAX_SESSION_ID_LENGTH);
   if (!threadId) {
     return undefined;
   }
-  const activeFlags =
-    thread.status?.type === "active"
-      ? thread.status.activeFlags
-          ?.flatMap((flag) => {
-            const normalized = boundedCatalogString(flag, 128);
-            return normalized ? [normalized] : [];
-          })
-          .slice(0, MAX_ACTIVE_FLAGS)
-      : undefined;
-  const gitInfo = isRecord(record.gitInfo) ? record.gitInfo : undefined;
+  const gitInfo = isRecord(thread.gitInfo) ? thread.gitInfo : undefined;
   const sessionId = boundedCatalogString(thread.sessionId, MAX_SESSION_ID_LENGTH);
-  const name = boundedCatalogString(thread.name, MAX_SESSION_NAME_LENGTH, "truncate");
-  const fallbackName = name ? undefined : catalogPreview(thread.preview);
+  const name = codexCatalogThreadName(thread.name);
+  const fallbackName = name
+    ? undefined
+    : preparedPreview
+      ? preparedPreview.value
+      : catalogPreview(thread.preview, sanitize);
   const cwd = boundedCatalogString(thread.cwd, MAX_CWD_LENGTH);
-  const modelProvider = boundedCatalogString(record.modelProvider, MAX_METADATA_LENGTH, "truncate");
-  const cliVersion = boundedCatalogString(record.cliVersion, MAX_METADATA_LENGTH, "truncate");
+  const modelProvider = boundedCatalogString(thread.modelProvider, MAX_METADATA_LENGTH, "truncate");
+  const cliVersion = boundedCatalogString(thread.cliVersion, MAX_METADATA_LENGTH, "truncate");
   const gitBranch = boundedCatalogString(gitInfo?.branch, MAX_METADATA_LENGTH, "truncate");
   return {
     threadId,
-    status: thread.status?.type ?? "notLoaded",
+    ...codexCatalogThreadStatus(thread.status),
     archived,
     ...(sessionId ? { sessionId } : {}),
     ...(thread.name === null ? { name: null } : name ? { name } : {}),
     ...(fallbackName ? { fallbackName } : {}),
     ...(cwd ? { cwd } : {}),
-    ...(activeFlags?.length ? { activeFlags } : {}),
     ...(typeof thread.createdAt === "number" && Number.isFinite(thread.createdAt)
       ? { createdAt: thread.createdAt }
       : {}),
     ...(typeof thread.updatedAt === "number" && Number.isFinite(thread.updatedAt)
       ? { updatedAt: thread.updatedAt }
       : {}),
-    ...(typeof record.recencyAt === "number" && Number.isFinite(record.recencyAt)
-      ? { recencyAt: record.recencyAt }
-      : record.recencyAt === null
+    ...(typeof thread.recencyAt === "number" && Number.isFinite(thread.recencyAt)
+      ? { recencyAt: thread.recencyAt }
+      : thread.recencyAt === null
         ? { recencyAt: null }
         : {}),
     source,
@@ -179,7 +226,7 @@ export function normalizeLimit(value: unknown, key: string): number {
   return value as number;
 }
 
-export function readOptionalString(
+export function readBoundedOptionalString(
   params: Record<string, unknown>,
   key: string,
   maxLength: number,
@@ -211,15 +258,15 @@ export function requireOnlyKeys(
   }
 }
 
-export function readPageParams(value: unknown): CodexSessionCatalogPageParams {
+export function readPageParams(value: unknown): CodexSessionCatalogPageParams & { limit: number } {
   if (!isRecord(value)) {
     throw new CatalogParamsError("Codex session catalog parameters must be an object");
   }
   const params = value;
   requireOnlyKeys(params, new Set(["cursor", "limit", "searchTerm", "cwd"]));
-  const cursor = readOptionalString(params, "cursor", MAX_CURSOR_LENGTH);
-  const searchTerm = readOptionalString(params, "searchTerm", MAX_SEARCH_LENGTH);
-  const cwd = readOptionalString(params, "cwd", MAX_CWD_LENGTH);
+  const cursor = readBoundedOptionalString(params, "cursor", MAX_CURSOR_LENGTH);
+  const searchTerm = readBoundedOptionalString(params, "searchTerm", MAX_SEARCH_LENGTH);
+  const cwd = readBoundedOptionalString(params, "cwd", MAX_CWD_LENGTH);
   return {
     limit: normalizeLimit(params.limit, "limit"),
     ...(cursor ? { cursor } : {}),
@@ -228,13 +275,15 @@ export function readPageParams(value: unknown): CodexSessionCatalogPageParams {
   };
 }
 
-export function readGatewayParams(value: unknown): CodexSessionCatalogParams {
+export function readGatewayParams(
+  value: unknown,
+): CodexSessionCatalogParams & { limitPerHost: number } {
   if (value !== undefined && !isRecord(value)) {
     throw new CatalogParamsError("Codex session catalog parameters must be an object");
   }
   const params = isRecord(value) ? value : {};
   requireOnlyKeys(params, new Set(["search", "limitPerHost", "hostIds", "cursors"]));
-  const search = readOptionalString(params, "search", MAX_SEARCH_LENGTH);
+  const search = readBoundedOptionalString(params, "search", MAX_SEARCH_LENGTH);
   let hostIds: string[] | undefined;
   if (params.hostIds !== undefined) {
     if (!Array.isArray(params.hostIds) || params.hostIds.length > MAX_HOST_COUNT) {
@@ -305,10 +354,6 @@ export function parseJsonParams(paramsJSON?: string | null): unknown {
   }
 }
 
-function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function parseOptionalCatalogString(
   value: unknown,
   field: string,
@@ -320,7 +365,7 @@ function parseOptionalCatalogString(
   if (typeof value !== "string" || value.length > maxLength) {
     throw new Error(`Codex session catalog returned an invalid ${field}`);
   }
-  return value;
+  return detachCodexCatalogString(value);
 }
 
 function parseCatalogSession(
@@ -385,11 +430,11 @@ function parseCatalogSession(
   const sessionKey = options.allowSessionKey
     ? parseOptionalCatalogString(value.sessionKey, "OpenClaw session key", MAX_SESSION_KEY_LENGTH)
     : undefined;
-  const createdAt = readFiniteNumber(value.createdAt);
-  const updatedAt = readFiniteNumber(value.updatedAt);
-  const recencyAt = value.recencyAt === null ? null : readFiniteNumber(value.recencyAt);
+  const createdAt = asFiniteNumber(value.createdAt);
+  const updatedAt = asFiniteNumber(value.updatedAt);
+  const recencyAt = value.recencyAt === null ? null : asFiniteNumber(value.recencyAt);
   return {
-    threadId: value.threadId,
+    threadId: detachCodexCatalogString(value.threadId),
     status,
     archived: value.archived,
     ...(sessionId !== undefined ? { sessionId } : {}),
@@ -420,6 +465,11 @@ export function parseCatalogPage(
     throw new Error("Codex session catalog returned an invalid page");
   }
   const nextCursor = parseOptionalCatalogString(value.nextCursor, "next cursor", MAX_CURSOR_LENGTH);
+  const sourceHomeId = parseOptionalCatalogString(
+    value.sourceHomeId,
+    "source home id",
+    MAX_SESSION_ID_LENGTH,
+  );
   const backwardsCursor = parseOptionalCatalogString(
     value.backwardsCursor,
     "backwards cursor",
@@ -427,6 +477,10 @@ export function parseCatalogPage(
   );
   return {
     sessions: value.sessions.map((session) => parseCatalogSession(session, options)),
+    ...(sourceHomeId ? { sourceHomeId } : {}),
+    ...(typeof value.canContinueCodex === "boolean"
+      ? { canContinueCodex: value.canContinueCodex }
+      : {}),
     ...(nextCursor ? { nextCursor } : {}),
     ...(backwardsCursor ? { backwardsCursor } : {}),
   };
@@ -442,7 +496,9 @@ export function filterCatalogPageByTitle(
   return {
     ...page,
     sessions: page.sessions.filter((session) =>
-      session.name?.toLocaleLowerCase().includes(searchTerm.toLocaleLowerCase()),
+      (session.name ?? session.fallbackName)
+        ?.toLocaleLowerCase()
+        .includes(searchTerm.toLocaleLowerCase()),
     ),
   };
 }

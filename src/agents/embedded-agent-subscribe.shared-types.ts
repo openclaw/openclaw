@@ -1,11 +1,24 @@
 /**
  * Shared display and chunking types for embedded-agent subscription handlers.
  */
-import type { BlockReplyChunking } from "./embedded-agent-block-chunker.js";
+import type { AgentCommandOutputEventFields } from "../infra/agent-activity-events.js";
+export type { BlockReplyChunking } from "./embedded-agent-block-chunker.js";
 
 /** Rendering mode for completed tool results in subscribed replies. */
 export type ToolResultFormat = "markdown" | "plain";
 /** Detail level for in-flight tool progress messages. */
 export type ToolProgressDetailMode = "explain" | "raw";
 
-export type { BlockReplyChunking };
+export type EmbeddedAgentEvent = {
+  stream: string;
+  data: Record<string, unknown> &
+    Omit<Partial<AgentCommandOutputEventFields>, "phase" | "status"> & {
+      phase?: string;
+      status?: string;
+      args?: Record<string, unknown>;
+      summary?: string;
+      commandBearing?: boolean;
+      isError?: boolean;
+    };
+  sessionKey?: string;
+};

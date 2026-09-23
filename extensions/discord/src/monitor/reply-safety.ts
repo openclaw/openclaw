@@ -1,4 +1,3 @@
-// Discord plugin module implements reply safety behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -86,9 +85,7 @@ export function sanitizeDiscordFrontChannelReplyPayloads(
           : sanitizeDiscordFrontChannelText(payload.text)
         : payload.text;
     const nextPayload =
-      safeText === payload.text
-        ? payload
-        : ({ ...payload, text: safeText || undefined } as ReplyPayload);
+      safeText === payload.text ? payload : { ...payload, text: safeText || undefined };
     const nextParts = resolveSendableOutboundReplyParts(nextPayload);
     if (!nextParts.hasContent && !hasNonTextReplyPayloadContent(nextPayload)) {
       continue;

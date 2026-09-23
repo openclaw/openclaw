@@ -1,17 +1,17 @@
-// Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { withEnv } from "../test-utils/env.js";
-import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+// Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { warnWhenAllowlistIsOpen } from "./loader-provenance.js";
 import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
 import {
   clearPluginLoaderCache,
   EMPTY_PLUGIN_SCHEMA,
-  makeTempDir,
+  makePluginLoaderTempDir,
   mkdirSafe,
   type PluginLoadConfig,
   type PluginRegistry,
@@ -42,6 +42,8 @@ import {
   globalAfterEach0,
   globalAfterAll1,
 } from "./loader.test-harness.js";
+import { getActiveMemorySearchManagerCore } from "./memory-runtime.js";
+import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
@@ -49,7 +51,7 @@ afterAll(globalAfterAll1);
 describe("loadOpenClawPlugins", () => {
   it("loads every entry in a multi-entry package pack under its derived id", () => {
     useNoBundledPlugins();
-    const stateDir = makeTempDir();
+    const stateDir = makePluginLoaderTempDir();
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
       const packageDir = path.join(stateDir, "extensions", "pack");
       mkdirSafe(packageDir);
@@ -112,11 +114,9 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "hook-unknown",
       filename: "hook-unknown.cjs",
-      body: `module.exports = { id: "hook-unknown", register(api) {
-    api.on("totally_unknown_hook_name", () => ({ foo: "bar" }));
-    api.on(123, () => ({ foo: "baz" }));
-    api.on("before_model_resolve", () => ({ providerOverride: "demo-provider" }));
-  } };`,
+      registration: `api.on("totally_unknown_hook_name", () => ({ foo: "bar" }));
+      api.on(123, () => ({ foo: "baz" }));
+      api.on("before_model_resolve", () => ({ providerOverride: "demo-provider" }));`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -192,7 +192,7 @@ describe("loadOpenClawPlugins", () => {
       {
         label: "skips importing bundled memory plugins that are disabled by memory slot",
         loadRegistry: () => {
-          const bundledDir = makeTempDir();
+          const bundledDir = makePluginLoaderTempDir();
           const memoryADir = path.join(bundledDir, "memory-a");
           const memoryBDir = path.join(bundledDir, "memory-b");
           mkdirSafe(memoryADir);
@@ -209,32 +209,8 @@ describe("loadOpenClawPlugins", () => {
             filename: "index.cjs",
             body: memoryPluginBody("memory-b"),
           });
-          fs.writeFileSync(
-            path.join(memoryADir, "openclaw.plugin.json"),
-            JSON.stringify(
-              {
-                id: "memory-a",
-                kind: "memory",
-                configSchema: EMPTY_PLUGIN_SCHEMA,
-              },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-          fs.writeFileSync(
-            path.join(memoryBDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              {
-                id: "memory-b",
-                kind: "memory",
-                configSchema: EMPTY_PLUGIN_SCHEMA,
-              },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
+          updatePluginManifest({ dir: memoryADir }, { kind: "memory" });
+          updatePluginManifest({ dir: memoryBDir }, { kind: "memory" });
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           return loadOpenClawPlugins({
@@ -408,43 +384,22 @@ describe("loadOpenClawPlugins", () => {
         label:
           "loads dreaming engine alongside a different memory slot plugin when dreaming is enabled",
         loadRegistry: () => {
-          const bundledDir = makeTempDir();
-          const memoryCoreDir = path.join(bundledDir, "memory-core");
-          const memoryLanceDir = path.join(bundledDir, "memory-lancedb");
-          mkdirSafe(memoryCoreDir);
-          mkdirSafe(memoryLanceDir);
-          writePlugin({
-            id: "memory-core",
-            dir: memoryCoreDir,
-            filename: "index.cjs",
-            body: memoryPluginBody("memory-core"),
+          // Active Memory grants private-transcript recall by resolved plugin id,
+          // so the real bundled sidecar must not lend its recall declarations to
+          // the resolved slot owner.
+          setupBundledDreamingMemoryPlugins({
+            coreBody: `module.exports = {
+              id: "memory-core",
+              kind: "memory",
+              register(api) {
+                api.registerMemoryCapability({
+                  deterministicRecallToolName: "memory_search",
+                  supportsPrivateTranscriptRecall: true,
+                  promptBuilder: () => ["sidecar prompt"],
+                });
+              },
+            };`,
           });
-          writePlugin({
-            id: "memory-lancedb",
-            dir: memoryLanceDir,
-            filename: "index.cjs",
-            body: memoryPluginBody("memory-lancedb"),
-          });
-          const openSchema = { type: "object", additionalProperties: true };
-          fs.writeFileSync(
-            path.join(memoryCoreDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              { id: "memory-core", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-          fs.writeFileSync(
-            path.join(memoryLanceDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              { id: "memory-lancedb", kind: "memory", configSchema: openSchema },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           return loadOpenClawPlugins({
             cache: false,
@@ -467,51 +422,19 @@ describe("loadOpenClawPlugins", () => {
           expect(lance?.status).toBe("loaded");
           expect(lance?.memorySlotSelected).toBe(true);
           expect(core?.memorySlotSelected).not.toBe(true);
+          const resolved = resolveMemoryCapabilityRegistration(registry.memoryCapabilities);
+          expect(resolved?.pluginId).toBe("memory-core");
+          expect(resolved?.capability.deterministicRecallToolName).toBeUndefined();
+          expect(resolved?.capability.supportsPrivateTranscriptRecall).toBeUndefined();
+          expect(resolved?.capability.promptBuilder).toBeDefined();
         },
       },
       {
         label: "excludes dreaming engine when dreaming is disabled and it is not the slot",
         loadRegistry: () => {
-          const bundledDir = makeTempDir();
-          const memoryCoreDir = path.join(bundledDir, "memory-core");
-          const memoryLanceDir = path.join(bundledDir, "memory-lancedb");
-          mkdirSafe(memoryCoreDir);
-          mkdirSafe(memoryLanceDir);
-          writePlugin({
-            id: "memory-core",
-            dir: memoryCoreDir,
-            filename: "index.cjs",
-            body: `throw new Error("memory-core should not load when dreaming is disabled");`,
+          setupBundledDreamingMemoryPlugins({
+            coreBody: `throw new Error("memory-core should not load when dreaming is disabled");`,
           });
-          writePlugin({
-            id: "memory-lancedb",
-            dir: memoryLanceDir,
-            filename: "index.cjs",
-            body: memoryPluginBody("memory-lancedb"),
-          });
-          fs.writeFileSync(
-            path.join(memoryCoreDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              { id: "memory-core", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-          fs.writeFileSync(
-            path.join(memoryLanceDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              {
-                id: "memory-lancedb",
-                kind: "memory",
-                configSchema: { type: "object", additionalProperties: true },
-              },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           return loadOpenClawPlugins({
             cache: false,
@@ -540,7 +463,7 @@ describe("loadOpenClawPlugins", () => {
       {
         label: 'keeps memory slot "none" disabled even with stale memory-core dreaming config',
         loadRegistry: () => {
-          const bundledDir = makeTempDir();
+          const bundledDir = makePluginLoaderTempDir();
           const memoryCoreDir = path.join(bundledDir, "memory-core");
           mkdirSafe(memoryCoreDir);
           writePlugin({
@@ -549,15 +472,7 @@ describe("loadOpenClawPlugins", () => {
             filename: "index.cjs",
             body: `throw new Error("memory-core should not load when memory slot is none");`,
           });
-          fs.writeFileSync(
-            path.join(memoryCoreDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              { id: "memory-core", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
+          updatePluginManifest({ dir: memoryCoreDir }, { kind: "memory" });
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           return loadOpenClawPlugins({
@@ -611,6 +526,87 @@ describe("loadOpenClawPlugins", () => {
     ] as const;
 
     runRegistryScenarios(scenarios, ({ loadRegistry }) => loadRegistry());
+  });
+
+  it("routes direct-facade indexing I/O to the configured memory slot owner", async () => {
+    const tracePath = path.join(makePluginLoaderTempDir(), "memory-indexing.txt");
+    const runtimePluginBody = (id: string, includeRecall: boolean, direct: boolean) => `
+      const trace = (line) => require("node:fs").appendFileSync(${JSON.stringify(tracePath)}, line + "\\n");
+      const id = ${JSON.stringify(id)};
+      ${direct ? 'const { registerMemoryCapability } = require("openclaw/plugin-sdk/memory-host-core");' : ""}
+      module.exports = {
+        id,
+        kind: "memory",
+        register(api) {
+          const capability = {
+            runtime: {
+              async getMemorySearchManager() {
+                trace(id + ":manager");
+                return {
+                  manager: {
+                    async sync(input) {
+                      trace(id + ":sync:" + input.reason);
+                    },
+                  },
+                };
+              },
+              resolveMemoryBackendConfig() {
+                return { backend: "builtin" };
+              },
+            },
+            ${includeRecall ? 'deterministicRecallToolName: "memory_search", supportsPrivateTranscriptRecall: true,' : ""}
+            promptBuilder: () => [id + " prompt"],
+          };
+          ${direct ? "registerMemoryCapability(id, capability);" : "api.registerMemoryCapability(capability);"}
+        },
+      };`;
+
+    const selected = writePlugin({
+      id: "memory-lancedb",
+      body: runtimePluginBody("memory-lancedb", false, true),
+    });
+    updatePluginManifest(selected, {
+      kind: "memory",
+      configSchema: { type: "object", additionalProperties: true },
+    });
+    const bundledDir = makePluginLoaderTempDir();
+    const sidecarDir = path.join(bundledDir, "memory-core");
+    mkdirSafe(sidecarDir);
+    const sidecar = writePlugin({
+      id: "memory-core",
+      dir: sidecarDir,
+      filename: "index.cjs",
+      body: runtimePluginBody("memory-core", true, false),
+    });
+    updatePluginManifest(sidecar, { kind: "memory" });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const config = {
+      plugins: {
+        allow: [selected.id, sidecar.id],
+        load: { paths: [selected.file] },
+        slots: { memory: selected.id },
+        entries: {
+          [selected.id]: { enabled: true, config: { dreaming: { enabled: true } } },
+          [sidecar.id]: { enabled: true },
+        },
+      },
+    };
+    const registry = loadOpenClawPlugins({ cache: false, config });
+    const resolved = resolveMemoryCapabilityRegistration(registry.memoryCapabilities);
+    const acquired = await getActiveMemorySearchManagerCore({
+      cfg: config,
+      agentId: "main",
+    });
+    await acquired.manager?.sync?.({ reason: "post-compaction" });
+
+    expect(resolved?.pluginId).toBe(selected.id);
+    expect(resolved?.capability.deterministicRecallToolName).toBeUndefined();
+    expect(resolved?.capability.supportsPrivateTranscriptRecall).toBeUndefined();
+    expect(fs.readFileSync(tracePath, "utf8").trim().split("\n")).toEqual([
+      "memory-lancedb:manager",
+      "memory-lancedb:sync:post-compaction",
+    ]);
   });
 
   it("loads dreaming sidecar metadata through a restrictive selected-memory allowlist", async () => {
@@ -732,15 +728,16 @@ describe("loadOpenClawPlugins", () => {
               dir: globalDir,
               filename: "index.cjs",
             });
-            writePersistedInstalledPluginIndexInstallRecordsSync(
-              {
+            refreshPersistedInstalledPluginIndex({
+              stateDir,
+              reason: "source-changed",
+              installRecords: {
                 "demo-installed-duplicate": {
                   source: "npm",
                   installPath: globalDir,
                 },
               },
-              { stateDir },
-            );
+            });
 
             return loadOpenClawPlugins({
               cache: false,
@@ -784,15 +781,16 @@ describe("loadOpenClawPlugins", () => {
                 dir: globalDir,
                 filename: "index.cjs",
               });
-              writePersistedInstalledPluginIndexInstallRecordsSync(
-                {
+              refreshPersistedInstalledPluginIndex({
+                stateDir,
+                reason: "source-changed",
+                installRecords: {
                   "demo-dev-source-duplicate": {
                     source: "npm",
                     installPath: globalDir,
                   },
                 },
-                { stateDir },
-              );
+              });
 
               return loadOpenClawPlugins({
                 cache: false,
@@ -1117,7 +1115,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("distinguishes load permission from capability trust in the untracked-provenance warning", () => {
     useNoBundledPlugins();
-    const stateDir = makeTempDir();
+    const stateDir = makePluginLoaderTempDir();
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
       const globalDir = path.join(stateDir, "extensions", "warn-untracked-remediation");
       mkdirSafe(globalDir);
@@ -1401,7 +1399,7 @@ describe("loadOpenClawPlugins", () => {
       {
         label: "warns when loaded non-bundled plugin has no provenance and no allowlist is set",
         loadRegistry: () => {
-          const stateDir = makeTempDir();
+          const stateDir = makePluginLoaderTempDir();
           return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
             const globalDir = path.join(stateDir, "extensions", "rogue");
             mkdirSafe(globalDir);
@@ -1490,7 +1488,7 @@ describe("loadOpenClawPlugins", () => {
         label: "does not warn when install paths resolve through a symlinked state root",
         loadRegistry: () => {
           useNoBundledPlugins();
-          const stateDir = makeTempDir();
+          const stateDir = makePluginLoaderTempDir();
           const realHome = path.join(stateDir, "real-home");
           const linkedHome = path.join(stateDir, "linked-home");
           mkdirSafe(realHome);
@@ -1511,8 +1509,10 @@ describe("loadOpenClawPlugins", () => {
             dir: pluginDir,
             filename: "index.cjs",
           });
-          writePersistedInstalledPluginIndexInstallRecordsSync(
-            {
+          refreshPersistedInstalledPluginIndex({
+            stateDir,
+            reason: "source-changed",
+            installRecords: {
               [plugin.id]: {
                 source: "npm",
                 spec: "@example/tracked-symlink-install@1.0.0",
@@ -1527,8 +1527,7 @@ describe("loadOpenClawPlugins", () => {
                 version: "1.0.0",
               },
             },
-            { stateDir },
-          );
+          });
 
           const warnings: string[] = [];
           const registry = loadOpenClawPlugins({
@@ -1572,7 +1571,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("uses the source runtime snapshot allowlist for plugin trust checks", () => {
     useNoBundledPlugins();
-    const stateDir = makeTempDir();
+    const stateDir = makePluginLoaderTempDir();
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
       const globalDir = path.join(stateDir, "extensions", "trusted-plugin");
       mkdirSafe(globalDir);
@@ -1655,11 +1654,11 @@ describe("loadOpenClawPlugins", () => {
     if (process.platform === "win32") {
       return;
     }
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     const pluginDir = path.join(bundledDir, "hardlinked-bundled");
     mkdirSafe(pluginDir);
 
-    const outsideDir = makeTempDir();
+    const outsideDir = makePluginLoaderTempDir();
     const outsideEntry = path.join(outsideDir, "outside.cjs");
     fs.writeFileSync(
       outsideEntry,
@@ -1703,25 +1702,23 @@ describe("loadOpenClawPlugins", () => {
 
   it("preserves runtime reflection semantics when runtime is lazily initialized", () => {
     useNoBundledPlugins();
-    const stateDir = makeTempDir();
+    const stateDir = makePluginLoaderTempDir();
     const plugin = writePlugin({
       id: "runtime-introspection",
       filename: "runtime-introspection.cjs",
-      body: `module.exports = { id: "runtime-introspection", register(api) {
-    const runtime = api.runtime ?? {};
-    const keys = Object.keys(runtime);
-    for (const key of ["channel", "mediaUnderstanding", "llm"]) {
-      if (!keys.includes(key)) {
-        throw new Error("runtime " + key + " key missing");
-      }
-      if (!(key in runtime)) {
-        throw new Error("runtime " + key + " missing from has check");
-      }
-      if (!Object.getOwnPropertyDescriptor(runtime, key)) {
-        throw new Error("runtime " + key + " descriptor missing");
-      }
-    }
-  } };`,
+      registration: `const runtime = api.runtime ?? {};
+      const keys = Object.keys(runtime);
+      for (const key of ["channel", "mediaUnderstanding", "llm"]) {
+        if (!keys.includes(key)) {
+          throw new Error("runtime " + key + " key missing");
+        }
+        if (!(key in runtime)) {
+          throw new Error("runtime " + key + " missing from has check");
+        }
+        if (!Object.getOwnPropertyDescriptor(runtime, key)) {
+          throw new Error("runtime " + key + " descriptor missing");
+        }
+      }`,
     });
 
     const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
@@ -1742,7 +1739,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("suppresses trust warning logs for non-activating snapshot loads", () => {
     useNoBundledPlugins();
-    const stateDir = makeTempDir();
+    const stateDir = makePluginLoaderTempDir();
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
       const globalDir = path.join(stateDir, "extensions", "rogue");
       mkdirSafe(globalDir);

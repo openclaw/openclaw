@@ -1,9 +1,12 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { logVerbose } from "../../globals.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
+  isSilentReplyPayloadText,
   isSilentReplyPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
@@ -12,8 +15,9 @@ import {
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
-import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
+import { createBlockReplyDeliveryHandler, type DirectBlockDelivery } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
+import { hasCommittedReplyOperationOutcome } from "./reply-run-registry.js";
 
 type AgentTurnPresentation = {
   classifyStreamingPartial: (payload: ReplyPayload) => { text?: string; skip: boolean };
@@ -22,7 +26,7 @@ type AgentTurnPresentation = {
     errorContext: boolean,
   ) => { text?: string; skip: boolean };
   normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
-  startPresentationWhileTyping: (
+  presentWithTyping: (
     typingPromise: Promise<void>,
     startPresentation: () => boolean | void | Promise<boolean | void>,
   ) => Promise<boolean | void>;
@@ -33,13 +37,12 @@ type AgentTurnPresentation = {
 export function createAgentTurnPresentation(params: {
   turn: AgentTurnParams;
   replyMediaContext: ReplyMediaContext;
-  directlySentBlockKeys: Set<string>;
-  directlySentBlockPayloads: Array<ReplyPayload | undefined>;
+  directBlockDeliveries: DirectBlockDelivery[];
   heartbeatState: { didLogStrip: boolean };
 }): AgentTurnPresentation {
   const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } => {
     let text = payload.text;
-    const reply = resolveSendableOutboundReplyParts(payload);
+    const reply = resolveSendableOutboundReplyParts(payload, { text: "" });
     if (params.turn.followupRun.run.silentExpected) {
       return { skip: true };
     }
@@ -79,8 +82,14 @@ export function createAgentTurnPresentation(params: {
     if (!text) {
       return { skip: true };
     }
-    const sanitized = sanitizeUserFacingText(text, { errorContext });
-    return sanitized.trim() ? { text: sanitized, skip: false } : { skip: true };
+    const conversationContext =
+      params.turn.sessionCtx.agentText ?? params.turn.sessionCtx.BodyForAgent;
+    const sanitized = errorContext
+      ? renderUserFacingText(text, { errorContext: true, conversationContext, streaming: true })
+      : sanitizeUserFacingText(text, { conversationContext, streaming: true });
+    return sanitized.trim()
+      ? { text: sanitized, skip: isSilentReplyPayloadText(sanitized, SILENT_REPLY_TOKEN) }
+      : { skip: true };
   };
 
   const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
@@ -91,10 +100,27 @@ export function createAgentTurnPresentation(params: {
     return sanitizeStreamingText(classified.text, Boolean(payload.isError));
   };
 
-  const startPresentationWhileTyping = async (
+  const preserveProgressCallbackStartOrder =
+    params.turn.opts?.preserveProgressCallbackStartOrder === true;
+  const presentWithTyping = async (
     typingPromise: Promise<void>,
     startPresentation: () => boolean | void | Promise<boolean | void>,
   ) => {
+    if (!preserveProgressCallbackStartOrder) {
+      await typingPromise;
+      const operation = params.turn.replyOperation;
+      // Successful settlement keeps delivery alive; delayed typing must not
+      // reopen presentation after this operation has committed its final answer.
+      if (
+        operation &&
+        (operation.abortSignal.aborted ||
+          operation.result ||
+          hasCommittedReplyOperationOutcome(operation))
+      ) {
+        return false;
+      }
+      return await startPresentation();
+    }
     let presentationPromise: boolean | void | Promise<boolean | void>;
     try {
       presentationPromise = startPresentation();
@@ -109,30 +135,38 @@ export function createAgentTurnPresentation(params: {
 
   const blockReplyPipeline = params.turn.blockReplyPipeline;
   // One handler owns threading and direct-send dedupe for this fallback cycle.
-  const blockReplyHandler = params.turn.opts?.onBlockReply
-    ? createBlockReplyDeliveryHandler({
-        onBlockReply: params.turn.opts.onBlockReply,
-        currentMessageId:
-          params.turn.sessionCtx.MessageSidFull ?? params.turn.sessionCtx.MessageSid,
-        replyThreading: params.turn.replyThreading,
-        normalizeStreamingText,
-        applyReplyToMode: params.turn.applyReplyToMode,
-        normalizeMediaPaths: params.replyMediaContext.normalizePayload,
-        typingSignals: params.turn.typingSignals,
-        reasoningPayloadsEnabled: params.turn.opts?.reasoningPayloadsEnabled,
-        commentaryPayloadsEnabled: params.turn.opts?.commentaryPayloadsEnabled,
-        blockStreamingEnabled: params.turn.blockStreamingEnabled,
-        blockReplyPipeline,
-        directlySentBlockKeys: params.directlySentBlockKeys,
-        directlySentBlockPayloads: params.directlySentBlockPayloads,
-      })
-    : undefined;
+  const blockReplyHandler =
+    params.turn.opts?.onPreparedBlockReply || params.turn.opts?.onBlockReply
+      ? createBlockReplyDeliveryHandler({
+          onBlockReply: async (payload, context) => {
+            if (params.turn.opts?.onPreparedBlockReply) {
+              for (const plan of createStructuredOutboundPayloadPlan([payload])) {
+                await params.turn.opts.onPreparedBlockReply(plan, context);
+              }
+              return;
+            }
+            await params.turn.opts?.onBlockReply?.(payload, context);
+          },
+          currentMessageId:
+            params.turn.sessionCtx.MessageSidFull ?? params.turn.sessionCtx.MessageSid,
+          replyThreading: params.turn.replyThreading,
+          normalizeStreamingText,
+          applyReplyToMode: params.turn.applyReplyToMode,
+          normalizeMediaPaths: params.replyMediaContext.normalizePayload,
+          typingSignals: params.turn.typingSignals,
+          reasoningPayloadsEnabled: params.turn.opts?.reasoningPayloadsEnabled,
+          commentaryPayloadsEnabled: params.turn.opts?.commentaryPayloadsEnabled,
+          blockStreamingEnabled: params.turn.blockStreamingEnabled,
+          blockReplyPipeline,
+          directBlockDeliveries: params.directBlockDeliveries,
+        })
+      : undefined;
 
   return {
     classifyStreamingPartial,
     sanitizeStreamingText,
     normalizeStreamingText,
-    startPresentationWhileTyping,
+    presentWithTyping,
     blockReplyHandler,
   };
 }

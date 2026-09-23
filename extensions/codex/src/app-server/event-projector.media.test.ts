@@ -1,5 +1,14 @@
+import { pathToFileURL } from "node:url";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import {
+  installCodexToolResultMiddleware,
+  resetOpenClawOwnedToolHooks,
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { Type } from "typebox";
 import { afterEach, beforeEach } from "vitest";
+import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -13,12 +22,67 @@ import {
   createParams,
   createProjector,
   buildEmptyToolTelemetry,
+  requireRecord,
   forCurrentTurn,
   turnCompleted,
   type EmbeddedRunAttemptParams,
 } from "./event-projector.test-harness.js";
+import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 
 registerCodexEventProjectorTestLifecycle();
+
+const SECOND_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+
+async function createRemoteGeneratedMediaDelivery(
+  send: (args: Record<string, unknown>) => Promise<AgentToolResult<unknown>>,
+) {
+  const params = await createParams();
+  const remoteWorkspaceRoot = "/remote/codex-workspace";
+  const sources = {
+    first: `${remoteWorkspaceRoot}/generated/first.png`,
+    second: `${remoteWorkspaceRoot}/generated/second.png`,
+    unrelated: `${remoteWorkspaceRoot}/reports/unrelated.txt`,
+  };
+  const bytesBySource = new Map([
+    [sources.first, tinyPngBase64],
+    [sources.second, SECOND_PNG_BASE64],
+    [sources.unrelated, Buffer.from("Unrelated report").toString("base64")],
+  ]);
+  const projector = await createProjector(params, { remoteWorkspaceRoot });
+  for (const [id, savedPath, result] of [
+    ["generated-first", sources.first, tinyPngBase64],
+    ["generated-second", sources.second, SECOND_PNG_BASE64],
+  ] as const) {
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "imageGeneration", id, status: "completed", savedPath, result },
+      }),
+    );
+  }
+  const execute = vi.fn(send);
+  const bridge = createCodexDynamicToolBridge({
+    tools: [
+      {
+        name: "message",
+        label: "Message",
+        description: "Send a synthetic attachment",
+        parameters: Type.Object({}, { additionalProperties: true }),
+        execute: async (_callId, args) => execute(requireRecord(args, "message arguments")),
+      },
+    ],
+    signal: new AbortController().signal,
+    hookContext: { workspaceDir: params.workspaceDir, remoteWorkspaceRoot },
+  });
+  bridge.setRemoteWorkspaceFileReader?.(async ({ path: source }) => {
+    const dataBase64 = bytesBySource.get(source);
+    if (!dataBase64) {
+      throw new Error(`Unexpected synthetic media source: ${source}`);
+    }
+    return { dataBase64 };
+  });
+  return { projector, bridge, execute, sources };
+}
 
 let openClawState: OpenClawTestState;
 beforeEach(async () => {
@@ -28,6 +92,7 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
+  resetOpenClawOwnedToolHooks();
   await openClawState.cleanup();
 });
 
@@ -118,11 +183,15 @@ describe("CodexAppServerEventProjector media projection", () => {
   });
 
   it("fetches saved-path-only remote images over the bounded Codex command protocol", async () => {
-    const readRemoteWorkspaceFile = vi.fn(async () => ({ dataBase64: tinyPngBase64 }));
+    const readRemoteWorkspaceFile = vi.fn<CodexRemoteWorkspaceFileReader>(async () => ({
+      dataBase64: tinyPngBase64,
+    }));
+    const runAbort = new AbortController();
     const projector = await createProjector(undefined, {
       remoteWorkspaceRoot: "/remote/codex-workspace",
       readRemoteWorkspaceFile,
       remoteWorkspaceRequestTimeoutMs: 90_000,
+      runAbortSignal: runAbort.signal,
     });
     const savedPath = "/remote/codex-home/generated_images/session-1/ig_saved_only.png";
 
@@ -142,7 +211,7 @@ describe("CodexAppServerEventProjector media projection", () => {
     expect(readRemoteWorkspaceFile).toHaveBeenCalledWith({
       path: savedPath,
       maxBytes: expect.any(Number),
-      signal: undefined,
+      signal: expect.any(AbortSignal),
       timeoutMs: 90_000,
     });
     expect(result.toolMediaUrls).toHaveLength(1);
@@ -150,7 +219,71 @@ describe("CodexAppServerEventProjector media projection", () => {
     await expect(fs.readFile(result.toolMediaUrls?.[0] ?? "")).resolves.toEqual(
       Buffer.from(tinyPngBase64, "base64"),
     );
+    const signal = readRemoteWorkspaceFile.mock.calls[0]?.[0].signal;
+    expect(signal?.aborted).toBe(false);
+    runAbort.abort();
+    expect(signal?.aborted).toBe(true);
   });
+
+  it.each([false, true])(
+    "fences direct tool-result callbacks after blocked media when projection closed=%s",
+    async (closed) => {
+      const media = createDeferred<{ dataBase64: string }>();
+      const readRemoteWorkspaceFile = vi.fn<CodexRemoteWorkspaceFileReader>(() => media.promise);
+      const onToolResult = vi.fn();
+      const projector = await createProjector(
+        { ...(await createParams()), verboseLevel: "full", onToolResult },
+        { remoteWorkspaceRoot: "/remote/workspace", readRemoteWorkspaceFile },
+      );
+      const pending = projector.handleNotification(
+        turnCompleted([
+          {
+            type: "imageGeneration",
+            id: "blocked-image",
+            status: "completed",
+            result: "",
+            revisedPrompt: null,
+            savedPath: "/remote/workspace/image.png",
+          },
+          {
+            type: "commandExecution",
+            id: "command-after-image",
+            command: "echo late-output",
+            cwd: "/remote/workspace",
+            commandActions: [],
+            processId: null,
+            source: "agent",
+            status: "completed",
+            aggregatedOutput: "late-output",
+            exitCode: 0,
+            durationMs: 1,
+          },
+        ]),
+      );
+      try {
+        await vi.waitFor(() => expect(readRemoteWorkspaceFile).toHaveBeenCalledOnce());
+        const signal = readRemoteWorkspaceFile.mock.calls[0]?.[0].signal;
+        expect(signal?.aborted === true).toBe(false);
+        expect(onToolResult).not.toHaveBeenCalled();
+        if (closed) {
+          await projector.closeProjection();
+        }
+        expect(signal?.aborted === true).toBe(closed);
+        media.resolve({ dataBase64: tinyPngBase64 });
+        await pending;
+        if (closed) {
+          expect(onToolResult).not.toHaveBeenCalled();
+        } else {
+          expect(onToolResult).toHaveBeenCalledWith(
+            expect.objectContaining({ text: expect.stringContaining("late-output") }),
+          );
+        }
+      } finally {
+        media.resolve({ dataBase64: tinyPngBase64 });
+        await pending;
+      }
+    },
+  );
 
   it("never exposes a remote image path when remote file transfer is unavailable", async () => {
     const projector = await createProjector(undefined, {
@@ -237,42 +370,6 @@ describe("CodexAppServerEventProjector media projection", () => {
       hadPotentialSideEffects: true,
       replaySafe: false,
     });
-  });
-
-  it("supersedes terminal assistant text before raw image persistence settles", async () => {
-    const projector = await createProjector();
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: { type: "agentMessage", id: "answer-before-image", text: "stale answer" },
-      }),
-    );
-    expect(projector.hasLatestTerminalAssistantCandidateText()).toBe(true);
-
-    let resolveMedia: (() => void) | undefined;
-    const mediaPersistence = new Promise<void>((resolve) => {
-      resolveMedia = resolve;
-    });
-    const mediaProjection = (
-      projector as unknown as {
-        generatedMediaProjection: { recordRaw(item: unknown): Promise<void> };
-      }
-    ).generatedMediaProjection;
-    vi.spyOn(mediaProjection, "recordRaw").mockReturnValue(mediaPersistence);
-
-    const pending = projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "image_generation_call",
-          id: "image-after-answer",
-          status: "completed",
-          result: tinyPngBase64,
-        },
-      }),
-    );
-
-    expect(projector.hasLatestTerminalAssistantCandidateText()).toBe(false);
-    resolveMedia?.();
-    await pending;
   });
 
   it("does not let delayed raw completion consume a newer assistant echo", async () => {
@@ -546,43 +643,274 @@ describe("CodexAppServerEventProjector media projection", () => {
     expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
   });
 
-  it("does not append native Codex image-generation media after explicit media delivery", async () => {
-    const projector = await createProjector();
-    const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
-
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "imageGeneration",
-          id: "ig_123",
-          status: "completed",
-          revisedPrompt: null,
-          result: "Zm9v",
-          savedPath,
+  it.each([
+    { attachment: "first", target: "chat-source" },
+    { attachment: "first", target: "chat-other" },
+    { attachment: "unrelated", target: "chat-source" },
+  ] as const)(
+    "preserves generated media and route-specific identity after sending $attachment to $target",
+    async ({ attachment, target }) => {
+      const { projector, bridge, execute, sources } = await createRemoteGeneratedMediaDelivery(
+        async () => ({
+          content: [{ type: "text", text: "Sent." }],
+          details: {
+            messageDelivery: {
+              status: "settled",
+              primaryPlatformMessageId: "sent-media-1",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
+          },
+        }),
+      );
+      const sent = await bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "send-generated-media",
+        namespace: null,
+        tool: "message",
+        arguments: {
+          action: "send",
+          provider: "telegram",
+          to: target,
+          mediaUrl: sources[attachment],
         },
-      ]),
-    );
+      });
+      expect(sent.success).toBe(true);
+      const stagedPath = execute.mock.calls[0]?.[0].mediaUrl;
+      expect(stagedPath).toEqual(
+        expect.stringContaining(`${path.sep}media${path.sep}outbound${path.sep}`),
+      );
+      await projector.handleNotification(turnCompleted());
+      const result = projector.buildResult(bridge.telemetry);
 
-    const result = projector.buildResult({
-      ...buildEmptyToolTelemetry(),
-      messagingToolSentMediaUrls: [savedPath],
-      toolMediaUrls: [],
-    });
+      expect(result.toolMediaUrls).toHaveLength(2);
+      expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
+      const generated = await Promise.all(
+        (result.toolMediaUrls ?? []).map(async (url) => ({
+          url,
+          base64: (await fs.readFile(url)).toString("base64"),
+        })),
+      );
+      const first = generated.find((image) => image.base64 === tinyPngBase64);
+      const second = generated.find((image) => image.base64 === SECOND_PNG_BASE64);
+      expect(first).toBeDefined();
+      expect(second).toBeDefined();
+      expect(result.messagingToolSentTargets).toHaveLength(1);
+      const delivery = result.messagingToolSentTargets?.[0];
+      expect(delivery).toMatchObject({ provider: "telegram", to: target });
+      expect(delivery?.mediaUrls).toContain(stagedPath);
+      expect(result.messagingToolSentMediaUrls).toEqual(delivery?.mediaUrls);
+      expect(delivery?.mediaUrls).not.toContain(second?.url);
+      if (attachment === "first") {
+        expect(delivery?.mediaUrls).toContain(first?.url);
+      } else {
+        expect(delivery?.mediaUrls).not.toContain(first?.url);
+      }
+    },
+  );
 
-    expect(result.toolMediaUrls).toStrictEqual([]);
-    expect(result.hostOwnedToolMediaUrls).toBeUndefined();
-  });
+  it.each([
+    { attachment: "first", presentation: "unchanged" },
+    { attachment: "unrelated", presentation: "unchanged" },
+    { attachment: "first", presentation: "replaced" },
+    { attachment: "first", presentation: "file-url" },
+    { attachment: "first", presentation: "stripped" },
+    { attachment: "first", presentation: "error" },
+  ] as const)(
+    "preserves the processed internal UI attachment: $attachment, $presentation",
+    async ({ attachment, presentation }) => {
+      const replacementUrl = "https://example.test/filtered-preview.png";
+      if (presentation !== "unchanged") {
+        installCodexToolResultMiddleware((event) => {
+          let processedUrl = replacementUrl;
+          if (presentation === "file-url") {
+            if (typeof event.args.mediaUrl !== "string") {
+              throw new Error("Expected the staged attachment path");
+            }
+            processedUrl = pathToFileURL(event.args.mediaUrl).href;
+          }
+          return {
+            ...event.result,
+            details:
+              presentation === "replaced" || presentation === "file-url"
+                ? {
+                    deliveryStatus: "sent",
+                    sourceReplySink: "internal-ui",
+                    sourceReply: {
+                      text: presentation === "replaced" ? "Filtered attachment." : "Attached.",
+                      mediaUrls: [processedUrl],
+                    },
+                  }
+                : { status: presentation === "error" ? "error" : "ok" },
+          };
+        });
+      }
+      const { projector, bridge, execute, sources } = await createRemoteGeneratedMediaDelivery(
+        async (args) => ({
+          content: [{ type: "text", text: "Sent to current chat." }],
+          details: {
+            status: "ok",
+            deliveryStatus: "sent",
+            sourceReplySink: "internal-ui",
+            sourceReply: { text: "Attached.", mediaUrls: [args.mediaUrl] },
+            messageDelivery: {
+              status: "settled",
+              sourceReplyDelivered: true,
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
+          },
+        }),
+      );
+      const sent = await bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "send-internal-generated-media",
+        namespace: null,
+        tool: "message",
+        arguments: {
+          action: "send",
+          message: "Original source reply arguments",
+          mediaUrl: sources[attachment],
+        },
+      });
+      expect(sent.success).toBe(presentation !== "error");
+      const stagedPath = execute.mock.calls[0]?.[0].mediaUrl;
+      if (typeof stagedPath !== "string") {
+        throw new Error("Expected the executed attachment path");
+      }
+      await projector.handleNotification(turnCompleted());
+      const result = projector.buildResult(bridge.telemetry);
 
-  it("propagates message-tool-only source reply delivery telemetry", async () => {
+      expect(result.messagingToolSourceReplyPayloads).toEqual(
+        presentation === "stripped" || presentation === "error"
+          ? []
+          : [
+              {
+                text: presentation === "replaced" ? "Filtered attachment." : "Attached.",
+                mediaUrls: [
+                  presentation === "replaced"
+                    ? replacementUrl
+                    : presentation === "file-url"
+                      ? pathToFileURL(stagedPath).href
+                      : stagedPath,
+                ],
+              },
+            ],
+      );
+      expect(result.messagingToolSentTargets).toEqual([]);
+      expect(result.messagingToolSentMediaUrls).toEqual([]);
+      expect(result.messagingToolSentTexts).toEqual([]);
+      const sentGeneratedImage =
+        attachment === "first" && (presentation === "unchanged" || presentation === "file-url");
+      expect(result.toolMediaUrls).toHaveLength(sentGeneratedImage ? 1 : 2);
+      expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
+      const remainingImages = await Promise.all(
+        (result.toolMediaUrls ?? []).map(async (url) =>
+          (await fs.readFile(url)).toString("base64"),
+        ),
+      );
+      expect(remainingImages).toContain(SECOND_PNG_BASE64);
+      if (sentGeneratedImage) {
+        expect(remainingImages).not.toContain(tinyPngBase64);
+      } else {
+        expect(remainingImages).toContain(tinyPngBase64);
+      }
+    },
+  );
+
+  it.each([
+    { name: "a partial saved-path send", partialDelivery: true, useFileUrl: false },
+    { name: "a confirmed file-URL send", partialDelivery: false, useFileUrl: true },
+  ])(
+    "keeps correct local image delivery evidence for $name",
+    async ({ partialDelivery, useFileUrl }) => {
+      const params = await createParams();
+      const projector = await createProjector(params);
+      const savedPath = path.join(params.workspaceDir, "generated-local.png");
+      await fs.writeFile(savedPath, Buffer.from(tinyPngBase64, "base64"));
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            type: "imageGeneration",
+            id: "generated-local",
+            status: "completed",
+            savedPath,
+            ...(useFileUrl ? { result: tinyPngBase64 } : {}),
+          },
+        }),
+      );
+      const bridge = createCodexDynamicToolBridge({
+        tools: [
+          {
+            name: "message",
+            label: "Message",
+            description: "Send a synthetic attachment",
+            parameters: Type.Object({}, { additionalProperties: true }),
+            execute: async () => ({
+              content: [{ type: "text", text: "Message delivery receipt." }],
+              details: {
+                messageDelivery: {
+                  status: "settled",
+                  partialDelivery,
+                  createdThreadIds: [],
+                },
+              },
+            }),
+          },
+        ],
+        signal: new AbortController().signal,
+      });
+      await bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "send-local-partial",
+        namespace: null,
+        tool: "message",
+        arguments: {
+          action: "send",
+          provider: "telegram",
+          to: "chat-source",
+          mediaUrl: useFileUrl ? pathToFileURL(savedPath).href : savedPath,
+        },
+      });
+      await projector.handleNotification(turnCompleted());
+      const result = projector.buildResult(bridge.telemetry);
+
+      expect(result.didSendViaMessagingTool).toBe(true);
+      expect(result.messagingToolSentTargets).toEqual([
+        expect.objectContaining({ provider: "telegram", to: "chat-source" }),
+      ]);
+      expect(result.toolMediaUrls).toHaveLength(1);
+      expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
+      if (partialDelivery) {
+        expect(result.messagingToolSentMediaUrls).toEqual([]);
+        expect(
+          result.messagingToolSentTargets?.flatMap((target) => target.mediaUrls ?? []),
+        ).toEqual([]);
+        expect(result.toolMediaUrls).toEqual([savedPath]);
+      } else {
+        const generatedUrl = result.toolMediaUrls?.[0];
+        expect(generatedUrl).not.toBe(savedPath);
+        expect(result.messagingToolSentMediaUrls).toContain(generatedUrl);
+        expect(result.messagingToolSentTargets?.[0]?.mediaUrls).toContain(generatedUrl);
+      }
+    },
+  );
+
+  it("propagates source reply delivery without destination telemetry", async () => {
     const projector = await createProjector();
 
     const result = projector.buildResult({
       ...buildEmptyToolTelemetry(),
       didSendViaMessagingTool: true,
       didDeliverSourceReplyViaMessageTool: true,
+      sourceReplyDelivered: true,
     });
 
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(result.sourceReplyDelivered).toBe(true);
   });
 });

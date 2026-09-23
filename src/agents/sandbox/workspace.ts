@@ -10,6 +10,7 @@ import type { OptionalBootstrapFileName } from "../../config/types.agent-default
 import { openRootFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveUserPath } from "../../utils.js";
+import { publishBootstrapFile } from "../workspace-bootstrap-publish.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
@@ -44,35 +45,36 @@ export async function ensureSandboxWorkspace(
     for (const name of files) {
       const src = path.join(seed, name);
       const dest = path.join(workspaceDir, name);
-      try {
-        await fs.access(dest);
-      } catch {
-        try {
-          const opened = await openRootFile({
-            absolutePath: src,
-            rootPath: seed,
-            boundaryLabel: "sandbox seed workspace",
-          });
-          if (!opened.ok) {
-            continue;
-          }
-          try {
-            const content = await readWorkspaceBootstrapFile(opened.fd);
-            await fs.writeFile(dest, content, { encoding: "utf-8", flag: "wx" });
-          } catch (err) {
-            if (err instanceof RangeError) {
-              log.warn(
-                `Ignoring oversized sandbox seed file ${src}: file exceeds the ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES}-byte limit`,
-              );
-            }
-            // ignore missing or oversized seed file
-          } finally {
-            syncFs.closeSync(opened.fd);
-          }
-        } catch {
-          // ignore missing seed file
-        }
+      const destinationExists = await fs.access(dest).then(
+        () => true,
+        () => false,
+      );
+      if (destinationExists) {
+        continue;
       }
+      const opened = await openRootFile({
+        absolutePath: src,
+        rootPath: seed,
+        boundaryLabel: "sandbox seed workspace",
+      });
+      if (!opened.ok) {
+        continue;
+      }
+      let content: string;
+      try {
+        content = await readWorkspaceBootstrapFile(opened.fd);
+      } catch (err) {
+        if (err instanceof RangeError) {
+          log.warn(
+            `Ignoring oversized sandbox seed file ${src}: file exceeds the ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES}-byte limit`,
+          );
+          continue;
+        }
+        throw err;
+      } finally {
+        syncFs.closeSync(opened.fd);
+      }
+      await publishBootstrapFile(dest, content);
     }
   }
   await ensureAgentWorkspace({

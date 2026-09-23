@@ -1,5 +1,6 @@
 // Background media generation tests cover detached task completion, requester
 // wake delivery, and direct media fallback behavior.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   runWithOwnedSessionTranscriptWrite,
@@ -37,7 +38,7 @@ const sessionMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn<() => SessionEntry | undefined>(() => undefined),
 }));
 
-vi.mock("../subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
+vi.mock("../subagents/announce/subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
 vi.mock("../../config/sessions/session-accessor.js", async () => ({
   ...(await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
     "../../config/sessions/session-accessor.js",
@@ -50,10 +51,36 @@ vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliv
 vi.mock("../../tasks/cron-run-continuation-cleanup.js", () => cronContinuationCleanupMocks);
 
 import {
+  createDefaultMediaGenerateBackgroundScheduler,
   createMediaGenerationTaskLifecycle,
   scheduleMediaGenerationTaskCompletion,
   shouldDetachMediaGenerationTask,
 } from "./media-generate-background-shared.js";
+
+describe("createDefaultMediaGenerateBackgroundScheduler", () => {
+  it("runs genuinely detached work outside request-scoped async context", async () => {
+    const requestContext = new AsyncLocalStorage<string>();
+    let resolveWork!: () => void;
+    const completed = new Promise<void>((resolve) => {
+      resolveWork = resolve;
+    });
+    const observedContexts: Array<string | undefined> = [];
+    const scheduler = createDefaultMediaGenerateBackgroundScheduler({
+      toolName: "image_generate",
+      onCrash: vi.fn(),
+    });
+
+    requestContext.run("matrix-monitor-task", () => {
+      scheduler(async () => {
+        observedContexts.push(requestContext.getStore());
+        resolveWork();
+      });
+    });
+
+    await completed;
+    expect(observedContexts).toEqual([undefined]);
+  });
+});
 
 beforeEach(() => {
   resetGeneratedMediaTaskActivityForTests();
@@ -154,7 +181,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       provider: "openai",
       model: "gpt-image-1",
       count: 1,
-      paths: ["/tmp/qa-lighthouse.png"],
       wakeResult: "generated",
     }));
 
@@ -201,19 +227,12 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     try {
       const scheduled: Array<() => Promise<void>> = [];
       let resolveRun:
-        | ((value: {
-            provider: string;
-            model: string;
-            count: number;
-            paths: string[];
-            wakeResult: string;
-          }) => void)
+        | ((value: { provider: string; model: string; count: number; wakeResult: string }) => void)
         | undefined;
       const runPromise = new Promise<{
         provider: string;
         model: string;
         count: number;
-        paths: string[];
         wakeResult: string;
       }>((resolve) => {
         resolveRun = resolve;
@@ -261,7 +280,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         provider: "openai",
         model: "gpt-image-1",
         count: 1,
-        paths: ["/tmp/proof.png"],
         wakeResult: "generated",
       });
       await task;
@@ -318,7 +336,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
           provider: "openai",
           model: "gpt-image-1",
           count: 1,
-          paths: ["/tmp/proof.png"],
           wakeResult: "generated",
         };
       },
@@ -336,7 +353,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         count: 1,
-        paths: ["/tmp/proof.png"],
         terminalResult: undefined,
       }),
     );
@@ -365,14 +381,18 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         provider: "openai",
         model: "gpt-image-1",
         count: 1,
-        paths: ["/tmp/proof.png"],
         wakeResult: "generated",
+        attachments: [{ type: "image" as const, path: "/tmp/proof.png" }],
       }),
     });
 
     await scheduled[0]?.();
 
-    expect(detachedTaskRuntimeMocks.completeTaskRunByRunId).toHaveBeenCalledOnce();
+    expect(detachedTaskRuntimeMocks.completeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalSummary: "Generated 1 image with openai/gpt-image-1.",
+      }),
+    );
     expect(
       cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle,
     ).toHaveBeenCalledWith(sessionKey);
@@ -407,8 +427,8 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         provider: "openai",
         model: "gpt-image-1",
         count: 1,
-        paths: ["/tmp/proof.png"],
         wakeResult: "generated",
+        attachments: [{ type: "image" as const, path: "/tmp/proof.png" }],
         mediaUrls: ["/tmp/proof.png"],
       }),
     });
@@ -419,6 +439,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expect(detachedTaskRuntimeMocks.completeTaskRunByRunId).toHaveBeenCalledWith(
       expect.objectContaining({
         terminalOutcome: "blocked",
+        terminalSummary: expect.stringContaining('path="/tmp/proof.png"'),
       }),
     );
     expect(
@@ -458,7 +479,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
           provider: "openai",
           model: "gpt-image-1",
           count: 1,
-          paths: ["/tmp/proof.png"],
           wakeResult: "generated",
         }),
       });
@@ -519,7 +539,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
           provider: "openai",
           model: "gpt-image-1",
           count: 1,
-          paths: ["/tmp/proof.png"],
           wakeResult: "generated",
         }),
       });
@@ -572,7 +591,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
           provider: "openai",
           model: "gpt-image-1",
           count: 1,
-          paths: ["/tmp/proof.png"],
           wakeResult: "generated",
         }),
       });
@@ -625,7 +643,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         provider: "openai",
         model: "gpt-image-1",
         count: 1,
-        paths: ["/tmp/proof.png"],
         wakeResult: "generated",
       }),
     });
@@ -642,7 +659,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         count: 1,
-        paths: ["/tmp/proof.png"],
         terminalResult: {
           terminalOutcome: "blocked",
           terminalSummary:
@@ -684,8 +700,8 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         provider: "openai",
         model: "gpt-image-1",
         count: 1,
-        paths: ["/tmp/proof.png"],
         wakeResult: "generated",
+        attachments: [{ type: "image" as const, path: "/tmp/proof.png" }],
       }),
     });
 
@@ -702,11 +718,9 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         count: 1,
-        paths: ["/tmp/proof.png"],
         terminalResult: {
           terminalOutcome: "blocked",
-          terminalSummary:
-            "Required completion delivery failed before reaching the requester: requester wake failed.",
+          terminalSummary: expect.stringContaining('path="/tmp/proof.png"'),
         },
       }),
     );
@@ -747,7 +761,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         provider: "openai",
         model: "gpt-image-1",
         count: 1,
-        paths: ["/tmp/proof.png"],
         wakeResult: "generated",
         mediaUrls: ["/tmp/proof.png"],
       }),
@@ -796,7 +809,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         provider: "openai",
         model: "gpt-image-1",
         count: 1,
-        paths: ["/tmp/proof.png"],
         wakeResult: "generated",
       }),
     });

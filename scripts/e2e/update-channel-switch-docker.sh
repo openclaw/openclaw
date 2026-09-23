@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Exercises package-to-git and git-to-package update channel switching in Docker.
 # Both package and git fixtures are derived from the same prepared npm tarball.
 set -euo pipefail
@@ -32,6 +36,9 @@ docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
+  -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
+  -e OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT \
+  -e OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
@@ -46,7 +53,6 @@ export NPM_CONFIG_PREFIX=/tmp/npm-prefix
 export PNPM_HOME=/tmp/pnpm-home
 export PATH="/tmp/npm-prefix/bin:/tmp/pnpm-home:$PATH"
 export CI=true
-export OPENCLAW_DISABLE_BUNDLED_PLUGINS=1
 export OPENCLAW_NO_ONBOARD=1
 export OPENCLAW_NO_PROMPT=1
 
@@ -61,7 +67,8 @@ node scripts/e2e/lib/package-git-fixture.mjs prepare "$git_root"
 node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$git_root"
 (
   cd "$git_root"
-  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
+  # Git-style fixtures still need optional native prebuilds; omit only development dependencies.
+  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=dev --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
     openclaw_e2e_print_log /tmp/openclaw-git-install.log >&2
     exit 1
   fi
@@ -86,10 +93,26 @@ if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm 
   exit 1
 fi
 package_version="$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"/tmp/npm-prefix/lib/node_modules/openclaw/package.json\", \"utf8\")).version")"
+# npm global tarball installs can retain the host platform package even with
+# --omit=optional. Relocate any such package so this lane deterministically
+# exercises the optional-free JavaScript fallback promised by that install mode.
+fs_safe_scope=/tmp/npm-prefix/lib/node_modules/openclaw/node_modules/@openclaw
+for platform_package in "$fs_safe_scope"/fs-safe-*; do
+  if [ -d "$platform_package" ]; then
+    mv "$platform_package" "$platform_package.omitted"
+  fi
+done
+node scripts/docker/verify-fs-safe-native.mjs \
+  --package-root /tmp/npm-prefix/lib/node_modules/openclaw \
+  --mode fallback
 OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
   node scripts/e2e/lib/package-compat.mjs "$package_version"
 )"
 export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
+OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT:-0}"
+export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT
+OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT:-0}"
+export OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT
 command -v openclaw >/dev/null
 openclaw_e2e_enable_openclaw_cli_timeout
 
@@ -105,7 +128,7 @@ cleanup_registry() {
 trap cleanup_registry EXIT
 rm -f "$registry_port_file"
 OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$package_version" \
-  OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
+  OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-https://registry.npmjs.org}" \
   node scripts/e2e/lib/plugins/npm-registry-server.mjs \
     "$registry_port_file" \
     openclaw \
@@ -156,9 +179,55 @@ status_json="$(openclaw update status --json)"
 printf "%s\n" "$status_json"
 STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind package
 
+assert_package_dry_run() {
+  local expected_kind="$1" expected_channel="$2" selection="$3"
+  shift 3
+  local preview
+  preview="$(openclaw update --dry-run --json --no-restart "$@")"
+  printf "%s\n" "$preview"
+  UPDATE_JSON="$preview" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
+    assert-dry-run "$expected_kind" "$expected_channel" "$selection"
+  node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
+}
+dev_channel_args=(--channel dev)
+# Legacy package acceptance permits missing channel persistence; keep its explicit switch.
+if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]; then
+  echo "==> package dry-run channel and one-off tag precedence"
+  openclaw config set update.channel dev
+  assert_package_dry_run git dev stored
+  assert_package_dry_run git dev explicit --channel dev
+  assert_package_dry_run git dev explicit --channel dev --tag beta
+  assert_package_dry_run package dev stored --tag beta
+  assert_package_dry_run package stable explicit --channel stable
+  # 7.33 reports a stored dev channel as a package update even though an
+  # explicit --channel dev selects Git. Keep the explicit selector for the
+  # destructive admission and actual switch probes on that frozen contract.
+  if [ "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" != "1" ]; then
+    dev_channel_args=()
+  fi
+fi
+
+echo "==> ordinary untracked files still block Git admission"
+printf "retain user notes\n" >"$git_root/operator-update-notes.tmp"
+set +e
+dirty_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
+dirty_status=$?
+set -e
+# Historical update CLIs can report a blocked structured result with exit zero.
+# Admit only that exact legacy status; timeouts, signals, and other failures stay fatal.
+node scripts/e2e/lib/update-channel-switch/assertions.mjs \
+  assert-dirty-exit \
+  "$dirty_status" \
+  "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" \
+  "$OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT"
+# The payload assertion proves the update was rejected and no checkout state changed.
+UPDATE_JSON="$dirty_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
+  assert-dirty-update "$git_root" "$fixture_sha"
+node -e "require(\"node:fs\").unlinkSync(process.argv[1])" "$git_root/operator-update-notes.tmp"
+
 echo "==> package -> git dev channel"
 set +e
-dev_json="$(openclaw update --channel dev --yes --json --no-restart)"
+dev_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
 dev_status=$?
 set -e
 printf "%s\n" "$dev_json"
@@ -166,11 +235,16 @@ if [ "$dev_status" -ne 0 ]; then
   exit "$dev_status"
 fi
 UPDATE_JSON="$dev_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-update dev
+node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-runtime-staging-clean "$git_root"
 node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
 
 status_json="$(openclaw update status --json)"
 printf "%s\n" "$status_json"
-STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind git
+if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" = "1" ]; then
+  STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind package
+else
+  STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind git
+fi
 
 echo "==> git -> package stable channel"
 set +e
@@ -182,6 +256,7 @@ if [ "$stable_status" -ne 0 ]; then
   exit "$stable_status"
 fi
 UPDATE_JSON="$stable_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-update stable
+node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-runtime-staging-clean "$git_root"
 node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel stable
 
 status_json="$(openclaw update status --json)"

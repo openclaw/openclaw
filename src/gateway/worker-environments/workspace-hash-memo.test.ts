@@ -7,11 +7,15 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   createWorkspaceReconcileMetrics,
   MAX_WORKSPACE_HASH_MEMO_BYTES,
+  MAX_WORKSPACE_HASH_MEMO_ENTRIES,
+  pruneWorkspaceHashMemo,
   recordRemoteWorkspaceHashMetrics,
   serializeRemoteWorkspaceHashMemo,
   withWorkspaceHashMemo,
+  withWorkerWorkspaceHashMemo,
+  type WorkspaceHashMemo,
 } from "./workspace-hash-memo.js";
-import { MAX_RECONCILIATION_ENTRIES, type WorkerWorkspaceManifest } from "./workspace-manifest.js";
+import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { preflightWorkspaceApply, readActualWorkspaceManifest } from "./workspace-reconcile.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
@@ -113,9 +117,6 @@ describe("workspace hash memo", () => {
       directories: ["parent"],
     };
     const metrics = hashMetrics();
-    const open = vi.spyOn(fs, "open");
-    const parentPath = path.join(root, "parent");
-    const parentSnapshots = () => open.mock.calls.filter(([file]) => file === parentPath).length;
 
     const first = await withWorkspaceHashMemo(
       new Map(),
@@ -127,16 +128,14 @@ describe("workspace hash memo", () => {
       "parent/child.txt",
       "parent/sibling.txt",
     ]);
-    expect(metrics.contentHashCount).toBe(1);
-    expect(parentSnapshots()).toBe(1);
+    expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
 
     await withWorkspaceHashMemo(
       new Map(),
       async () => await preflightWorkspaceApply({ root, base, current }),
       metrics,
     );
-    expect(metrics.contentHashCount).toBe(2);
-    expect(parentSnapshots()).toBe(2);
+    expect(metrics).toMatchObject({ contentHashCount: 2, memoHitCount: 0 });
   });
 
   it("aggregates remote metrics and bounds a maximum-entry memo envelope", () => {
@@ -145,24 +144,27 @@ describe("workspace hash memo", () => {
       contentHashCount: 7,
       contentHashDurationMs: 11,
       memoHitCount: 13,
+      memoTruncatedCount: 17,
       totalDurationMs: 17,
     });
     recordRemoteWorkspaceHashMetrics(aggregate, {
       contentHashCount: 19,
       contentHashDurationMs: 23,
       memoHitCount: 29,
+      memoTruncatedCount: 31,
       totalDurationMs: 31,
     });
     expect(aggregate).toMatchObject({
       remoteContentHashCount: 26,
       remoteMemoHitCount: 42,
+      remoteMemoTruncatedCount: 48,
       remoteHashDurationMs: 34,
       remoteManifestDurationMs: 48,
     });
 
     const uint64 = "18446744073709551615";
     const memo = new Map<string, string>();
-    for (let index = 0; index < MAX_RECONCILIATION_ENTRIES; index += 1) {
+    for (let index = 0; index < MAX_WORKSPACE_HASH_MEMO_ENTRIES; index += 1) {
       const inode = String(index).padStart(20, "0");
       memo.set(
         `worker:${uint64}:${inode}:${uint64}:${uint64}:${uint64}`,
@@ -176,15 +178,21 @@ describe("workspace hash memo", () => {
         manifestRef: `sha256:${"f".repeat(64)}`,
         memo: JSON.parse(serializedMemo),
         metrics: {
-          contentHashCount: MAX_RECONCILIATION_ENTRIES,
+          contentHashCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
           contentHashDurationMs: Number.MAX_SAFE_INTEGER,
-          memoHitCount: MAX_RECONCILIATION_ENTRIES,
+          memoHitCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
+          memoTruncatedCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
           totalDurationMs: Number.MAX_SAFE_INTEGER,
         },
       })}\n`,
     );
     expect(envelopeBytes).toBeLessThan(MAX_WORKSPACE_HASH_MEMO_BYTES);
     expect(MAX_WORKSPACE_HASH_MEMO_BYTES - envelopeBytes).toBeGreaterThan(3 * 1024 * 1024);
+    const smallFile = "worker:0:0:1:0:0";
+    memo.set(smallFile, "c".repeat(64));
+    const bounded = JSON.parse(serializeRemoteWorkspaceHashMemo(memo)) as [string, string][];
+    expect(bounded).toHaveLength(MAX_WORKSPACE_HASH_MEMO_ENTRIES);
+    expect(bounded.some(([identity]) => identity === smallFile)).toBe(false);
   });
 
   it("reuses hashes only for matching stat identities in one remote reconcile", async () => {
@@ -212,6 +220,13 @@ describe("workspace hash memo", () => {
 
     const first = await capture([]);
     expect(first.metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
+    const nodeMemo: WorkspaceHashMemo = new Map();
+    await withWorkerWorkspaceHashMemo(nodeMemo, () =>
+      readActualWorkspaceManifest({ root: workspace, baseCommit: null }),
+    );
+    const nodeValidated = await capture([...nodeMemo]);
+    expect(nodeValidated.manifestRef).toBe(first.manifestRef);
+    expect(nodeValidated.metrics).toMatchObject({ contentHashCount: 0, memoHitCount: 1 });
     const unchanged = await capture(first.memo);
     expect(unchanged.manifestRef).toBe(first.manifestRef);
     expect(unchanged.metrics).toMatchObject({ contentHashCount: 0, memoHitCount: 1 });
@@ -232,5 +247,91 @@ describe("workspace hash memo", () => {
     const nextReconcile = await capture([]);
     expect(nextReconcile.manifestRef).toBe(replaced.manifestRef);
     expect(nextReconcile.metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
+
+    await fs.chmod(target, 0o755);
+    const executable = await capture(replaced.memo);
+    if (process.platform !== "win32") {
+      expect(executable.manifestRef).not.toBe(replaced.manifestRef);
+    }
+    await fs.unlink(target);
+    await fs.symlink("other.txt", target);
+    const symlink = await capture(executable.memo);
+    expect(symlink.manifestRef).not.toBe(executable.manifestRef);
+    expect(symlink.metrics).toMatchObject({ contentHashCount: 0, memoHitCount: 0 });
+  });
+
+  it("bounds the remote memo to the largest files and reports truncation", async () => {
+    const root = tempDirs.make("openclaw-remote-manifest-memo-cap-");
+    const home = path.join(root, "home");
+    const workspace = path.join(root, "workspace");
+    await Promise.all([fs.mkdir(home), fs.mkdir(workspace)]);
+    await Promise.all([
+      fs.writeFile(path.join(workspace, "small.txt"), "1"),
+      fs.writeFile(path.join(workspace, "medium.txt"), "22"),
+      fs.writeFile(path.join(workspace, "large.txt"), "333"),
+    ]);
+    const limitDeclaration = `const MAX_WORKSPACE_HASH_MEMO_ENTRIES = ${MAX_WORKSPACE_HASH_MEMO_ENTRIES};`;
+    const limitedScript = REMOTE_WORKSPACE_MANIFEST_JS.replace(
+      limitDeclaration,
+      "const MAX_WORKSPACE_HASH_MEMO_ENTRIES = 2;",
+    );
+    expect(limitedScript).not.toBe(REMOTE_WORKSPACE_MANIFEST_JS);
+    const env = { ...process.env, HOME: home };
+    type MemoResponse = {
+      manifestRef: string;
+      memo: [string, string][];
+      metrics: { contentHashCount: number; memoHitCount: number; memoTruncatedCount: number };
+    };
+    const capture = async (memo: [string, string][]): Promise<MemoResponse> => {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", limitedScript, workspace, "", "memo-v1"],
+        { timeoutMs: 10_000, baseEnv: env, input: JSON.stringify(memo) },
+      );
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      return JSON.parse(result.stdout) as MemoResponse;
+    };
+
+    const first = await capture([]);
+    expect(
+      first.memo
+        .map(([identity]) => Number(identity.split(":")[3]))
+        .toSorted((left, right) => left - right),
+    ).toEqual([2, 3]);
+    expect(first.metrics).toMatchObject({
+      contentHashCount: 3,
+      memoHitCount: 0,
+      memoTruncatedCount: 1,
+    });
+
+    const unchanged = await capture(first.memo);
+    expect(unchanged.manifestRef).toBe(first.manifestRef);
+    expect(unchanged.memo).toEqual(first.memo);
+    expect(unchanged.metrics).toMatchObject({
+      contentHashCount: 1,
+      memoHitCount: 2,
+      memoTruncatedCount: 1,
+    });
+  });
+});
+
+describe("placement hash memo pruning", () => {
+  it("keeps a memo under the byte cap and clears one that exceeds it", () => {
+    const retained: WorkspaceHashMemo = new Map([
+      ["worker:1:2:3:4:5", "a".repeat(64)],
+      ["gateway:1:2:3:4:5", "b".repeat(64)],
+    ]);
+    pruneWorkspaceHashMemo(retained);
+    expect(retained.size).toBe(2);
+
+    const digest = "c".repeat(64);
+    const oversized: WorkspaceHashMemo = new Map();
+    let bytes = 0;
+    for (let index = 0; bytes <= MAX_WORKSPACE_HASH_MEMO_BYTES; index += 1) {
+      const identity = `gateway:${index}:0:0:0:0`;
+      oversized.set(identity, digest);
+      bytes += identity.length + digest.length;
+    }
+    pruneWorkspaceHashMemo(oversized);
+    expect(oversized.size).toBe(0);
   });
 });

@@ -126,7 +126,7 @@ describe("plugin SDK surface report", () => {
 
   it("accepts exact deprecated export budget overrides by public entrypoint", () => {
     const budgetConfig = readPluginSdkSurfaceBudgets({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 2 }),
+      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 3 }),
     });
 
     expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).not.toContain(
@@ -136,6 +136,23 @@ describe("plugin SDK surface report", () => {
 
   it("keeps default public surface budgets pinned to current source counts", () => {
     expect(readDefaultPublicSurfaceBudgets()).toEqual(readCurrentPublicSurfaceCounts());
+    const channelMessage = surfaceReport.publicStats.byEntrypoint.get("channel-message");
+    expect(channelMessage).toBeDefined();
+    expect(
+      readPluginSdkSurfaceBudgets({}).publicDeprecatedExportsByEntrypointBudget["channel-message"],
+    ).toBe(channelMessage?.deprecatedExports);
+  });
+
+  it("accepts frozen named facades while rejecting missing deprecated reexports", () => {
+    expect(surfaceReport.deprecatedBarrelWithoutReexports).toEqual([]);
+    const report = {
+      ...surfaceReport,
+      deprecatedBarrelWithoutReexports: ["channel-message"],
+    };
+
+    expect(evaluatePluginSdkSurfaceReport(report, readPluginSdkSurfaceBudgets({}))).toContain(
+      "deprecated barrel entrypoints without reexports: channel-message",
+    );
   });
 
   it("keeps approval store internals out of the deprecated infra barrel", () => {
@@ -185,7 +202,7 @@ describe("plugin SDK surface report", () => {
     });
 
     expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).toContain(
-      "public deprecated exports in core 2 > 1",
+      "public deprecated exports in core 3 > 1",
     );
   });
 });

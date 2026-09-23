@@ -3,6 +3,8 @@
 
 self-hosted-runner:
   labels:
+    # GitHub's hosted preview label is not yet in actionlint's built-in inventory.
+    - xcode-27
     # Blacksmith CI runners
     - blacksmith-4vcpu-ubuntu-2404
     - blacksmith-8vcpu-ubuntu-2404
@@ -30,9 +32,24 @@ paths:
       # actionlint's built-in runner label allowlist lags Blacksmith additions.
       - 'label "blacksmith-16vcpu-[^"]+" is unknown\.'
   # GitHub Actions supports concurrency.queue, but actionlint does not yet model it.
+  .github/workflows/qa-live-transports-convex.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/full-release-candidate.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
   .github/workflows/docker-release.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'
   .github/workflows/docker-channel-promote.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/linux-app-release.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/openclaw-release-publish.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/openclaw-release-promote.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'

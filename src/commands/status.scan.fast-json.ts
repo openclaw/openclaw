@@ -6,9 +6,12 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { isRecord } from "../utils.js";
+import type { StatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
-import type { StatusScanResult } from "./status.scan-result.ts";
+import type { StatusJsonScanResult } from "./status.scan-result.ts";
+
+const statusGatewayModuleLoader = createLazyImportLoader(() => import("./status.scan.gateway.js"));
 
 const statusScanMemoryModuleLoader = createLazyImportLoader(
   () => import("./status.scan-memory.js"),
@@ -26,20 +29,6 @@ const STATUS_JSON_CHANNEL_ENV_VARS = new Set(
     (entry) => entry.channelEnvVars ?? [],
   ),
 );
-
-type StatusJsonScanPolicy = {
-  commandName: string;
-  allowMissingConfigFastPath?: boolean;
-  fetchGitUpdate?: boolean;
-  includeRegistryUpdate?: boolean;
-  includeLocalStatusRpcFallback?: boolean;
-  gatewayProbeTimeoutMs?: number | ((cfg: OpenClawConfig) => number | undefined);
-  resolveHasConfiguredChannels: (
-    cfg: OpenClawConfig,
-    sourceConfig: OpenClawConfig,
-  ) => boolean | Promise<boolean>;
-  resolveMemory: Parameters<typeof executeStatusScanFromOverview>[0]["resolveMemory"];
-};
 
 function hasMeaningfulStatusJsonChannelConfig(value: unknown): boolean {
   if (!isRecord(value)) {
@@ -83,30 +72,30 @@ function hasPotentialConfiguredChannelsForStatusJson(cfg: OpenClawConfig): boole
   return hasExplicitStatusJsonChannelConfig(cfg) || hasStatusJsonChannelEnvConfig();
 }
 
-/** Runs status JSON with an injectable policy for tests and specialized callers. */
-export async function scanStatusJsonWithPolicy(
-  opts: {
-    timeoutMs?: number;
+/** Runs the default fast status JSON scan. */
+export async function scanStatusJsonFast(
+  opts: StatusGatewayProbeBudget & {
     all?: boolean;
   },
   runtime: RuntimeEnv,
-  policy: StatusJsonScanPolicy,
-): Promise<StatusScanResult> {
+): Promise<StatusJsonScanResult> {
+  const online = await (await statusGatewayModuleLoader.load()).scanStatusJsonGateway(opts);
+  if (online.scan) {
+    return online.scan;
+  }
   const overview = await collectStatusScanOverview({
-    commandName: policy.commandName,
+    env: process.env,
+    commandName: "status --json",
     opts,
     showSecrets: false,
     runtime,
-    allowMissingConfigFastPath: policy.allowMissingConfigFastPath,
-    resolveHasConfiguredChannels: policy.resolveHasConfiguredChannels,
+    allowMissingConfigFastPath: true,
+    resolveHasConfiguredChannels: (cfg) => hasPotentialConfiguredChannelsForStatusJson(cfg),
     includeChannelsData: false,
-    // Fast JSON only needs to know whether channels may exist; it does not render channel tables.
-    includeChannelSecretTargets: false,
-    skipConfigPluginValidation: true,
-    fetchGitUpdate: policy.fetchGitUpdate,
-    includeRegistryUpdate: policy.includeRegistryUpdate,
-    includeLocalStatusRpcFallback: policy.includeLocalStatusRpcFallback,
-    gatewayProbeTimeoutMs: policy.gatewayProbeTimeoutMs,
+    fetchGitUpdate: opts.all === true,
+    includeRegistryUpdate: opts.all === true,
+    includeLocalStatusRpcFallback: opts.all === true,
+    gatewaySnapshot: online.gatewaySnapshot,
   });
   const pluginCompatibility = opts.all
     ? await statusScanPluginStatusModuleLoader
@@ -118,29 +107,6 @@ export async function scanStatusJsonWithPolicy(
   return await executeStatusScanFromOverview({
     overview,
     runtime,
-    resolveMemory: policy.resolveMemory,
-    channelIssues: [],
-    channels: { rows: [], details: [] },
-    pluginCompatibility,
-  });
-}
-
-/** Runs the default fast status JSON scan. */
-export async function scanStatusJsonFast(
-  opts: {
-    timeoutMs?: number;
-    all?: boolean;
-  },
-  runtime: RuntimeEnv,
-): Promise<StatusScanResult> {
-  return await scanStatusJsonWithPolicy(opts, runtime, {
-    commandName: "status --json",
-    allowMissingConfigFastPath: true,
-    fetchGitUpdate: opts.all === true,
-    includeRegistryUpdate: opts.all === true,
-    includeLocalStatusRpcFallback: opts.all === true,
-    gatewayProbeTimeoutMs: opts.all === true ? undefined : () => opts.timeoutMs ?? 1000,
-    resolveHasConfiguredChannels: (cfg) => hasPotentialConfiguredChannelsForStatusJson(cfg),
     resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) => {
       if (!opts.all) {
         return null;
@@ -154,5 +120,8 @@ export async function scanStatusJsonFast(
         requireDefaultDatabasePath: resolveDefaultMemoryDatabasePath,
       });
     },
+    channelIssues: overview.channelIssues,
+    channels: overview.channels,
+    pluginCompatibility,
   });
 }

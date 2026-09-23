@@ -2,7 +2,7 @@ import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
-import { resolveSessionTranscriptRuntimeReadTarget } from "../../config/sessions/session-accessor.js";
+import { resolveSessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 
 export type RuntimeTranscriptScope = SessionTranscriptRuntimeScope;
 type RuntimeTranscriptTarget = SessionTranscriptRuntimeTarget;
@@ -14,5 +14,9 @@ type RuntimeTranscriptTarget = SessionTranscriptRuntimeTarget;
 export async function resolveRuntimeTranscriptReadTarget(
   scope: RuntimeTranscriptScope,
 ): Promise<RuntimeTranscriptTarget> {
-  return await resolveSessionTranscriptRuntimeReadTarget(scope);
+  const target = await resolveSessionTranscriptRuntimeTarget(scope);
+  const { restoreSessionColdTranscript } =
+    await import("../../config/sessions/session-cold-storage.js");
+  await restoreSessionColdTranscript({ ...target, ...(scope.env ? { env: scope.env } : {}) });
+  return target;
 }

@@ -34,15 +34,27 @@
       "@openclaw/ai/types": ["./packages/ai/src/types.ts"],
       "@openclaw/ai/validation": ["./packages/ai/src/validation.ts"],
       "@openclaw/ai/internal/anthropic": ["./packages/ai/src/internal/anthropic.ts"],
+      "@openclaw/ai/internal/google-model-family": [
+        "./packages/ai/src/internal/google-model-family.ts"
+      ],
       "@openclaw/ai/internal/openai": ["./packages/ai/src/internal/openai.ts"],
+      "@openclaw/ai/internal/openai-completions-compat": [
+        "./packages/ai/src/internal/openai-completions-compat.ts"
+      ],
+      "@openclaw/ai/internal/openai-responses-payload-policy": [
+        "./packages/ai/src/internal/openai-responses-payload-policy.ts"
+      ],
       "@openclaw/ai/internal/retry-after": ["./packages/ai/src/internal/retry-after.ts"],
       "@openclaw/ai/internal/runtime": ["./packages/ai/src/internal/runtime.ts"],
       "@openclaw/ai/internal/shared": ["./packages/ai/src/internal/shared.ts"],
+      "@openclaw/ai/internal/tool-schema": ["./packages/ai/src/internal/tool-schema.ts"],
       "@openclaw/agent-core": ["./packages/agent-core/src/index.ts"],
       "@openclaw/agent-core/*": ["./packages/agent-core/src/*"],
       "@openclaw/llm-core": ["./packages/llm-core/src/index.ts"],
       "@openclaw/llm-core/diagnostics": ["./packages/llm-core/src/utils/diagnostics.ts"],
       "@openclaw/llm-core/event-stream": ["./packages/llm-core/src/utils/event-stream.ts"],
+      "@openclaw/llm-core/model-contracts/anthropic": ["./packages/llm-core/src/model-contracts/anthropic.ts"],
+      "@openclaw/llm-core/types": ["./packages/llm-core/src/types.ts"],
       "@openclaw/llm-core/validation": ["./packages/llm-core/src/validation.ts"],
       "@openclaw/llm-core/*": ["./packages/llm-core/src/*"],
       "@openclaw/model-catalog-core": ["./packages/model-catalog-core/src/index.ts"],
@@ -51,6 +63,9 @@
       ],
       "@openclaw/model-catalog-core/model-catalog-normalize": [
         "./packages/model-catalog-core/src/model-catalog-normalize.ts"
+      ],
+      "@openclaw/model-catalog-core/model-catalog-pricing": [
+        "./packages/model-catalog-core/src/model-catalog-pricing.ts"
       ],
       "@openclaw/model-catalog-core/model-catalog-refs": [
         "./packages/model-catalog-core/src/model-catalog-refs.ts"
@@ -70,6 +85,9 @@
       "@openclaw/model-catalog-core/*": ["./packages/model-catalog-core/src/*"],
       "@openclaw/gateway-client": ["./packages/gateway-client/src/index.ts"],
       "@openclaw/gateway-client/browser": ["./packages/gateway-client/src/browser.ts"],
+      "@openclaw/gateway-client/scope-upgrade": [
+        "./packages/gateway-client/src/scope-upgrade.ts"
+      ],
       "@openclaw/gateway-client/websocket-data": [
         "./packages/gateway-client/src/websocket-data.ts"
       ],
@@ -91,6 +109,7 @@
       "@openclaw/gateway-protocol/startup-unavailable": [
         "./packages/gateway-protocol/src/startup-unavailable.ts"
       ],
+      "@openclaw/gateway-protocol/system-agent-context": ["./packages/gateway-protocol/src/system-agent-context.ts"],
       "@openclaw/gateway-protocol/version": ["./packages/gateway-protocol/src/version.ts"],
       "@openclaw/gateway-protocol/*": ["./packages/gateway-protocol/src/*"],
       "@openclaw/media-generation-core": ["./packages/media-generation-core/src/index.ts"],
@@ -108,6 +127,9 @@
       ],
       "@openclaw/media-generation-core/*": ["./packages/media-generation-core/src/*"],
       "@openclaw/media-core": ["./packages/media-core/src/index.ts"],
+      "@openclaw/media-core/attachment-classify": [
+        "./packages/media-core/src/attachment-classify.ts"
+      ],
       "@openclaw/media-core/base64": ["./packages/media-core/src/base64.ts"],
       "@openclaw/media-core/constants": ["./packages/media-core/src/constants.ts"],
       "@openclaw/media-core/content-length": ["./packages/media-core/src/content-length.ts"],
@@ -145,24 +167,46 @@
       "@openclaw/normalization-core/agent-id": [
         "./packages/normalization-core/src/agent-id.ts"
       ],
+      "@openclaw/normalization-core/agent-run-terminal-outcome": [
+        "./packages/normalization-core/src/agent-run-terminal-outcome.ts"
+      ],
       "@openclaw/normalization-core/boolean-coercion": [
         "./packages/normalization-core/src/boolean-coercion.ts"
       ],
       "@openclaw/normalization-core/cjk-chars": [
         "./packages/normalization-core/src/cjk-chars.ts"
       ],
+      "@openclaw/normalization-core/code-points": [
+        "./packages/normalization-core/src/code-points.ts"
+      ],
       "@openclaw/normalization-core/error-coercion": [
         "./packages/normalization-core/src/error-coercion.ts"
       ],
       "@openclaw/normalization-core/expect": ["./packages/normalization-core/src/expect.ts"],
+      "@openclaw/normalization-core/grapheme": ["./packages/normalization-core/src/grapheme.ts"],
+      "@openclaw/normalization-core/json-coercion": [
+        "./packages/normalization-core/src/json-coercion.ts"
+      ],
       "@openclaw/normalization-core/json-schema": [
         "./packages/normalization-core/src/json-schema.ts"
+      ],
+      "@openclaw/normalization-core/markdown-plain-text": [
+        "./packages/normalization-core/src/markdown-plain-text.ts"
+      ],
+      "@openclaw/normalization-core/mountinfo-path": [
+        "./packages/normalization-core/src/mountinfo-path.ts"
+      ],
+      "@openclaw/normalization-core/node-crypto": [
+        "./packages/normalization-core/src/node-crypto.ts"
       ],
       "@openclaw/normalization-core/number-coercion": [
         "./packages/normalization-core/src/number-coercion.ts"
       ],
       "@openclaw/normalization-core/phone-presentation": [
         "./packages/normalization-core/src/phone-presentation.ts"
+      ],
+      "@openclaw/normalization-core/promise-like": [
+        "./packages/normalization-core/src/promise-like.ts"
       ],
       "@openclaw/normalization-core/record-coerce": [
         "./packages/normalization-core/src/record-coerce.ts"
@@ -173,6 +217,9 @@
       "@openclaw/normalization-core/stable-node-path": [
         "./packages/normalization-core/src/stable-node-path.ts"
       ],
+      "@openclaw/normalization-core/stable-stringify": [
+        "./packages/normalization-core/src/stable-stringify.ts"
+      ],
       "@openclaw/normalization-core/string-coerce": [
         "./packages/normalization-core/src/string-coerce.ts"
       ],
@@ -182,9 +229,20 @@
       "@openclaw/normalization-core/utf16-slice": [
         "./packages/normalization-core/src/utf16-slice.ts"
       ],
+      "@openclaw/normalization-core/home-dir": [
+        "./packages/normalization-core/src/home-dir.ts"
+      ],
       "@openclaw/normalization-core/*": ["./packages/normalization-core/src/*"],
       "@openclaw/retry": ["./packages/retry/src/index.ts"],
+      "@openclaw/mermaid-renderer": ["./packages/mermaid-renderer/src/renderer.ts"],
       "@openclaw/session-url-contract": ["./packages/session-url-contract/src/index.ts"],
+      "@openclaw/session-url-contract/parse": ["./packages/session-url-contract/src/parse.ts"],
+      "@openclaw/session-url-contract/session-key-normalization": [
+        "./packages/session-url-contract/src/session-key-normalization.ts"
+      ],
+      "@openclaw/session-url-contract/share-build": [
+        "./packages/session-url-contract/src/share-build.ts"
+      ],
       "@openclaw/session-url-contract/*": ["./packages/session-url-contract/src/*"],
       "@openclaw/workboard-contract": ["./packages/workboard-contract/src/index.ts"],
       "@openclaw/acp-core": ["./packages/acp-core/src/index.ts"],

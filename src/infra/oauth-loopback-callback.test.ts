@@ -3,16 +3,19 @@ import * as dnsPromises from "node:dns/promises";
 import type { Server } from "node:http";
 import { createServer } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getFreePort } from "../test-utils/ports.js";
+import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import { hasErrnoCode } from "./errno.js";
 import {
   startOAuthLoopbackCallbackServer,
   type OAuthLoopbackCallbackServer,
 } from "./oauth-loopback-callback.js";
 
 const openCallbacks: OAuthLoopbackCallbackServer[] = [];
+const portClaims: TestPortClaim[] = [];
 
 afterEach(async () => {
   await Promise.all(openCallbacks.splice(0).map((callback) => callback.close()));
+  await Promise.all(portClaims.splice(0).map((claim) => claim.release()));
   vi.restoreAllMocks();
 });
 
@@ -21,17 +24,26 @@ function callbackUrl(hostname: string, port: number, query = ""): string {
   return `http://${host}:${port}/oauth/callback${query}`;
 }
 
-async function getFreeIpv6Port(): Promise<number | undefined> {
+async function getClaimedPort(): Promise<number> {
+  const claim = await acquireTestPortBlock({ offsets: [0] });
+  portClaims.push(claim);
+  return claim.port;
+}
+
+async function getClaimedIpv6Port(): Promise<number | undefined> {
+  const port = await getClaimedPort();
   const probe = createServer();
   try {
     await new Promise<void>((resolve, reject) => {
       probe.once("error", reject);
-      probe.listen(0, "::1", resolve);
+      probe.listen(port, "::1", resolve);
     });
-    const address = probe.address();
-    return typeof address === "object" && address ? address.port : undefined;
-  } catch {
-    return undefined;
+    return port;
+  } catch (error) {
+    if (hasErrnoCode(error, "EADDRNOTAVAIL") || hasErrnoCode(error, "EAFNOSUPPORT")) {
+      return undefined;
+    }
+    throw error;
   } finally {
     await new Promise<void>((resolve) => {
       probe.close(() => resolve());
@@ -40,7 +52,7 @@ async function getFreeIpv6Port(): Promise<number | undefined> {
 }
 
 async function start(hostname = "127.0.0.1") {
-  const port = hostname === "::1" ? await getFreeIpv6Port() : await getFreePort();
+  const port = hostname === "::1" ? await getClaimedIpv6Port() : await getClaimedPort();
   if (!port) {
     return undefined;
   }
@@ -149,7 +161,7 @@ describe("OAuth loopback callback server", () => {
     await timedOut.callback.close();
     await expect(timedOut.callback.waitForCallback()).rejects.toThrow("cancelled");
 
-    const port = await getFreePort();
+    const port = await getClaimedPort();
     const controller = new AbortController();
     const callback = await startOAuthLoopbackCallbackServer({
       redirectUrl: callbackUrl("127.0.0.1", port),
@@ -160,7 +172,7 @@ describe("OAuth loopback callback server", () => {
     openCallbacks.push(callback);
     await expect(callback.waitForCallback()).rejects.toThrow("timeout");
 
-    const abortPort = await getFreePort();
+    const abortPort = await getClaimedPort();
     const abortController = new AbortController();
     const aborted = await startOAuthLoopbackCallbackServer({
       redirectUrl: callbackUrl("127.0.0.1", abortPort),
@@ -179,7 +191,7 @@ describe("OAuth loopback callback server", () => {
       releaseLookup = () => resolve([{ address: "127.0.0.1", family: 4 }]);
     });
     const controller = new AbortController();
-    const port = await getFreePort();
+    const port = await getClaimedPort();
     const startPromise = startOAuthLoopbackCallbackServer({
       redirectUrl: `http://localhost:${port}/oauth/callback`,
       expectedState: "state-1234567890",
@@ -205,7 +217,7 @@ describe("OAuth loopback callback server", () => {
   });
 
   it("binds every loopback address resolved for localhost", async () => {
-    const port = await getFreePort();
+    const port = await getClaimedPort();
     const addresses = [
       ...new Set(
         (await dnsPromises.lookup("localhost", { all: true, verbatim: true })).map(

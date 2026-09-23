@@ -1,10 +1,11 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { ensureCompletionState } from "../../subagent-delivery-state.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "../../subagent-lifecycle-events.js";
-import { updateSubagentArchiveAtMs } from "../../subagent-registry-helpers.js";
-import type { SubagentRunRecord, SwarmCollectorStatus } from "../../subagent-registry.types.js";
-import { loadSubagentSessionEntry } from "../../subagent-session-reconciliation.js";
 import { consumeSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
+import { ensureCompletionState } from "../registry/subagent-delivery-state.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
+import { updateSubagentArchiveAtMs } from "../registry/subagent-registry-helpers.js";
+import type { SwarmCollectorStatus } from "../registry/subagent-registry-read.types.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { loadSubagentSessionEntry } from "../registry/subagent-session-reconciliation.js";
 
 function resolveStatus(
   entry: SubagentRunRecord,
@@ -22,6 +23,27 @@ function resolveStatus(
   // Tool-only structured turns can surface the runner's synthetic completion
   // marker as an error despite having fulfilled the collector contract.
   return hasStructuredResult && entry.execution.outcome?.error === "completed" ? "done" : "failed";
+}
+
+export function prepareTerminatedCollectorLaunch(
+  entry: SubagentRunRecord,
+  endedAt: number,
+  error: string,
+  getRuntimeConfig: () => OpenClawConfig,
+): void {
+  entry.swarmLaunchPending = false;
+  entry.collectorLaunchCleanupPending = true;
+  entry.queuedLaunch = undefined;
+  entry.execution = { ...entry.execution, status: "terminal", endedAt };
+  entry.completion = {
+    required: false,
+    resultText:
+      entry.execution.outcome?.status === "error"
+        ? (entry.execution.outcome.error ?? error)
+        : error,
+    capturedAt: endedAt,
+  };
+  updateSwarmCollectorCompletion(entry, getRuntimeConfig());
 }
 
 /** Freeze the waitable collector record after raw completion capture. */
@@ -61,15 +83,11 @@ export function updateSwarmCollectorCompletion(
         }
       : undefined;
   const resolvedStatus = resolveStatus(entry, captured?.structured !== undefined);
-  const next = {
+  entry.collectorCompletion = {
     status: schemaError && resolvedStatus === "done" ? ("failed" as const) : resolvedStatus,
     ...(captured?.structured !== undefined ? { structured: captured.structured } : {}),
     ...(schemaError ? { schemaError } : {}),
     ...(usage ? { usage } : {}),
   };
-  if (JSON.stringify(entry.collectorCompletion) === JSON.stringify(next)) {
-    return false;
-  }
-  entry.collectorCompletion = next;
   return true;
 }

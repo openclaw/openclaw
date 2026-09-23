@@ -4,8 +4,12 @@
  */
 
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { ZALO_DEFAULT_REQUEST_TIMEOUT_MS, ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS } from "./timeouts.js";
 
 const ZALO_API_BASE = "https://bot-api.zaloplatforms.com";
@@ -134,7 +138,12 @@ export async function callZaloApi<T = unknown>(
   method: string,
   token: string,
   body?: Record<string, unknown>,
-  options?: { apiUrl?: string; timeoutMs?: number; fetch?: ZaloFetch },
+  options?: {
+    apiUrl?: string;
+    timeoutMs?: number;
+    fetch?: ZaloFetch;
+    assertDirectAdapterHandoff?: () => void;
+  },
 ): Promise<ZaloApiResponse<T>> {
   const url = `${resolveZaloApiUrl(options?.apiUrl)}/bot${token}/${method}`;
   const controller = new AbortController();
@@ -146,15 +155,18 @@ export async function callZaloApi<T = unknown>(
   const fetcher = options?.fetch ?? fetch;
 
   try {
-    const response = await fetcher(url, {
+    const request: RequestInit = {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
-    });
+    };
+    options?.assertDirectAdapterHandoff?.();
+    const response = await fetcher(url, request);
 
+    await assertOkOrThrowProviderError(response, `zalo.${method}`);
     const data = await readProviderJsonResponse<ZaloApiResponse<T>>(response, `zalo.${method}`);
 
     if (!data.ok) {
@@ -189,8 +201,12 @@ export async function sendMessage(
   token: string,
   params: ZaloSendMessageParams,
   fetcher?: ZaloFetch,
+  assertDirectAdapterHandoff?: () => void,
 ): Promise<ZaloApiResponse<ZaloMessage>> {
-  return callZaloApi<ZaloMessage>("sendMessage", token, params, { fetch: fetcher });
+  return callZaloApi<ZaloMessage>("sendMessage", token, params, {
+    fetch: fetcher,
+    assertDirectAdapterHandoff,
+  });
 }
 
 /**
@@ -200,6 +216,7 @@ export async function sendPhoto(
   token: string,
   params: ZaloSendPhotoParams,
   fetcher?: ZaloFetch,
+  assertDirectAdapterHandoff?: () => void,
 ): Promise<ZaloApiResponse<ZaloMessage>> {
   const photoUrl = params.photo.trim();
   let parsedPhotoUrl: URL;
@@ -220,12 +237,17 @@ export async function sendPhoto(
   return callZaloApi<ZaloMessage>(
     "sendPhoto",
     token,
-    { ...params, photo: parsedPhotoUrl.href },
+    {
+      ...params,
+      photo: parsedPhotoUrl.href,
+      caption: params.caption === undefined ? undefined : truncateUtf16Safe(params.caption, 2000),
+    },
     {
       // Zalo receives a URL-only JSON body and may resolve that URL before replying.
       // Wait through the hosted-media lifetime plus normal response-processing grace.
       timeoutMs: ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS,
       fetch: fetcher,
+      assertDirectAdapterHandoff,
     },
   );
 }

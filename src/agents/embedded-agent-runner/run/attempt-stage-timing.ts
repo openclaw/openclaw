@@ -1,21 +1,14 @@
-/** Timing for one named stage, including both stage duration and run-relative elapsed time. */
-type EmbeddedRunStageTiming = {
-  name: string;
-  durationMs: number;
-  elapsedMs: number;
-};
+import { isMainThread, threadId } from "node:worker_threads";
+import {
+  createStageTimingTracker,
+  formatStageTimings,
+  type StageTimingSummary,
+} from "../../../shared/stage-timing.js";
 
-/** Snapshot of all marked stages plus total elapsed time at snapshot creation. */
-type EmbeddedRunStageSummary = {
-  totalMs: number;
-  stages: EmbeddedRunStageTiming[];
-};
+type EmbeddedRunStageSummary = StageTimingSummary;
 
 /** Lightweight monotonic-ish stage tracker used for embedded run startup diagnostics. */
-type EmbeddedRunStageTracker = {
-  mark: (name: string) => void;
-  snapshot: () => EmbeddedRunStageSummary;
-};
+type EmbeddedRunStageTracker = ReturnType<typeof createStageTimingTracker>;
 
 /** Canonical stage names for dispatch-time embedded attempt diagnostics. */
 export const EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE = {
@@ -30,36 +23,13 @@ const EMBEDDED_RUN_STAGE_WARN_STAGE_MS = 5_000;
 
 /**
  * Creates an append-only stage tracker. `mark` records time since the previous
- * mark while `snapshot` reports current total elapsed time without mutating the
- * recorded stage list.
+ * mark. Explicit spans do not advance that checkpoint; snapshots do not mutate
+ * the recorded stage list.
  */
 export function createEmbeddedRunStageTracker(options?: {
   now?: () => number;
 }): EmbeddedRunStageTracker {
-  const now = options?.now ?? Date.now;
-  const startedAt = now();
-  let previousAt = startedAt;
-  const stages: EmbeddedRunStageTiming[] = [];
-
-  const toMs = (value: number) => Math.max(0, Math.round(value));
-
-  return {
-    mark(name) {
-      const currentAt = now();
-      stages.push({
-        name,
-        durationMs: toMs(currentAt - previousAt),
-        elapsedMs: toMs(currentAt - startedAt),
-      });
-      previousAt = currentAt;
-    },
-    snapshot() {
-      return {
-        totalMs: toMs(now() - startedAt),
-        stages: stages.slice(),
-      };
-    },
-  };
+  return createStageTimingTracker(options?.now ?? Date.now);
 }
 
 /** Returns true when either total runtime or any single stage exceeds warning thresholds. */
@@ -117,11 +87,6 @@ export function formatEmbeddedRunStageSummary(
   prefix: string,
   summary: EmbeddedRunStageSummary,
 ): string {
-  const stages =
-    summary.stages.length > 0
-      ? summary.stages
-          .map((stage) => `${stage.name}:${stage.durationMs}ms@${stage.elapsedMs}ms`)
-          .join(",")
-      : "none";
-  return `${prefix} totalMs=${summary.totalMs} stages=${stages}`;
+  const stages = formatStageTimings(summary.stages);
+  return `${prefix} pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=${summary.totalMs} stages=${stages}`;
 }

@@ -34,18 +34,20 @@ Reasoning-capable Cohere models support two Compatibility API reasoning modes. O
 
 ## Get started
 
-1. Install the official plugin and restart the Gateway:
+1. Install the official plugin:
 
 ```bash
 openclaw plugins install @openclaw/cohere-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 2. Create a Cohere API key.
 3. Run onboarding:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice cohere-api-key \
   --cohere-api-key "$COHERE_API_KEY"
 ```
@@ -57,6 +59,8 @@ openclaw models list --provider cohere
 ```
 
 Onboarding only sets Cohere as the primary model when no primary model is already configured.
+
+Onboarding preserves your model entries and leaves generated catalog rows to discovery. With `models.mode: "replace"`, it also writes the built-in catalog because that mode skips discovery.
 
 ## Environment-only setup
 

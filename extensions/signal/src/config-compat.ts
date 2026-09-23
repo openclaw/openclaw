@@ -2,7 +2,8 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 // Signal compatibility migration moves shipped flat transport config into account ownership.
 import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveSignalAccountKey } from "./account-selection.js";
 import type { SignalTransportConfig } from "./account-types.js";
 import {
   allocateSignalManagedNativePort,
@@ -12,7 +13,11 @@ import {
   isValidSignalManagedNativePort,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
-import { buildSignalTransportHttpUrl, normalizeSignalTransportUrl } from "./transport-url.js";
+import {
+  assertSignalSocketTransport,
+  buildSignalTransportHttpUrl,
+  normalizeSignalTransportUrl,
+} from "./transport-url.js";
 
 const LEGACY_TRANSPORT_FIELDS = [
   "configPath",
@@ -47,6 +52,11 @@ function isSignalTransportConfig(value: unknown): value is SignalTransportConfig
     return false;
   }
   if (value.kind === "managed-native") {
+    try {
+      assertSignalSocketTransport(value);
+    } catch {
+      return false;
+    }
     if (value.httpPort !== undefined && !isValidSignalManagedNativePort(value.httpPort)) {
       return false;
     }
@@ -77,20 +87,16 @@ function isSignalTransportConfig(value: unknown): value is SignalTransportConfig
   }
 }
 
-function optionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function inherited(entry: Record<string, unknown>, parent: Record<string, unknown>, key: string) {
   return Object.hasOwn(entry, key) ? entry[key] : parent[key];
 }
 
 function legacyBaseUrl(entry: Record<string, unknown>, parent: Record<string, unknown>): string {
-  const url = optionalString(inherited(entry, parent, "httpUrl"));
+  const url = normalizeOptionalString(inherited(entry, parent, "httpUrl"));
   if (url) {
     return normalizeSignalTransportUrl(url);
   }
-  const host = optionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1";
+  const host = normalizeOptionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1";
   const rawPort = inherited(entry, parent, "httpPort");
   const port = typeof rawPort === "number" ? rawPort : 8080;
   return buildSignalTransportHttpUrl(host, port);
@@ -105,11 +111,11 @@ function wasLegacySignalAccountConfigured(
   parent: Record<string, unknown>,
 ): boolean {
   return Boolean(
-    optionalString(inherited(entry, parent, "account")) ||
-    optionalString(inherited(entry, parent, "configPath")) ||
-    optionalString(inherited(entry, parent, "httpUrl")) ||
-    optionalString(inherited(entry, parent, "httpHost")) ||
-    optionalString(inherited(entry, parent, "cliPath")) ||
+    normalizeOptionalString(inherited(entry, parent, "account")) ||
+    normalizeOptionalString(inherited(entry, parent, "configPath")) ||
+    normalizeOptionalString(inherited(entry, parent, "httpUrl")) ||
+    normalizeOptionalString(inherited(entry, parent, "httpHost")) ||
+    normalizeOptionalString(inherited(entry, parent, "cliPath")) ||
     typeof inherited(entry, parent, "httpPort") === "number" ||
     typeof inherited(entry, parent, "autoStart") === "boolean",
   );
@@ -120,7 +126,7 @@ function hasInvalidLegacyHttpUrl(
   parent: Record<string, unknown>,
 ): boolean {
   return entries.some((entry) => {
-    const httpUrl = optionalString(inherited(entry, parent, "httpUrl"));
+    const httpUrl = normalizeOptionalString(inherited(entry, parent, "httpUrl"));
     if (!httpUrl) {
       return false;
     }
@@ -138,14 +144,14 @@ function findInvalidLegacyDerivedEndpoint(
   parent: Record<string, unknown>,
 ): "host" | "port" | undefined {
   for (const entry of entries) {
-    if (optionalString(inherited(entry, parent, "httpUrl"))) {
+    if (normalizeOptionalString(inherited(entry, parent, "httpUrl"))) {
       continue;
     }
     const rawPort = inherited(entry, parent, "httpPort");
     if (rawPort !== undefined && !isValidSignalManagedNativePort(rawPort)) {
       return "port";
     }
-    const host = optionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1";
+    const host = normalizeOptionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1";
     try {
       buildSignalTransportHttpUrl(host, typeof rawPort === "number" ? rawPort : 8080);
     } catch {
@@ -175,7 +181,7 @@ function requiresDetection(
     return false;
   }
   return (
-    Boolean(optionalString(inherited(entry, parent, "httpUrl"))) ||
+    Boolean(normalizeOptionalString(inherited(entry, parent, "httpUrl"))) ||
     !resolveLegacyAutoStart(entry, parent)
   );
 }
@@ -188,20 +194,20 @@ function resolveLegacyAutoStart(
   if (typeof autoStart === "boolean") {
     return autoStart;
   }
-  return !optionalString(inherited(entry, parent, "httpUrl"));
+  return !normalizeOptionalString(inherited(entry, parent, "httpUrl"));
 }
 
 function resolveManagedConnectionUrl(
   entry: Record<string, unknown>,
   parent: Record<string, unknown>,
 ): string | undefined {
-  const httpUrl = optionalString(inherited(entry, parent, "httpUrl"));
+  const httpUrl = normalizeOptionalString(inherited(entry, parent, "httpUrl"));
   if (!httpUrl) {
     return undefined;
   }
   const normalizedUrl = normalizeSignalTransportUrl(httpUrl);
   const endpoint = new URL(normalizedUrl);
-  const bindHost = (optionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1")
+  const bindHost = (normalizeOptionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1")
     .replace(/^\[|\]$/g, "")
     .toLowerCase();
   const rawBindPort = inherited(entry, parent, "httpPort");
@@ -222,10 +228,10 @@ function buildManagedNativeTransport(
   parent: Record<string, unknown>,
 ): SignalTransportConfig {
   const value = (key: string) => inherited(entry, parent, key);
-  const configPath = optionalString(value("configPath"));
-  const cliPath = optionalString(value("cliPath"));
+  const configPath = normalizeOptionalString(value("configPath"));
+  const cliPath = normalizeOptionalString(value("cliPath"));
   const url = resolveManagedConnectionUrl(entry, parent);
-  const httpHost = optionalString(value("httpHost"));
+  const httpHost = normalizeOptionalString(value("httpHost"));
   const httpPort = value("httpPort");
   const startupTimeoutMs = value("startupTimeoutMs");
   const receiveMode = value("receiveMode");
@@ -280,7 +286,7 @@ async function resolveLegacyTransport(params: {
   if (resolved) {
     return resolved;
   }
-  const account = optionalString(inherited(params.entry, params.parent, "account"));
+  const account = normalizeOptionalString(inherited(params.entry, params.parent, "account"));
   try {
     const detected = await params.detect?.({
       url: legacyBaseUrl(params.entry, params.parent),
@@ -315,7 +321,7 @@ function hasRootSignalAccount(entries: Record<string, unknown>[]): boolean {
   const root = entries[0];
   return (
     entries.length === 1 ||
-    Boolean(optionalString(root?.account)) ||
+    Boolean(normalizeOptionalString(root?.account)) ||
     isSignalTransportConfig(root?.transport)
   );
 }
@@ -327,18 +333,15 @@ function signalAccountIds(entries: Record<string, unknown>[]): string[] {
     .map(([accountId]) => accountId);
 }
 
-function isDefaultSignalAccountId(accountId: string | undefined): boolean {
-  return Boolean(accountId?.trim()) && normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID;
+function resolveNestedDefaultEntryIndex(entries: Record<string, unknown>[]): number | undefined {
+  const accounts = isRecord(entries[0]?.accounts) ? entries[0].accounts : {};
+  const key = resolveSignalAccountKey(accounts, DEFAULT_ACCOUNT_ID);
+  const offset = signalAccountIds(entries).findIndex((accountId) => accountId === key);
+  return offset >= 0 ? offset + 1 : undefined;
 }
 
-function resolveSignalAccountKey(
-  accounts: Record<string, unknown>,
-  accountId: string,
-): string | undefined {
-  const normalizedAccountId = normalizeAccountId(accountId);
-  return Object.keys(accounts).find(
-    (key) => Boolean(key.trim()) && normalizeAccountId(key) === normalizedAccountId,
-  );
+function isDefaultSignalAccountId(accountId: string | undefined): boolean {
+  return Boolean(accountId?.trim()) && normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID;
 }
 
 function nestedDefaultOwnsEffectiveTransport(entries: Record<string, unknown>[]): boolean {
@@ -361,7 +364,7 @@ function isDiscardedTransportEntry(entries: Record<string, unknown>[], index: nu
   // A canonical root transport owns the default account; a nested default's
   // retired endpoint fields are cleanup-only and must not block migration.
   return (
-    isDefaultSignalAccountId(signalAccountIds(entries)[index - 1]) &&
+    index === resolveNestedDefaultEntryIndex(entries) &&
     isSignalTransportConfig(entries[0]?.transport)
   );
 }
@@ -419,19 +422,19 @@ function allocateMigratedManagedPorts(params: {
 }): Array<SignalTransportConfig | undefined> {
   const reservedPorts = new Set<number>();
   const rootIsAccount = hasRootSignalAccount(params.entries);
-  const accountIds = signalAccountIds(params.entries);
-  const nestedDefaultOffset = accountIds.findIndex((accountId) =>
-    isDefaultSignalAccountId(accountId),
-  );
+  const nestedDefaultIndex = resolveNestedDefaultEntryIndex(params.entries);
   const canonicalDefaultIndex = isSignalTransportConfig(params.entries[0]?.transport)
     ? 0
-    : nestedDefaultOffset >= 0
-      ? nestedDefaultOffset + 1
+    : nestedDefaultIndex !== undefined
+      ? nestedDefaultIndex
       : rootIsAccount
         ? 0
         : undefined;
   for (const [index, transport] of params.transports.entries()) {
     if (!transport || (index === 0 && canonicalDefaultIndex !== 0)) {
+      continue;
+    }
+    if (transport.kind === "managed-native" && transport.socketPath !== undefined) {
       continue;
     }
     if (transport.kind !== "managed-native") {
@@ -455,7 +458,7 @@ function allocateMigratedManagedPorts(params: {
     if (!transport || (index === 0 && canonicalDefaultIndex !== 0)) {
       return transport;
     }
-    if (transport.kind !== "managed-native") {
+    if (transport.kind !== "managed-native" || transport.socketPath !== undefined) {
       return transport;
     }
     const existingCanonical = isRecord(params.entries[index]?.transport);
@@ -484,7 +487,7 @@ function applyMigratedSignalTransports(params: {
   if (!isRecord(nextSignal)) {
     return undefined;
   }
-  const accountIds = signalAccountIds(params.entries);
+  const nestedDefaultIndex = resolveNestedDefaultEntryIndex(params.entries);
   const nextAccounts = isRecord(nextSignal.accounts) ? nextSignal.accounts : {};
   const nextEntries = [nextSignal, ...Object.values(nextAccounts).filter(isRecord)];
   const rootIsAccount = hasRootSignalAccount(params.entries);
@@ -492,8 +495,7 @@ function applyMigratedSignalTransports(params: {
     ? params.entries[0].transport
     : undefined;
   for (const [index, entry] of nextEntries.entries()) {
-    const accountId = index === 0 ? undefined : accountIds[index - 1];
-    if (isDefaultSignalAccountId(accountId)) {
+    if (index === nestedDefaultIndex) {
       const defaultTransport = canonicalRootTransport ?? params.transports[index];
       if (defaultTransport) {
         nextSignal.transport = defaultTransport;
@@ -525,8 +527,8 @@ function hasContainerTransportWithoutEffectiveAccount(cfg: OpenClawConfig): bool
   const defaultEntry = defaultKey ? accounts[defaultKey] : undefined;
   const defaultAccount =
     isRecord(defaultEntry) && defaultEntry.account !== undefined
-      ? optionalString(defaultEntry.account)
-      : optionalString(signal.account);
+      ? normalizeOptionalString(defaultEntry.account)
+      : normalizeOptionalString(signal.account);
   const channelEnabled = signal.enabled !== false;
   const defaultEnabled = !isRecord(defaultEntry) || defaultEntry.enabled !== false;
   if (rootTransport?.kind === "container" && channelEnabled && defaultEnabled && !defaultAccount) {
@@ -550,7 +552,9 @@ function hasContainerTransportWithoutEffectiveAccount(cfg: OpenClawConfig): bool
       continue;
     }
     const account =
-      entry.account === undefined ? optionalString(signal.account) : optionalString(entry.account);
+      entry.account === undefined
+        ? normalizeOptionalString(signal.account)
+        : normalizeOptionalString(entry.account);
     if (!account) {
       return true;
     }
@@ -558,106 +562,14 @@ function hasContainerTransportWithoutEffectiveAccount(cfg: OpenClawConfig): bool
   return false;
 }
 
-export async function migrateLegacySignalTransportConfig(params: {
-  cfg: OpenClawConfig;
-  detect?: DetectTransport;
-}): Promise<ChannelDoctorConfigMutation> {
-  const signal = params.cfg.channels?.signal as unknown;
-  if (!isRecord(signal)) {
-    return { config: params.cfg, changes: [] };
-  }
-  const accounts = isRecord(signal.accounts) ? signal.accounts : {};
-  const hasLegacy =
-    Object.hasOwn(signal, "apiMode") ||
-    hasLegacyFields(signal) ||
-    Object.values(accounts).some((entry) => isRecord(entry) && hasLegacyFields(entry));
-  if (!hasLegacy) {
-    return { config: params.cfg, changes: [] };
-  }
-  const apiMode = signal.apiMode;
-  const entries = [signal, ...Object.values(accounts).filter(isRecord)];
-  const migrationEntries = entries.filter((_, index) => shouldMaterializeTransport(entries, index));
-  const legacyResolutionEntries = migrationEntries.filter(
-    (entry) => !isSignalTransportConfig(entry.transport),
-  );
-  const invalidDerivedEndpoint = findInvalidLegacyDerivedEndpoint(legacyResolutionEntries, signal);
-  if (invalidDerivedEndpoint) {
-    return {
-      config: params.cfg,
-      changes: [],
-      warnings: [
-        invalidDerivedEndpoint === "port"
-          ? PENDING_LEGACY_INVALID_PORT_WARNING
-          : PENDING_LEGACY_INVALID_HOST_WARNING,
-      ],
-    };
-  }
-  if (hasInvalidLegacyHttpUrl(legacyResolutionEntries, signal)) {
-    return {
-      config: params.cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_INVALID_URL_WARNING],
-    };
-  }
-  if (
-    !params.detect &&
-    legacyResolutionEntries.some((entry) => requiresDetection(entry, signal, apiMode))
-  ) {
-    return {
-      config: params.cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_TRANSPORT_WARNING],
-    };
-  }
-  const resolvedTransports = await Promise.all(
-    entries.map(async (entry, index) =>
-      !shouldMaterializeTransport(entries, index)
-        ? undefined
-        : await resolveLegacyTransport({ entry, parent: signal, apiMode, detect: params.detect }),
-    ),
-  );
-  if (hasInvalidManagedTransportPort(resolvedTransports)) {
-    return {
-      config: params.cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_INVALID_PORT_WARNING],
-    };
-  }
-  const transports = allocateMigratedManagedPorts({
-    entries,
-    transports: resolvedTransports,
-  });
-  if (
-    transports.some((transport, index) => shouldMaterializeTransport(entries, index) && !transport)
-  ) {
-    return {
-      config: params.cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_TRANSPORT_WARNING],
-    };
-  }
-  const next = applyMigratedSignalTransports({ cfg: params.cfg, entries, transports });
-  if (!next) {
-    return { config: params.cfg, changes: [] };
-  }
-  if (hasContainerTransportWithoutEffectiveAccount(next)) {
-    return {
-      config: params.cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_CONTAINER_ACCOUNT_WARNING],
-    };
-  }
-  return {
-    config: next,
-    changes: [
-      "Migrated channels.signal transport settings to concrete account-owned transport objects.",
-    ],
-  };
-}
-
-export function migrateLegacySignalTransportConfigSync(
-  cfg: OpenClawConfig,
-): ChannelDoctorConfigMutation {
+function prepareLegacySignalTransportMigration(cfg: OpenClawConfig):
+  | ChannelDoctorConfigMutation
+  | {
+      signal: Record<string, unknown>;
+      apiMode: unknown;
+      entries: Record<string, unknown>[];
+      legacyResolutionEntries: Record<string, unknown>[];
+    } {
   const signal = cfg.channels?.signal as unknown;
   if (!isRecord(signal)) {
     return { config: cfg, changes: [] };
@@ -670,7 +582,25 @@ export function migrateLegacySignalTransportConfigSync(
   if (!hasLegacy) {
     return { config: cfg, changes: [] };
   }
+  const apiMode = signal.apiMode;
   const entries = [signal, ...Object.values(accounts).filter(isRecord)];
+  // A malformed explicit socket opt-in must never become an HTTP daemon during repair.
+  if (
+    entries.some(
+      (entry) =>
+        isRecord(entry.transport) &&
+        Object.hasOwn(entry.transport, "socketPath") &&
+        (entry.transport.kind !== "managed-native" || !isSignalTransportConfig(entry.transport)),
+    )
+  ) {
+    return {
+      config: cfg,
+      changes: [],
+      warnings: [
+        "- channels.signal: invalid transport.socketPath configuration; correct the socket path and remove conflicting HTTP or receiveMode on-start options, then run openclaw doctor --fix.",
+      ],
+    };
+  }
   const migrationEntries = entries.filter((_, index) => shouldMaterializeTransport(entries, index));
   const legacyResolutionEntries = migrationEntries.filter(
     (entry) => !isSignalTransportConfig(entry.transport),
@@ -694,16 +624,14 @@ export function migrateLegacySignalTransportConfigSync(
       warnings: [PENDING_LEGACY_INVALID_URL_WARNING],
     };
   }
-  const resolvedTransports = entries.map((entry, index) => {
-    if (!shouldMaterializeTransport(entries, index)) {
-      return undefined;
-    }
-    return resolveLegacyTransportWithoutDetection({
-      entry,
-      parent: signal,
-      apiMode: signal.apiMode,
-    });
-  });
+  return { signal, apiMode, entries, legacyResolutionEntries };
+}
+
+function finishLegacySignalTransportMigration(
+  cfg: OpenClawConfig,
+  entries: Record<string, unknown>[],
+  resolvedTransports: Array<SignalTransportConfig | undefined>,
+): ChannelDoctorConfigMutation {
   if (hasInvalidManagedTransportPort(resolvedTransports)) {
     return {
       config: cfg,
@@ -718,7 +646,11 @@ export function migrateLegacySignalTransportConfigSync(
   if (
     transports.some((transport, index) => shouldMaterializeTransport(entries, index) && !transport)
   ) {
-    return { config: cfg, changes: [], warnings: [PENDING_LEGACY_TRANSPORT_WARNING] };
+    return {
+      config: cfg,
+      changes: [],
+      warnings: [PENDING_LEGACY_TRANSPORT_WARNING],
+    };
   }
   const next = applyMigratedSignalTransports({ cfg, entries, transports });
   if (!next) {
@@ -737,4 +669,50 @@ export function migrateLegacySignalTransportConfigSync(
       "Migrated channels.signal transport settings to concrete account-owned transport objects.",
     ],
   };
+}
+
+export async function migrateLegacySignalTransportConfig(params: {
+  cfg: OpenClawConfig;
+  detect?: DetectTransport;
+}): Promise<ChannelDoctorConfigMutation> {
+  const prepared = prepareLegacySignalTransportMigration(params.cfg);
+  if ("config" in prepared) {
+    return prepared;
+  }
+  const { signal, apiMode, entries, legacyResolutionEntries } = prepared;
+  if (
+    !params.detect &&
+    legacyResolutionEntries.some((entry) => requiresDetection(entry, signal, apiMode))
+  ) {
+    return {
+      config: params.cfg,
+      changes: [],
+      warnings: [PENDING_LEGACY_TRANSPORT_WARNING],
+    };
+  }
+  const resolvedTransports = await Promise.all(
+    entries.map(async (entry, index) =>
+      !shouldMaterializeTransport(entries, index)
+        ? undefined
+        : await resolveLegacyTransport({ entry, parent: signal, apiMode, detect: params.detect }),
+    ),
+  );
+  return finishLegacySignalTransportMigration(params.cfg, entries, resolvedTransports);
+}
+
+export function migrateLegacySignalTransportConfigSync(
+  cfg: OpenClawConfig,
+): ChannelDoctorConfigMutation {
+  const prepared = prepareLegacySignalTransportMigration(cfg);
+  if ("config" in prepared) {
+    return prepared;
+  }
+  const { signal, apiMode, entries } = prepared;
+  const resolvedTransports = entries.map((entry, index) => {
+    if (!shouldMaterializeTransport(entries, index)) {
+      return undefined;
+    }
+    return resolveLegacyTransportWithoutDetection({ entry, parent: signal, apiMode });
+  });
+  return finishLegacySignalTransportMigration(cfg, entries, resolvedTransports);
 }

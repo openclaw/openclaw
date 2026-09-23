@@ -12,6 +12,7 @@ import type { RuntimeEnv } from "../../../runtime.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "../../daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, isGatewayDaemonRuntime } from "../../daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../gateway-install-token.js";
+import { resolveGatewaySetupRuntime } from "../../gateway-setup-runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 import { ensureSystemdUserLingerNonInteractive } from "../../systemd-linger.js";
 
@@ -39,8 +40,8 @@ export async function installGatewayDaemonNonInteractive(params: {
   const systemdAvailable =
     process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
   if (process.platform === "linux" && !systemdAvailable) {
-    // Container and CI sessions often lack a user systemd manager; setup can
-    // still succeed with a direct gateway run, so this is a skip not a fatal.
+    // Container and CI sessions often lack a user systemd manager; onboarding
+    // owns the failure outcome for an explicitly requested installation.
     runtime.log(
       "Systemd user services are unavailable; skipping service install. Use a direct shell run (`openclaw gateway run`) or rerun without --install-daemon on this session.",
     );
@@ -48,7 +49,7 @@ export async function installGatewayDaemonNonInteractive(params: {
   }
 
   if (!isGatewayDaemonRuntime(daemonRuntimeRaw)) {
-    runtime.error('Invalid --daemon-runtime. Use "node"; Bun lacks the required node:sqlite API.');
+    runtime.error('Invalid --daemon-runtime. Use "node" or "bun".');
     runtime.exit(1);
     return { installed: false };
   }
@@ -74,22 +75,27 @@ export async function installGatewayDaemonNonInteractive(params: {
     runtime.exit(1);
     return { installed: false };
   }
-  const { programArguments, workingDirectory, environment, environmentValueSources } =
-    await buildGatewayInstallPlan({
-      env: process.env,
-      port,
-      runtime: daemonRuntimeRaw,
-      warn: (message) => runtime.log(message),
-      config: params.nextConfig,
-    });
+  const existingCommand = await service.readCommand(process.env);
+  const selection = await resolveGatewaySetupRuntime({
+    env: process.env,
+    existingCommand,
+    runtime: opts.daemonRuntime,
+  });
+  const plan = await buildGatewayInstallPlan({
+    env: selection.env,
+    port,
+    runtime: selection.runtime,
+    pinnedRuntimePath: selection.pinnedRuntimePath,
+    existingCommand,
+    warn: (message) => runtime.log(message),
+    config: params.nextConfig,
+  });
   try {
     await service.install({
       env: process.env,
       stdout: process.stdout,
-      programArguments,
-      workingDirectory,
-      environment,
-      environmentValueSources,
+      ...plan,
+      runtimePinUpdate: selection.runtimePinUpdate,
     });
   } catch (err) {
     runtime.error(`Gateway service install failed: ${formatErrorMessage(err)}`);

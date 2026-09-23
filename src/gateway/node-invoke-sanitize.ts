@@ -8,15 +8,20 @@ import type { GatewayClient } from "./server-methods/types.js";
 // the gateway. system.run carries approval bindings and therefore needs special
 // handling; other commands pass through unchanged.
 /** Sanitizes node.invoke params before forwarding them to a connected node. */
-export function sanitizeNodeInvokeParamsForForwarding(opts: {
+export async function sanitizeNodeInvokeParamsForForwarding(opts: {
   nodeId: string;
   command: string;
   rawParams: unknown;
   client: GatewayClient | null;
   execApprovalManager?: ExecApprovalManager;
-}):
-  | { ok: true; params: unknown }
-  | { ok: false; message: string; details?: Record<string, unknown> } {
+}): Promise<
+  | {
+      ok: true;
+      params: unknown;
+      approvalAuthority?: { recordId: string; decision: "allow-once" | "allow-always" };
+    }
+  | { ok: false; message: string; details?: Record<string, unknown> }
+> {
   if (opts.command === "system.run") {
     return sanitizeSystemRunParamsForForwarding({
       nodeId: opts.nodeId,

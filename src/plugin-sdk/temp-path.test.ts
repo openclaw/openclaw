@@ -35,6 +35,19 @@ describe("buildRandomTempFilePath", () => {
       verifyInsideTmpRoot: false,
     },
     {
+      name: "preserves relative roots, trimmed UUIDs, and compound extensions",
+      input: {
+        prefix: "archive",
+        extension: "tar.gz",
+        tmpDir: "relative/tmp",
+        now: 123.9,
+        uuid: " abc ",
+      },
+      expectedPath: path.join("relative/tmp", "archive-123-abc.tar.gz"),
+      expectedBasename: "archive-123-abc.tar.gz",
+      verifyInsideTmpRoot: false,
+    },
+    {
       name: "sanitizes prefix and extension to avoid path traversal segments",
       input: {
         prefix: "../../channels/../media",
@@ -55,6 +68,21 @@ describe("buildRandomTempFilePath", () => {
       expectPathInsideTmpRoot(result);
     }
   });
+
+  it.each(["../../../escaped", "..\\..\\escaped", "id/name", "id\0name"])(
+    "rejects path-control bytes in the UUID override %j",
+    (uuid) => {
+      expect(() =>
+        buildRandomTempFilePath({ prefix: "download", tmpDir: "/tmp/owned", now: 1, uuid }),
+      ).toThrow(/safe path segment/);
+    },
+  );
+
+  it.each(["", "   "])("generates a UUID for a blank override %j", (uuid) => {
+    const result = buildRandomTempFilePath({ prefix: "media", now: 123, extension: ".jpg", uuid });
+    expect(path.basename(result)).toMatch(/^media-123-[\da-f-]{36}\.jpg$/u);
+    expectPathInsideTmpRoot(result);
+  });
 });
 
 describe("withTempDownloadPath", () => {
@@ -62,22 +90,23 @@ describe("withTempDownloadPath", () => {
     {
       name: "creates a temp path under tmp dir and cleans up the temp directory",
       input: { prefix: "line-media" },
-      expectCleanup: true,
       expectedBasename: undefined,
     },
     {
       name: "sanitizes prefix and fileName",
       input: { prefix: "../../channels/../media", fileName: "../../evil.bin" },
-      expectCleanup: false,
       expectedBasename: "evil.bin",
     },
-  ])("$name", async ({ input, expectCleanup, expectedBasename }) => {
+    ...[".", "..", "../..", "-..-"].map((fileName) => ({
+      name: `falls back to the default name for the dot segment ${fileName}`,
+      input: { prefix: "media", fileName },
+      expectedBasename: "download.bin",
+    })),
+  ])("$name", async ({ input, expectedBasename }) => {
     let capturedPath = "";
     await withTempDownloadPath(input, async (tmpPath) => {
       capturedPath = tmpPath;
-      if (expectCleanup) {
-        await fs.writeFile(tmpPath, "ok");
-      }
+      await fs.writeFile(tmpPath, "ok");
     });
 
     expectPathInsideTmpRoot(capturedPath);
@@ -86,14 +115,6 @@ describe("withTempDownloadPath", () => {
     } else {
       expect(capturedPath).toContain(path.join(resolvePreferredOpenClawTmpDir(), "line-media-"));
     }
-    if (expectCleanup) {
-      let statError: NodeJS.ErrnoException | undefined;
-      try {
-        await fs.stat(capturedPath);
-      } catch (error) {
-        statError = error as NodeJS.ErrnoException;
-      }
-      expect(statError?.code).toBe("ENOENT");
-    }
+    await expect(fs.stat(path.dirname(capturedPath))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

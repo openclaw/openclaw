@@ -51,8 +51,10 @@ export async function sandboxListCommand(
   opts: SandboxListOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const containers = opts.browser ? [] : await listSandboxContainers().catch(() => []);
-  const browsers = opts.browser ? await listSandboxBrowsers().catch(() => []) : [];
+  // A failing backend/registry probe must surface, not render as an empty
+  // list that reads as "no sandboxes".
+  const containers = opts.browser ? [] : await listSandboxContainers();
+  const browsers = opts.browser ? await listSandboxBrowsers() : [];
 
   if (opts.json) {
     writeRuntimeJson(runtime, { containers, browsers });
@@ -65,7 +67,7 @@ export async function sandboxListCommand(
     displayContainers(containers, runtime);
   }
 
-  displaySummary(containers, browsers, runtime);
+  displaySummary(opts.browser ? browsers : containers, opts.browser, runtime);
 }
 
 /** Stops and removes sandbox runtimes matching the requested scope. */
@@ -81,7 +83,7 @@ export async function sandboxRecreateCommand(
 
   if (filtered.containers.length + filtered.browsers.length === 0) {
     runtime.log(
-      `No sandbox runtimes found matching the criteria. Run ${formatCliCommand("openclaw sandbox list")} to inspect active runtimes.`,
+      `No sandbox runtimes found matching the criteria. Run ${formatCliCommand(`openclaw sandbox list${opts.browser ? " --browser" : ""}`)} to inspect active runtimes.`,
     );
     return;
   }
@@ -97,6 +99,9 @@ export async function sandboxRecreateCommand(
   displayRecreateResult(result, runtime);
 
   if (result.failCount > 0) {
+    runtime.error(
+      `Run ${formatCliCommand(`openclaw sandbox list${opts.browser ? " --browser" : ""}`)} to inspect what remains.`,
+    );
     runtime.exit(1);
   }
 }
@@ -104,7 +109,7 @@ export async function sandboxRecreateCommand(
 function validateRecreateOptions(opts: SandboxRecreateOptions, runtime: RuntimeEnv): boolean {
   if (!opts.all && !opts.session && !opts.agent) {
     runtime.error(
-      `Choose the sandbox scope: --all, --session <key>, or --agent <id>. Run ${formatCliCommand("openclaw sandbox list")} to inspect active runtimes first.`,
+      `Choose the sandbox scope: --all, --session <key>, or --agent <id>. Run ${formatCliCommand(`openclaw sandbox list${opts.browser ? " --browser" : ""}`)} to inspect active runtimes first.`,
     );
     runtime.exit(1);
     return false;
@@ -121,8 +126,8 @@ function validateRecreateOptions(opts: SandboxRecreateOptions, runtime: RuntimeE
 }
 
 async function fetchAndFilterContainers(opts: SandboxRecreateOptions): Promise<FilteredContainers> {
-  const allContainers = await listSandboxContainers().catch(() => []);
-  const allBrowsers = await listSandboxBrowsers().catch(() => []);
+  const allContainers = await listSandboxContainers();
+  const allBrowsers = await listSandboxBrowsers();
 
   let containers = opts.browser ? [] : allContainers;
   let browsers = opts.browser ? allBrowsers : [];
@@ -202,9 +207,7 @@ async function removeContainer(
     runtime.log(`✓ Removed ${containerName}`);
     return { success: true };
   } catch (err) {
-    runtime.error(
-      `Failed to remove ${containerName}: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw sandbox list")} to inspect what remains.`,
-    );
+    runtime.error(`Failed to remove ${containerName}: ${formatErrorMessage(err)}.`);
     return { success: false };
   }
 }

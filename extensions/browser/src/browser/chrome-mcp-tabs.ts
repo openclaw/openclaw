@@ -17,8 +17,6 @@ import {
   type ChromeMcpOperationOptions,
   type ChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
-import { cacheKeyMatchesProfileName } from "./chrome-mcp-options.js";
-import { cleanupTarget } from "./chrome-mcp-process.js";
 import { extractStructuredPages } from "./chrome-mcp-result.js";
 import {
   callTool,
@@ -28,10 +26,6 @@ import {
   registerChromeMcpTargets,
   withChromeMcpLease,
 } from "./chrome-mcp-routing.js";
-import {
-  chromeMcpSessions as sessions,
-  retainedChromeMcpCleanupSessions as retainedCleanupSessions,
-} from "./chrome-mcp-state.js";
 import type { BrowserOpenResult, BrowserTab, BrowserTabOwnership } from "./client.types.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 
@@ -40,27 +34,25 @@ export async function ensureChromeMcpAvailable(
   profileOptions?: string | ChromeMcpProfileOptions,
   options: ChromeMcpCallOptions = {},
 ): Promise<void> {
-  await withChromeMcpLease(profileName, profileOptions, options, async () => {});
+  await withChromeMcpLease(profileName, profileOptions, options, async (lease, normalized) => {
+    if (!options.pageProbe) {
+      return;
+    }
+    try {
+      const pages = await listChromeMcpTargetsWithLease({
+        profileName,
+        profileOptions: normalized,
+        lease,
+        options: { ...options, timeoutMs: options.pageProbe.timeoutMs?.() ?? options.timeoutMs },
+      });
+      options.pageProbe.onResult(pages.length);
+    } catch {
+      options.signal?.throwIfAborted();
+      options.pageProbe.onResult(null);
+    }
+  });
 }
 
-/** Return the cached Chrome MCP process pid for a profile, when present. */
-export function getChromeMcpPid(profileName: string): number | null {
-  for (const [key, session] of sessions.entries()) {
-    if (cacheKeyMatchesProfileName(key, profileName)) {
-      return session.transport.pid ?? null;
-    }
-  }
-  for (const [key, retained] of retainedCleanupSessions) {
-    if (cacheKeyMatchesProfileName(key, profileName)) {
-      const session = retained.values().next().value;
-      const target = session?.processCleanup ? cleanupTarget(session.processCleanup) : undefined;
-      return target?.root.pid ?? session?.transport.pid ?? null;
-    }
-  }
-  return null;
-}
-
-/** Close every cached Chrome MCP session. */
 async function readChromeMcpTabs(
   profileName: string,
   profileOptions?: string | ChromeMcpProfileOptions,
@@ -359,5 +351,3 @@ export async function openChromeMcpTab(
     },
   );
 }
-
-/** Bring a Chrome MCP page to the foreground. */

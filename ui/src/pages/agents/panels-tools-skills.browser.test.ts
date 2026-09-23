@@ -1,13 +1,30 @@
 // Control UI tests cover agents panels tools skills behavior.
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
-import type { SkillStatusEntry } from "../../api/types.ts";
+import { assert, describe, expect, it, vi } from "vitest";
+import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
-import { renderAgentSkills, renderAgentTools } from "./panels-tools-skills.ts";
+import { renderAgentTools } from "./panels-tools-skills.ts";
 
 installBrowserHistoryIsolation();
 
 function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
+  const githubIdentity = new GitHubIdentityController({
+    requestUpdate: () => undefined,
+    runExternalMutation: async () => ({
+      ok: false,
+      reason: "unavailable",
+      error: "Mutation unavailable in rendering test.",
+    }),
+  });
+  githubIdentity.sync({
+    client: null,
+    connected: false,
+    target: { kind: "shared", scope: "agent", agentId: "main", config: null },
+    statusReadable: true,
+    configurable: false,
+    authorizable: false,
+    clientRevision: 0,
+  });
   return {
     agentId: "main",
     canUpdateConfig: true,
@@ -27,6 +44,8 @@ function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>
     toolsEffectiveResult: null,
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: true,
+    githubIdentity,
+    onOpenGitHubConnections: vi.fn(),
     onProfileChange: () => undefined,
     onOverridesChange: () => undefined,
     onConfigReload: () => undefined,
@@ -129,10 +148,10 @@ describe("agents tools panel (browser)", () => {
       Array.from(container.querySelectorAll(".settings-section__heading")).map((heading) =>
         heading.textContent?.trim(),
       ),
-    ).toEqual(["Tool Access", "Available Right Now", "Tool Catalog"]);
+    ).toEqual(["Available Tools", "Available Right Now", "GitHub account", "Tool Catalog"]);
     expect(
       Array.from(container.querySelectorAll(".settings-row__title")).some(
-        (title) => title.textContent?.trim() === "Quick Presets",
+        (title) => title.textContent?.trim() === "Tool Presets",
       ),
     ).toBe(true);
     const runtimeChips = Array.from(container.querySelectorAll(".agent-tools-runtime-chip")).map(
@@ -164,6 +183,178 @@ describe("agents tools panel (browser)", () => {
     expect(container.querySelector(".agent-tool-card[open]")).toBeNull();
   });
 
+  it("renders the GitHub identity section with settings rows only", async () => {
+    const container = document.createElement("div");
+    const params = createBaseParams();
+    const nativeIdentity = {
+      source: "system-detected" as const,
+      credentialKind: "native" as const,
+      credentialState: "available" as const,
+      account: { login: "octocat" },
+      gitAuthor: { name: null, email: null },
+      evidence: "github-api" as const,
+      accessExpiresAtMs: null,
+      refreshState: "not_applicable" as const,
+      oauthScopes: [],
+      repositoryGrants: "unknown" as const,
+    };
+    params.githubIdentity.status = {
+      agentId: "main",
+      selectedScope: "system",
+      selected: { scope: "system", configured: false, identity: nativeIdentity },
+      effective: nativeIdentity,
+    };
+    render(renderAgentTools(params), container);
+    await Promise.resolve();
+
+    const section = Array.from(container.querySelectorAll(".settings-section")).find((candidate) =>
+      candidate.querySelector(".settings-section__heading")?.textContent?.includes("GitHub"),
+    );
+    expect(section).toBeDefined();
+    if (!section) {
+      throw new Error("expected GitHub identity section");
+    }
+    // The whole section stays inside the one group surface: no bespoke form
+    // markup or nested callouts, per ui/docs/design-system/settings-design.md.
+    expect(section.querySelector(".form-grid")).toBeNull();
+    expect(section.querySelector(".callout")).toBeNull();
+    expect(section.querySelector(".settings-group .settings-account__avatar")).toBeNull();
+    expect(section.textContent).toContain("@octocat");
+    expect(section.querySelector(".settings-status")?.textContent?.trim()).toBe("Verified");
+    // Raw wire enums never render; friendly labels replace them.
+    expect(section.textContent).not.toContain("system-detected");
+    expect(section.textContent).not.toContain("github-api");
+    const authorRow = Array.from(section.querySelectorAll(".settings-row")).find((row) =>
+      row.querySelector(".settings-row__title")?.textContent?.includes("Git Author"),
+    );
+    expect(authorRow?.querySelector(".settings-row__value")?.textContent?.trim()).toBe("Not set");
+    expect(section.querySelector(".settings-segmented")).toBeNull();
+    expect(section.querySelector(".settings-secret input")).toBeNull();
+    expect(section.textContent).toContain("Manage connections in Profile");
+    expect(section.textContent).not.toContain("OS account running the Gateway");
+    expect(section.textContent).not.toContain("Advanced: agent GitHub override");
+  });
+
+  it("renders only the pinned device link and one-time code while authorization is active", async () => {
+    const container = document.createElement("div");
+    const client = {
+      request: vi.fn(async () => ({
+        requestId: "github-device-11111111111111111111111111111111",
+        userCode: "ABCD-1234",
+        verificationUri: "https://github.com/login/device",
+        expiresInMs: 900_000,
+        pollAfterMs: 60_000,
+      })),
+    } as never;
+    const githubIdentity = new GitHubIdentityController({
+      requestUpdate: () => undefined,
+      runExternalMutation: async () => ({
+        ok: false,
+        reason: "unavailable",
+        error: "not used",
+      }),
+    });
+    githubIdentity.sync({
+      client,
+      connected: true,
+      target: { kind: "shared", scope: "agent", agentId: "main", config: {} },
+      statusReadable: true,
+      configurable: true,
+      authorizable: true,
+      clientRevision: 1,
+    });
+    await githubIdentity.startAuthorization();
+
+    render(renderAgentTools(createBaseParams({ githubIdentity })), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("ABCD-1234");
+    const link = container.querySelector<HTMLAnchorElement>(
+      'a[href="https://github.com/login/device"]',
+    );
+    expect(link?.textContent?.trim()).toBe("Open github.com/login/device");
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel.split(/\s+/)).toEqual(expect.arrayContaining(["noopener", "noreferrer"]));
+    expect(container.querySelector(".settings-secret input")).toBeNull();
+    expect(container.textContent).not.toContain("github-device-11111111111111111111111111111111");
+    expect(container.querySelector(".settings-segmented")).toBeNull();
+    githubIdentity.dispose();
+  });
+
+  it("keeps complete effective facts when This Agent inherits System", async () => {
+    const container = document.createElement("div");
+    const params = createBaseParams();
+    const effective = {
+      source: "system-configured" as const,
+      credentialKind: "managed-oauth" as const,
+      credentialState: "available" as const,
+      account: { login: "system-user" },
+      gitAuthor: { name: "System Author", email: "system@example.com" },
+      evidence: "github-api" as const,
+      accessExpiresAtMs: 1_900_000_000_000,
+      refreshState: "available" as const,
+      oauthScopes: ["repo", "workflow"],
+      repositoryGrants: "unknown" as const,
+    };
+    params.githubIdentity.status = {
+      agentId: "main",
+      selectedScope: "agent",
+      selected: { scope: "agent", configured: false, identity: null },
+      effective,
+    };
+
+    render(renderAgentTools(params), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("@system-user");
+    expect(container.textContent).toContain("System Author · system@example.com");
+    expect(container.textContent).toContain("Managed GitHub authorization");
+    expect(container.textContent).toContain("repo, workflow");
+    expect(container.textContent).toContain("System GitHub");
+    expect(container.textContent).not.toContain("OS account running the Gateway");
+  });
+
+  it("keeps PAT fields hidden until the explicit fallback is selected", async () => {
+    const container = document.createElement("div");
+    const client = { request: vi.fn() } as never;
+    const githubIdentity = new GitHubIdentityController({
+      requestUpdate: () => undefined,
+      runExternalMutation: async () => ({
+        ok: false,
+        reason: "unavailable",
+        error: "not used",
+      }),
+    });
+    githubIdentity.sync({
+      client,
+      connected: true,
+      target: { kind: "shared", scope: "agent", agentId: "main", config: {} },
+      statusReadable: true,
+      configurable: true,
+      authorizable: true,
+      clientRevision: 1,
+    });
+
+    render(renderAgentTools(createBaseParams({ githubIdentity })), container);
+    await Promise.resolve();
+    expect(container.querySelector(".settings-secret input")).toBeNull();
+    expect(container.textContent).toContain("Use a PAT instead");
+
+    githubIdentity.showPatFallback();
+    render(renderAgentTools(createBaseParams({ githubIdentity })), container);
+    await Promise.resolve();
+    expect(container.querySelector(".settings-secret input")).not.toBeNull();
+    expect(container.textContent).not.toContain("Continue with GitHub");
+
+    githubIdentity.busy = true;
+    render(renderAgentTools(createBaseParams({ githubIdentity })), container);
+    await Promise.resolve();
+    const cancel = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Cancel",
+    );
+    expect(cancel?.disabled).toBe(true);
+  });
+
   it("shows fallback warning when runtime catalog fails", async () => {
     const container = document.createElement("div");
     render(
@@ -180,6 +371,52 @@ describe("agents tools panel (browser)", () => {
     expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
       "Could not load runtime tool catalog. Showing built-in fallback list instead.",
     );
+  });
+
+  it("enables the fallback setup helper without selecting Full", async () => {
+    const container = document.createElement("div");
+    const onOverridesChange = vi.fn();
+    const onProfileChange = vi.fn();
+    render(
+      renderAgentTools(
+        createBaseParams({
+          configForm: { agents: { entries: { main: { tools: { profile: "coding" } } } } },
+          toolsCatalogResult: null,
+          onOverridesChange,
+          onProfileChange,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent).toContain(
+      "Full selects tools; it does not grant Full Access execution permissions.",
+    );
+    const card = Array.from(container.querySelectorAll(".agent-tool-card")).find(
+      (entry) => entry.querySelector(".agent-tool-title")?.textContent?.trim() === "openclaw",
+    );
+    const toggle = card?.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    assert(toggle, "Missing setup helper switch");
+    expect(toggle.checked).toBe(false);
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onOverridesChange).toHaveBeenCalledExactlyOnceWith("main", ["openclaw"], []);
+    expect(onProfileChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps Inherit separate from the explicit Full profile", async () => {
+    const container = document.createElement("div");
+    const onProfileChange = vi.fn();
+    render(renderAgentTools(createBaseParams({ onProfileChange })), container);
+    await Promise.resolve();
+
+    const inherit = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Inherit",
+    );
+    assert(inherit, "Missing Inherit control");
+    inherit.click();
+    expect(onProfileChange).toHaveBeenCalledExactlyOnceWith("main", null, false);
   });
 
   it("renders effective tool notices", async () => {
@@ -246,8 +483,6 @@ describe("agents tools panel (browser)", () => {
 
     expect(group).toBeInstanceOf(HTMLDetailsElement);
     expect(tool).toBeInstanceOf(HTMLDetailsElement);
-    expect(group ? [...group.classList] : []).toEqual(["agent-tools-group"]);
-    expect(tool ? [...tool.classList] : []).toEqual(["agent-tool-card"]);
 
     if (!group || !tool) {
       throw new Error("expected agent tool group and card");
@@ -349,7 +584,10 @@ describe("agents tools panel (browser)", () => {
     ]);
   });
 
-  it("opens the collapsed group and tool row from a live tool chip", async () => {
+  it.each([
+    { reduced: true, behavior: "auto" },
+    { reduced: false, behavior: "smooth" },
+  ] as const)("opens a live tool chip with $behavior scrolling", async ({ reduced, behavior }) => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
@@ -409,8 +647,6 @@ describe("agents tools panel (browser)", () => {
 
     expect(group).toBeInstanceOf(HTMLDetailsElement);
     expect(tool).toBeInstanceOf(HTMLDetailsElement);
-    expect(group ? [...group.classList] : []).toEqual(["agent-tools-group"]);
-    expect(tool ? [...tool.classList] : []).toEqual(["agent-tool-card"]);
     expect(chip?.getAttribute("href")).toBe("#agent-tool-read");
 
     if (!group || !tool || !chip) {
@@ -421,9 +657,16 @@ describe("agents tools panel (browser)", () => {
     expect(group.open).toBe(false);
     expect(tool.open).toBe(false);
 
+    const summary = tool.querySelector<HTMLElement>("summary");
+    if (!summary) {
+      container.remove();
+      throw new Error("expected agent tool summary");
+    }
+    const scrollIntoView = vi.fn();
+    tool.scrollIntoView = scrollIntoView;
+    const focus = vi.spyOn(summary, "focus");
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: reduced }));
     const previousUrl = window.location.href;
-    // Shared jsdom workers can observe URL changes before finally/afterEach,
-    // so inspect the intended deep link without mutating browser history.
     const replaceState = vi.spyOn(window.history, "replaceState").mockImplementation(() => {});
     try {
       chip.click();
@@ -438,117 +681,189 @@ describe("agents tools panel (browser)", () => {
       expect(requestedUrl).toBeInstanceOf(URL);
       expect((requestedUrl as URL).hash).toBe("#agent-tool-read");
       expect(window.location.href).toBe(previousUrl);
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", behavior });
+      expect(focus).toHaveBeenCalledOnce();
     } finally {
+      vi.unstubAllGlobals();
+      focus.mockRestore();
       replaceState.mockRestore();
       container.remove();
     }
   });
-});
 
-describe("agents skills panel (browser)", () => {
-  it("gates allowlist clearing separately from staged config edits", async () => {
+  it.each([
+    {
+      name: "enables one profile tool",
+      tool: "session_status",
+      enabled: true,
+      expectedAllow: ["untouched", "exec", "web_*"],
+      expectedDeny: ["read", "web_*"],
+    },
+    {
+      name: "disables one aliased tool",
+      tool: "bash",
+      enabled: false,
+      expectedAllow: ["untouched", "web_*"],
+      expectedDeny: ["session_status", "read", "web_*", "exec"],
+    },
+    {
+      name: "enables the catalog without removing wildcard denies",
+      tool: null,
+      enabled: true,
+      expectedAllow: ["untouched", "exec", "web_*", "web_fetch"],
+      expectedDeny: ["read", "web_*"],
+    },
+    {
+      name: "disables the catalog without removing wildcard allows",
+      tool: null,
+      enabled: false,
+      expectedAllow: ["untouched", "web_*"],
+      expectedDeny: ["session_status", "read", "web_*", "exec", "web_fetch"],
+    },
+    {
+      name: "publishes one normalized update for an empty catalog",
+      tool: null,
+      enabled: true,
+      emptyCatalog: true,
+      expectedAllow: ["untouched", "exec", "web_*"],
+      expectedDeny: ["session_status", "read", "web_*"],
+    },
+  ])("$name with one immutable override update", async (testCase) => {
+    const tools = {
+      profile: "minimal",
+      alsoAllow: [" untouched ", " BASH ", "exec", "", "web_*"],
+      deny: [" SESSION_STATUS ", "read", "web_*", "", "read"],
+    };
+    const configForm = { agents: { entries: { main: { tools } } } };
+    const originalConfig = structuredClone(configForm);
+    const onOverridesChange = vi.fn();
+    const toolIds = testCase.emptyCatalog ? [] : ["session_status", "bash", "web_fetch"];
     const container = document.createElement("div");
     render(
-      renderAgentSkills({
-        agentId: "main",
-        canPatchConfig: false,
-        canUpdateConfig: true,
-        report: {
-          workspaceDir: "/tmp/workspace",
-          managedSkillsDir: "/tmp/skills",
-          skills: [],
-        },
-        loading: false,
-        error: null,
-        activeAgentId: "main",
-        configForm: { agents: { entries: { main: { skills: ["coding-agent"] } } } },
-        configLoading: false,
-        configSaving: false,
-        configDirty: false,
-        filter: "",
-        onFilterChange: () => undefined,
-        onRefresh: () => undefined,
-        onToggle: () => undefined,
-        onClear: () => undefined,
-        onDisableAll: () => undefined,
-        onConfigReload: () => undefined,
-        onConfigSave: () => undefined,
-      }),
+      renderAgentTools(
+        createBaseParams({
+          configForm,
+          onOverridesChange,
+          toolsCatalogResult: {
+            agentId: "main",
+            profiles: [{ id: "minimal", label: "Minimal" }],
+            groups: [
+              {
+                id: "policy",
+                label: "Policy",
+                source: "core",
+                tools: toolIds.map((id) => ({
+                  id,
+                  label: id,
+                  description: id,
+                  source: "core" as const,
+                  defaultProfiles: [],
+                })),
+              },
+            ],
+          },
+        }),
+      ),
       container,
     );
     await Promise.resolve();
 
-    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
-    expect(buttons[0]?.disabled).toBe(true);
-    expect(buttons[1]?.disabled).toBe(false);
-    expect(buttons[2]?.disabled).toBe(true);
+    if (testCase.tool) {
+      const card = Array.from(container.querySelectorAll(".agent-tool-card")).find(
+        (entry) => entry.querySelector(".agent-tool-title")?.textContent?.trim() === testCase.tool,
+      );
+      const toggle = card?.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+      assert(toggle, `Missing tool switch: ${testCase.tool}`);
+      expect(toggle.checked).toBe(!testCase.enabled);
+      toggle.checked = testCase.enabled;
+      toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    } else {
+      const label = testCase.enabled ? "Enable All" : "Disable All";
+      const button = Array.from(container.querySelectorAll("button")).find(
+        (entry) => entry.textContent?.trim() === label,
+      );
+      assert(button, `Missing bulk control: ${label}`);
+      button.click();
+    }
+
+    expect(onOverridesChange).toHaveBeenCalledExactlyOnceWith(
+      "main",
+      testCase.expectedAllow,
+      testCase.expectedDeny,
+    );
+    expect(configForm).toEqual(originalConfig);
   });
 
-  it("explains an unsatisfied one-of binary requirement", async () => {
+  it.each([
+    {
+      name: "prefix wildcard",
+      tools: { allow: ["web_*"] },
+      expected: { web_fetch: true, web_: true, read: false },
+    },
+    {
+      name: "suffix wildcard",
+      tools: { allow: ["*fetch"] },
+      expected: { web_fetch: true, read: false },
+    },
+    {
+      name: "literal dots in wildcard",
+      tools: { allow: ["mcp.server.*"] },
+      expected: { "mcp.server.tool": true, mcpXserverXtool: false },
+    },
+    {
+      name: "base exec alias and direct deny",
+      tools: { allow: [" BASH "], deny: ["exec"] },
+      expected: { exec: false, apply_patch: true, write: false },
+    },
+    {
+      name: "override exec deny",
+      tools: { profile: "full", deny: ["exec"] },
+      expected: { exec: false, apply_patch: false, write: true },
+    },
+    {
+      name: "group expansion and direct deny",
+      tools: { allow: ["group:fs"], deny: ["write"] },
+      expected: { read: true, write: false, apply_patch: true },
+    },
+  ])("renders policy-controlled switches: $name", async ({ tools, expected }) => {
     const container = document.createElement("div");
-    const skill: SkillStatusEntry = {
-      name: "Coding Agent",
-      description: "Delegate coding work to an available coding CLI.",
-      source: "openclaw-bundled",
-      bundled: true,
-      filePath: "/tmp/skills/coding-agent/SKILL.md",
-      baseDir: "/tmp/skills/coding-agent",
-      skillKey: "coding-agent",
-      always: false,
-      disabled: false,
-      blockedByAllowlist: false,
-      blockedByAgentFilter: false,
-      eligible: false,
-      requirements: {
-        bins: [],
-        anyBins: ["claude", "codex", "opencode"],
-        env: [],
-        config: [],
-        os: [],
-      },
-      missing: {
-        bins: [],
-        anyBins: ["claude", "codex", "opencode"],
-        env: [],
-        config: [],
-        os: [],
-      },
-      configChecks: [],
-      install: [{ id: "node-codex", kind: "node", label: "Install Codex CLI", bins: ["codex"] }],
-    };
-
     render(
-      renderAgentSkills({
-        agentId: "main",
-        canPatchConfig: true,
-        canUpdateConfig: true,
-        report: {
-          workspaceDir: "/tmp/workspace",
-          managedSkillsDir: "/tmp/skills",
-          skills: [skill],
-        },
-        loading: false,
-        error: null,
-        activeAgentId: "main",
-        configForm: { agents: { entries: { main: { default: true } } } },
-        configLoading: false,
-        configSaving: false,
-        configDirty: false,
-        filter: "",
-        onFilterChange: () => undefined,
-        onRefresh: () => undefined,
-        onToggle: () => undefined,
-        onClear: () => undefined,
-        onDisableAll: () => undefined,
-        onConfigReload: () => undefined,
-        onConfigSave: () => undefined,
-      }),
+      renderAgentTools(
+        createBaseParams({
+          configForm: {
+            agents: { entries: { main: { default: true, tools } } },
+          },
+          toolsCatalogResult: {
+            agentId: "main",
+            profiles: [{ id: "full", label: "Full" }],
+            groups: [
+              {
+                id: "policy",
+                label: "Policy",
+                source: "core",
+                tools: Object.keys(expected).map((id) => ({
+                  id,
+                  label: id,
+                  description: id,
+                  source: "core" as const,
+                  defaultProfiles: [],
+                })),
+              },
+            ],
+          },
+        }),
+      ),
       container,
     );
     await Promise.resolve();
 
-    expect(container.querySelector(".agent-skill-row")?.textContent).toContain(
-      "bin:any of (claude, codex, opencode)",
-    );
+    expect(
+      Object.fromEntries(
+        Array.from(container.querySelectorAll(".agent-tool-card"), (card) => [
+          card.querySelector(".agent-tool-title")?.textContent?.trim(),
+          card.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked,
+        ]),
+      ),
+    ).toEqual(expected);
   });
 });

@@ -8,6 +8,32 @@ vi.mock("./sticker-vision.runtime.js", () => ({
 }));
 
 describe("buildTelegramMessageContext media carriers", () => {
+  it("carries a successfully downloaded original filename into the current-turn media facts", async () => {
+    const context = await buildTelegramMessageContextForTest({
+      message: {
+        chat: { id: 42, type: "private", first_name: "Ada" },
+        text: "Please read quarterly report.pdf",
+        document: {
+          file_id: "file-1",
+          file_unique_id: "file-u1",
+          file_name: "quarterly report.pdf",
+        },
+      },
+      allMedia: [
+        {
+          kind: "document",
+          path: "/tmp/opaque-upload",
+          contentType: "application/pdf",
+          fileName: "quarterly report.pdf",
+        },
+      ],
+    });
+
+    expect(context?.ctxPayload.media).toEqual([
+      expect.objectContaining({ path: "/tmp/opaque-upload", fileName: "quarterly report.pdf" }),
+    ]);
+  });
+
   it("carries direct tool policy into a topic-bound admitted turn", async () => {
     const context = await buildTelegramMessageContextForTest({
       message: {
@@ -151,8 +177,7 @@ describe("buildTelegramMessageContext media carriers", () => {
     expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual(["image"]);
   });
 
-  it("keeps primary media bodies empty while recording formatted group history", async () => {
-    const groupHistories = new Map();
+  it("keeps group primary media in its typed carrier rather than command text", async () => {
     const context = await buildTelegramMessageContextForTest({
       message: {
         chat: { id: -1001, type: "supergroup", title: "Ops" },
@@ -160,7 +185,6 @@ describe("buildTelegramMessageContext media carriers", () => {
         photo: [{ file_id: "photo-1", file_unique_id: "photo-u1", width: 1, height: 1 }],
       },
       allMedia: [{ kind: "image" }],
-      groupHistories,
       historyLimit: 5,
     });
 
@@ -169,36 +193,52 @@ describe("buildTelegramMessageContext media carriers", () => {
     expect(context?.ctxPayload.CommandBody).toBe("");
     expect(context?.ctxPayload.CommandSource).toBeUndefined();
     expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual(["image"]);
-    expect([...groupHistories.values()].flat().at(-1)?.body).toBe("<media:image>");
   });
 
-  it("admits an unavailable native sticker as a type-only fact", async () => {
-    const context = await buildTelegramMessageContextForTest({
-      message: {
-        chat: { id: 42, type: "private", first_name: "Ada" },
-        text: undefined,
-        sticker: {
-          file_id: "sticker-1",
-          file_unique_id: "sticker-u1",
-          type: "regular",
-          width: 1,
-          height: 1,
-          is_animated: true,
-          is_video: false,
+  it.each([
+    { is_animated: true, is_video: false, emoji: "😭", expected: "😭" },
+    { is_animated: false, is_video: true, emoji: "😭", expected: "😭" },
+    { is_animated: true, is_video: false, emoji: undefined, expected: "<media:sticker>" },
+  ])(
+    "keeps an unavailable sticker meaningful to the agent: $expected ($is_video)",
+    async ({ is_animated, is_video, emoji, expected }) => {
+      const context = await buildTelegramMessageContextForTest({
+        message: {
+          chat: { id: -1001, type: "supergroup", title: "Stickers" },
+          text: undefined,
+          reply_to_message: {
+            message_id: 10,
+            date: 1_700_000_000,
+            chat: { id: -1001, type: "supergroup", title: "Stickers" },
+            from: { id: 7, is_bot: true, first_name: "Bot" },
+            text: "No Sunday-only tickets yet.",
+          },
+          sticker: {
+            file_id: "sticker-1",
+            file_unique_id: "sticker-u1",
+            type: "regular",
+            width: 1,
+            height: 1,
+            is_animated,
+            is_video,
+            emoji,
+          },
         },
-      },
-      allMedia: [{ kind: "sticker" }],
-    });
+        allMedia: [{ kind: "sticker" }],
+        resolveTelegramGroupConfig: () => ({
+          groupConfig: { requireMention: true },
+          topicConfig: undefined,
+        }),
+      });
 
-    expect(context?.ctxPayload.RawBody).toBe("");
-    expect(context?.ctxPayload.BodyForAgent).toBe("");
-    expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual(["sticker"]);
-    expect(context?.ctxPayload.StickerMediaIncluded).toBeUndefined();
-  });
+      expect(context?.ctxPayload.BodyForAgent).toBe(expected);
+      expect(context?.ctxPayload.ReplyToBody).toBe("No Sunday-only tickets yet.");
+      expect(context?.ctxPayload.WasMentioned).toBe(true);
+    },
+  );
 
-  it("preserves cached sticker descriptions in group history", async () => {
-    const groupHistories = new Map();
-    await buildTelegramMessageContextForTest({
+  it("preserves cached sticker descriptions in the current message", async () => {
+    const context = await buildTelegramMessageContextForTest({
       message: {
         chat: { id: -1002, type: "supergroup", title: "Stickers" },
         text: undefined,
@@ -220,10 +260,9 @@ describe("buildTelegramMessageContext media carriers", () => {
           stickerMetadata: { cachedDescription: "A waving sticker" },
         },
       ],
-      groupHistories,
       historyLimit: 5,
     });
 
-    expect([...groupHistories.values()].flat().at(-1)?.body).toBe("[Sticker] A waving sticker");
+    expect(context?.ctxPayload.BodyForAgent).toBe("[Sticker] A waving sticker");
   });
 });

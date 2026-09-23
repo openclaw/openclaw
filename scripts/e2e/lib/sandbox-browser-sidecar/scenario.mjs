@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
-import { resolveSandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 const execFileAsync = promisify(execFile);
 
@@ -17,6 +17,10 @@ function requireEnv(name) {
 }
 
 const root = requireEnv("OPENCLAW_E2E_ROOT");
+const hostRoot = requireEnv("OPENCLAW_E2E_HOST_ROOT");
+const workspaceAccess = requireEnv("OPENCLAW_E2E_WORKSPACE_ACCESS");
+assert.notEqual(root, hostRoot, "DooD proof requires different Gateway and daemon paths");
+assert(["none", "ro", "rw"].includes(workspaceAccess));
 const sandboxImage = requireEnv("OPENCLAW_E2E_SANDBOX_IMAGE");
 const browserImage = requireEnv("OPENCLAW_E2E_BROWSER_IMAGE");
 const sandboxPrefix = requireEnv("OPENCLAW_E2E_SANDBOX_PREFIX");
@@ -26,7 +30,9 @@ const stateDir = path.join(root, "state");
 const workspaceDir = path.join(root, "workspace");
 const sandboxRoot = path.join(root, "sandboxes");
 const configPath = path.join(stateDir, "openclaw.json");
-const sessionKey = "agent:main:sandbox-browser-sidecar";
+const sessionKey = requireEnv("OPENCLAW_E2E_SESSION_KEY");
+const workspaceHash = createHash("sha256").update(workspaceDir).digest("hex").slice(0, 32);
+const scopeKey = `${sessionKey}:workspace:${workspaceHash}`;
 const browserToken = `sandbox-browser-sidecar-${process.pid}`;
 const marker = `OPENCLAW_SANDBOX_BROWSER_SIDECAR_${process.pid}`;
 const ownedContainerNames = new Set();
@@ -34,8 +40,12 @@ const ownedContainerNames = new Set();
 process.env.HOME = path.join(root, "home");
 process.env.OPENCLAW_STATE_DIR = stateDir;
 process.env.OPENCLAW_CONFIG_PATH = configPath;
+// Sandbox state roots are process-stable; initialize them from the fixture's
+// environment before loading the packaged runtime.
+const { resolveSandboxContext } = await import("openclaw/plugin-sdk/agent-harness-runtime");
 
 const config = {
+  skills: { load: { extraDirs: [path.join(root, "skill-source")] } },
   gateway: {
     auth: {
       mode: "token",
@@ -62,7 +72,7 @@ const config = {
         mode: "all",
         backend: "docker",
         scope: "session",
-        workspaceAccess: "rw",
+        workspaceAccess,
         workspaceRoot: sandboxRoot,
         docker: {
           image: sandboxImage,
@@ -98,12 +108,25 @@ async function docker(args, options) {
   return await run("docker", args, options);
 }
 
+async function fileOwnership(filePath) {
+  const { uid, gid, mode } = await fs.stat(filePath);
+  return { uid, gid, mode: mode & 0o777 };
+}
+
 async function listTaskContainers() {
-  const { stdout } = await docker(["ps", "-a", "--format", "{{.Names}}"]);
+  // Container names can shorten the configured prefix; the scope label stays exact.
+  const { stdout } = await docker([
+    "ps",
+    "-a",
+    "--filter",
+    `label=openclaw.sessionKey=${scopeKey}`,
+    "--format",
+    "{{.Names}}",
+  ]);
   return stdout
     .split(/\r?\n/u)
     .map((value) => value.trim())
-    .filter((name) => name.startsWith(sandboxPrefix) || name.startsWith(browserPrefix));
+    .filter(Boolean);
 }
 
 async function cleanupTaskResources() {
@@ -146,9 +169,30 @@ async function startFixtureServer() {
   };
 }
 
+const gatewayIdentity = { uid: process.geteuid(), gid: process.getegid() };
+const fixtureOwnership = {
+  gateway: gatewayIdentity,
+  workspace: await fileOwnership(workspaceDir),
+  nestedData: await fileOwnership(path.join(root, "nested data")),
+};
+process.stdout.write(
+  `${JSON.stringify({ stage: "fixture-ownership", workspaceAccess, ...fixtureOwnership })}\n`,
+);
+assert.notEqual(gatewayIdentity.uid, 0, "Gateway fixture must use the image's non-root user");
+for (const { uid, gid, mode } of [fixtureOwnership.workspace, fixtureOwnership.nestedData]) {
+  assert.deepEqual({ uid, gid }, gatewayIdentity, "bind source owner differs from Gateway user");
+  assert.equal(mode, 0o755, "bind source permissions must not mask ownership mismatches");
+}
+
 await fs.mkdir(process.env.HOME, { recursive: true });
 await fs.mkdir(stateDir, { recursive: true });
-await fs.mkdir(workspaceDir, { recursive: true });
+await fs.writeFile(path.join(workspaceDir, "USER.md"), marker);
+await fs.writeFile(path.join(root, "nested data", "proof.txt"), marker);
+await fs.mkdir(path.join(root, "skill-source", "mount-proof"), { recursive: true });
+await fs.writeFile(
+  path.join(root, "skill-source", "mount-proof", "SKILL.md"),
+  `---\nname: mount-proof\ndescription: deterministic sandbox mount proof\n---\n${marker}\n`,
+);
 await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 
 const fixture = await startFixtureServer();
@@ -193,6 +237,119 @@ try {
   ownedContainerNames.add(first.containerName);
   ownedContainerNames.add(first.browser.containerName);
 
+  const skillPath =
+    workspaceAccess === "rw"
+      ? "/workspace/.openclaw/sandbox-skills/skills/mount-proof/SKILL.md"
+      : "/workspace/skills/mount-proof/SKILL.md";
+  const nestedPath =
+    workspaceAccess === "none"
+      ? undefined
+      : `${workspaceAccess === "ro" ? "/agent" : "/workspace"}/data/proof.txt`;
+  for (const filePath of ["/workspace/USER.md", skillPath, ...(nestedPath ? [nestedPath] : [])]) {
+    assert.match((await first.fsBridge.readFile({ filePath })).toString(), new RegExp(marker));
+    const read = await first.backend.runShellCommand({ script: 'cat "$1"', args: [filePath] });
+    assert.match(
+      read.stdout.toString(),
+      new RegExp(marker),
+      "sandbox exec disagrees with Gateway file tools",
+    );
+    const browserRead = await docker([
+      "exec",
+      first.browser.containerName,
+      "/bin/sh",
+      "-c",
+      'cat "$1"',
+      "--",
+      filePath,
+    ]);
+    assert.match(browserRead.stdout, new RegExp(marker), "browser mount exposes different bytes");
+  }
+  const write = { filePath: "/workspace/roundtrip.txt", data: marker };
+  if (workspaceAccess === "ro") {
+    await assert.rejects(first.fsBridge.writeFile(write));
+    const attempted = await first.backend.runShellCommand({
+      script: 'printf %s "$2" > "$1"',
+      args: [write.filePath, marker],
+      allowFailure: true,
+    });
+    assert.notEqual(attempted.code, 0, "read-only workspace accepted an exec write");
+  } else {
+    await first.fsBridge.writeFile(write);
+    const read = await first.backend.runShellCommand({
+      script: 'cat "$1"',
+      args: [write.filePath],
+    });
+    assert.equal(read.stdout.toString(), marker);
+    await first.backend.runShellCommand({
+      script: 'printf %s "$2" > "$1"',
+      args: [write.filePath, `${marker}-exec`],
+    });
+    if (workspaceAccess === "rw") {
+      const { stdout } = await docker([
+        "inspect",
+        "--format",
+        "{{.Config.User}}",
+        first.containerName,
+      ]);
+      const sandboxUser = stdout.trim();
+      const roundtrip = await fileOwnership(path.join(workspaceDir, "roundtrip.txt"));
+      process.stdout.write(
+        `${JSON.stringify({ stage: "roundtrip-ownership", workspaceAccess, sandboxUser, roundtrip })}\n`,
+      );
+      assert.equal(sandboxUser, `${gatewayIdentity.uid}:${gatewayIdentity.gid}`);
+      assert.deepEqual({ uid: roundtrip.uid, gid: roundtrip.gid }, gatewayIdentity);
+      assert.equal(roundtrip.mode, 0o600, "roundtrip must remain private to its owner");
+    }
+    assert.equal(
+      (await first.fsBridge.readFile({ filePath: write.filePath })).toString(),
+      `${marker}-exec`,
+    );
+  }
+  for (const filePath of [skillPath, ...(nestedPath ? [nestedPath] : [])]) {
+    await assert.rejects(first.fsBridge.writeFile({ filePath, data: "must-not-write" }));
+    const attempted = await first.backend.runShellCommand({
+      script: 'printf x > "$1"',
+      args: [filePath],
+      allowFailure: true,
+    });
+    assert.notEqual(attempted.code, 0, "read-only skill or nested Gateway mount accepted a write");
+  }
+  const mountProof = [];
+  for (const containerName of [first.containerName, first.browser.containerName]) {
+    const { stdout } = await docker(["inspect", "--format", "{{json .Mounts}}", containerName]);
+    const managed = JSON.parse(stdout).filter(
+      (mount) =>
+        mount.Destination === "/agent" ||
+        mount.Destination.startsWith("/agent/") ||
+        mount.Destination === "/workspace" ||
+        mount.Destination.startsWith("/workspace/"),
+    );
+    assert(managed.length > 0);
+    assert.equal(
+      managed.some((mount) => mount.Destination === "/agent"),
+      workspaceAccess === "ro",
+    );
+    for (const mount of managed) {
+      assert.equal(mount.Type, "bind");
+      assert(
+        mount.Source.startsWith(`${hostRoot}/`),
+        "sandbox source was not translated into the daemon namespace",
+      );
+    }
+    mountProof.push(
+      managed
+        .map((mount) => ({
+          source: path.relative(hostRoot, mount.Source),
+          destination: mount.Destination,
+          writable: mount.RW,
+        }))
+        .toSorted((a, b) =>
+          a.destination < b.destination ? -1 : a.destination > b.destination ? 1 : 0,
+        ),
+    );
+  }
+  assert.deepEqual(mountProof[0], mountProof[1], "shell/browser managed mount plans differ");
+
   const unauthenticated = await fetch(`${first.browser.bridgeUrl}/`);
   assert.equal(unauthenticated.status, 401, "browser bridge accepted an unauthenticated request");
   await unauthenticated.body?.cancel();
@@ -216,10 +373,17 @@ try {
     (entry) => entry.containerName === first.browser.containerName,
   );
   assert(browserEntry, "packaged sandbox list did not report the browser container");
-  assert.equal(browserEntry.sessionKey, sessionKey);
+  assert.equal(browserEntry.sessionKey, scopeKey);
   assert.equal(browserEntry.running, true);
 
-  await run("openclaw", ["sandbox", "recreate", "--browser", "--session", sessionKey, "--force"]);
+  await run("openclaw", [
+    "sandbox",
+    "recreate",
+    "--browser",
+    "--session",
+    browserEntry.sessionKey,
+    "--force",
+  ]);
   const remaining = await listTaskContainers();
   assert(
     !remaining.includes(first.browser.containerName),
@@ -230,6 +394,8 @@ try {
   process.stdout.write(
     `${JSON.stringify({
       ok: true,
+      workspaceAccess,
+      managedMounts: mountProof,
       sandboxContainer: first.containerName,
       browserContainer: first.browser.containerName,
       marker,

@@ -365,27 +365,12 @@ describe("live transport scenario timeouts", () => {
 
 describe("live subagent scenario timeouts", () => {
   it.each([
-    {
-      id: "issue-109025-completion-policy-live",
-      savedEvidence: "expectedFinalMarker",
-    },
-    {
-      id: "issue-109025-completion-policy-live",
-      savedEvidence: "completedChild",
-    },
-    {
-      id: "issue-109025-completion-policy-live",
-      savedEvidence: "parentTranscript",
-    },
-    {
-      id: "issue-109025-completion-policy-live",
-      savedEvidence: "parentHistory",
-    },
-    {
-      id: "issue-109025-sender-policy-live",
-      savedEvidence: "childRow",
-    },
-  ])("uses the model-aware completion timeout for $id", ({ id, savedEvidence }) => {
+    ["issue-109025-completion-policy-live", "expectedFinalMarker"],
+    ["issue-109025-completion-policy-live", "completedChild"],
+    ["issue-109025-completion-policy-live", "parentTranscript"],
+    ["issue-109025-completion-policy-live", "parentHistory"],
+    ["issue-109025-sender-policy-live", "childRow"],
+  ])("uses the model-aware completion timeout for %s", (id, savedEvidence) => {
     const scenario = requireFlowScenario(readQaScenarioById(id));
     const completionWait = scenario.execution.flow?.steps
       .flatMap((step) => step.actions)

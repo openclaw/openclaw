@@ -5,23 +5,38 @@ import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import {
   createRealtimeTranscriptionWebSocketSession,
+  type RealtimeTranscriptionWebSocketSessionOptions,
   type RealtimeTranscriptionWebSocketTransport,
 } from "./websocket-session.js";
 
 let cleanup: (() => Promise<void>) | undefined;
+const sessions = new Set<ReturnType<typeof createRealtimeTranscriptionWebSocketSession>>();
 
 beforeEach(() => {
   vi.useRealTimers();
 });
 
 afterEach(async () => {
+  for (const session of sessions) {
+    session.close();
+  }
+  sessions.clear();
   vi.restoreAllMocks();
   vi.useRealTimers();
   await cleanup?.();
   cleanup = undefined;
 });
+
+function createSession<Event = unknown>(
+  options: RealtimeTranscriptionWebSocketSessionOptions<Event>,
+) {
+  const session = createRealtimeTranscriptionWebSocketSession(options);
+  sessions.add(session);
+  return session;
+}
 
 async function createRealtimeServer(params?: {
   closeOnConnection?: boolean;
@@ -85,17 +100,6 @@ async function createRealtimeServer(params?: {
   return { url: `ws://127.0.0.1:${port}` };
 }
 
-function createSignal() {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((next) => {
-    resolve = next;
-  });
-  if (!resolve) {
-    throw new Error("Expected frame signal resolver to be initialized");
-  }
-  return { promise, resolve };
-}
-
 function requireFirstMockArg<T>(mock: { mock: { calls: T[][] } }, label: string): T {
   const call = mock.mock.calls[0];
   if (!call) {
@@ -114,7 +118,7 @@ function encodeSequence(value: number): Buffer {
 describe("createRealtimeTranscriptionWebSocketSession", () => {
   it("flushes queued binary audio after an open-ready connection", async () => {
     const frames: Buffer[] = [];
-    const framesReady = createSignal();
+    const framesReady = createDeferred();
     const server = await createRealtimeServer({
       onBinary: (payload) => {
         frames.push(payload);
@@ -123,7 +127,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
         }
       },
     });
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: {},
       url: server.url,
@@ -139,12 +143,11 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     await framesReady.promise;
     expect(Buffer.concat(frames).toString()).toBe("queuedafter");
     expect(session.isConnected()).toBe(true);
-    session.close();
   });
 
   it("drops the oldest queued audio by bytes and flushes the retained tail in order", async () => {
     const frames: Buffer[] = [];
-    const framesReady = createSignal();
+    const framesReady = createDeferred();
     const server = await createRealtimeServer({
       onBinary: (payload) => {
         frames.push(payload);
@@ -153,7 +156,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
         }
       },
     });
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: {},
       url: server.url,
@@ -184,13 +187,73 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
       encodeSequence(12_999),
       Buffer.from([0xaa, 0xbb, 0xcc]),
     ]);
-    session.close();
+  });
+
+  it.each([
+    { scenario: "socket open", readyOnOpen: true, initialEvent: undefined },
+    {
+      scenario: "provider readiness handshake",
+      readyOnOpen: false,
+      initialEvent: { type: "session.created" },
+    },
+  ])(
+    "rejects startup when queued audio fails during $scenario",
+    async ({ readyOnOpen, initialEvent }) => {
+      const server = await createRealtimeServer({ initialEvent });
+      const onError = vi.fn();
+      const session = createSession<{ type?: string }>({
+        providerId: "test",
+        callbacks: { onError },
+        url: server.url,
+        readyOnOpen,
+        onMessage: (event, transport) => {
+          if (event.type === "session.created") {
+            transport.markReady();
+          }
+        },
+        sendAudio: () => {
+          throw new Error("queued audio send failed");
+        },
+      });
+
+      session.sendAudio(Buffer.from("queued"));
+      await expect(session.connect()).rejects.toThrow("queued audio send failed");
+      expect(session.isConnected()).toBe(false);
+      expect(onError).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not replay successfully flushed audio after a later frame fails", async () => {
+    const server = await createRealtimeServer();
+    const sentFrames: string[] = [];
+    let shouldFailSecondFrame = true;
+    const session = createSession({
+      providerId: "test",
+      callbacks: {},
+      url: server.url,
+      readyOnOpen: true,
+      sendAudio: (audio, transport) => {
+        if (audio.toString() === "second" && shouldFailSecondFrame) {
+          shouldFailSecondFrame = false;
+          throw new Error("second frame failed");
+        }
+        sentFrames.push(audio.toString());
+        transport.sendBinary(audio);
+      },
+    });
+
+    session.sendAudio(Buffer.from("first"));
+    session.sendAudio(Buffer.from("second"));
+    await expect(session.connect()).rejects.toThrow("second frame failed");
+    await session.connect();
+
+    expect(sentFrames).toEqual(["first", "second"]);
   });
 
   it("flushes a large retained audio tail in order after reconnect", async () => {
     const connections: WebSocket[] = [];
     const frames: Buffer[] = [];
-    const framesReady = createSignal();
+    const framesReady = createDeferred();
     const server = await createRealtimeServer({
       onConnection: (ws) => connections.push(ws),
       onBinary: (payload) => {
@@ -200,7 +263,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
         }
       },
     });
-    const session = createRealtimeTranscriptionWebSocketSession<{ type?: string }>({
+    const session = createSession<{ type?: string }>({
       providerId: "test",
       callbacks: {},
       url: server.url,
@@ -237,19 +300,18 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
       encodeSequence(12_998),
       encodeSequence(12_999),
     ]);
-    session.close();
   });
 
   it("discards a large queued audio tail when closed before connecting", async () => {
     const frames: Buffer[] = [];
-    const framesReady = createSignal();
+    const framesReady = createDeferred();
     const server = await createRealtimeServer({
       onBinary: (payload) => {
         frames.push(payload);
         framesReady.resolve();
       },
     });
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: {},
       url: server.url,
@@ -269,7 +331,6 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     session.sendAudio(Buffer.from("live"));
     await framesReady.promise;
     expect(frames).toEqual([Buffer.from("live")]);
-    session.close();
   });
 
   it("keeps replacement sockets owned when retired socket callbacks arrive late", async () => {
@@ -280,7 +341,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     const server = await createRealtimeServer({
       onConnection: (socket) => connections.push(socket),
     });
-    const session = createRealtimeTranscriptionWebSocketSession<{ text?: string }>({
+    const session = createSession<{ text?: string }>({
       providerId: "test",
       callbacks: { onError, onTranscript },
       url: server.url,
@@ -328,7 +389,6 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
 
     connections[1]?.send(JSON.stringify({ text: "current transcript" }));
     await vi.waitFor(() => expect(onTranscript).toHaveBeenCalledWith("current transcript"));
-    session.close();
   });
 
   it("discards superseded asynchronous connection preparation", async () => {
@@ -341,7 +401,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
       resolveFirstUrl = resolve;
     });
     let connectionAttempt = 0;
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: {},
       url: async () => (++connectionAttempt === 1 ? await firstUrl : server.url),
@@ -360,7 +420,6 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     await delay(20);
     expect(connections).toHaveLength(1);
     expect(session.isConnected()).toBe(true);
-    session.close();
   });
 
   it("cancels a retired reconnect delay before starting a replacement socket", async () => {
@@ -368,7 +427,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     const server = await createRealtimeServer({
       onConnection: (socket) => connections.push(socket),
     });
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: {},
       url: server.url,
@@ -389,7 +448,6 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
 
     expect(connections).toHaveLength(2);
     expect(session.isConnected()).toBe(true);
-    session.close();
   });
 
   it("reconnects after a healthy successor closes following a failed connection", async () => {
@@ -407,7 +465,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
         );
       },
     });
-    const session = createRealtimeTranscriptionWebSocketSession<{
+    const session = createSession<{
       message?: string;
       type?: string;
     }>({
@@ -438,25 +496,27 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     connections[2]?.close(1011, "healthy connection dropped");
     await vi.waitFor(() => expect(connections).toHaveLength(4), { timeout: 500 });
     await vi.waitFor(() => expect(session.isConnected()).toBe(true));
-    session.close();
   });
 
-  it("delivers graceful provider finals and sends the close signal only once", async () => {
+  it("delivers graceful provider finals before natural close and finalizes only once", async () => {
     const finalizedFrames: unknown[] = [];
     const transcripts: string[] = [];
+    const closed = createDeferred();
     let providerSocket: WebSocket | undefined;
     const server = await createRealtimeServer({
       onConnection: (socket) => {
         providerSocket = socket;
+        socket.once("close", () => closed.resolve());
       },
       onText: (payload) => {
         finalizedFrames.push(payload);
         if (finalizedFrames.length === 1) {
           providerSocket?.send(JSON.stringify({ text: "final provider transcript" }));
+          providerSocket?.close(1000, "finished");
         }
       },
     });
-    const session = createRealtimeTranscriptionWebSocketSession<{ text?: string }>({
+    const session = createSession<{ text?: string }>({
       providerId: "test",
       callbacks: { onTranscript: (text) => transcripts.push(text) },
       url: server.url,
@@ -479,14 +539,14 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     session.close();
     session.close();
 
+    await withTestTimeout(closed.promise, 1_000, "Graceful provider close not received");
     await vi.waitFor(() => expect(transcripts).toEqual(["final provider transcript"]));
-    await delay(20);
     expect(finalizedFrames).toEqual([{ type: "finalize" }]);
   });
 
   it("terminates the captured socket when graceful provider shutdown expires", async () => {
     const server = await createRealtimeServer();
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: {},
       url: server.url,
@@ -509,7 +569,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
   it("terminates once when binary audio reaches the active socket buffer cap", async () => {
     const onError = vi.fn();
     const server = await createRealtimeServer();
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: { onError },
       url: server.url,
@@ -544,7 +604,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     let providerTransport: RealtimeTranscriptionWebSocketTransport | undefined;
     const onError = vi.fn();
     const server = await createRealtimeServer();
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: { onError },
       url: server.url,
@@ -577,7 +637,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
   it("rejects connect when provider handshake frames exceed the socket buffer cap", async () => {
     const onError = vi.fn();
     const server = await createRealtimeServer();
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: { onError },
       url: server.url,
@@ -604,7 +664,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
 
   it("lets providers mark ready after a JSON handshake", async () => {
     const frames: unknown[] = [];
-    const framesReady = createSignal();
+    const framesReady = createDeferred();
     const server = await createRealtimeServer({
       initialEvent: { type: "session.created" },
       onText: (payload) => {
@@ -614,7 +674,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
         }
       },
     });
-    const session = createRealtimeTranscriptionWebSocketSession<{ type?: string }>({
+    const session = createSession<{ type?: string }>({
       providerId: "test",
       callbacks: {},
       url: server.url,
@@ -636,7 +696,6 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
       { type: "session.update" },
       { type: "input_audio.append", audio: Buffer.from("queued").toString("base64") },
     ]);
-    session.close();
   });
 
   it("resolves async URLs and headers before opening the socket", async () => {
@@ -646,7 +705,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
         seenAuthHeaders.push(headers.authorization);
       },
     });
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: {},
       url: async () => server.url,
@@ -660,13 +719,12 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     await session.connect();
 
     expect(seenAuthHeaders).toEqual(["Bearer resolved-token"]);
-    session.close();
   });
 
   it("applies the connect timeout while resolving async connection details", async () => {
     vi.useFakeTimers();
     const onError = vi.fn();
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: { onError },
       url: () => new Promise<string>(() => {}),
@@ -678,23 +736,18 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
       },
     });
 
-    try {
-      const connecting = session.connect();
-      const timeoutAssertion = expect(connecting).rejects.toThrow(
-        "test realtime transcription connection timeout",
-      );
-      await vi.advanceTimersByTimeAsync(10);
+    const connecting = session.connect();
+    const timeoutAssertion = expect(connecting).rejects.toThrow(
+      "test realtime transcription connection timeout",
+    );
+    await vi.advanceTimersByTimeAsync(10);
 
-      await timeoutAssertion;
-      expect(session.isConnected()).toBe(false);
-      expect(onError).toHaveBeenCalledTimes(1);
-      const timeoutError = requireFirstMockArg(onError, "connect timeout error");
-      expect(timeoutError).toBeInstanceOf(Error);
-      expect(timeoutError.message).toBe("test realtime transcription connection timeout");
-    } finally {
-      session.close();
-      vi.useRealTimers();
-    }
+    await timeoutAssertion;
+    expect(session.isConnected()).toBe(false);
+    expect(onError).toHaveBeenCalledTimes(1);
+    const timeoutError = requireFirstMockArg(onError, "connect timeout error");
+    expect(timeoutError).toBeInstanceOf(Error);
+    expect(timeoutError.message).toBe("test realtime transcription connection timeout");
   });
 
   it("preserves connect failures when the error callback throws", async () => {
@@ -704,7 +757,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     const onError = vi.fn((_error: Error) => {
       throw new Error("error observer failed");
     });
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: { onError },
       url: () => new Promise<string>(() => {}),
@@ -730,13 +783,11 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
       expect(timeoutError).toBeInstanceOf(Error);
       expect(timeoutError.message).toBe("test realtime transcription connection timeout");
     } finally {
-      session.close();
       if (previousDebugProxyEnabled === undefined) {
         delete process.env.OPENCLAW_DEBUG_PROXY_ENABLED;
       } else {
         process.env.OPENCLAW_DEBUG_PROXY_ENABLED = previousDebugProxyEnabled;
       }
-      vi.useRealTimers();
     }
   });
 
@@ -751,7 +802,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
         seenAuthHeaders.push(headers.authorization);
       },
     });
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: {},
       url: () => url,
@@ -774,7 +825,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
   it("rejects provider setup errors before ready", async () => {
     const server = await createRealtimeServer({ initialEvent: { type: "error", message: "nope" } });
     const onError = vi.fn();
-    const session = createRealtimeTranscriptionWebSocketSession<{
+    const session = createSession<{
       type?: string;
       message?: string;
     }>({
@@ -801,8 +852,9 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
 
   it("reports malformed websocket JSON with an owned parser error", async () => {
     const server = await createRealtimeServer({ initialText: "{not json" });
-    const onError = vi.fn();
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const received = createDeferred();
+    const onError = vi.fn((_error: Error) => received.resolve());
+    const session = createSession({
       providerId: "test",
       callbacks: { onError },
       url: server.url,
@@ -816,21 +868,21 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     });
 
     await session.connect();
-    await vi.waitFor(() => {
-      expect(onError).toHaveBeenCalledTimes(1);
-    });
+    await withTestTimeout(received.promise, 1_000, "Malformed JSON error not received");
+    expect(onError).toHaveBeenCalledTimes(1);
     const parseError = requireFirstMockArg(onError, "malformed websocket json error");
     expect(parseError).toBeInstanceOf(Error);
     expect(parseError.message).toBe("Realtime transcription websocket received malformed JSON.");
-    session.close();
   });
 
   it("keeps error callback failures inside websocket message dispatch", async () => {
     const server = await createRealtimeServer({ initialText: "{not json" });
+    const received = createDeferred();
     const onError = vi.fn((_error: Error) => {
+      received.resolve();
       throw new Error("error observer failed");
     });
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: { onError },
       url: server.url,
@@ -844,20 +896,18 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     });
 
     await session.connect();
-    await vi.waitFor(() => {
-      expect(onError).toHaveBeenCalledTimes(1);
-    });
+    await withTestTimeout(received.promise, 1_000, "Throwing error observer not reached");
+    expect(onError).toHaveBeenCalledTimes(1);
     const parseError = requireFirstMockArg(onError, "malformed websocket json error");
     expect(parseError).toBeInstanceOf(Error);
     expect(parseError.message).toBe("Realtime transcription websocket received malformed JSON.");
     expect(session.isConnected()).toBe(true);
-    session.close();
   });
 
   it("reports pre-ready closes separately from connection timeouts", async () => {
     const server = await createRealtimeServer({ closeOnConnection: true });
     const onError = vi.fn();
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: { onError },
       url: server.url,
@@ -887,7 +937,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
         setTimeout(() => ws.close(1011, "flap"), 1);
       },
     });
-    const session = createRealtimeTranscriptionWebSocketSession<{ type?: string }>({
+    const session = createSession<{ type?: string }>({
       providerId: "test",
       callbacks: { onError },
       url: server.url,
@@ -915,7 +965,6 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
       { timeout: 1000 },
     );
     expect(openCount).toBe(4);
-    session.close();
   });
 
   it("refreshes the reconnect budget after a stable ready connection", async () => {
@@ -927,7 +976,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
       initialEvent: { type: "session.created" },
       onConnection: (ws) => connections.push(ws),
     });
-    const session = createRealtimeTranscriptionWebSocketSession<{ type?: string }>({
+    const session = createSession<{ type?: string }>({
       providerId: "test",
       callbacks: { onError },
       url: server.url,
@@ -962,7 +1011,6 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
       );
     });
     expect(connections).toHaveLength(3);
-    session.close();
   });
 
   it("delivers a legitimate large inbound message below the payload cap", async () => {
@@ -972,8 +1020,9 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     const server = await createRealtimeServer({
       initialEvent: { type: "transcript", text: largeText },
     });
-    const onMessage = vi.fn();
-    const session = createRealtimeTranscriptionWebSocketSession<{ type?: string; text?: string }>({
+    const received = createDeferred();
+    const onMessage = vi.fn(() => received.resolve());
+    const session = createSession<{ type?: string; text?: string }>({
       providerId: "test",
       callbacks: {},
       url: server.url,
@@ -985,12 +1034,10 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     });
 
     await session.connect();
-    await vi.waitFor(() => {
-      expect(onMessage).toHaveBeenCalledTimes(1);
-    });
+    await withTestTimeout(received.promise, 1_000, "Large inbound message not received");
+    expect(onMessage).toHaveBeenCalledTimes(1);
     const event = requireFirstMockArg(onMessage, "large inbound message");
     expect(event).toEqual({ type: "transcript", text: largeText });
-    session.close();
   });
 
   it("drops an oversized inbound message before it reaches the provider parser", async () => {
@@ -998,11 +1045,12 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     // oversized upstream message never reaches onMessage/JSON parse.
     const oversized = "x".repeat(16 * 1024 * 1024 + 1);
     const server = await createRealtimeServer({ initialText: oversized });
-    const onError = vi.fn();
+    const received = createDeferred();
+    const onError = vi.fn((_error: Error) => received.resolve());
     const onMessage = vi.fn(() => {
       throw new Error("oversized frame should not reach provider handler");
     });
-    const session = createRealtimeTranscriptionWebSocketSession({
+    const session = createSession({
       providerId: "test",
       callbacks: { onError },
       url: server.url,
@@ -1014,14 +1062,12 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     });
 
     await session.connect();
-    await vi.waitFor(() => {
-      expect(onError).toHaveBeenCalledTimes(1);
-    });
+    await withTestTimeout(received.promise, 1_000, "Oversized message error not received");
+    expect(onError).toHaveBeenCalledTimes(1);
     expect(onMessage).not.toHaveBeenCalled();
     const overflowError = requireFirstMockArg(onError, "oversized inbound message error");
     expect(overflowError).toBeInstanceOf(Error);
     expect(overflowError).toHaveProperty("code", "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH");
     expect(overflowError.message).toMatch(/max payload/i);
-    session.close();
   });
 });

@@ -1,3 +1,4 @@
+import type { ThemeArtwork } from "../../../packages/gateway-protocol/src/theme.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import type {
@@ -8,15 +9,9 @@ import type {
   LobsterPetPersonalityId,
   LobsterRunOutcome,
 } from "./lobster-pet-contract.ts";
-import {
-  LOBSTER_PET_PALETTES,
-  canonicalLobsterLook,
-  lobsterPetName,
-  mulberry32,
-  SPOT_ZONES,
-} from "./lobster-pet-look.ts";
-
-export { SPOT_ZONES };
+import { canonicalLobsterLook, lobsterPetName, mulberry32 } from "./lobster-pet-look.ts";
+import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
+import { THEME_CRITTER_CROSS_MS } from "./theme-flair-sprites.ts";
 
 export type LobsterPetAct =
   | "wave"
@@ -163,29 +158,25 @@ export const LOBSTER_PET_ENTRANCE_MS: Record<LobsterPetEntrance, number> = {
 
 // One full ledge crossing per passer kind. The snail is the point of the
 // snail: glance away, glance back, still crossing.
-export const LOBSTER_PASSER_CROSS_MS: Record<LobsterPasserKind, number> = {
+const LOBSTER_PASSER_CROSS_MS: Partial<Record<LobsterPasserKind, number>> = {
   stranger: 11_000,
   crab: 11_000,
   snail: 90_000,
   duck: 14_000,
   jellyfish: 16_000,
+  ...THEME_CRITTER_CROSS_MS,
 };
 
-export type LobsterPetAnchor = "ledge" | "bar";
-
-// The historical bar visit keeps its compact left-to-center roaming and scale
-// cap, while CSS places it on the same ledge as regular visits.
-export const BAR_ZONE = [18, 50] as const;
-export const BAR_MAX_SCALE = 1.7;
+export type LobsterPetAnchor = "top" | "floor";
 
 // Visit cadence: seeded per load, the pet is a guest, not a fixture. A share
-// of loads gets no visit at all; the rest get a first arrival within minutes,
+// of loads gets no visit at all; the rest get a delayed first arrival,
 // stays of a few minutes, and long gaps between returns. Disconnects summon
 // the pet regardless of schedule (unless dismissed or disabled).
-export const VISIT_SHY_CHANCE = 0.25;
-export const VISIT_FIRST_DELAY_MS = [15_000, 180_000] as const;
+export const VISIT_SHY_CHANCE = 0.5;
+export const VISIT_FIRST_DELAY_MS = [1800, 7500] as const;
 export const VISIT_STAY_MS = [90_000, 300_000] as const;
-export const VISIT_GAP_MS = [360_000, 1_080_000] as const;
+export const VISIT_GAP_MS = [1_800_000, 3_600_000] as const;
 
 // Rare-event loads, planned per seed so tests can probe them purely: a molt
 // load sheds its shell during the first idle act and sizes up one tier; a
@@ -202,32 +193,59 @@ export type LobsterPasserPlan = {
   kind: LobsterPasserKind;
   atMs: number;
   direction: 1 | -1;
+  floor: boolean;
+  hops: boolean;
 };
 
 // Once per load, someone else might just... pass through. Strangers are
 // other lobsters that never stop; the rest of the traffic is a crab (not a
 // lobster, refuses to discuss it), a snail, a rubber duck, or a jellyfish.
-// The 9.5% event gate is unchanged from the two-kind era — variety widened,
-// frequency did not. None of them count for the Lobsterdex.
-export function planLobsterPasser(seed: number): LobsterPasserPlan | null {
+// Theme visitors add their own rarity bands after the regulars. None count
+// for the Lobsterdex; one roll still admits at most one crossing per load.
+export type LobsterPasserOptions = {
+  critters?: readonly string[];
+  strangers?: boolean;
+  critterArtwork?: ThemeArtwork["critters"];
+};
+
+export function resolveLobsterPasserCrossMs(
+  kind: LobsterPasserKind,
+  artwork?: ThemeArtwork["critters"],
+): number {
+  return (
+    (Object.hasOwn(LOBSTER_PASSER_CROSS_MS, kind) ? LOBSTER_PASSER_CROSS_MS[kind] : undefined) ??
+    artwork?.[kind]?.crossMs ??
+    12_000
+  );
+}
+
+export function planLobsterPasser(
+  seed: number,
+  { critters = [], strangers = true }: LobsterPasserOptions = {},
+): LobsterPasserPlan | null {
   const rng = mulberry32((seed ^ 0xcab) >>> 0);
-  const roll = rng();
-  if (roll >= 0.095) {
+  const roll = rng() * 1000;
+  const weights: Array<readonly [LobsterPasserKind, number]> = [
+    ["crab", 15],
+    ["snail", 12],
+    ["duck", 12],
+    ["jellyfish", 11],
+    ...(strangers ? ([["stranger", 45]] as const) : []),
+    ...critters.map((kind) => [kind, 20] as const),
+  ];
+  let limit = 0;
+  const kind = weights.find(([, weight]) => {
+    limit += weight;
+    return roll < limit;
+  })?.[0];
+  if (!kind) {
     return null;
   }
-  const kind: LobsterPasserKind =
-    roll < 0.015
-      ? "crab"
-      : roll < 0.027
-        ? "snail"
-        : roll < 0.039
-          ? "duck"
-          : roll < 0.05
-            ? "jellyfish"
-            : "stranger";
-  const atMs = Math.round(60_000 + rng() * 840_000);
+  const atMs = Math.round(2500 + rng() * 6500);
   const direction: 1 | -1 = rng() < 0.5 ? 1 : -1;
-  return { kind, atMs, direction };
+  const floor = rng() < 0.55;
+  const hops = rng() < 0.35 && kind !== "snail";
+  return { kind, atMs, direction, floor, hops };
 }
 
 // A very rare load hosts the Elder: a huge, barnacled, unhurried lobster.
@@ -358,7 +376,7 @@ export function planLobsterBottle(seed: number): LobsterBottlePlan | null {
   if (rng() >= 0.03) {
     return null;
   }
-  const atMs = Math.round(45_000 + rng() * 855_000);
+  const atMs = Math.round(3500 + rng() * 6500);
   const spotPct = Math.round(15 + rng() * 70);
   const fortuneIndex = Math.floor(rng() * LOBSTER_BOTTLE_FORTUNES.length);
   return { atMs, spotPct, fortuneIndex };

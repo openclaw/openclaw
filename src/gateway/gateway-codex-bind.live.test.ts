@@ -3,31 +3,29 @@ import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { describe, expect, it } from "vitest";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
-import type { ChannelOutboundContext } from "../channels/plugins/types.adapters.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
-import { pluginCommands } from "../plugins/command-registry-state.js";
 import { getCurrentPluginConversationBinding } from "../plugins/conversation-binding.js";
 import { seedPluginConversationBindingApprovalForTest } from "../plugins/conversation-binding.test-fixtures.js";
-import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
-import { getActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import { clearPluginLoaderCache, writePlugin } from "../plugins/loader.test-fixtures.js";
+import { listRegisteredPluginCommands } from "../plugins/plugin-command-registry.js";
+import { requireActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
-import { extractFirstTextBlock } from "../shared/chat-message-content.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { sleep } from "../utils.js";
 import type { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
-  getFreeGatewayPort,
+  getCliBackendPortBlock,
 } from "./gateway-cli-backend.live-helpers.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
 import { startGatewayServer } from "./server.js";
@@ -61,12 +59,13 @@ function logCodexBindStep(message: string): void {
   console.info(`[live-codex-bind] ${message}`);
 }
 
-function createSlackCurrentConversationBindingRegistry(outboundReplies: CapturedOutboundReply[]) {
-  return createTestRegistry([
-    {
-      pluginId: "slack",
-      source: "test",
-      plugin: {
+async function writeSlackCurrentConversationBindingPlugin(dir: string, outboundEvent: string) {
+  const fixture = writePlugin({
+    id: "codex-bind-slack-fixture",
+    dir,
+    filename: "index.cjs",
+    registration: `
+      api.registerChannel({ plugin: {
         id: "slack",
         meta: {
           id: "slack",
@@ -86,14 +85,14 @@ function createSlackCurrentConversationBindingRegistry(outboundReplies: Captured
         },
         outbound: {
           deliveryMode: "direct",
-          sendText: async ({ accountId, text, threadId, to }: ChannelOutboundContext) => {
-            outboundReplies.push({
+          sendText: async ({ accountId, text, threadId, to }) => {
+            process.emit(${JSON.stringify(outboundEvent)}, {
               ...(accountId ? { accountId } : {}),
               text,
               ...(threadId != null ? { threadId } : {}),
               to,
             });
-            return { channel: "slack", messageId: `slack-${outboundReplies.length}` };
+            return { channel: "slack", messageId: "slack-" + require("node:crypto").randomUUID() };
           },
         },
         bindings: {
@@ -103,35 +102,34 @@ function createSlackCurrentConversationBindingRegistry(outboundReplies: Captured
             commandTo,
             originatingTo,
             fallbackTo,
-          }: {
-            commandTo?: string;
-            originatingTo?: string;
-            fallbackTo?: string;
           }) => {
             const conversationId = [commandTo, originatingTo, fallbackTo].find(Boolean)?.trim();
             return conversationId ? { conversationId } : null;
           },
         },
+      } });
+    `,
+  });
+  await fs.writeFile(
+    path.join(fixture.dir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: fixture.id,
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+      channels: ["slack"],
+      channelConfigs: {
+        slack: { schema: { type: "object", additionalProperties: false, properties: {} } },
       },
-    },
-  ]);
-}
-
-function extractAssistantTexts(messages: unknown[]): string[] {
-  const texts: string[] = [];
-  for (const entry of messages) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-    if ((entry as { role?: unknown }).role !== "assistant") {
-      continue;
-    }
-    const text = extractFirstTextBlock(entry);
-    if (typeof text === "string" && text.trim().length > 0) {
-      texts.push(text);
-    }
-  }
-  return texts;
+    }),
+  );
+  await fs.writeFile(
+    path.join(fixture.dir, "package.json"),
+    JSON.stringify({
+      name: "@test/codex-bind-slack",
+      version: "0.0.0",
+      openclaw: { extensions: ["./index.cjs"] },
+    }),
+  );
+  return fixture;
 }
 
 function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
@@ -145,6 +143,7 @@ function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
 async function waitForOutboundText(params: {
   replies: CapturedOutboundReply[];
   contains: string;
+  caseInsensitive?: boolean;
   minReplyCount?: number;
   timeoutMs?: number;
 }): Promise<{ outboundTexts: string[]; matchedText: string }> {
@@ -159,9 +158,10 @@ async function waitForOutboundText(params: {
       }
     }
     const minReplyCount = params.minReplyCount ?? 1;
+    const expected = params.caseInsensitive ? params.contains.toLowerCase() : params.contains;
     const matchedText = outboundTexts
       .slice(Math.max(0, minReplyCount - 1))
-      .find((text) => text.includes(params.contains));
+      .find((text) => (params.caseInsensitive ? text.toLowerCase() : text).includes(expected));
     if (outboundTexts.length >= minReplyCount && matchedText) {
       return { outboundTexts, matchedText };
     }
@@ -232,50 +232,11 @@ async function sendChatAndWait(params: {
   logCodexBindStep(`${params.context} completed`);
 }
 
-async function waitForAssistantText(params: {
-  client: GatewayClient;
-  sessionKey: string;
-  contains: string;
-  caseInsensitive?: boolean;
-  minAssistantCount?: number;
-  timeoutMs?: number;
-}): Promise<{ messages: unknown[]; assistantTexts: string[]; matchedAssistantText: string }> {
-  const timeoutMs = params.timeoutMs ?? 60_000;
-  const startedAt = Date.now();
-
-  while (Date.now() - startedAt < timeoutMs) {
-    const history: { messages?: unknown[] } = await params.client.request("chat.history", {
-      sessionKey: params.sessionKey,
-      limit: 24,
-    });
-    const messages = history.messages ?? [];
-    const assistantTexts = extractAssistantTexts(messages);
-    const minAssistantCount = params.minAssistantCount ?? 1;
-    const expected = params.caseInsensitive ? params.contains.toLowerCase() : params.contains;
-    const matchedAssistantText = assistantTexts
-      .slice(Math.max(0, minAssistantCount - 1))
-      .find((text) => (params.caseInsensitive ? text.toLowerCase() : text).includes(expected));
-    if (assistantTexts.length >= minAssistantCount && matchedAssistantText) {
-      return { messages, assistantTexts, matchedAssistantText };
-    }
-    await sleep(500);
-  }
-
-  const finalHistory: { messages?: unknown[] } = await params.client.request("chat.history", {
-    sessionKey: params.sessionKey,
-    limit: 24,
-  });
-  throw new Error(
-    `timed out waiting for assistant text containing ${params.contains}: ${formatAssistantTextPreview(
-      extractAssistantTexts(finalHistory.messages ?? []),
-    )}`,
-  );
-}
-
 function resolveCodexPluginRoot(): string {
+  const commands = listRegisteredPluginCommands(requireActivePluginRegistry());
   const command =
-    pluginCommands.get("/codex") ??
-    Array.from(pluginCommands.values()).find((candidate) => candidate.pluginId === "codex");
+    commands.find((candidate) => normalizeOptionalLowercaseString(candidate.name) === "codex") ??
+    commands.find((candidate) => candidate.pluginId === "codex");
   if (command?.pluginRoot) {
     return command.pluginRoot;
   }
@@ -315,6 +276,7 @@ async function writeGatewayConfig(params: {
   port: number;
   token: string;
   workspace: string;
+  channelPlugin: { id: string; dir: string };
 }): Promise<void> {
   const modelProvider = params.modelProvider?.trim() || "codex";
   const usesApiKeyAuth =
@@ -326,8 +288,10 @@ async function writeGatewayConfig(params: {
       auth: { mode: "token", token: params.token },
     },
     plugins: {
-      allow: ["codex"],
+      allow: ["codex", params.channelPlugin.id],
+      load: { paths: [params.channelPlugin.dir] },
       entries: {
+        [params.channelPlugin.id]: { enabled: true },
         codex: {
           enabled: true,
           config: {
@@ -395,7 +359,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
       const workspace = path.join(tempRoot, "workspace");
       const configPath = path.join(tempRoot, "openclaw.json");
       const token = `test-${randomUUID()}`;
-      const port = await getFreeGatewayPort();
+      const port = await getCliBackendPortBlock();
       const sessionKey = "main";
       const accountId = "default";
       const slackUserId = `U${randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
@@ -404,6 +368,12 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         process.env.OPENCLAW_LIVE_CODEX_BIND_MODEL?.trim() || DEFAULT_CODEX_BIND_MODEL;
       const bindProvider = resolveCodexBindModelProvider();
       const outboundReplies: CapturedOutboundReply[] = [];
+      const outboundEvent = `codex-bind-outbound-${randomUUID()}`;
+      const recordOutboundReply = (reply: CapturedOutboundReply) => outboundReplies.push(reply);
+      const channelPlugin = await writeSlackCurrentConversationBindingPlugin(
+        path.join(tempRoot, "channel-plugin"),
+        outboundEvent,
+      );
 
       await fs.mkdir(workspace, { recursive: true });
       await fs.writeFile(
@@ -424,6 +394,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         port,
         token,
         workspace,
+        channelPlugin,
       });
 
       clearConfigCache();
@@ -474,11 +445,13 @@ describeLive("gateway live (native Codex conversation binding)", () => {
       let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
 
       try {
+        process.on(outboundEvent, recordOutboundReply);
         server = await startGatewayServer(port, {
           bind: "loopback",
           auth: { mode: "token", token },
           controlUiEnabled: false,
         });
+        await server.startupSettled;
         client = await connectTestGatewayClient({
           url: `ws://127.0.0.1:${port}`,
           token,
@@ -487,14 +460,8 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           clientDisplayName: "vitest-codex-bind-live",
         });
         const activeClient = client;
-        const channelRegistry = createSlackCurrentConversationBindingRegistry(outboundReplies);
-        const activeRegistry = getActivePluginRegistry();
-        if (!activeRegistry) {
-          throw new Error("expected gateway root plugin registry");
-        }
-        activeRegistry.channels.push(...channelRegistry.channels);
 
-        seedPluginConversationBindingApprovalForTest({
+        await seedPluginConversationBindingApprovalForTest({
           pluginRoot: resolveCodexPluginRoot(),
           pluginId: "codex",
           pluginName: "Codex",
@@ -526,6 +493,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           accountId,
           conversationId,
         });
+        expect(boundSessionKey).toMatch(/^plugin-binding:codex:/);
         logCodexBindStep(`binding resolved to ${boundSessionKey}`);
 
         const initialNonce = randomBytes(4).toString("hex").toUpperCase();
@@ -592,15 +560,15 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         expect(initializedBinding.matchedText).not.toContain("- Thread: unknown");
         await sendCodexCommand("/codex fast on", "Codex fast mode enabled.");
         await sendCodexCommand("/codex fast status", "Codex fast mode: on.");
-        await sendCodexCommand("/codex permissions default", "Codex permissions set to default.");
-        await sendCodexCommand("/codex permissions status", "Codex permissions: default.");
+        await sendCodexCommand("/codex permissions default", "Codex permissions set to guarded.");
+        await sendCodexCommand("/codex permissions status", "Codex permissions: guarded.");
         await sendCodexCommand("/codex model", `Codex model: ${bindModel}`);
         await sendCodexCommand("/codex stop", "No active Codex run to stop.");
 
         const bindingStatus = await sendCodexCommand("/codex binding", "- Fast: on");
-        if (!bindingStatus.matchedText.includes("- Permissions: default")) {
+        if (!bindingStatus.matchedText.includes("- Permissions: guarded")) {
           throw new Error(
-            `binding status did not include default permissions: ${bindingStatus.matchedText}`,
+            `binding status did not include guarded permissions: ${bindingStatus.matchedText}`,
           );
         }
 
@@ -615,14 +583,16 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           originatingChannel: "slack",
           originatingTo: conversationId,
           originatingAccountId: accountId,
+          deliver: true,
         });
-        const textHistory = await waitForAssistantText({
-          client: activeClient,
-          sessionKey: boundSessionKey,
+        // Opaque binding targets have no agent transcript; verify the channel's delivered reply.
+        const controlledTextReply = await waitForOutboundText({
+          replies: outboundReplies,
           contains: textToken,
+          minReplyCount: commandReplyCount + 1,
           timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
         });
-        expect(textHistory.matchedAssistantText).toContain(textToken);
+        expect(controlledTextReply.matchedText).toContain(textToken);
 
         await sendChatAndWait({
           client: activeClient,
@@ -634,6 +604,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           originatingChannel: "slack",
           originatingTo: conversationId,
           originatingAccountId: accountId,
+          deliver: true,
           attachments: [
             {
               mimeType: "image/png",
@@ -642,15 +613,15 @@ describeLive("gateway live (native Codex conversation binding)", () => {
             },
           ],
         });
-        const imageHistory = await waitForAssistantText({
-          client: activeClient,
-          sessionKey: boundSessionKey,
+        const imageReply = await waitForOutboundText({
+          replies: outboundReplies,
           contains: "cat",
           caseInsensitive: true,
-          minAssistantCount: textHistory.assistantTexts.length + 1,
+          minReplyCount: controlledTextReply.outboundTexts.length + 1,
           timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
         });
-        expect(imageHistory.matchedAssistantText.toLowerCase()).toContain("cat");
+        expect(imageReply.matchedText.toLowerCase()).toContain("cat");
+        commandReplyCount = imageReply.outboundTexts.length;
 
         await sendCodexCommand("/codex detach", "Detached this conversation from Codex.");
         await sendCodexCommand("/codex binding", "No Codex conversation binding is attached.");
@@ -664,6 +635,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
             await server?.close();
           }
         } finally {
+          process.off(outboundEvent, recordOutboundReply);
           await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
           restoreLiveEnv(previous);
         }

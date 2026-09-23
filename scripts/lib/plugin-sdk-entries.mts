@@ -41,11 +41,20 @@ export const publicPluginSdkEntrypoints = pluginSdkEntrypoints.filter(
  */
 export const publicPluginSdkSubpaths = publicPluginSdkEntrypoints;
 
+/** Facades emitted only for the trusted private QA harness, never package exports. */
+export const privateQaPluginSdkEntrypoints = [
+  "qa-channel",
+  "qa-channel-protocol",
+  "qa-lab",
+  "qa-runtime",
+];
+
 // These local-only entries were already omitted from ordinary packaged builds
 // before bundled runtime facades moved behind the same private-local boundary.
 const nonProductionPluginSdkSubpathSet = new Set([
   "agent-runtime-test-contracts",
   "channel-contract-testing",
+  "channel-ingress-test-runtime",
   "channel-target-testing",
   "channel-test-helpers",
   "plugin-test-api",
@@ -54,13 +63,9 @@ const nonProductionPluginSdkSubpathSet = new Set([
   "plugin-test-runtime",
   "provider-http-test-mocks",
   "provider-test-contracts",
-  "qa-channel",
-  "qa-channel-protocol",
-  "qa-lab",
-  "qa-runtime",
+  ...privateQaPluginSdkEntrypoints,
   "reply-payload-testing",
   "sqlite-runtime-testing",
-  "ssrf-runtime-internal",
   "test-env",
   "test-fixtures",
   "test-live",
@@ -76,11 +81,6 @@ export const productionPluginSdkEntrypoints = pluginSdkEntrypoints.filter(
   (entry) => !nonProductionPluginSdkSubpathSet.has(entry),
 );
 
-/** List flat plugin SDK declaration outputs for the selected entrypoints. */
-export function listPluginSdkDeclarationOutputs(entries = productionPluginSdkEntrypoints) {
-  return entries.map((entry) => `dist/plugin-sdk/${entry}.d.ts`);
-}
-
 const productionPluginSdkEntrypointSet = new Set(productionPluginSdkEntrypoints);
 
 /** Private runtime facades required by bundled or separately published official plugins. */
@@ -88,11 +88,6 @@ export const packagedPrivatePluginSdkRuntimeEntrypoints =
   privateLocalOnlyPluginSdkEntrypoints.filter((entry) =>
     productionPluginSdkEntrypointSet.has(entry),
   );
-
-/** Private entrypoints reserved for local tests and QA builds. */
-const nonProductionPrivatePluginSdkEntrypoints = privateLocalOnlyPluginSdkEntrypoints.filter(
-  (entry) => !productionPluginSdkEntrypointSet.has(entry),
-);
 
 /**
  * Deprecated public plugin SDK subpaths kept for compatibility.
@@ -109,6 +104,12 @@ export const deprecatedPublicPluginSdkEntrypoints = publicPluginSdkSubpaths.filt
 export const deprecatedBarrelPluginSdkEntrypoints = pluginSdkSubpaths.filter((entry) =>
   deprecatedBarrelPluginSdkSubpathList.includes(entry),
 );
+
+/** Supported SDK facades backed by bundled plugins until generic contracts replace them. */
+export const supportedBundledFacadeSdkEntrypoints = ["discord", "telegram-account"] as const;
+
+/** Plugin-owned surfaces intentionally public and documented for third-party plugins. */
+export const publicPluginOwnedSdkEntrypoints = ["memory-core-host-engine-foundation"] as const;
 
 /**
  * Build tsdown entry source paths for plugin SDK entrypoints.
@@ -153,33 +154,17 @@ export function buildPluginSdkPackageExports() {
   );
 }
 
-/**
- * List public plugin SDK dist artifacts expected in package output.
- * @internal Shared repository-script contract.
- */
-export function listPluginSdkDistArtifacts() {
-  return [
-    ...publicPluginSdkEntrypoints.flatMap((entry) => [
-      `dist/plugin-sdk/${entry}.js`,
-      `dist/plugin-sdk/${entry}.d.ts`,
-    ]),
-    ...packagedPrivatePluginSdkRuntimeEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.js`),
-  ];
-}
-
-/**
- * List private local-only plugin SDK dist artifacts expected after local builds.
- * @internal Shared repository-script contract.
- */
-/** List private runtime facade artifacts required inside package output. */
-export function listPackagedPrivatePluginSdkRuntimeArtifacts() {
-  return packagedPrivatePluginSdkRuntimeEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.js`);
-}
-
 /** List private artifacts that must stay out of package output. */
-export function listUnpackagedPrivatePluginSdkDistArtifacts() {
+export function listUnpackagedPrivatePluginSdkDistArtifacts(
+  entries: readonly string[] = pluginSdkEntrypoints,
+  privateEntries: readonly string[] = privateLocalOnlyPluginSdkEntrypoints,
+) {
+  const privateSet = new Set(privateEntries);
+  const privateEntrypoints = entries.filter((entry) => privateSet.has(entry));
   return [
-    ...listPluginSdkDeclarationOutputs(privateLocalOnlyPluginSdkEntrypoints),
-    ...nonProductionPrivatePluginSdkEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.js`),
+    ...privateEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.d.ts`),
+    ...privateEntrypoints
+      .filter((entry) => nonProductionPluginSdkSubpathSet.has(entry))
+      .map((entry) => `dist/plugin-sdk/${entry}.js`),
   ];
 }

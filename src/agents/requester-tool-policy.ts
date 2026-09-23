@@ -16,21 +16,19 @@ import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import {
   isTrustedSubagentCompletionHandoffForRun,
   type TrustedSubagentCompletionHandoff,
-} from "./subagent-announce-handoff.js";
+} from "./subagents/announce/subagent-announce-handoff.js";
+import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
 import {
   isSubagentEnvelopeSession,
   resolvePersistedSubagentToolPolicyEnvelope,
   resolveSubagentCapabilityStore,
+  type PreparedSessionCapabilityEntry,
   type SessionCapabilityStore,
-} from "./subagent-capabilities.js";
-import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
+} from "./subagents/spawn/subagent-capabilities.js";
 
 const MAX_DELEGATION_LINEAGE_DEPTH = 32;
 
-export type RequesterToolPolicySource =
-  | "current-request"
-  | "persisted-child"
-  | "completion-handoff";
+type RequesterToolPolicySource = "current-request" | "persisted-child" | "completion-handoff";
 
 type RequesterToolPolicyResolution = {
   delegated: boolean;
@@ -50,6 +48,7 @@ type RequesterToolPolicyParams = {
   agentId?: string;
   sessionKey?: string;
   subagentSessionKey?: string;
+  preparedSessionEntry?: PreparedSessionCapabilityEntry;
   spawnedBy?: string | null;
   messageProvider?: string | null;
   groupId?: string | null;
@@ -194,6 +193,7 @@ export function resolveRequesterToolPolicies(
   const subagentSessionKey = params.subagentSessionKey ?? params.sessionKey;
   const subagentStore = resolveSubagentCapabilityStore(subagentSessionKey, {
     cfg: params.config,
+    preparedSessionEntry: params.preparedSessionEntry,
   });
   const delegatedPolicy = resolveDelegatedPolicy({ ...params, subagentSessionKey }, subagentStore);
   const subagentPolicy =
@@ -246,6 +246,7 @@ export function resolveRequesterToolPolicies(
       ? resolveSenderToolPolicy({
           config: params.config,
           agentId: params.agentId,
+          sessionKey: params.sessionKey,
           messageProvider: params.messageProvider,
           senderId: params.senderId,
           senderName: params.senderName,

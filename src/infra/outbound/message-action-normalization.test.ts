@@ -5,11 +5,12 @@ import { normalizeMessageActionInput } from "./message-action-normalization.js";
 
 vi.mock("../../channels/plugins/bootstrap-registry.js", async () => ({
   getBootstrapChannelPlugin: (
-    await import("./message-action-test-fixtures.js")
+    await import("./message-action-runner.test-support.js")
   ).createPinboardMessageActionBootstrapRegistryMock(),
 }));
 
-vi.mock("../../utils/message-channel.js", () => ({
+vi.mock("../../utils/message-channel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/message-channel.js")>()),
   isDeliverableMessageChannel: (value: string) => ["workspace", "forum"].includes(value),
   normalizeMessageChannel: (value?: string | null) =>
     typeof value === "string" ? value.trim().toLowerCase() : undefined,
@@ -258,6 +259,36 @@ describe("normalizeMessageActionInput", () => {
       input: {
         action: "read",
         args: {
+          channel: "pinboard",
+          messageId: "msg_123",
+        },
+        toolContext: { currentChannelId: "channel:C1" },
+        targetAliasSpec: null,
+      },
+      expectedFields: { target: "channel:C1", to: "channel:C1", messageId: "msg_123" },
+    },
+    {
+      input: {
+        action: "poll",
+        args: { channel: "imessage", chatGuid: "bundled-target" },
+        toolContext: { currentChannelId: "selected-target" },
+        targetAliasSpec: null,
+      },
+      expectedFields: { target: "selected-target", to: "selected-target" },
+    },
+    {
+      input: {
+        action: "edit",
+        args: { channel: "imessage", messageId: "msg_123" },
+        targetAliasSpec: null,
+      },
+      expectedFields: { messageId: "msg_123" },
+      absentFields: ["target", "to"],
+    },
+    {
+      input: {
+        action: "read",
+        args: {
           channel: "workspace",
           messageId: "123.456",
         },
@@ -300,6 +331,45 @@ describe("normalizeMessageActionInput", () => {
         args: {},
       }),
     ).toThrow(/requires a target/);
+  });
+
+  it("does not inject heartbeat sender sentinel as inferred target", () => {
+    // The non-deliverable sender sentinel must not become @heartbeat.
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "send",
+        args: {},
+        toolContext: {
+          currentChannelId: "heartbeat",
+          currentChannelProvider: "telegram",
+        },
+      }),
+    ).toThrow(/requires a target/);
+  });
+
+  it("does not inject heartbeat sentinel from currentMessagingTarget", () => {
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "send",
+        args: {},
+        toolContext: {
+          currentMessagingTarget: "heartbeat",
+          currentChannelProvider: "telegram",
+        },
+      }),
+    ).toThrow(/requires a target/);
+  });
+
+  it("still infers a real ambient route when not the heartbeat sentinel", () => {
+    const normalized = normalizeMessageActionInput({
+      action: "send",
+      args: {},
+      toolContext: {
+        currentChannelId: "telegram:12345",
+        currentChannelProvider: "telegram",
+      },
+    });
+    expect(normalized.target).toBe("telegram:12345");
   });
 
   it.each([
@@ -428,13 +498,47 @@ describe("normalizeMessageActionInput", () => {
     expect(
       normalizeMessageActionInput({
         action: "unpin",
-        args: { channel: "pinboard", messageId: "om_123" },
+        args: { channel: "pinboard", postId: "post_123" },
         targetAliasSpec: {
-          aliases: ["messageId", "chatId"],
-          deliveryTargetAliases: ["chatId"],
+          aliases: ["postId", "roomId"],
+          deliveryTargetAliases: ["roomId"],
         },
         allowResourceOnly: true,
       }),
-    ).toEqual({ channel: "pinboard", messageId: "om_123" });
+    ).toEqual({ channel: "pinboard", postId: "post_123" });
+  });
+
+  it.each([
+    { target: "channel:parent" },
+    { to: "channel:parent" },
+    { channelId: "channel:parent" },
+  ])("preserves a parent target when a thread alias defers to it", (args) => {
+    const normalized = normalizeMessageActionInput({
+      action: "thread-reply",
+      args: {
+        channel: "forum",
+        threadId: "thread-1",
+        ...args,
+      },
+      targetAliasSpec: {
+        aliases: ["threadId"],
+        deliveryTargetAliases: ["threadId"],
+        resolveDeliveryTarget: ({ args: actionArgs }) => {
+          if (actionArgs.target || actionArgs.to || actionArgs.channelId) {
+            return undefined;
+          }
+          return typeof actionArgs.threadId === "string"
+            ? `channel:${actionArgs.threadId}`
+            : undefined;
+        },
+      },
+    });
+
+    expect(normalized).toMatchObject({
+      channel: "forum",
+      target: "channel:parent",
+      to: "channel:parent",
+      threadId: "thread-1",
+    });
   });
 });

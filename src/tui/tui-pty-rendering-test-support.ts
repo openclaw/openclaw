@@ -1,5 +1,7 @@
 import { writeFile } from "node:fs/promises";
+import { expect, it } from "vitest";
 import {
+  readFixtureLog,
   type StartTuiPtyFixture,
   waitForSynchronizedFrameRows,
 } from "./tui-pty-harness-assertion-test-support.js";
@@ -23,7 +25,15 @@ export function toolFrame(rows: string[], complete: boolean) {
     const before = frame.indexOf("PTY_BEFORE_TOOL");
     const running = frame.indexOf("Read File (running)");
     const partial = frame.indexOf("PTY_TOOL_PARTIAL");
-    return before >= 0 && running >= 0 && partial >= 0 && before < running && running < partial;
+    return (
+      before >= 0 &&
+      running >= 0 &&
+      partial >= 0 &&
+      before < running &&
+      running < partial &&
+      frame.includes("# PTY_TOOL_PARTIAL") &&
+      frame.includes("```")
+    );
   }
   const markers = ["PTY_BEFORE_TOOL", "Read File", "PTY_TOOL_RESULT", "PTY_AFTER_TOOL"];
   return (
@@ -34,6 +44,8 @@ export function toolFrame(rows: string[], complete: boolean) {
     ) &&
     !frame.includes("(running)") &&
     !frame.includes("PTY_TOOL_PARTIAL") &&
+    frame.includes("> PTY_TOOL_RESULT") &&
+    frame.includes("```") &&
     frame.includes("idle")
   );
 }
@@ -53,49 +65,163 @@ async function withFixture(
     await fixture.cleanup();
   }
 }
-export async function exerciseStreamingRendering(start: StartTuiPtyFixture, timeoutMs: number) {
+export async function exerciseStreamingRendering(
+  start: StartTuiPtyFixture,
+  timeoutMs: number,
+  ctrlC?: "clear" | "warn",
+) {
   await withFixture(start, {}, timeoutMs, async (fixture) => {
+    const runCalls = async () =>
+      (await readFixtureLog(fixture.logPath)).filter((entry) =>
+        ["sendChat", "abortChat", "stop"].includes(entry.method),
+      );
+    const expectedCalls = [{ method: "sendChat", payload: { message: STREAM_PROMPT } }];
     await fixture.run.write(`${STREAM_PROMPT}\r`, { delay: false });
-    await waitForSynchronizedFrameRows(
+    try {
+      await waitForSynchronizedFrameRows(fixture.run, streamingPrefixFrame, timeoutMs);
+      if (ctrlC) {
+        const draft = "CTRL_C_UNSUBMITTED_DRAFT";
+        if (ctrlC === "clear") {
+          await fixture.run.write(draft, { delay: false });
+          await waitForSynchronizedFrameRows(
+            fixture.run,
+            (rows) => streamingPrefixFrame(rows) && text(rows).includes(draft),
+            timeoutMs,
+          );
+        }
+        await fixture.run.write("\x03", { delay: false });
+        const hint =
+          ctrlC === "clear"
+            ? "cleared input; press ctrl+c again to exit"
+            : "press ctrl+c again to exit";
+        const rows = await waitForSynchronizedFrameRows(
+          fixture.run,
+          (frame) => text(frame).includes(hint),
+          timeoutMs,
+        );
+        const calls = await runCalls();
+        console.log(
+          `[behavior-evidence] tui-ctrl-c ${JSON.stringify({ ctrlC, phase: "hint", rows, calls, pid: fixture.run.pid, logPath: fixture.logPath })}`,
+        );
+        expect(text(rows)).not.toContain(draft);
+        expect(calls).toMatchObject(expectedCalls);
+        // Keep the baseline failure while still proving final delivery and graceful exit.
+        expect
+          .soft(streamingPrefixFrame(rows), "Ctrl+C hint must preserve the busy frame")
+          .toBe(true);
+      }
+    } finally {
+      await release(fixture, "streaming");
+    }
+    const rows = await waitForSynchronizedFrameRows(
       fixture.run,
-      (rows) => streamingPrefixFrame(rows),
+      (frame) =>
+        tokens(frame).join(",") === TOKENS.join(",") && text(frame).includes("local ready | idle"),
       timeoutMs,
     );
-    await release(fixture, "streaming");
-    await waitForSynchronizedFrameRows(
-      fixture.run,
-      (rows) => tokens(rows).join(",") === TOKENS.join(",") && text(rows).includes("idle"),
-      timeoutMs,
-    );
+    if (ctrlC) {
+      const calls = await runCalls();
+      console.log(
+        `[behavior-evidence] tui-ctrl-c ${JSON.stringify({ ctrlC, phase: "final", rows, calls })}`,
+      );
+      expect(calls).toMatchObject(expectedCalls);
+      await fixture.run.write("/exit\r", { delay: false });
+      const exit = await fixture.run.waitForExit();
+      const exitCalls = await runCalls();
+      console.log(
+        `[behavior-evidence] tui-ctrl-c ${JSON.stringify({ ctrlC, phase: "native-exit", exit, calls: exitCalls })}`,
+      );
+      expect(exit.exitCode).toBe(0);
+      expect(exit.signal ?? 0).toBe(0);
+      expect(exitCalls.filter((entry) => entry.method !== "stop")).toMatchObject(expectedCalls);
+    }
   });
 }
-export async function exerciseToolCardRendering(start: StartTuiPtyFixture, timeoutMs: number) {
+async function exerciseToolCardRendering(
+  start: StartTuiPtyFixture,
+  timeoutMs: number,
+  prepared = false,
+) {
   await withFixture(
     start,
     {
       OPENCLAW_TUI_PTY_MODEL: "fixture-provider/fixture-model",
       OPENCLAW_TUI_PTY_VERBOSE_LEVEL: "full",
+      ...(prepared ? { OPENCLAW_TUI_PTY_PREPARED_ACTIVITY: "1" } : {}),
     },
     timeoutMs,
     async (fixture) => {
       await fixture.run.write(`${TOOL_PROMPT}\r`, { delay: false });
-      await waitForSynchronizedFrameRows(fixture.run, (rows) => toolFrame(rows, false), timeoutMs);
+      if (!prepared) {
+        await waitForSynchronizedFrameRows(
+          fixture.run,
+          (rows) => toolFrame(rows, false),
+          timeoutMs,
+        );
+        await release(fixture, "tool");
+        await waitForSynchronizedFrameRows(fixture.run, (rows) => toolFrame(rows, true), timeoutMs);
+        return;
+      }
+      await fixture.waitForLogEntry((entry) => entry.method === "toolPartialReady");
+      const partial = await waitForSynchronizedFrameRows(
+        fixture.run,
+        (rows) => text(rows).includes("PTY_BEFORE_TOOL"),
+        timeoutMs,
+      );
+      expect(text(partial)).not.toContain("PTY_TOOL_PARTIAL");
       await release(fixture, "tool");
-      await waitForSynchronizedFrameRows(fixture.run, (rows) => toolFrame(rows, true), timeoutMs);
+      const final = await waitForSynchronizedFrameRows(
+        fixture.run,
+        (rows) => text(rows).includes("PTY_APPROVAL (blocked)") && text(rows).includes("idle"),
+        timeoutMs,
+      );
+      expect(text(final)).not.toContain("PTY_TOOL_RESULT");
+      expect(text(final)).not.toContain("…");
+      await fixture.run.write("\x0f", { delay: false });
+      await waitForSynchronizedFrameRows(
+        fixture.run,
+        (rows) => text(rows).includes("PTY_TOOL_RESULT"),
+        timeoutMs,
+      );
+      await fixture.run.write("\x0f", { delay: false });
+      await waitForSynchronizedFrameRows(
+        fixture.run,
+        (rows) =>
+          text(rows).includes("PTY_APPROVAL (blocked)") && !text(rows).includes("PTY_TOOL_RESULT"),
+        timeoutMs,
+      );
     },
   );
 }
+export function registerToolCardRenderingTests(
+  start: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+  testTimeoutMs: number,
+) {
+  it(
+    "authenticates running partial and completed tool cards in real terminal frames",
+    async () => await exerciseToolCardRendering(start, startupTimeoutMs),
+    testTimeoutMs,
+  );
+  it(
+    "keeps quiet tool details available through Ctrl+O and settles prepared-only outcomes",
+    async () => await exerciseToolCardRendering(start, startupTimeoutMs, true),
+    testTimeoutMs,
+  );
+}
+
 export const TUI_PTY_RENDERING_FIXTURE_SCRIPT = `
   const renderingTokens = Array.from({ length: 128 }, (_, i) => "T" + String(i).padStart(3, "0"));
   async function waitForRenderingRelease(gate: string) {
     const target = actionLogPath + "." + gate + ".release";
     if (existsSync(target)) return;
-    await new Promise<void>((resolve, reject) => {
-      const watcher = watch(dirname(target), () => {
-        if (existsSync(target)) { watcher.close(); resolve(); }
-      });
-      watcher.on("error", (error) => { watcher.close(); reject(error); });
-      if (existsSync(target)) { watcher.close(); resolve(); }
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (existsSync(target)) { unwatchFile(target, check); resolve(); }
+      };
+      // Release is file state; native watch delivery can outlast the fixture budget.
+      watchFile(target, { interval: 50, persistent: false }, check);
+      check();
     });
   }
   function emitAssistant(backend, runId, sessionKey, state, value) {
@@ -111,11 +237,18 @@ export const TUI_PTY_RENDERING_FIXTURE_SCRIPT = `
   async function runToolCardRendering(backend, runId, sessionKey) {
     emitAssistant(backend, runId, sessionKey, "delta", "PTY_BEFORE_TOOL");
     const base = { toolCallId: "pty-rendering-tool", name: process.env.OPENCLAW_TUI_PTY_TOOL_NAME ?? "read_file" };
+    const prepared = process.env.OPENCLAW_TUI_PTY_PREPARED_ACTIVITY === "1";
+    const activity = { ...base, itemId: "tool:" + base.toolCallId, title: "Quiet poll", kind: "tool", hideFromChannelProgress: true, source: "fixture" };
+    if (prepared) backend.onEvent?.({ event: "agent", payload: { runId, sessionKey, stream: "item", data: { ...activity, phase: "start", status: "running" } } });
     backend.onEvent?.({ event: "agent", payload: { runId, sessionKey, stream: "tool", data: { ...base, phase: "start", args: { path: "chronology-proof.txt" } } } });
     if (process.env.OPENCLAW_TUI_PTY_VERBOSE_LEVEL === "full") {
-      backend.onEvent?.({ event: "agent", payload: { runId, sessionKey, stream: "tool", data: { ...base, phase: "update", partialResult: { content: [{ type: "text", text: "PTY_TOOL_PARTIAL" }] } } } });
+      backend.onEvent?.({ event: "agent", payload: { runId, sessionKey, stream: "tool", data: { ...base, phase: "update", partialResult: { content: [{ type: "text", text: "    # PTY_TOOL_PARTIAL" }] } } } });
       record("toolPartialReady", { runId }); await waitForRenderingRelease("tool");
-      backend.onEvent?.({ event: "agent", payload: { runId, sessionKey, stream: "tool", data: { ...base, phase: "result", result: { content: [{ type: "text", text: "PTY_TOOL_RESULT" }] } } } });
+      backend.onEvent?.({ event: "agent", payload: { runId, sessionKey, stream: "tool", data: { ...base, phase: "result", result: { content: [{ type: "text", text: "    > PTY_TOOL_RESULT" }] } } } });
+    }
+    if (prepared) {
+      backend.onEvent?.({ event: "agent", payload: { runId, sessionKey, stream: "item", data: { ...activity, phase: "end", status: "completed" } } });
+      backend.onEvent?.({ event: "agent", payload: { runId, sessionKey, stream: "item", data: { itemId: "tool:approval", toolCallId: "approval", kind: "tool", name: "exec", title: "PTY_APPROVAL", phase: "end", status: "blocked" } } });
     }
     const finalText = "PTY_BEFORE_TOOL\\n\\nPTY_AFTER_TOOL"; emitAssistant(backend, runId, sessionKey, "delta", finalText); emitAssistant(backend, runId, sessionKey, "final", finalText); record("toolComplete", { runId }); record("toolChronologyComplete", { runId });
   }

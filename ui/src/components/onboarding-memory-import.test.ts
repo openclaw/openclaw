@@ -2,13 +2,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import "./onboarding-memory-import.ts";
 
 type OnboardingMemoryImportElement = HTMLElement & {
   active: boolean;
-  context: ApplicationContext<RouteId>;
+  context: ApplicationContext;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
 };
@@ -127,11 +126,11 @@ function createContext(
       subscribe,
     },
     navigate: vi.fn(),
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
 }
 
 async function mount(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   active = true,
 ): Promise<OnboardingMemoryImportElement> {
   const element = document.createElement(
@@ -401,7 +400,7 @@ describe("OnboardingMemoryImport", () => {
         return createPlan(["codex", "claude"]);
       }
       if (params?.providerId === "codex") {
-        throw new Error("Codex import unavailable");
+        throw new Error("Codex import unavailable: OPENAI_API_KEY=sk-1234567890abcdef");
       }
       return createApplyResult("claude", 1, 0);
     });
@@ -429,7 +428,8 @@ describe("OnboardingMemoryImport", () => {
       .filter(([method]) => method === "migrations.memory.apply")
       .map(([, params]) => (params as { providerId: string }).providerId);
     expect(applyProviders).toEqual(["codex", "claude"]);
-    expect(element.textContent).toContain("Codex import unavailable");
+    expect(element.textContent).toContain("Codex import unavailable: OPENAI_API_KEY=sk-123...cdef");
+    expect(element.textContent).not.toContain("sk-1234567890abcdef");
     expect(element.textContent).toContain("Migrated 1, skipped 0");
   });
 });

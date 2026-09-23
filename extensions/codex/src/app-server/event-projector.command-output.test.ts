@@ -68,9 +68,12 @@ describe("CodexAppServerEventProjector command output projection", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
     const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
-    const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
-    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
-    expect(toolResultContentItem.content).toBe("status passed\njson /tmp/scenario.json");
+    expect(toolResultMessage).toMatchObject({
+      role: "toolResult",
+      toolCallId: "cmd-1",
+      toolName: "bash",
+      content: [{ type: "text", text: "status passed\njson /tmp/scenario.json\n" }],
+    });
     expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
       "tool.result",
       expect.objectContaining({
@@ -87,10 +90,9 @@ describe("CodexAppServerEventProjector command output projection", () => {
     expect(toolResult.result).toEqual({ status: "completed", exitCode: 0, durationMs: 42 });
   });
 
-  it("keeps final command output UTF-16 safe at the transcript limit", async () => {
+  it("preserves complete final command output across the old UTF-16 transcript boundary", async () => {
     const projector = await createProjector();
-    // Position the surrogate pair so it straddles the transcript cap: the
-    // truncation boundary must drop the whole emoji, never split it in half.
+    // The old mirror cap cut this emoji and discarded the entire suffix.
     const prefix = "a".repeat(9_886);
     const aggregatedOutput = `${prefix}😀${"a".repeat(400)}`;
 
@@ -116,11 +118,8 @@ describe("CodexAppServerEventProjector command output projection", () => {
     const message = requireRecord(result.messagesSnapshot[2], "tool result message");
     const content = requireArray(message.content, "tool result content");
     const item = requireRecord(content[0], "tool result content item");
-    expect(item.content).toBe(
-      `${prefix}\n...(OpenClaw truncated Codex native tool output: original 10288 chars, showing 10000; rerun with narrower args.)`,
-    );
-    // A split surrogate would leave a lone code unit behind.
-    expect(item.content).not.toMatch(/[\uD800-\uDFFF]/);
+    expect(item.type).toBe("text");
+    expect(item.text).toBe(aggregatedOutput);
   });
 
   it("keeps streamed command output UTF-16 safe at the transcript limit", async () => {
@@ -165,9 +164,10 @@ describe("CodexAppServerEventProjector command output projection", () => {
     const item = requireRecord(content[0], "tool result content item");
     // A split surrogate would leave a lone code unit behind; the streamed output
     // must stay well-formed while still carrying the truncation notice.
-    expect(item.content).not.toMatch(/[\uD800-\uDFFF]/);
-    expect(item.content).toContain("OpenClaw truncated Codex native tool output");
-    expect(item.content).toContain("showing 10000");
+    expect(item.type).toBe("text");
+    expect(item.text).not.toMatch(/[\uD800-\uDFFF]/);
+    expect(item.text).toContain("OpenClaw truncated Codex native tool output");
+    expect(item.text).toContain("showing 10000");
   });
 
   it.each([
@@ -322,9 +322,9 @@ describe("CodexAppServerEventProjector command output projection", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
     const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
-    const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
-    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
-    expect(toolResultContentItem.content).toBe(`${userOutputWithNotice}second line must survive`);
+    expect(toolResultMessage.content).toEqual([
+      { type: "text", text: `${userOutputWithNotice}second line must survive\n` },
+    ]);
     expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
       "tool.result",
       expect.objectContaining({
@@ -448,8 +448,12 @@ describe("CodexAppServerEventProjector command output projection", () => {
       "tool result content",
     );
     const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
-    expect(toolResultContentItem.content).toHaveLength(10_000);
-    expect(toolResultContentItem.content).toContain("OpenClaw truncated Codex native tool output");
+    expect(toolResultContentItem.type).toBe("text");
+    expect(toolResultContentItem.text).toHaveLength(10_000);
+    expect(toolResultContentItem.text).toContain("OpenClaw truncated Codex native tool output");
+    expect(toolResultMessage).toMatchObject({
+      __openclaw: { toolOutput: { source: "execution", captureTruncated: true } },
+    });
   });
 
   it("uses streamed command output for failed native tool errors", async () => {
@@ -484,11 +488,6 @@ describe("CodexAppServerEventProjector command output projection", () => {
       meta: "run tests (workspace)",
       error: "fatal: missing fixture",
       mutatingAction: true,
-      actionFingerprint: JSON.stringify({
-        type: "commandExecution",
-        command: "pnpm test extensions/codex",
-        cwd: "/workspace",
-      }),
     });
   });
 

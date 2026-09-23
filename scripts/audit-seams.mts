@@ -53,7 +53,7 @@ const testRoot = path.join(repoRoot, "test");
 const workspacePackagePaths = ["ui/package.json"];
 const MAX_SCAN_BYTES = 2 * 1024 * 1024;
 const compareStrings = (left: string, right: string) => left.localeCompare(right);
-export const HELP_TEXT = `Usage: node --import tsx scripts/audit-seams.mts [--help]
+const HELP_TEXT = `Usage: node --import tsx scripts/audit-seams.mts [--help]
 
 Audit repo seam inventory and emit JSON to stdout.
 
@@ -651,7 +651,7 @@ function describeCronSeamKinds(relativePath: string, source: string) {
 
   if (
     importsSchedulerModules &&
-    /\bensureLoaded\b|\bpersist\b|\barmTimer\b|\brunMissedJobs\b|\bcomputeJobNextRunAtMs\b|\brecomputeNextRuns\b|\bnextWakeAtMs\b/.test(
+    /\bensureLoaded\b|\bpersist\b|\barmTimer\b|\brunMissedJobs\b|\bcomputeJobNextRunAtMs\b|\brecomputeNextRunsForMaintenance\b|\bnextWakeAtMs\b/.test(
       source,
     )
   ) {
@@ -686,8 +686,8 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
 
   const seamKinds = [];
   const isAnnounceDispatchPath =
-    relativePath === "src/agents/subagent-announce.ts" ||
-    relativePath === "src/agents/subagent-announce-dispatch.ts";
+    relativePath === "src/agents/subagents/announce/subagent-announce.ts" ||
+    relativePath === "src/agents/subagents/announce/subagent-announce-dispatch.ts";
   const importsSpawnRuntime = hasAnyImportSource(source, [
     "./subagent-spawn.js",
     "./acp-spawn.js",
@@ -718,6 +718,8 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
   const importsAnnounceDelivery = hasAnyImportSource(source, [
     "./subagent-announce.js",
     "./subagent-announce-dispatch.js",
+    "../announce/subagent-announce.js",
+    "../announce/subagent-announce-dispatch.js",
     "./subagent-announce-queue.js",
     "../infra/outbound/bound-delivery-router.js",
     "../utils/delivery-context.shared.js",
@@ -825,7 +827,7 @@ export function describeSeamKinds(relativePath: string, source: string) {
   }
   if (
     isReplyDeliveryPath &&
-    /blockStreamingEnabled|directlySentBlockKeys|resolveSendableOutboundReplyParts/.test(source) &&
+    /blockStreamingEnabled|directBlockDeliveries|resolveSendableOutboundReplyParts/.test(source) &&
     /\bmediaUrl\b|\bmediaUrls\b/.test(source)
   ) {
     seamKinds.push("streaming-media-handoff");

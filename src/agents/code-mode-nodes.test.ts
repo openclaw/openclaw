@@ -45,7 +45,7 @@ let applyCodeModeCatalog: typeof import("./code-mode.js").applyCodeModeCatalog;
 let createCodeModeTools: typeof import("./code-mode.js").createCodeModeTools;
 let createToolSearchCatalogRef: typeof import("./tool-search.js").createToolSearchCatalogRef;
 let createNodesTool: typeof import("./tools/nodes-tool.js").createNodesTool;
-let testing: typeof import("./code-mode.test-support.js").testing;
+let resetCodeModeTestState: typeof import("./code-mode.test-support.js").resetCodeModeTestState;
 
 function resultDetails(result: { details?: unknown }): Record<string, unknown> {
   expect(result.details).toBeDefined();
@@ -100,7 +100,9 @@ async function runUntilCompleted(params: {
   code: string;
 }): Promise<Record<string, unknown>> {
   let details = resultDetails(
-    await params.execTool.execute("code-nodes-call", { code: params.code }),
+    await params.execTool.execute("code-nodes-call", {
+      code: params.code,
+    }),
   );
   for (let index = 0; index < 8 && details.status === "waiting"; index += 1) {
     details = resultDetails(
@@ -116,7 +118,7 @@ describe("Code Mode nodes", () => {
     ({ applyCodeModeCatalog, createCodeModeTools } = await import("./code-mode.js"));
     ({ createToolSearchCatalogRef } = await import("./tool-search.js"));
     ({ createNodesTool } = await import("./tools/nodes-tool.js"));
-    ({ testing } = await import("./code-mode.test-support.js"));
+    ({ resetCodeModeTestState } = await import("./code-mode.test-support.js"));
   });
 
   beforeEach(() => {
@@ -150,20 +152,17 @@ describe("Code Mode nodes", () => {
     });
   });
 
-  afterEach(() => {
-    testing.activeRuns.clear();
-    testing.resumingRunIds.clear();
-  });
+  afterEach(() => resetCodeModeTestState());
 
-  it("lists nodes and returns a callable handle with conditional directory sugar", async () => {
+  it("lists nodes and invokes typed handles", async () => {
     const harness = createHarness();
     const details = await runUntilCompleted({
       ...harness,
       code: `
         const listed = await nodes.list();
-        const node = await nodes.get("Desk");
+        const node = await nodes.get(listed.find(entry => entry.connected)?.id ?? "Desk");
         const invoked = await node.invoke("device.status", { detail: true });
-        const directory = await node.listDir("/tmp");
+        const directory = node.listDir ? await node.listDir("/tmp") : undefined;
         return {
           listed,
           id: node.id,
@@ -280,5 +279,46 @@ describe("Code Mode nodes", () => {
     });
 
     expect(details.value).toBe('node "shadow-id" is not paired (paired node ids: node-1, node-2)');
+  });
+
+  it.each([
+    {
+      label: "list",
+      code: `await nodes.list(); return missingAfterList();`,
+    },
+    {
+      label: "get",
+      code: `return (await nodes.get("Desk")).describe();`,
+    },
+  ])("reports a guest error after nodes.$label", async ({ code }) => {
+    const details = await runUntilCompleted({ ...createHarness(), code });
+
+    expect(details).toMatchObject({
+      status: "failed",
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+    });
+  });
+
+  it("reports a guest error after nodes.invoke without replaying the invocation", async () => {
+    const details = await runUntilCompleted({
+      ...createHarness(),
+      code: `
+        const node = await nodes.get("Desk");
+        await node.invoke("device.status");
+        return node.describe();
+      `,
+    });
+
+    expect(details).toMatchObject({
+      status: "failed",
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+    });
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({ nodeId: "node-1", command: "device.status" }),
+    );
   });
 });

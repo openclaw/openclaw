@@ -1,58 +1,28 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CHECK_IDS } from "./check-ids.js";
+import { createOrderedPolicyShape } from "./ordered-shape.js";
 import { SUPPORTED_AUTH_PROFILE_METADATA } from "./policy-constants.js";
-import { isChannelDenyRule } from "./policy-runtime.js";
-import { unsupportedPolicyKey } from "./shape-helpers.js";
-import { ocPathSegment } from "./utils.js";
+import { isChannelDenyRule } from "./shape-helpers.js";
 
 export function authProfileMetadataRequirementFindings(
   policy: unknown,
   policyPath: string,
   policyDocName: string,
 ): readonly HealthFinding[] {
-  if (
-    !isRecord(policy) ||
-    !isRecord(policy.auth) ||
-    !isRecord(policy.auth.profiles) ||
-    policy.auth.profiles.requireMetadata === undefined
-  ) {
-    return [];
-  }
-  if (!Array.isArray(policy.auth.profiles.requireMetadata)) {
-    return [
-      {
-        checkId: CHECK_IDS.policyInvalidFile,
-        severity: "error",
-        message: `${policyPath} auth.profiles.requireMetadata must be an array of metadata keys.`,
-        source: "policy",
-        path: policyPath,
-        target: `oc://${policyDocName}/auth/profiles/requireMetadata`,
-        fixHint: `Use supported metadata keys: ${SUPPORTED_AUTH_PROFILE_METADATA.join(", ")}.`,
-      },
-    ];
-  }
-  const invalidIndex = policy.auth.profiles.requireMetadata.findIndex(
-    (entry) =>
-      typeof entry !== "string" ||
-      !SUPPORTED_AUTH_PROFILE_METADATA.includes(
-        entry.trim().toLowerCase() as (typeof SUPPORTED_AUTH_PROFILE_METADATA)[number],
-      ),
-  );
-  if (invalidIndex < 0) {
-    return [];
-  }
-  return [
-    {
-      checkId: CHECK_IDS.policyInvalidFile,
-      severity: "error",
-      message: `${policyPath} auth.profiles.requireMetadata[${invalidIndex}] must be a supported metadata key.`,
-      source: "policy",
-      path: policyPath,
-      target: `oc://${policyDocName}/auth/profiles/requireMetadata/#${invalidIndex}`,
-      fixHint: `Use supported metadata keys: ${SUPPORTED_AUTH_PROFILE_METADATA.join(", ")}.`,
+  const shape = createOrderedPolicyShape(policy, { policyPath, policyDocName });
+  const finding = shape.list("auth.profiles.requireMetadata", {
+    allowed: SUPPORTED_AUTH_PROFILE_METADATA,
+    normalize: "lower",
+    array: {
+      message: "{policy} {property} must be an array of metadata keys.",
+      hint: "Use supported metadata keys: {allowed}.",
     },
-  ];
+    entry: {
+      message: "{policy} {property}[{index}] must be a supported metadata key.",
+      hint: "Use supported metadata keys: {allowed}.",
+    },
+  });
+  return finding === undefined ? [] : [finding];
 }
 
 export function invalidChannelDenyRuleFindings(
@@ -60,70 +30,59 @@ export function invalidChannelDenyRuleFindings(
   policyPath: string,
   policyDocName: string,
 ): readonly HealthFinding[] {
-  if (!isRecord(policy) || !isRecord(policy.channels) || policy.channels.denyRules === undefined) {
+  const shape = createOrderedPolicyShape(policy, { policyPath, policyDocName });
+  const rules = shape.value("channels.denyRules");
+  if (rules === undefined) {
     return [];
   }
-  if (!Array.isArray(policy.channels.denyRules)) {
+  if (!Array.isArray(rules)) {
     return [
-      {
-        checkId: CHECK_IDS.policyInvalidFile,
-        severity: "error",
-        message: `${policyPath} channels.denyRules must be an array.`,
-        source: "policy",
-        path: policyPath,
-        target: `oc://${policyDocName}/channels/denyRules`,
-        fixHint: `Fix ${policyPath} so channel deny rules are an array.`,
-      },
+      shape.finding("channels.denyRules", {
+        message: "{policy} {property} must be an array.",
+        hint: "Fix {policy} so channel deny rules are an array.",
+      }),
     ];
   }
-  for (const [index, rule] of policy.channels.denyRules.entries()) {
+  for (const [index, rule] of rules.entries()) {
     if (!isRecord(rule)) {
       continue;
     }
-    const unsupportedRuleKey = unsupportedPolicyKey(rule, ["id", "reason", "when"]);
-    if (unsupportedRuleKey !== undefined) {
-      return [
-        {
-          checkId: CHECK_IDS.policyInvalidFile,
-          severity: "error",
-          message: `${policyPath} channels.denyRules[${index}].${unsupportedRuleKey} is not supported in channel deny rules.`,
-          source: "policy",
-          path: policyPath,
-          target: `oc://${policyDocName}/channels/denyRules/#${index}/${ocPathSegment(unsupportedRuleKey)}`,
-          fixHint: `Remove channels.denyRules[${index}].${unsupportedRuleKey} or use id, when.provider, and reason.`,
-        },
-      ];
+    const entry = createOrderedPolicyShape(rule, {
+      policyPath,
+      policyDocName,
+      propertyPrefix: "channels.denyRules[" + index + "]",
+      targetPrefix: "channels/denyRules/#" + index,
+    });
+    const finding =
+      entry.keys(
+        "",
+        ["id", "reason", "when"],
+        "",
+        "Remove {unsupported} or use id, when.provider, and reason.",
+        "{policy} {unsupported} is not supported in channel deny rules.",
+      ) ??
+      entry.keys(
+        "when",
+        ["provider"],
+        "",
+        "Remove {unsupported} or use when.provider.",
+        "{policy} {unsupported} is not supported in channel deny rules.",
+      );
+    if (finding !== undefined) {
+      return [finding];
     }
-    if (isRecord(rule.when)) {
-      const unsupportedWhenKey = unsupportedPolicyKey(rule.when, ["provider"]);
-      if (unsupportedWhenKey !== undefined) {
-        return [
+  }
+  const index = rules.findIndex((rule) => !isChannelDenyRule(rule));
+  return index < 0
+    ? []
+    : [
+        shape.finding(
+          "channels.denyRules",
           {
-            checkId: CHECK_IDS.policyInvalidFile,
-            severity: "error",
-            message: `${policyPath} channels.denyRules[${index}].when.${unsupportedWhenKey} is not supported in channel deny rules.`,
-            source: "policy",
-            path: policyPath,
-            target: `oc://${policyDocName}/channels/denyRules/#${index}/when/${ocPathSegment(unsupportedWhenKey)}`,
-            fixHint: `Remove channels.denyRules[${index}].when.${unsupportedWhenKey} or use when.provider.`,
+            message: "{policy} {property}[{index}] must define when.provider as a string.",
+            hint: "Fix {policy} so each channel deny rule has a provider match.",
           },
-        ];
-      }
-    }
-  }
-  const invalid = policy.channels.denyRules.findIndex((rule) => !isChannelDenyRule(rule));
-  if (invalid < 0) {
-    return [];
-  }
-  return [
-    {
-      checkId: CHECK_IDS.policyInvalidFile,
-      severity: "error",
-      message: `${policyPath} channels.denyRules[${invalid}] must define when.provider as a string.`,
-      source: "policy",
-      path: policyPath,
-      target: `oc://${policyDocName}/channels/denyRules/#${invalid}`,
-      fixHint: `Fix ${policyPath} so each channel deny rule has a provider match.`,
-    },
-  ];
+          { index },
+        ),
+      ];
 }

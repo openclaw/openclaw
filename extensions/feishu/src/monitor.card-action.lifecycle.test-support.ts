@@ -1,13 +1,14 @@
 // Feishu plugin module implements monitor.card action.lifecycle support behavior.
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "./lifecycle.test-support.js";
-import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
-import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
 import {
   getFeishuLifecycleTestMocks,
   resetFeishuLifecycleTestMocks,
 } from "./lifecycle.test-support.js";
+import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
+import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import {
   createFeishuLifecycleConfig,
   createFeishuLifecycleReplyDispatcher,
@@ -20,6 +21,7 @@ import {
   restoreFeishuLifecycleStateDir,
   setFeishuLifecycleStateDir,
   setupFeishuLifecycleHandler,
+  stopFeishuLifecycleMonitors,
 } from "./test-support/lifecycle-test-support.js";
 
 const {
@@ -181,11 +183,15 @@ describe("Feishu card-action lifecycle", () => {
     });
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    processedCardActions.clear();
-    resolvedCardActionChatTypes.clear();
-    restoreFeishuLifecycleStateDir(originalStateDir);
+  afterEach(async () => {
+    try {
+      await stopFeishuLifecycleMonitors();
+      processedCardActions.clear();
+      resolvedCardActionChatTypes.clear();
+      restoreFeishuLifecycleStateDir(originalStateDir);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("routes one reply across duplicate callback delivery", async () => {

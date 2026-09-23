@@ -13,6 +13,7 @@ import {
 const changelogScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "changelog.sh");
 const commonScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "common.sh");
 const gatesScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "gates.sh");
+const reviewScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "review.sh");
 
 function run(cwd: string, command: string, args: string[], env?: NodeJS.ProcessEnv): string {
   return execFileSync(command, args, {
@@ -30,24 +31,23 @@ function commandOutput(error: unknown): string {
 
 function createRepoWithPrChangelogDiff(entry: string): string {
   const repo = mkdtempSync(path.join(os.tmpdir(), "openclaw-changelog-credit-"));
-  run(repo, "git", ["init", "-q", "--initial-branch=main"]);
-  run(repo, "git", ["config", "user.email", "test@example.com"]);
-  run(repo, "git", ["config", "user.name", "Test User"]);
+  const git = (args: string[]) =>
+    run(repo, "git", ["-c", "user.email=test@example.com", "-c", "user.name=Test User", ...args]);
+  git(["init", "-q", "--initial-branch=main"]);
   writeFileSync(repo + "/CHANGELOG.md", "# Changelog\n\n## Unreleased\n\n### Fixes\n\n", "utf8");
-  run(repo, "git", ["add", "CHANGELOG.md"]);
-  run(repo, "git", ["commit", "-qm", "seed"]);
-  const baseSha = run(repo, "git", ["rev-parse", "HEAD"]);
-  // validate_changelog_entry_for_pr reads origin/main...HEAD, so the test
-  // fixture needs a real base ref plus a feature-branch changelog diff.
-  run(repo, "git", ["update-ref", "refs/remotes/origin/main", baseSha]);
-  run(repo, "git", ["checkout", "-qb", "feature"]);
+  git(["add", "CHANGELOG.md"]);
+  git(["commit", "-qm", "seed"]);
+  const baseSha = git(["rev-parse", "HEAD"]);
+  // Direct helper callers capture this base as the operation's main snapshot.
+  git(["update-ref", "refs/remotes/origin/main", baseSha]);
+  git(["checkout", "-qb", "feature"]);
   writeFileSync(
     repo + "/CHANGELOG.md",
     `# Changelog\n\n## Unreleased\n\n### Fixes\n\n${entry}\n`,
     "utf8",
   );
-  run(repo, "git", ["add", "CHANGELOG.md"]);
-  run(repo, "git", ["commit", "-qm", "add changelog entry"]);
+  git(["add", "CHANGELOG.md"]);
+  git(["commit", "-qm", "add changelog entry"]);
   return repo;
 }
 
@@ -63,7 +63,7 @@ function validateChangelogEntry(repo: string, contrib: string): string {
     "bash",
     [
       "-c",
-      'source "$OPENCLAW_PR_CHANGELOG_SH"; validate_changelog_entry_for_pr 123 "$OPENCLAW_TEST_CONTRIB"',
+      'source "$OPENCLAW_PR_CHANGELOG_SH"; PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); validate_changelog_entry_for_pr 123 "$OPENCLAW_TEST_CONTRIB"',
     ],
     {
       OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
@@ -217,6 +217,60 @@ describe("check-changelog-attributions", () => {
     }
   });
 
+  it.each([
+    {
+      name: "initial release keeps maintainer exclusion",
+      file: "2026.9.1.md",
+      mirror: false,
+      handle: "steipete",
+      rejected: true,
+    },
+    {
+      name: "docs mirror includes the maintainer",
+      file: "2026.9.1.md",
+      mirror: true,
+      handle: "steipete",
+      rejected: false,
+    },
+    {
+      name: "docs mirror excludes bots",
+      file: "2026.9.1.md",
+      mirror: true,
+      handle: "dependabot[bot]",
+      rejected: true,
+    },
+    {
+      name: "frozen record retains initial policy",
+      file: "records/2026.9.1.md",
+      mirror: true,
+      handle: "steipete",
+      rejected: true,
+    },
+  ])("$name", ({ file, mirror, handle, rejected }) => {
+    const repo = createRepoWithChangelog("# Changelog\n\n<!-- openclaw:split-changelog -->\n");
+    mkdirSync(path.join(repo, "CHANGELOG/records"), { recursive: true });
+    writeFileSync(
+      path.join(repo, "CHANGELOG", file),
+      `## 2026.9.1\n\n${mirror ? "<!-- openclaw-docs-mirror-v1 -->\n\n" : ""}- Repair. Thanks @${handle}.\n`,
+    );
+    try {
+      if (rejected) {
+        let output = "";
+        try {
+          validateChangelogAttributionPolicy(repo);
+        } catch (error) {
+          output = commandOutput(error);
+        }
+        expect(output).toContain(`CHANGELOG/${file}:`);
+        expect(output).toContain(`uses Thanks @${handle}`);
+      } else {
+        expect(validateChangelogAttributionPolicy(repo)).toBe("");
+      }
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("rejects root changelog updates from normal prepare gates", () => {
     const repo = createRepoWithPrChangelogDiff("- User fix (#123). Thanks @alice.");
     const callsPath = path.join(repo, "calls.log");
@@ -235,13 +289,16 @@ set -euo pipefail
 source "$OPENCLAW_PR_COMMON_SH"
 source "$OPENCLAW_PR_CHANGELOG_SH"
 source "$OPENCLAW_PR_GATES_SH"
+source "$OPENCLAW_PR_REVIEW_SH"
 
-enter_worktree() { :; }
+pr_gh() { printf '{"headRefName":"feature"}\\n'; }
+enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }
 checkout_prep_branch() { :; }
 refresh_prep_branch_for_reviewed_head() { :; }
+# Preparation tests cover review admission; these fixtures isolate changelog policy.
+require_prepared_review() { :; }
 bootstrap_deps_if_needed() { :; }
 require_artifact() { [ -s "$1" ]; }
-normalize_pr_changelog_entries() { printf 'normalize\\n' >>"$OPENCLAW_TEST_CALLS"; }
 validate_changelog_attribution_policy() { printf 'policy\\n' >>"$OPENCLAW_TEST_CALLS"; }
 validate_changelog_merge_hygiene() { printf 'merge-hygiene\\n' >>"$OPENCLAW_TEST_CALLS"; }
 validate_changelog_entry_for_pr() { printf 'entry:%s:%s\\n' "$1" "$2" >>"$OPENCLAW_TEST_CALLS"; }
@@ -254,6 +311,7 @@ prepare_gates 123
             OPENCLAW_PR_COMMON_SH: commonScriptPath,
             OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
             OPENCLAW_PR_GATES_SH: gatesScriptPath,
+            OPENCLAW_PR_REVIEW_SH: reviewScriptPath,
             OPENCLAW_TEST_CALLS: callsPath,
             OPENCLAW_TESTBOX: "0",
           },
@@ -264,7 +322,6 @@ prepare_gates 123
       const calls = existsSync(callsPath) ? readFileSync(callsPath, "utf8") : "";
 
       expect(output).toContain("CHANGELOG.md is release-owned");
-      expect(calls).not.toContain("normalize");
       expect(calls).not.toContain("policy");
     } finally {
       rmSync(repo, { recursive: true, force: true });
@@ -287,13 +344,16 @@ set -euo pipefail
 source "$OPENCLAW_PR_COMMON_SH"
 source "$OPENCLAW_PR_CHANGELOG_SH"
 source "$OPENCLAW_PR_GATES_SH"
+source "$OPENCLAW_PR_REVIEW_SH"
 
-enter_worktree() { :; }
+pr_gh() { printf '{"headRefName":"feature"}\\n'; }
+enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }
 checkout_prep_branch() { :; }
 refresh_prep_branch_for_reviewed_head() { :; }
+# Preparation tests cover review admission; these fixtures isolate changelog policy.
+require_prepared_review() { :; }
 bootstrap_deps_if_needed() { :; }
 require_artifact() { [ -s "$1" ]; }
-normalize_pr_changelog_entries() { printf 'normalize\\n' >>"$OPENCLAW_TEST_CALLS"; }
 validate_changelog_attribution_policy() { printf 'policy\\n' >>"$OPENCLAW_TEST_CALLS"; }
 validate_changelog_merge_hygiene() { printf 'merge-hygiene\\n' >>"$OPENCLAW_TEST_CALLS"; }
 validate_changelog_entry_for_pr() { printf 'entry:%s:%s\\n' "$1" "$2" >>"$OPENCLAW_TEST_CALLS"; }
@@ -307,6 +367,7 @@ prepare_gates 123
           OPENCLAW_PR_COMMON_SH: commonScriptPath,
           OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
           OPENCLAW_PR_GATES_SH: gatesScriptPath,
+          OPENCLAW_PR_REVIEW_SH: reviewScriptPath,
           OPENCLAW_TEST_CALLS: callsPath,
           OPENCLAW_TESTBOX: "0",
         },
@@ -314,7 +375,7 @@ prepare_gates 123
       const calls = readFileSync(callsPath, "utf8");
 
       expect(output).toContain("docs_only=true");
-      expect(calls).toContain("normalize\npolicy\n");
+      expect(calls).toContain("policy\n");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

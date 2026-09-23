@@ -8,7 +8,13 @@ export type DoctorSessionSqliteIssue = {
 };
 
 const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
+  "active_sqlite_transcript_jsonl",
   "entry_invalid",
+  "historical_transcript_deferred",
+  "historical_duplicate_settled",
+  "legacy_index_informational",
+  "plugin_migration_source_retained",
+  "retained_plugin_source_index_rebuilt",
   "transcript_archive_failed",
   "transcript_malformed",
   "transcript_missing",
@@ -17,6 +23,26 @@ const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
 
 export function isSessionSqliteMigrationWarning(issue: DoctorSessionSqliteIssue): boolean {
   return SESSION_SQLITE_WARNING_ISSUE_CODES.has(issue.code);
+}
+
+export function countBlockingSessionSqliteIssues(report: DoctorSessionSqliteTargetReport): number {
+  return report.issues.filter((issue) => !isSessionSqliteMigrationWarning(issue)).length;
+}
+
+export function isRetainedSourceIssue(issue: DoctorSessionSqliteIssue): boolean {
+  return [
+    "entry_invalid",
+    "historical_duplicate_settled",
+    "transcript_malformed",
+    "transcript_missing",
+    "retained_plugin_source_index_rebuilt",
+  ].includes(issue.code);
+}
+
+export function isInformationalMissingSessionIndex(
+  report: DoctorSessionSqliteTargetReport,
+): boolean {
+  return report.issues.some((issue) => issue.code === "legacy_index_informational");
 }
 
 export type DoctorSessionSqliteRestoreConflict = {
@@ -67,13 +93,11 @@ export type SessionSqliteMigrationFailureIssue = {
   body: string;
   bodyPath?: string;
   github?: {
-    fallbackUrl?: string;
     message?: string;
     status: "created" | "failed" | "skipped";
     url?: string;
   };
   title: string;
-  url: string;
 };
 
 export type DoctorSessionSqliteMode =
@@ -177,6 +201,13 @@ export function createDoctorSessionSqliteTotals(
   > = {},
 ): DoctorSessionSqliteReport["totals"] {
   const { archivedLegacyStoreFiles, reclaimedBytes } = values;
+  const sqliteEntries = new Map<string, number>();
+  for (const target of targets) {
+    sqliteEntries.set(
+      target.sqlitePath,
+      Math.max(sqliteEntries.get(target.sqlitePath) ?? 0, target.sqliteEntries),
+    );
+  }
   return {
     ...(archivedLegacyStoreFiles === undefined ? {} : { archivedLegacyStoreFiles }),
     archivedTranscriptFiles: values.archivedTranscriptFiles ?? 0,
@@ -186,7 +217,7 @@ export function createDoctorSessionSqliteTotals(
     issues: sumDoctorSessionSqliteTargets(targets, (target) => target.issues.length),
     legacyEntries: values.legacyEntries ?? 0,
     ...(reclaimedBytes === undefined ? {} : { reclaimedBytes }),
-    sqliteEntries: sumDoctorSessionSqliteTargets(targets, (target) => target.sqliteEntries),
+    sqliteEntries: [...sqliteEntries.values()].reduce((total, count) => total + count, 0),
     targets: targets.length,
     unreferencedJsonlFiles: values.unreferencedJsonlFiles ?? 0,
     validatedEntries: values.validatedEntries ?? 0,

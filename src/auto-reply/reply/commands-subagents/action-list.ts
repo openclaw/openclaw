@@ -1,14 +1,17 @@
-// Lists subagent runs with focus and status information.
-import { buildSubagentList } from "../../../agents/subagent-list.js";
+// Lists subagent runs with lifecycle status.
+import {
+  buildSubagentList,
+  readSubagentListSessionEntries,
+} from "../../../agents/subagents/registry/subagent-list.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
-import { type SubagentsCommandContext, RECENT_WINDOW_MINUTES, stopWithText } from "./shared.js";
+import { type SubagentsCommandContext, RECENT_WINDOW_MINUTES } from "./shared.js";
 
 export function handleSubagentsListAction(ctx: SubagentsCommandContext): CommandHandlerResult {
-  const { params, runs } = ctx;
+  const { params, readContext } = ctx;
   const list = buildSubagentList({
-    cfg: params.cfg,
-    runs,
-    recentMinutes: RECENT_WINDOW_MINUTES,
+    context: readContext.list,
+    sessionEntries: readSubagentListSessionEntries(params.cfg, readContext.list),
     taskMaxChars: 110,
   });
   const lines = ["active subagents:", "-----"];
@@ -24,5 +27,5 @@ export function handleSubagentsListAction(ctx: SubagentsCommandContext): Command
     lines.push(list.recent.map((entry) => entry.line).join("\n"));
   }
 
-  return stopWithText(lines.join("\n"));
+  return commandReply(lines.join("\n"));
 }

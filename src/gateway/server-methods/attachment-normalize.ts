@@ -1,5 +1,6 @@
 // Attachment normalization accepts permissive RPC attachment payloads and turns
 // them into the bounded chat attachment shape used by gateway chat methods.
+import { asNonNegativeFiniteNumber as normalizeAttachmentNumber } from "@openclaw/normalization-core/number-coercion";
 import type { ChatAttachment } from "../chat-attachments.js";
 
 /** RPC attachment payload shape accepted by chat-like gateway methods. */
@@ -7,6 +8,7 @@ export type RpcAttachmentInput = {
   type?: unknown;
   mimeType?: unknown;
   fileName?: unknown;
+  origin?: unknown;
   content?: unknown;
   sizeBytes?: unknown;
   durationMs?: unknown;
@@ -30,10 +32,6 @@ function normalizeAttachmentContent(content: unknown): string | undefined {
   return undefined;
 }
 
-function normalizeAttachmentNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
 /** Convert permissive RPC attachment payloads into the bounded chat attachment shape. */
 export function normalizeRpcAttachmentsToChatAttachments(
   attachments: RpcAttachmentInput[] | undefined,
@@ -42,7 +40,7 @@ export function normalizeRpcAttachmentsToChatAttachments(
   // source:{type:"base64",media_type,data} payloads used by some clients.
   return (
     attachments
-      ?.map((a) => {
+      ?.map((a): ChatAttachment => {
         const source = a?.source && typeof a.source === "object" ? a.source : undefined;
         const sourceRecord = source as
           | { type?: unknown; media_type?: unknown; data?: unknown }
@@ -62,6 +60,7 @@ export function normalizeRpcAttachmentsToChatAttachments(
           mimeType: typeof a?.mimeType === "string" ? a.mimeType : sourceMimeType,
           fileName: typeof a?.fileName === "string" ? a.fileName : undefined,
           content: normalizeAttachmentContent(a?.content) ?? sourceContent,
+          ...(a?.origin === "paste" || a?.origin === "file" ? { origin: a.origin } : {}),
           ...(sizeBytes !== undefined ? { sizeBytes } : {}),
           ...(durationMs !== undefined ? { durationMs } : {}),
           ...(width !== undefined ? { width } : {}),

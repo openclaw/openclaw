@@ -9,10 +9,11 @@ import {
   COMPACTION_SUMMARY_SUFFIX,
   bashExecutionToText,
 } from "../runtime/index.js";
-import { estimateToolResultTextChars } from "./tool-result-text-budget.js";
+import { prepareToolResultTextChars } from "./tool-result-text-budget.js";
 
 export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
+export const TOOL_IMAGE_CHARS = IMAGE_CHAR_ESTIMATE * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
 
 export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
 
@@ -81,11 +82,9 @@ function estimateToolResultContentChars(content: unknown[]): number {
   let chars = 0;
   for (const block of content) {
     if (isTextBlock(block)) {
-      chars += estimateToolResultTextChars(block.text, {
-        minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
-      });
+      chars += prepareToolResultTextChars(block, block.text, TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE);
     } else if (isImageBlock(block)) {
-      chars += IMAGE_CHAR_ESTIMATE * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
+      chars += TOOL_IMAGE_CHARS;
     } else {
       chars += estimateUnknownChars(block) * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
     }
@@ -104,13 +103,17 @@ export function getToolResultText(msg: AgentMessage): string {
   return chunks.join("\n");
 }
 
-function estimateMessageChars(msg: AgentMessage): number {
-  if (!msg || typeof msg !== "object") {
+export function estimateMessageChars(msg: AgentMessage, contentOverride?: unknown[]): number {
+  if (
+    !msg ||
+    typeof msg !== "object" ||
+    ("excludeFromContext" in msg && msg.excludeFromContext === true)
+  ) {
     return 0;
   }
 
   if (msg.role === "user") {
-    const content = msg.content;
+    const content = contentOverride ?? msg.content;
     if (typeof content === "string") {
       return content.length;
     }
@@ -122,7 +125,7 @@ function estimateMessageChars(msg: AgentMessage): number {
 
   if (msg.role === "assistant") {
     let chars = 0;
-    const content = (msg as { content?: unknown }).content;
+    const content = contentOverride ?? (msg as { content?: unknown }).content;
     if (Array.isArray(content)) {
       for (const block of content) {
         if (!block || typeof block !== "object") {
@@ -154,31 +157,30 @@ function estimateMessageChars(msg: AgentMessage): number {
 
   if (isToolResultMessage(msg)) {
     // `details` is stripped before provider conversion; estimate only visible content.
-    const content = getToolResultContent(msg);
+    const content = contentOverride ?? getToolResultContent(msg);
     return estimateToolResultContentChars(content);
   }
 
-  const record = msg as unknown as Record<string, unknown>;
+  const role: unknown = Reflect.get(msg, "role");
 
-  if (record.role === "bashExecution") {
-    if (record.excludeFromContext === true) {
-      return 0;
-    }
-    return bashExecutionToText(msg as unknown as Parameters<typeof bashExecutionToText>[0]).length;
+  if (role === "bashExecution") {
+    return bashExecutionToText(msg as Parameters<typeof bashExecutionToText>[0]).length;
   }
 
-  if (record.role === "branchSummary") {
-    const summary = typeof record.summary === "string" ? record.summary : "";
+  if (role === "branchSummary") {
+    const rawSummary = Reflect.get(msg, "summary");
+    const summary = typeof rawSummary === "string" ? rawSummary : "";
     return (BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX).length;
   }
 
-  if (record.role === "compactionSummary") {
-    const summary = typeof record.summary === "string" ? record.summary : "";
+  if (role === "compactionSummary") {
+    const rawSummary = Reflect.get(msg, "summary");
+    const summary = typeof rawSummary === "string" ? rawSummary : "";
     return (COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX).length;
   }
 
-  if (record.role === "custom") {
-    const content = record.content;
+  if (role === "custom") {
+    const content = contentOverride ?? Reflect.get(msg, "content");
     if (typeof content === "string") {
       return content.length;
     }

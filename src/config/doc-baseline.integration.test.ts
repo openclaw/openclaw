@@ -1,8 +1,9 @@
 // Verifies generated config documentation baselines against source metadata.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-url";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   type ConfigDocBaselineEntry,
   renderConfigDocBaselineArtifacts,
@@ -88,13 +89,14 @@ describe("config doc baseline integration", () => {
     expect(twilioToken.sensitive).toBe(true);
   });
 
-  it("preserves help text and tags from merged schema hints", async () => {
+  it("preserves authored help and security metadata without inferred tags", async () => {
     const byPath = await getSharedByPath();
     const tokenEntry = byPath.get("gateway.auth.token");
 
-    expect(tokenEntry?.help).toContain("gateway access");
-    expect(tokenEntry?.tags).toContain("auth");
-    expect(tokenEntry?.tags).toContain("security");
+    expect(tokenEntry?.help).toContain("Shared secret selected by gateway.auth.mode=token");
+    expect(tokenEntry?.help).toContain("either auth.token or auth.password");
+    expect(tokenEntry?.tags).toEqual([]);
+    expect(requireEntry(byPath, "mcp.servers.*.url").tags).toContain(SENSITIVE_URL_HINT_TAG);
   });
 
   it("omits legacy hooks.internal.handlers from the generated baseline", async () => {
@@ -150,7 +152,7 @@ describe("config doc baseline integration", () => {
   });
 
   it("supports check mode for stale hash files", async () => {
-    await withTempDir({ prefix: "openclaw-config-doc-baseline-" }, async (tempRoot) => {
+    await withTestDir({ prefix: "openclaw-config-doc-baseline-" }, async (tempRoot) => {
       const rendered = getSharedRendered();
 
       const initial = await writeConfigDocBaselineArtifacts({
@@ -184,7 +186,7 @@ describe("config doc baseline integration", () => {
   });
 
   it("ratchets config entry count budgets in both directions", async () => {
-    await withTempDir({ prefix: "openclaw-config-doc-counts-" }, async (tempRoot) => {
+    await withTestDir({ prefix: "openclaw-config-doc-counts-" }, async (tempRoot) => {
       const rendered = await getSharedRendered();
       const countsPath = path.join(tempRoot, "docs/.generated/config-baseline.counts.json");
 

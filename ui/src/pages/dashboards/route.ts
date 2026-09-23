@@ -2,38 +2,47 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { DEFAULT_SESSION_LIST_QUERY } from "../../lib/sessions/index.ts";
+import type { SessionListOptions, SessionListSnapshot } from "../../lib/sessions/index.ts";
 import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
-import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
+import {
+  isUiGlobalScopeConfigured,
+  resolveUiConfiguredMainKey,
+} from "../../lib/sessions/session-key.ts";
+import { dashboardSessionListQuery as dashboardSessionListQueryForAgent } from "../../lib/sessions/session-requests.ts";
 import type { DashboardsRouteData } from "./view.ts";
 
-export async function loadDashboardsRoute(
+export function dashboardSessionListQuery(context: ApplicationContext): SessionListOptions {
+  return dashboardSessionListQueryForAgent(context.agentSelection.state.scopeId);
+}
+
+export function dashboardsRouteData(
   context: ApplicationContext,
-): Promise<DashboardsRouteData> {
-  let value = null;
-  let error: string | null = null;
-  try {
-    value = await context.sessions.list({
-      ...DEFAULT_SESSION_LIST_QUERY,
-      boardFace: "dashboard",
-      archivedFilter: "all",
-      ...(context.agentSelection.state.scopeId
-        ? { agentId: context.agentSelection.state.scopeId }
-        : {}),
-    });
-  } catch (cause) {
-    error = String(cause);
-  }
+  snapshot: SessionListSnapshot,
+): DashboardsRouteData {
   return {
-    result: value,
-    error,
+    result: snapshot.result,
+    error: snapshot.error,
     basePath: context.basePath,
     fallbackAgentId: resolveSessionNavigationAgentId(context),
+    globalScope: isUiGlobalScopeConfigured({
+      agentsList: context.agents.state.agentsList,
+      hello: context.gateway.snapshot.hello,
+    }),
     mainKey: resolveUiConfiguredMainKey({
       agentsList: context.agents.state.agentsList,
       hello: context.gateway.snapshot.hello,
     }),
   };
+}
+
+async function loadDashboardsRoute(context: ApplicationContext): Promise<DashboardsRouteData> {
+  const query = dashboardSessionListQuery(context);
+  let snapshot = context.sessions.listSnapshot(query);
+  if (!snapshot.result && !snapshot.loading) {
+    await context.sessions.refreshList({ ...query, force: true });
+    snapshot = context.sessions.listSnapshot(query);
+  }
+  return dashboardsRouteData(context, snapshot);
 }
 
 export const page = definePage({

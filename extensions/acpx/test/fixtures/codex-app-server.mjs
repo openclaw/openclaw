@@ -1,0 +1,233 @@
+#!/usr/bin/env node
+import fs from "node:fs";
+import readline from "node:readline";
+
+let nextRequestId = 1;
+let nextThreadId = 1;
+let nextTurnId = 1;
+const pending = new Map();
+const activeTurns = new Map();
+const tracePath = process.env.OPENCLAW_ACPX_PROCESS_FIXTURE_TRACE;
+const afterResponseCallback = Symbol("afterResponseCallback");
+
+function trace(method, params = {}) {
+  if (tracePath) {
+    fs.appendFileSync(
+      tracePath,
+      `${JSON.stringify({ method, threadId: params.threadId, turnId: params.turnId })}\n`,
+      "utf8",
+    );
+  }
+}
+
+function write(message) {
+  process.stdout.write(`${JSON.stringify(message)}\n`);
+}
+
+function notify(method, params) {
+  write({ method, params });
+}
+
+function request(method, params) {
+  const id = `fixture-${nextRequestId++}`;
+  write({ id, method, params });
+  const response = new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+  });
+  return { id, response };
+}
+
+function invalidRequest(message) {
+  const error = new Error(message);
+  error.code = -32600;
+  return error;
+}
+
+function deferUntilAfterResponse(result, callback) {
+  let pendingCallback = callback;
+  return {
+    result,
+    [afterResponseCallback]() {
+      const consume = pendingCallback;
+      pendingCallback = null;
+      consume?.();
+    },
+  };
+}
+
+const model = {
+  id: "gpt-5.6-luna",
+  model: "gpt-5.6-luna",
+  displayName: "GPT-5.6 Luna",
+  description: "Process-fixture model",
+  hidden: false,
+  isDefault: true,
+  defaultReasoningEffort: "medium",
+  supportedReasoningEfforts: [],
+  inputModalities: ["text"],
+};
+
+async function handle(method, params) {
+  if (method !== "turn/start") {
+    trace(method, params);
+  }
+  if (method === "initialize") {
+    return { userAgent: "openclaw-acpx-process-fixture", codexHome: process.cwd() };
+  }
+  if (method === "account/read") {
+    return { requiresOpenaiAuth: false, account: null };
+  }
+  if (method === "config/read") {
+    return { config: {} };
+  }
+  if (method === "skills/list") {
+    return { data: [] };
+  }
+  if (method === "model/list") {
+    return { data: [model], nextCursor: null };
+  }
+  if (method === "thread/start") {
+    return {
+      thread: {
+        id: `thread-process-${nextThreadId++}`,
+        name: "Process fixture",
+        preview: "",
+        cwd: process.cwd(),
+      },
+      model: model.id,
+      modelProvider: "openai",
+      reasoningEffort: "medium",
+      serviceTier: null,
+    };
+  }
+  if (method === "turn/start") {
+    if (activeTurns.has(params.threadId)) {
+      throw invalidRequest("a turn is already active for this thread");
+    }
+    const turnId = `turn-process-${nextTurnId++}`;
+    trace(method, { threadId: params.threadId, turnId });
+    const turn = { id: turnId, items: [], status: "inProgress", error: null };
+    const state = {
+      threadId: params.threadId,
+      turn,
+      terminalStatus: null,
+      pendingElicitationRequestId: null,
+    };
+    activeTurns.set(params.threadId, state);
+    queueMicrotask(() => {
+      void (async () => {
+        notify("turn/started", { threadId: params.threadId, turn });
+        const elicitation = request("item/tool/requestUserInput", {
+          threadId: params.threadId,
+          turnId,
+          itemId: "request_user_input",
+          questions: [
+            {
+              id: "question",
+              header: "Answer",
+              question: "Choose a value",
+              isOther: false,
+              isSecret: false,
+              options: null,
+            },
+          ],
+          isBlocking: true,
+          autoResolutionMs: null,
+        });
+        state.pendingElicitationRequestId = elicitation.id;
+        const answers = await elicitation.response;
+        if (activeTurns.get(params.threadId) !== state || state.terminalStatus !== null) {
+          return;
+        }
+        state.pendingElicitationRequestId = null;
+        const text = JSON.stringify(answers);
+        const item = { type: "agentMessage", id: "message-process", text };
+        state.turn = { ...turn, items: [item], status: "completed" };
+        state.terminalStatus = "completed";
+        notify("item/agentMessage/delta", {
+          threadId: params.threadId,
+          turnId,
+          itemId: item.id,
+          delta: text,
+        });
+        notify("item/completed", { threadId: params.threadId, turnId, item });
+        notify("turn/completed", {
+          threadId: params.threadId,
+          turn: state.turn,
+        });
+        activeTurns.delete(params.threadId);
+      })().catch(() => {
+        process.stderr.write("codex app-server fixture turn failed\n");
+      });
+    });
+    return { turn };
+  }
+  if (method === "turn/interrupt") {
+    const state = activeTurns.get(params.threadId);
+    if (!state || state.terminalStatus !== null || state.turn.id !== params.turnId) {
+      throw invalidRequest("no matching active turn to interrupt");
+    }
+    const pendingElicitationRequestId = state.pendingElicitationRequestId;
+    const interruptedTurn = { ...state.turn, items: [], status: "interrupted" };
+
+    // Fence the elicitation continuation before settling it or admitting a successor turn.
+    state.terminalStatus = "interrupted";
+    state.turn = interruptedTurn;
+    state.pendingElicitationRequestId = null;
+    if (pendingElicitationRequestId) {
+      const waiter = pending.get(pendingElicitationRequestId);
+      pending.delete(pendingElicitationRequestId);
+      waiter?.resolve(undefined);
+    }
+    return deferUntilAfterResponse({}, () => {
+      notify("turn/completed", {
+        threadId: state.threadId,
+        turn: interruptedTurn,
+      });
+      activeTurns.delete(state.threadId);
+    });
+  }
+  if (["thread/unsubscribe", "thread/archive"].includes(method)) {
+    return {};
+  }
+  throw new Error(`unsupported fixture method: ${method}`);
+}
+
+// Finish each response and its cleanup before admitting the next request.
+for await (const line of readline.createInterface({ input: process.stdin })) {
+  let message;
+  try {
+    message = JSON.parse(line);
+  } catch {
+    continue;
+  }
+  if (message && "id" in message && !("method" in message)) {
+    const waiter = pending.get(message.id);
+    pending.delete(message.id);
+    if (message.error) {
+      waiter?.reject(new Error(message.error.message ?? "fixture request failed"));
+    } else {
+      waiter?.resolve(message.result);
+    }
+    continue;
+  }
+  if (!message || typeof message.method !== "string" || !("id" in message)) {
+    continue;
+  }
+  try {
+    const handled = await handle(message.method, message.params ?? {});
+    const afterResponse = handled?.[afterResponseCallback];
+    const result = afterResponse ? handled.result : handled;
+    write({ id: message.id, result });
+    afterResponse?.();
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error && Number.isInteger(error.code)
+        ? error.code
+        : -32601;
+    write({
+      id: message.id,
+      error: { code, message: error instanceof Error ? error.message : String(error) },
+    });
+  }
+}

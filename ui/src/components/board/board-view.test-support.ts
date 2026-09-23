@@ -1,5 +1,4 @@
 import { vi } from "vitest";
-import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardSnapshot, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardViewCallbacks } from "../../lib/board/view-types.ts";
@@ -61,38 +60,17 @@ export function callbacks(overrides: Partial<BoardViewCallbacks> = {}): BoardVie
   };
 }
 
-export function gatewayContext(client: { request: ReturnType<typeof vi.fn> } | null) {
+export function gatewayContext(
+  client: { request: ReturnType<typeof vi.fn> } | null,
+  basePath = "",
+) {
   return {
+    basePath,
     gateway: {
       connection: { gatewayUrl: "" },
       snapshot: { client },
     },
-  } as unknown as ApplicationContext<RouteId>;
-}
-
-export function deferred(): {
-  promise: Promise<void>;
-  resolve: () => void;
-  reject: (error: Error) => void;
-} {
-  let resolve: () => void = () => undefined;
-  let reject: (error: Error) => void = () => undefined;
-  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
-
-export function deferredValue<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-} {
-  let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
+  } as unknown as ApplicationContext;
 }
 
 export async function settleCells(view: OpenClawBoardView): Promise<OpenClawBoardWidgetCell[]> {
@@ -112,7 +90,7 @@ export async function mount(
     activeTabId?: string;
     callbacks?: BoardViewCallbacks;
     widgetFrameUrl?: (name: string, revision: number) => string;
-    context?: ApplicationContext<RouteId>;
+    context?: ApplicationContext;
     canMutate?: boolean;
     canGrant?: boolean;
   } = {},

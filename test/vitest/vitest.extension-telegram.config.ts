@@ -6,7 +6,7 @@ export function createExtensionTelegramVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
   return createExtensionVitestConfig("telegram", telegramExtensionTestRoots, env, {
-    fileParallelism: false,
+    // Conflicting module mocks need a fresh graph per file.
     isolate: true,
   });
 }

@@ -1,77 +1,14 @@
-// OpenClaw SDK helper module supports normalize behavior.
-import { asFiniteNumber as readNumber } from "@openclaw/normalization-core/number-coercion";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSdkLifecycleEventType } from "./run-terminal.js";
 import type { GatewayEvent, JsonObject, OpenClawEvent, OpenClawEventType } from "./types.js";
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function readLowerString(value: unknown): string | undefined {
-  return readString(value)?.toLowerCase();
-}
-
-function hasHardTimeoutMetadata(data: JsonObject, statusAlreadyTimeoutAttributed = false): boolean {
-  const timeoutPhase = readLowerString(data.timeoutPhase);
-  return (
-    (statusAlreadyTimeoutAttributed && data.providerStarted === true) ||
-    timeoutPhase === "preflight" ||
-    timeoutPhase === "provider" ||
-    timeoutPhase === "post_turn"
-  );
-}
-
-function isLifecycleCancellation(data: JsonObject): boolean {
-  const status = readLowerString(data.status);
-  const stopReason = readLowerString(data.stopReason);
-  return (
-    status === "aborted" ||
-    status === "cancelled" ||
-    status === "canceled" ||
-    status === "killed" ||
-    stopReason === "aborted" ||
-    stopReason === "cancelled" ||
-    stopReason === "canceled" ||
-    stopReason === "killed" ||
-    stopReason === "auth-revoked" ||
-    stopReason === "restart" ||
-    stopReason === "rpc" ||
-    stopReason === "user" ||
-    (data.aborted === true && stopReason === "stop")
-  );
-}
-
-function normalizeLifecycleEndEventType(data: JsonObject): OpenClawEventType {
-  const status = readLowerString(data.status);
-  const stopReason = readLowerString(data.stopReason);
-  const statusAlreadyTimeoutAttributed =
-    stopReason !== "restart" &&
-    (status === "timeout" || status === "timed_out" || data.aborted === true);
-  if (hasHardTimeoutMetadata(data, statusAlreadyTimeoutAttributed)) {
-    return "run.timed_out";
-  }
-  if (isLifecycleCancellation(data)) {
-    return "run.cancelled";
-  }
-  if (
-    status === "timeout" ||
-    status === "timed_out" ||
-    stopReason === "timeout" ||
-    stopReason === "timed_out"
-  ) {
-    return "run.timed_out";
-  }
-  if (data.aborted === true) {
-    return "run.timed_out";
-  }
-  return "run.completed";
-}
-
 function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
-  const stream = readString(payload.stream);
+  const stream = readNonEmptyString(payload.stream);
   const data = asRecord(payload.data);
-  const phase = readString(data.phase);
-  const status = readString(data.status);
+  const phase = readNonEmptyString(data.phase);
+  const status = readNonEmptyString(data.status);
 
   if (stream === "assistant") {
     return data.delta === true || typeof data.delta === "string"
@@ -85,17 +22,8 @@ function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
     if (phase === "start") {
       return "run.started";
     }
-    if (phase === "end") {
-      return normalizeLifecycleEndEventType(data);
-    }
-    if (phase === "error") {
-      if (hasHardTimeoutMetadata(data, false)) {
-        return "run.timed_out";
-      }
-      if (isLifecycleCancellation(data)) {
-        return "run.cancelled";
-      }
-      return "run.failed";
+    if (phase === "end" || phase === "error") {
+      return resolveSdkLifecycleEventType(data, phase);
     }
   }
   if (stream === "tool" || stream === "item" || stream === "command_output") {
@@ -122,9 +50,6 @@ function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
   if (stream === "patch") {
     return "artifact.updated";
   }
-  if (stream === "error") {
-    return "run.failed";
-  }
   return "raw";
 }
 
@@ -134,7 +59,7 @@ function normalizeNamedEventType(event: GatewayEvent): OpenClawEventType {
     case "agent":
       return normalizeAgentEventType(payload);
     case "sessions.changed": {
-      const reason = readString(payload.reason);
+      const reason = readNonEmptyString(payload.reason);
       if (reason === "create") {
         return "session.created";
       }
@@ -164,12 +89,12 @@ function normalizeNamedEventType(event: GatewayEvent): OpenClawEventType {
 /** Normalize a raw Gateway event into the public SDK event shape. */
 export function normalizeGatewayEvent(event: GatewayEvent): OpenClawEvent {
   const payload = asRecord(event.payload);
-  const runId = readString(payload.runId);
-  const sessionId = readString(payload.sessionId);
-  const sessionKey = readString(payload.sessionKey);
-  const taskId = readString(payload.taskId);
-  const agentId = readString(payload.agentId);
-  const ts = readNumber(payload.ts) ?? Date.now();
+  const runId = readNonEmptyString(payload.runId);
+  const sessionId = readNonEmptyString(payload.sessionId);
+  const sessionKey = readNonEmptyString(payload.sessionKey);
+  const taskId = readNonEmptyString(payload.taskId);
+  const agentId = readNonEmptyString(payload.agentId);
+  const ts = asFiniteNumber(payload.ts) ?? Date.now();
   const idParts = [event.seq ?? "local", event.event, runId, sessionKey, ts].filter(
     (part) => part !== undefined,
   );

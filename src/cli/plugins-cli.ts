@@ -9,19 +9,11 @@ import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 type PluginUpdateOptions = {
   all?: boolean;
-  acknowledgeClawhubRisk?: boolean;
+  acceptCapabilities?: boolean;
+  acknowledgeInstallPolicyWarning?: boolean;
   dryRun?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
 };
-
-type CommanderClawHubRiskOptions = Record<string, unknown> & {
-  acknowledgeClawHubRisk?: boolean;
-  acknowledgeClawhubRisk?: boolean;
-};
-
-function normalizeCommanderClawHubRiskOption(opts: CommanderClawHubRiskOptions): boolean {
-  return opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true;
-}
 
 export type PluginMarketplaceListOptions = {
   json?: boolean;
@@ -139,33 +131,49 @@ export function registerPluginsCli(program: Command) {
 
   plugins
     .command("enable")
-    .description("Enable a plugin in config")
-    .argument("<id>", "Plugin id")
-    .action(async (id: string) => {
+    .description("Enable one or more plugins in config")
+    .argument("<ids...>", "Plugin ids")
+    .option("--accept-capabilities", "Accept each plugin's declared capabilities", false)
+    .action(async (ids: string[], opts: { acceptCapabilities?: boolean }) => {
       const { runPluginsEnableCommand } = await loadPluginsRuntime();
-      await runPluginsEnableCommand(id);
+      for (const id of ids) {
+        await runPluginsEnableCommand(id, opts);
+      }
     });
 
   plugins
     .command("disable")
-    .description("Disable a plugin in config")
-    .argument("<id>", "Plugin id")
-    .action(async (id: string) => {
+    .description("Disable one or more plugins in config")
+    .argument("<ids...>", "Plugin ids")
+    .action(async (ids: string[]) => {
       const { runPluginsDisableCommand } = await loadPluginsRuntime();
-      await runPluginsDisableCommand(id);
+      for (const id of ids) {
+        await runPluginsDisableCommand(id);
+      }
+    });
+
+  plugins
+    .command("reload")
+    .description("Reload one or more plugins in the running Gateway")
+    .argument("<ids...>", "Plugin ids")
+    .option("--accept-capabilities", "Accept changed declared capabilities", false)
+    .option("--json", "Print the applied runtime generation", false)
+    .action(async (ids: string[], opts: { json?: boolean; acceptCapabilities?: boolean }) => {
+      const { runPluginsReloadCommand } = await loadPluginsRuntime();
+      await runPluginsReloadCommand(ids, opts);
     });
 
   plugins
     .command("uninstall")
-    .description("Uninstall a plugin")
-    .argument("<id>", "Plugin id")
+    .description("Uninstall one or more plugin packages")
+    .argument("<ids...>", "Plugin ids")
     .option("--keep-files", "Keep installed files on disk", false)
     .option("--keep-config", "Deprecated alias for --keep-files", false)
     .option("--force", "Skip confirmation prompt", false)
     .option("--dry-run", "Show what would be removed without making changes", false)
-    .action(async (id: string, opts: PluginUninstallOptions) => {
+    .action(async (ids: string[], opts: PluginUninstallOptions) => {
       const { runPluginUninstallCommand } = await import("./plugins-uninstall-command.js");
-      await runPluginUninstallCommand(id, { ...opts, invalidateRuntimeCache: false });
+      await runPluginUninstallCommand(ids, { ...opts, invalidateRuntimeCache: false });
     });
 
   plugins
@@ -184,14 +192,15 @@ export function registerPluginsCli(program: Command) {
       false,
     )
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
+    .option("--accept-capabilities", "Accept the plugin's declared capabilities", false)
     .option(
       "--dangerously-force-unsafe-install",
       "Deprecated no-op; security.installPolicy may still block",
       false,
     )
     .option(
-      "--acknowledge-clawhub-risk",
-      "Acknowledge ClawHub release trust warnings without prompting",
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
     .option(
@@ -201,7 +210,9 @@ export function registerPluginsCli(program: Command) {
     .action(
       async (
         raw: string,
-        opts: CommanderClawHubRiskOptions & {
+        opts: {
+          acceptCapabilities?: boolean;
+          acknowledgeInstallPolicyWarning?: boolean;
           dangerouslyForceUnsafeInstall?: boolean;
           force?: boolean;
           link?: boolean;
@@ -210,38 +221,30 @@ export function registerPluginsCli(program: Command) {
         },
       ) => {
         const { runPluginsInstallAction } = await loadPluginsRuntime();
-        await runPluginsInstallAction(raw, {
-          ...opts,
-          acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
-        });
+        await runPluginsInstallAction(raw, opts);
       },
     );
 
   plugins
     .command("update")
     .description("Update installed plugins and tracked hook packs")
-    .argument("[id]", "Plugin or hook-pack id (omit with --all)")
+    .argument("[ids...]", "Plugin or hook-pack ids or npm specs (omit with --all)")
     .option("--all", "Update all tracked plugins and hook packs", false)
     .option("--dry-run", "Show what would change without writing", false)
+    .option("--accept-capabilities", "Accept widened plugin capabilities", false)
     .option(
       "--dangerously-force-unsafe-install",
       "Deprecated no-op; security.installPolicy may still block",
       false,
     )
     .option(
-      "--acknowledge-clawhub-risk",
-      "Acknowledge ClawHub release trust warnings without prompting",
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
-    .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
+    .action(async (ids: string[], opts: PluginUpdateOptions) => {
       const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
-      await runPluginUpdateCommand({
-        id,
-        opts: {
-          ...opts,
-          acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
-        },
-      });
+      await runPluginUpdateCommand({ ids, opts });
     });
 
   plugins
@@ -265,7 +268,7 @@ export function registerPluginsCli(program: Command) {
 
   plugins
     .command("build")
-    .description("Generate simple tool plugin metadata")
+    .description("Build plugin metadata and native Control UI assets")
     .option("--root <path>", "Plugin package root")
     .option("--entry <path>", "Plugin entry module relative to --root")
     .option("--check", "Fail if generated metadata is out of date", false)
@@ -276,7 +279,7 @@ export function registerPluginsCli(program: Command) {
 
   plugins
     .command("validate")
-    .description("Validate simple tool plugin metadata")
+    .description("Validate plugin metadata and native Control UI assets")
     .option("--root <path>", "Plugin package root")
     .option("--entry <path>", "Plugin entry module relative to --root")
     .option("--json", "Print JSON")
@@ -286,12 +289,23 @@ export function registerPluginsCli(program: Command) {
     });
 
   plugins
+    .command("pack")
+    .description("Bundle a built plugin into an exact artifact for activation approval")
+    .option("--root <path>", "Plugin package root")
+    .option("--out <path>", "Output .tgz file (must not exist)")
+    .option("--json", "Print the artifact path, SHA256, and activation request")
+    .action(async (opts: import("./plugins-feature-artifact.js").PluginsPackOptions) => {
+      const { runPluginsPackCommand } = await import("./plugins-feature-artifact.js");
+      await runPluginsPackCommand(opts);
+    });
+
+  plugins
     .command("init")
     .description("Create a plugin project")
     .argument("<id>", "Plugin id")
     .option("--directory <path>", "Output directory")
     .option("--name <name>", "Display name")
-    .option("--type <type>", "Scaffold type (tool or provider)", "tool")
+    .option("--type <type>", "Scaffold type (tool, provider, or feature)", "tool")
     .option("--force", "Overwrite an existing output directory", false)
     .action(async (id: string, opts: PluginAuthoringInitOptions) => {
       const { runPluginsInitCommand } = await loadPluginsAuthoringCommands();
@@ -332,7 +346,8 @@ export function registerPluginsCli(program: Command) {
     .argument("<source>", "Local marketplace path/repo or git/GitHub source")
     .option("--json", "Print JSON")
     .action(async (source: string, opts: PluginMarketplaceListOptions) => {
-      const { runPluginMarketplaceListCommand } = await loadPluginsRuntime();
+      const { runPluginMarketplaceListCommand } =
+        await import("./plugins-marketplace-list-command.js");
       await runPluginMarketplaceListCommand(source, opts);
     });
 

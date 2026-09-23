@@ -10,15 +10,35 @@ vi.mock("./doctor-bootstrap-size.js", () => ({
 }));
 
 vi.mock("./doctor-auth-flat-profiles.js", () => ({
-  maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue({
+  maybeRepairLegacyAuthProfileStores: ({
+    profileIdMap,
+  }: {
+    profileIdMap: Map<string, string>;
+  }) => ({
     changes: [],
     warnings: [],
+    profileIdMap,
   }),
-  maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => cfg),
+  collectOpenAICodexAuthProfileStoreIdMap: vi.fn(() => new Map()),
+  maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue({
+    detected: [],
+    changes: [],
+    migratedProfileIds: new Set<string>(),
+    blockedProfileIds: new Set<string>(),
+    warnings: [],
+  }),
+  maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => ({
+    config: cfg,
+    changes: [],
+    warnings: [],
+  })),
 }));
 
 vi.mock("./doctor-auth-legacy-oauth.js", () => ({
-  maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => cfg),
+  maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => ({
+    config: cfg,
+    retiredProfileCleanupPlans: [],
+  })),
 }));
 
 vi.mock("./doctor-auth-oauth-sidecar.js", () => ({
@@ -31,6 +51,10 @@ vi.mock("./doctor-browser.js", () => ({
     changes: [],
     warnings: [],
   }),
+  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
   noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -38,7 +62,8 @@ vi.mock("./doctor-claude-cli.js", () => ({
   noteClaudeCliHealth: vi.fn(),
 }));
 
-vi.mock("./doctor-command-owner.js", () => ({
+vi.mock("./doctor-command-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-command-owner.js")>()),
   noteCommandOwnerHealth: vi.fn(),
 }));
 
@@ -70,6 +95,10 @@ vi.mock("./doctor-gateway-daemon-flow.js", () => ({
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./doctor-foreign-launchd-jobs.js", () => ({
+  noteMacForeignLaunchdJobs: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("./doctor-gateway-health.js", () => ({
   checkGatewayHealth: vi.fn().mockResolvedValue({ healthOk: false }),
   probeGatewayMemoryStatus: vi
@@ -89,6 +118,7 @@ vi.mock("./doctor-plugin-manifests.js", () => ({
 
 vi.mock("./doctor-plugin-registry.js", () => ({
   maybeRepairPluginRegistryState: vi.fn(async ({ config }: { config: unknown }) => ({ config })),
+  maybeRepairStaleManagedNpmBundledPlugins: vi.fn(() => null),
 }));
 
 vi.mock("./doctor-platform-notes.js", () => ({
@@ -105,7 +135,7 @@ vi.mock("./doctor-sandbox.js", () => ({
 }));
 
 vi.mock("./doctor-security.js", () => ({
-  noteSecurityWarnings: vi.fn().mockResolvedValue(undefined),
+  noteSecurityWarnings: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./doctor-install-policy.js", () => ({

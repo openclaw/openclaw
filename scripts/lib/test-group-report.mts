@@ -282,18 +282,24 @@ function compareStatus(beforeItem: unknown, afterItem: unknown): ComparisonStatu
   return beforeItem ? "removed" : "added";
 }
 
+function keyedPairs<Entry>(
+  beforeItems: Entry[],
+  afterItems: Entry[],
+  getKey: (item: Entry) => string,
+) {
+  // Map overwrites retain first-key order; before keys precede after-only keys.
+  const beforeByKey = new Map(beforeItems.map((item) => [getKey(item), item]));
+  const afterByKey = new Map(afterItems.map((item) => [getKey(item), item]));
+  const keys = new Set([...beforeByKey.keys(), ...afterByKey.keys()]);
+  return [...keys].map((key) => [key, beforeByKey.get(key), afterByKey.get(key)] as const);
+}
+
 function compareCounters(
   beforeItems: ComparableCounter[] = [],
   afterItems: ComparableCounter[] = [],
 ) {
-  const beforeByKey = new Map(beforeItems.map((item) => [item.key, item]));
-  const afterByKey = new Map(afterItems.map((item) => [item.key, item]));
-  const keys = new Set([...beforeByKey.keys(), ...afterByKey.keys()]);
-
-  return [...keys]
-    .map((key) => {
-      const beforeItem = beforeByKey.get(key);
-      const afterItem = afterByKey.get(key);
+  return keyedPairs(beforeItems, afterItems, (item) => item.key)
+    .map(([key, beforeItem, afterItem]) => {
       const before = normalizeCounter(beforeItem);
       const after = normalizeCounter(afterItem);
       return {
@@ -330,14 +336,8 @@ function fileKey(item: Pick<ComparableFile, "config" | "file">): string {
 }
 
 function compareFiles(beforeFiles: ComparableFile[] = [], afterFiles: ComparableFile[] = []) {
-  const beforeByKey = new Map(beforeFiles.map((item) => [fileKey(item), item]));
-  const afterByKey = new Map(afterFiles.map((item) => [fileKey(item), item]));
-  const keys = new Set([...beforeByKey.keys(), ...afterByKey.keys()]);
-
-  return [...keys]
-    .map((key) => {
-      const beforeItem = beforeByKey.get(key);
-      const afterItem = afterByKey.get(key);
+  return keyedPairs(beforeFiles, afterFiles, fileKey)
+    .map(([key, beforeItem, afterItem]) => {
       const before = normalizeFileCounter(beforeItem);
       const after = normalizeFileCounter(afterItem);
       const source = afterItem ?? beforeItem;
@@ -401,14 +401,8 @@ function normalizeRun(run?: ComparableRun): RunSnapshot {
 }
 
 function compareRuns(beforeRuns: ComparableRun[] = [], afterRuns: ComparableRun[] = []) {
-  const beforeByKey = new Map(beforeRuns.map((run) => [runKey(run), run]));
-  const afterByKey = new Map(afterRuns.map((run) => [runKey(run), run]));
-  const keys = new Set([...beforeByKey.keys(), ...afterByKey.keys()]);
-
-  return [...keys]
-    .map((key) => {
-      const beforeRun = beforeByKey.get(key);
-      const afterRun = afterByKey.get(key);
+  return keyedPairs(beforeRuns, afterRuns, runKey)
+    .map(([key, beforeRun, afterRun]) => {
       const before = normalizeRun(beforeRun);
       const after = normalizeRun(afterRun);
       return {
@@ -498,41 +492,27 @@ function formatOptionalSignedBytes(value: number | null): string {
   return typeof value === "number" ? formatSignedBytesAsMb(value) : "n/a";
 }
 
-function pushChangeRows(
+function pushRows<Entry>(
   lines: string[],
-  entries: GroupedTestComparison["groups"],
-  options: { limit: number },
+  entries: Entry[],
+  limit: number,
+  formatRow: (entry: Entry, index: number) => string,
 ): void {
-  const selected = entries.slice(0, options.limit);
+  const selected = entries.slice(0, limit);
   if (selected.length === 0) {
     lines.push("  (none)");
-    return;
-  }
-
-  for (const [index, entry] of selected.entries()) {
-    lines.push(
-      `${String(index + 1).padStart(2, " ")}. ${formatSignedMs(entry.delta.durationMs).padStart(11, " ")} (${formatPercent(entry.percent.durationMs).padStart(7, " ")}) | before=${formatMs(entry.before.durationMs).padStart(10, " ")} after=${formatMs(entry.after.durationMs).padStart(10, " ")} | files=${formatCountDelta(entry.delta.fileCount ?? 0).padStart(4, " ")} tests=${formatCountDelta(entry.delta.testCount ?? 0).padStart(5, " ")} | ${entry.key}`,
-    );
+  } else {
+    for (const [index, entry] of selected.entries()) {
+      lines.push(formatRow(entry, index));
+    }
   }
 }
 
-function pushFileChangeRows(
-  lines: string[],
-  entries: GroupedTestComparison["files"],
-  options: { limit: number },
-): void {
-  const selected = entries.slice(0, options.limit);
-  if (selected.length === 0) {
-    lines.push("  (none)");
-    return;
-  }
+const formatChangeRow = (entry: GroupedTestComparison["groups"][number], index: number) =>
+  `${String(index + 1).padStart(2, " ")}. ${formatSignedMs(entry.delta.durationMs).padStart(11, " ")} (${formatPercent(entry.percent.durationMs).padStart(7, " ")}) | before=${formatMs(entry.before.durationMs).padStart(10, " ")} after=${formatMs(entry.after.durationMs).padStart(10, " ")} | files=${formatCountDelta(entry.delta.fileCount ?? 0).padStart(4, " ")} tests=${formatCountDelta(entry.delta.testCount ?? 0).padStart(5, " ")} | ${entry.key}`;
 
-  for (const [index, entry] of selected.entries()) {
-    lines.push(
-      `${String(index + 1).padStart(2, " ")}. ${formatSignedMs(entry.delta.durationMs).padStart(11, " ")} (${formatPercent(entry.percent.durationMs).padStart(7, " ")}) | before=${formatMs(entry.before.durationMs).padStart(10, " ")} after=${formatMs(entry.after.durationMs).padStart(10, " ")} | tests=${formatCountDelta(entry.delta.testCount).padStart(4, " ")} | ${entry.config} | ${entry.file}`,
-    );
-  }
-}
+const formatFileChangeRow = (entry: GroupedTestComparison["files"][number], index: number) =>
+  `${String(index + 1).padStart(2, " ")}. ${formatSignedMs(entry.delta.durationMs).padStart(11, " ")} (${formatPercent(entry.percent.durationMs).padStart(7, " ")}) | before=${formatMs(entry.before.durationMs).padStart(10, " ")} after=${formatMs(entry.after.durationMs).padStart(10, " ")} | tests=${formatCountDelta(entry.delta.testCount).padStart(4, " ")} | ${entry.config} | ${entry.file}`;
 
 /**
  * Renders a grouped test comparison as CLI-friendly text.
@@ -561,16 +541,16 @@ export function renderGroupedTestComparison(
     "",
     `Top group regressions (${Math.min(limit, groupRegressions.length)} of ${groupRegressions.length})`,
   );
-  pushChangeRows(lines, groupRegressions, { limit });
+  pushRows(lines, groupRegressions, limit, formatChangeRow);
 
   lines.push("", `Top group gains (${Math.min(limit, groupGains.length)} of ${groupGains.length})`);
-  pushChangeRows(lines, groupGains, { limit });
+  pushRows(lines, groupGains, limit, formatChangeRow);
 
   lines.push(
     "",
     `Config duration deltas (${Math.min(limit, comparison.configs.length)} of ${comparison.configs.length})`,
   );
-  pushChangeRows(lines, comparison.configs, { limit });
+  pushRows(lines, comparison.configs, limit, formatChangeRow);
 
   if (comparison.runs.length > 0) {
     lines.push(
@@ -588,10 +568,10 @@ export function renderGroupedTestComparison(
     "",
     `Top file regressions (${Math.min(topFiles, fileRegressions.length)} of ${fileRegressions.length})`,
   );
-  pushFileChangeRows(lines, fileRegressions, { limit: topFiles });
+  pushRows(lines, fileRegressions, topFiles, formatFileChangeRow);
 
   lines.push("", `Top file gains (${Math.min(topFiles, fileGains.length)} of ${fileGains.length})`);
-  pushFileChangeRows(lines, fileGains, { limit: topFiles });
+  pushRows(lines, fileGains, topFiles, formatFileChangeRow);
 
   return lines.join("\n");
 }

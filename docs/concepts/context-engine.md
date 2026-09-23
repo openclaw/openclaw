@@ -86,6 +86,18 @@ Every time OpenClaw runs a model prompt, the context engine participates at four
 
 Engines can also implement an optional `maintain()` method for transcript maintenance (safe rewrites via `runtimeContext.rewriteTranscriptEntries()`) after bootstrap, a successful turn, or compaction. Set `info.turnMaintenanceMode: "background"` to run it as deferred work instead of blocking the reply.
 
+When queued budget compaction accepts background maintenance, it keeps the prepared
+runtime alive through maintenance, coalesced reruns, and engine disposal. Acceptance
+does not mean cleanup has finished. Return asynchronous work from engine methods
+and `dispose()` so the host can join it before releasing their resources.
+
+A logical turn also retains its managed supplying registry through engine disposal.
+When that registry copied a runtime engine from another inspection, its recorded
+donor dependency can keep the engine usable after the donor inspection retires.
+Retiring the supplying registry still refuses new logical turns; existing engine
+work keeps its physical resources until cleanup finishes. Raw registrations keep
+their caller-owned lifetime.
+
 For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by projecting assembled context into Codex developer instructions and the current turn prompt. Codex still owns its native thread history and native compactor.
 
 ### Subagent lifecycle (optional)
@@ -116,12 +128,25 @@ The legacy engine does not register tools or provide a `systemPromptAddition`.
 
 When no `plugins.slots.contextEngine` is set (or it's set to `"legacy"`), this engine is used automatically.
 
+Disabling or denying the selected plugin preserves the slot preference but uses
+`legacy` normally when the engine's registered owner identifies the plugin, or
+when the engine ID matches the plugin ID. After a cold start with no registration,
+a distinct engine ID does not identify its owning plugin: resolution still reports
+the missing engine. Global plugin disablement uses `legacy` regardless of this
+owner mapping. Re-enabling the plugin restores the retained selection when its
+runtime registration is available. An enabled selection that is missing or fails
+still follows the failure-isolation behavior below.
+
 ## Plugin engines
 
 A plugin can register a context engine using the plugin API:
 
 ```ts
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+
+// `buildContext`, `countTokens`, and `commitAcceptedTurn` below are your own
+// plugin's helpers to implement. They are not part of the plugin SDK.
+// `buildMemorySystemPromptAddition` is real SDK surface, imported above.
 
 export default function register(api) {
   api.registerContextEngine("my-engine", (ctx) => ({
@@ -166,13 +191,12 @@ export default function register(api) {
       return { ok: true, compacted: true };
     },
 
-    async commitTurn({ advancementKey, messages, prePromptMessageCount }) {
+    async commitTurn({ advancementKey, messages }) {
       // Atomically store the accepted turn and advancementKey. Return
       // "duplicate" when that exact key was committed by an earlier retry.
       return await commitAcceptedTurn({
         advancementKey,
         messages,
-        prePromptMessageCount,
       });
     },
   }));
@@ -214,13 +238,15 @@ Required members:
 | `assemble(params)` | Method   | Build context for a model run (returns `AssembleResult`)                           |
 | `compact(params)`  | Method   | Summarize/reduce context                                                           |
 
-Set `info.acceptedHostParams` to the host-added lifecycle fields the engine
-accepts. Current keys are `sessionKey`, `prompt`, `runtimeSettings`,
-`sessionTarget`, and `runtimeContext`. OpenClaw intersects the declaration with
-the fields available for each lifecycle method, so undeclared or unknown keys
-are never injected. Engines without this declaration receive the pre-host-field
-legacy parameter set through 2026-08-12; after that date, undeclared engines
-receive every current host field.
+Set `info.acceptedHostParams` to restrict the host-added lifecycle fields the
+engine receives. Current keys are `sessionKey`, `prompt`, `runtimeSettings`,
+`sessionTarget`, `runtimeContext`, and `abortSignal`. OpenClaw intersects the
+declaration with the fields available for each lifecycle method, so undeclared
+or unknown keys are never injected. `abortSignal` governs optional cooperative
+cancellation for `maintain()`; the existing compact-operation abort signal is
+always preserved. Engines without this declaration receive every current host
+field; declare an explicit list, including `[]`, when the engine validates a
+narrower input shape.
 
 For durable admitted turns, declare both transcript semantics:
 
@@ -230,10 +256,35 @@ For durable admitted turns, declare both transcript semantics:
 and implement `commitTurn(...)` as one atomic, idempotent write keyed by
 `advancementKey`. Return `{ status: "committed" }` for the first write and
 `{ status: "duplicate" }` when a host retry presents an already-committed key.
+The `messages` payload contains only the inclusive range from the admitted user
+entry through the accepted terminal entry. Engines that need the earlier
+transcript during bootstrap or rebuild should read it through the transcript
+cursor API, `readSessionTranscriptVisibleMessageDelta(...)`.
 Pre-turn transcript reads during bootstrap, maintenance, assembly, and retries
 then see the exact transcript prefix before the admitted user message. The host
 calls `commitTurn` only for the accepted successful turn; failed or aborted
 turns do not advance context-engine state.
+
+After accepted-turn finalization acknowledges `committed` or `duplicate`, the host
+also offers `maintain()` through the same maintenance scheduler. Engines declaring
+`turnMaintenanceMode: "background"` run deferred maintenance. Background work
+retains the logical turn's engine and supplying resources until it settles, without
+making reply completion wait for maintenance. Engines declaring `"foreground"` or
+omitting the mode run maintenance inline: accepted-turn finalization and reply
+completion wait for it to settle. Inline maintenance receives the committed
+session target, provider/model/token budget, LLM capability, and transcript rewrite
+capability, without background compaction permission. Transcript rewrites reopen
+the durable target rather than requiring a live session manager.
+Failed commits remain queued and do
+not trigger this handoff. Pre-run outbox recovery reconciles ingestion before
+bootstrap and assembly; it does not start concurrent background maintenance.
+Maintenance is best effort, not a crash-durable job for every committed turn, and
+one invocation does not guarantee that an engine drains all pending compaction.
+
+For these admitted turns, embedded tool-loop `assemble()` receives the history
+before the current turn, with a token budget that reserves space for pending user
+and tool messages. The host appends those pending messages to the assembled history before
+the next model request, so they remain visible without entering the engine's store.
 
 Without the full declaration and method, OpenClaw uses the legacy context path
 for the whole logical turn, including retries. The configured context-engine
@@ -285,7 +336,22 @@ Optional members:
 | `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                                                      |
 | `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session before it starts.                                                                                    |
 | `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                                              |
-| `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload - not per-session.                                                        |
+| `dispose()`                    | Method | Release engine-instance resources when the owning operation ends, after any retained work finishes.                                          |
+
+The host also disposes instances resolved for standalone compaction, Doctor
+inspection, and subagent lifecycle hooks. A queued subagent spawn keeps its
+instance until dispatch succeeds or preparation is rolled back; returning a
+queued acceptance does not end that lifetime. Timed-out compaction keeps its
+instance until the underlying plugin work settles.
+Gateway shutdown releases queued instances without rolling back their preparation,
+so persisted queued work can resume after restart. Explicit cancellation still
+rolls back the preparation.
+
+Foreground engine disposal shares the agent cleanup deadline: 10 seconds by
+default, adjustable with `OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS`. A stalled cleanup
+logs a warning and lets the completed reply return; it does not cancel the
+plugin's pending disposal. Cleanup failures and timeouts retain the existing
+one-shot CLI cleanup-failure outcome; they do not certify resource closure.
 
 ### Runtime settings
 
@@ -305,9 +371,9 @@ rendered directly to users and does not create a dedicated reporting surface.
 - `diagnostics`: closed fallback and degraded reason codes when known
 
 Fields that can be unknown are represented as `null`; discriminator fields such
-as runtime mode and selection source remain non-nullable. Engines that accept
-`runtimeSettings` must include it in `info.acceptedHostParams` during the
-compatibility window.
+as runtime mode and selection source remain non-nullable. Engines that restrict
+host parameters and accept `runtimeSettings` must include it in
+`info.acceptedHostParams`.
 
 ### Host requirements
 
@@ -345,6 +411,12 @@ for the current Gateway process and downgrades context-engine work to the
 built-in `legacy` engine. The error is logged with the failed operation so the
 operator can repair, update, or disable the plugin without the agent going
 silent.
+
+Host admission and resource-ownership failures before factory entry propagate
+without quarantining the engine. Factory rejections caused by cancellation of
+the caller's work also propagate without quarantine or fallback. Completion
+cleanup owns an independent async lifetime, so a closed caller scope does not
+prevent its factory from running.
 
 Host requirement failures are different: when an engine declares that a runtime
 lacks a required capability, OpenClaw fails closed before starting the run. That
@@ -427,6 +499,9 @@ The slot is exclusive at run time - only one registered context engine is resolv
 
 - [Compaction](/concepts/compaction) - summarizing long conversations
 - [Context](/concepts/context) - how context is built for agent turns
+- [Honcho memory](/concepts/memory-honcho) - a memory plugin a context engine can draw on
 - [Plugin Architecture](/plugins/architecture) - registering context engine plugins
 - [Plugin manifest](/plugins/manifest) - plugin manifest fields
 - [Plugins](/tools/plugin) - plugin overview
+- [Session management deep dive](/reference/session-management-compaction) - the session store, transcript events, and auto-compaction internals
+- [System prompt](/concepts/system-prompt) - what OpenClaw assembles into the system prompt for every agent run, and the layers it renders from

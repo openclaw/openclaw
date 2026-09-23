@@ -36,15 +36,49 @@ function makeEvent<T extends NativeSubagentEventType>(
 }
 
 function createRuntime() {
-  const task = {} as AgentHarnessTaskRecord;
-  return {
-    tryCreateRunningTaskRun: vi.fn(() => task),
-    recordTaskRunProgressByRunId: vi.fn(() => []),
-    finalizeTaskRunByRunId: vi.fn(() => []),
+  const records = new Map<string, AgentHarnessTaskRecord>();
+  const runtime = {
+    tryCreateRunningTaskRun: vi.fn<AgentHarnessTaskRuntime["tryCreateRunningTaskRun"]>((params) => {
+      const task: AgentHarnessTaskRecord = {
+        taskId: `task-${params.runId}`,
+        runtime: "subagent",
+        taskKind: "copilot-native",
+        runId: params.runId,
+        requesterSessionKey: "agent:parent:session",
+        ownerKey: "agent:parent:session",
+        scopeKind: "session",
+        task: params.task,
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: 0,
+      };
+      records.set(task.taskId, task);
+      return task;
+    }),
+    finalizeTaskRunByRunId: vi.fn<AgentHarnessTaskRuntime["finalizeTaskRunByRunId"]>((params) => {
+      const current = [...records.values()].find((task) => task.runId === params.runId);
+      if (!current) {
+        return [];
+      }
+      const task: AgentHarnessTaskRecord = {
+        ...current,
+        status: params.status,
+        endedAt: params.endedAt,
+        lastEventAt: params.lastEventAt,
+        error: params.error,
+        progressSummary: params.progressSummary ?? undefined,
+        terminalSummary: params.terminalSummary ?? undefined,
+      };
+      records.set(task.taskId, task);
+      return [task];
+    }),
+    listTaskRecords: vi.fn<AgentHarnessTaskRuntime["listTaskRecords"]>(() => [...records.values()]),
   } satisfies Pick<
     AgentHarnessTaskRuntime,
-    "tryCreateRunningTaskRun" | "recordTaskRunProgressByRunId" | "finalizeTaskRunByRunId"
+    "tryCreateRunningTaskRun" | "finalizeTaskRunByRunId" | "listTaskRecords"
   >;
+  return { ...runtime, records };
 }
 
 function createMirror(
@@ -108,15 +142,15 @@ describe("CopilotNativeSubagentTaskMirror", () => {
       preferMetadata: true,
       startedAt: 100,
       lastEventAt: 100,
-      progressSummary: "Copilot native subagent started.",
+      progressSummary: "Subagent started.",
     });
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith({
       runId: "copilot-agent:child-1",
       status: "succeeded",
       endedAt: 100,
       lastEventAt: 100,
-      progressSummary: "Copilot native subagent completed.",
-      terminalSummary: "Copilot native subagent completed (2 tool calls, 30 tokens).",
+      progressSummary: "Subagent completed.",
+      terminalSummary: "Subagent completed (2 tool calls, 30 tokens).",
     });
   });
 
@@ -213,9 +247,131 @@ describe("CopilotNativeSubagentTaskMirror", () => {
       status: "cancelled",
       endedAt: 300,
       lastEventAt: 300,
-      error: "Copilot native subagent ended with its parent attempt.",
-      progressSummary: "Copilot native subagent cancelled with its parent attempt.",
-      terminalSummary: "Copilot native subagent cancelled.",
+      error: "Subagent ended with its parent attempt.",
+      progressSummary: "Subagent cancelled with its parent attempt.",
+      terminalSummary: "Subagent cancelled.",
     });
   });
+
+  it.each([
+    { terminal: "subagent.completed", failureMode: "throw" },
+    { terminal: "subagent.completed", failureMode: "empty" },
+    { terminal: "subagent.failed", failureMode: "throw" },
+    { terminal: "subagent.failed", failureMode: "empty" },
+  ] as const)(
+    "retries the original $terminal result after $failureMode",
+    ({ terminal, failureMode }) => {
+      const runtime = createRuntime();
+      let now = 100;
+      const mirror = createMirror(runtime, { now: () => now });
+      const data = {
+        agentDescription: "inspect",
+        agentDisplayName: "Researcher",
+        agentName: "researcher",
+        toolCallId: "call-retry",
+      };
+      mirror.handleEvent(makeEvent("subagent.started", data, "child-retry"));
+      if (failureMode === "throw") {
+        runtime.finalizeTaskRunByRunId.mockImplementationOnce(() => {
+          throw new Error("store unavailable");
+        });
+      } else {
+        runtime.finalizeTaskRunByRunId.mockReturnValueOnce([]);
+      }
+      const completed = makeEvent(
+        "subagent.completed",
+        { ...data, totalTokens: 30 },
+        "child-retry",
+      );
+      const failed = makeEvent(
+        "subagent.failed",
+        { ...data, error: "child failed" },
+        "child-retry",
+      );
+      expect(() =>
+        mirror.handleEvent(terminal === "subagent.completed" ? completed : failed),
+      ).toThrow(failureMode === "throw" ? "store unavailable" : "did not persist");
+      expect([...runtime.records.values()][0]?.status).toBe("running");
+      now = 200;
+      mirror.handleEvent(terminal === "subagent.completed" ? failed : completed);
+      expect([...runtime.records.values()]).toEqual([
+        expect.objectContaining({
+          taskId: "task-copilot-agent:child-retry",
+          status: terminal === "subagent.completed" ? "succeeded" : "failed",
+          endedAt: 100,
+          lastEventAt: 100,
+          error: terminal === "subagent.failed" ? "child failed" : undefined,
+          terminalSummary:
+            terminal === "subagent.completed"
+              ? "Subagent completed (30 tokens)."
+              : "Subagent failed.",
+        }),
+      ]);
+      mirror.handleEvent(completed);
+      mirror.finalizeActiveRuns();
+      expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("finalizes every active child and retains failed cancellation for retry", () => {
+    const runtime = createRuntime();
+    let now = 100;
+    const mirror = createMirror(runtime, { now: () => now });
+    for (const toolCallId of ["call-1", "call-2"]) {
+      mirror.handleEvent(
+        makeEvent("subagent.started", {
+          agentDescription: "inspect",
+          agentDisplayName: "Researcher",
+          agentName: "researcher",
+          toolCallId,
+        }),
+      );
+    }
+    runtime.finalizeTaskRunByRunId.mockImplementationOnce(() => {
+      throw new Error("store unavailable");
+    });
+    expect(() => mirror.finalizeActiveRuns()).toThrow("store unavailable");
+    expect([...runtime.records.values()].map((task) => task.status)).toEqual([
+      "running",
+      "cancelled",
+    ]);
+    now = 200;
+    mirror.finalizeActiveRuns();
+    expect([...runtime.records.values()]).toEqual([
+      expect.objectContaining({ status: "cancelled", endedAt: 100 }),
+      expect.objectContaining({ status: "cancelled", endedAt: 100 }),
+    ]);
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["removed", "replacement", "terminal"] as const)(
+    "accepts empty finalization only when the owned task is %s",
+    (disposition) => {
+      const runtime = createRuntime();
+      const mirror = createMirror(runtime);
+      const data = {
+        agentDescription: "inspect",
+        agentDisplayName: "Researcher",
+        agentName: "researcher",
+        toolCallId: "call-1",
+      };
+      mirror.handleEvent(makeEvent("subagent.started", data));
+      const task = [...runtime.records.values()][0];
+      if (!task) {
+        throw new Error("Expected persisted native task");
+      }
+      runtime.records.delete(task.taskId);
+      if (disposition === "replacement") {
+        runtime.records.set("replacement", { ...task, taskId: "replacement" });
+      } else if (disposition === "terminal") {
+        runtime.records.set(task.taskId, { ...task, status: "cancelled", endedAt: 50 });
+      }
+      mirror.handleEvent(makeEvent("subagent.completed", data));
+      mirror.finalizeActiveRuns();
+      expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+      expect([...runtime.records.values()].map((record) => record.status)).toEqual(
+        disposition === "removed" ? [] : [disposition === "terminal" ? "cancelled" : "running"],
+      );
+    },
+  );
 });

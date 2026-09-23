@@ -38,11 +38,17 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout protected manifest
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # A rerun keeps its original workflow_dispatch SHA. Read the latest
           # protected manifest so removing an entry revokes deletion authority.
           ref: refs/heads/main
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
 
       - name: Validate exact retired key
         env:

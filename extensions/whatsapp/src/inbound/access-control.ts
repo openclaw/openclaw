@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements access control behavior.
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
@@ -95,13 +94,18 @@ export async function checkInboundAccessControl(params: {
   const admissionSenderId = params.group
     ? (params.senderE164 ?? params.senderJid ?? params.from)
     : params.from;
-  const access = await resolveWhatsAppIngressAccess({
-    cfg: params.cfg,
-    policy,
-    isGroup: params.group,
-    conversationId,
-    senderId: accessSenderId,
-  });
+  const resolveChannelIngress = async (
+    contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
+  ) =>
+    await resolveWhatsAppIngressAccess({
+      cfg: params.cfg,
+      policy,
+      isGroup: params.group,
+      conversationId,
+      senderId: accessSenderId,
+      contextBinding,
+    });
+  const access = await resolveChannelIngress();
   const { senderAccess } = access;
   if (params.group && senderAccess.decision !== "allow") {
     if (senderAccess.reasonCode === "group_policy_disabled") {
@@ -191,13 +195,11 @@ export async function checkInboundAccessControl(params: {
     admission: buildWhatsAppInboundAdmission({
       policy,
       access,
+      channelIngress: access,
+      resolveChannelIngress,
       isGroup: params.group,
       conversationId,
       senderId: admissionSenderId,
     }),
   };
 }
-
-export const testing = {
-  resolveWhatsAppInboundPolicy,
-};

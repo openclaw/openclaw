@@ -1,12 +1,18 @@
 // Copilot plugin module implements event bridge behavior.
 import type { MessageOptions, SessionEvent, SessionEventType } from "@github/copilot-sdk";
+import {
+  emitAgentEvent,
+  projectAgentToolActivity,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   AgentHarnessAttemptResult,
   AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildAssistantMessage,
+  buildAssistantProjectionGroup,
   hasOwnKeys,
   projectSdkUserMetadata,
   projectToolResultDetails,
@@ -14,6 +20,8 @@ import {
   resolveEventTimestamp,
   sanitizeToolDetailText,
   type AssistantMessage,
+  type AssistantProjectionChunk,
+  type AssistantProjectionGroup,
   type AssistantUsageSnapshot,
   type AttemptTranscriptJournalProjection,
 } from "./event-bridge-transcript.js";
@@ -51,6 +59,8 @@ export interface SessionLike {
 }
 
 interface EventBridgeOptions {
+  runId?: string;
+  sessionKey?: string;
   onAssistantDelta?: (payload: OnAssistantDeltaPayload) => void | Promise<void>;
   onAgentEvent?: (event: {
     stream: "item" | "plan";
@@ -109,20 +119,17 @@ interface EventBridgeController {
   buildAssistantMessage(args: BuildAssistantMessageArgs): AssistantMessage | undefined;
   finalizeAssistantTexts(): string[];
   detach(): void;
+  completeTool(tool: {
+    toolCallId: string;
+    parentToolCallId?: string;
+    toolName: string;
+    args?: unknown;
+    result?: unknown;
+    isError: boolean;
+  }): void;
 }
 
 type MessageAccumulator = { messageId: string; text: string };
-type AssistantProjectionChunk = {
-  assistantTexts: string[];
-  event: Extract<SessionEvent, { type: "assistant.message" }>;
-  reasoningText?: string;
-  transcriptAssistantTexts: string[];
-  transcriptReasoningText?: string;
-};
-type AssistantProjectionGroup = {
-  apiCallId?: string;
-  chunks: AssistantProjectionChunk[];
-};
 type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
 
 export function attachEventBridge(
@@ -146,6 +153,8 @@ export function attachEventBridge(
   let streamError: Error | undefined;
   const toolMetas: AgentHarnessAttemptResult["toolMetas"] = [];
   const toolMetaIndexByCallId = new Map<string, number>();
+  const toolCallsById = new Map<string, { args: unknown; root: boolean }>();
+  const preparedToolCompletions = new Set<string>();
   const projectedToolNamesByCallId = new Map<string, string>();
   const userRequestedToolCallIds = new Set<string>();
   let startedCount = 0;
@@ -177,7 +186,7 @@ export function attachEventBridge(
     if (!projection) {
       return;
     }
-    const source = readString(event.data.source);
+    const source = readNonEmptyString(event.data.source);
     const transformedContent =
       typeof event.data.transformedContent === "string" ? event.data.transformedContent : undefined;
     const openClawMeta = projectSdkUserMetadata(event.data.attachments, source);
@@ -229,7 +238,7 @@ export function attachEventBridge(
     if (!isRootSessionEvent(event)) {
       return;
     }
-    const messageId = readString(event.data.messageId) ?? "assistant-message";
+    const messageId = readNonEmptyString(event.data.messageId) ?? "assistant-message";
     const delta = event.data.deltaContent;
     if (!delta) {
       return;
@@ -266,7 +275,7 @@ export function attachEventBridge(
     if (!isRootSessionEvent(event)) {
       return;
     }
-    const reasoningId = readString(event.data.reasoningId) ?? "assistant-reasoning";
+    const reasoningId = readNonEmptyString(event.data.reasoningId) ?? "assistant-reasoning";
     const delta = event.data.deltaContent;
     if (!delta) {
       return;
@@ -311,7 +320,7 @@ export function attachEventBridge(
       return;
     }
     usage = normalizeCopilotUsage(event.data);
-    const apiCallId = readString(event.data.apiCallId);
+    const apiCallId = readNonEmptyString(event.data.apiCallId);
     if (apiCallId && usage) {
       usageByApiCallId.set(apiCallId, usage);
     }
@@ -334,6 +343,21 @@ export function attachEventBridge(
     }
     toolMetaIndexByCallId.set(event.data.toolCallId, toolMetas.length);
     toolMetas.push({ toolName: event.data.toolName });
+    toolCallsById.set(event.data.toolCallId, {
+      args: event.data.arguments,
+      root: isRootSessionEvent(event),
+    });
+    if (isRootSessionEvent(event)) {
+      enqueueAgentEvent({
+        stream: "item",
+        data: projectAgentToolActivity({
+          toolCallId: event.data.toolCallId,
+          name: event.data.toolName,
+          phase: "start",
+          args: event.data.arguments,
+        }),
+      });
+    }
   });
 
   registerListener(session, unsubscribeFns, "tool.execution_complete", (event) => {
@@ -343,6 +367,21 @@ export function attachEventBridge(
     }
     const toolMetaIndex = toolMetaIndexByCallId.get(event.data.toolCallId);
     const toolName = toolMetaIndex === undefined ? undefined : toolMetas[toolMetaIndex]?.toolName;
+    const args = toolCallsById.get(event.data.toolCallId)?.args;
+    toolCallsById.delete(event.data.toolCallId);
+    const completionPrepared = preparedToolCompletions.delete(event.data.toolCallId);
+    if (toolName && isRootSessionEvent(event) && !completionPrepared) {
+      enqueueAgentEvent({
+        stream: "item",
+        data: projectAgentToolActivity({
+          toolCallId: event.data.toolCallId,
+          name: toolName,
+          phase: "result",
+          args,
+          isError: !event.data.success,
+        }),
+      });
+    }
     const meta = event.data.success
       ? (event.data.result?.detailedContent ?? event.data.result?.content)
       : event.data.error?.message;
@@ -613,6 +652,19 @@ export function attachEventBridge(
     finalizeAssistantTexts() {
       return finalizeAssistantTexts(messageOrder, messagesById, lastAssistantEvent);
     },
+    completeTool(tool) {
+      const owner = toolCallsById.get(tool.parentToolCallId ?? tool.toolCallId);
+      if (detached || !owner?.root) {
+        return;
+      }
+      if (!tool.parentToolCallId) {
+        preparedToolCompletions.add(tool.toolCallId);
+      }
+      enqueueAgentEvent({
+        stream: "item",
+        data: projectAgentToolActivity({ ...tool, name: tool.toolName, phase: "result" }),
+      });
+    },
     detach() {
       if (detached) {
         return;
@@ -664,7 +716,7 @@ export function attachEventBridge(
       transcriptAssistantTexts: [event.data.content ?? ""],
       ...(transcriptReasoningText ? { transcriptReasoningText } : {}),
     };
-    const apiCallId = readString(event.data.apiCallId);
+    const apiCallId = readNonEmptyString(event.data.apiCallId);
     if (!apiCallId) {
       if (projectedAssistantMessageIdsWithoutApiCall.has(event.data.messageId)) {
         options.transcriptProjection?.journal.markReplayIncomplete();
@@ -770,6 +822,9 @@ export function attachEventBridge(
     stream: "item" | "plan";
     data: Record<string, unknown>;
   }): void {
+    if (options.runId) {
+      emitAgentEvent({ runId: options.runId, sessionKey: options.sessionKey, ...event });
+    }
     const callback = options.onAgentEvent;
     if (!callback) {
       return;
@@ -846,102 +901,6 @@ function finalizeAssistantTexts(
   return [];
 }
 
-function buildAssistantProjectionGroup(
-  group: AssistantProjectionGroup,
-  modelRef: { api?: string; id: string; provider: string },
-  resolveTimestamp: (event: Extract<SessionEvent, { type: "assistant.message" }>) => number,
-  usageByApiCallId: Map<string, AssistantUsageSnapshot>,
-  latestUsage: AssistantUsageSnapshot | undefined,
-  forTranscript: boolean,
-): {
-  message: AssistantMessage | undefined;
-  replayIncomplete: boolean;
-  toolCallIds: string[];
-} {
-  const messages = group.chunks.flatMap((chunk) => {
-    const message = buildAssistantMessage({
-      event: chunk.event,
-      modelRef,
-      now: () => resolveTimestamp(chunk.event),
-      reasoningText: forTranscript ? chunk.transcriptReasoningText : chunk.reasoningText,
-      // Usage is keyed to the complete API call, so every chunk resolves to the
-      // same snapshot and the merged message keeps the terminal copy.
-      usage: resolveAssistantUsage(chunk.event, latestUsage, usageByApiCallId),
-      assistantTexts: forTranscript ? chunk.transcriptAssistantTexts : chunk.assistantTexts,
-    });
-    return message ? [message] : [];
-  });
-  const replayIncomplete = group.chunks.some(({ event }) =>
-    hasUnprojectedAssistantReplayState(event),
-  );
-  const last = messages.at(-1);
-  if (!last) {
-    return { message: undefined, replayIncomplete, toolCallIds: [] };
-  }
-  const narrative: AssistantMessage["content"] = [];
-  let terminalThinking:
-    | Extract<AssistantMessage["content"][number], { type: "thinking" }>
-    | undefined;
-  const toolCallOrder: string[] = [];
-  const toolCallsById = new Map<
-    string,
-    Extract<AssistantMessage["content"][number], { type: "toolCall" }>
-  >();
-  for (const message of messages) {
-    for (const part of message.content) {
-      if (part.type === "toolCall") {
-        if (!toolCallsById.has(part.id)) {
-          toolCallOrder.push(part.id);
-        }
-        toolCallsById.set(part.id, part);
-        continue;
-      }
-      if (part.type === "thinking") {
-        // Reasoning is an accumulated snapshot, not a per-message delta. Keep
-        // only the terminal snapshot when one API call emits phased chunks.
-        terminalThinking = part;
-        continue;
-      }
-      const previous = narrative.at(-1);
-      if (part.type === "text" && previous?.type === "text") {
-        narrative[narrative.length - 1] = { ...previous, text: previous.text + part.text };
-      } else {
-        narrative.push(part);
-      }
-    }
-  }
-  const toolCalls = toolCallOrder.flatMap((id) => {
-    const toolCall = toolCallsById.get(id);
-    return toolCall ? [toolCall] : [];
-  });
-  const content = [...(terminalThinking ? [terminalThinking] : []), ...narrative, ...toolCalls];
-  const toolCallIds = [...toolCallOrder];
-  return {
-    message: {
-      ...last,
-      content,
-      stopReason: toolCallIds.length > 0 ? "toolUse" : "stop",
-    },
-    replayIncomplete,
-    toolCallIds,
-  };
-}
-
-function hasUnprojectedAssistantReplayState(
-  event: Extract<SessionEvent, { type: "assistant.message" }>,
-): boolean {
-  // The SDK contract marks these as provider/session-bound state or custom
-  // call shape. AgentMessage cannot represent them, so native replay must stay.
-  return (
-    event.data.citations !== undefined ||
-    event.data.serverTools !== undefined ||
-    event.data.reasoningWireField !== undefined ||
-    event.data.reasoningOpaque !== undefined ||
-    event.data.encryptedContent !== undefined ||
-    event.data.toolRequests?.some((request) => request.type === "custom") === true
-  );
-}
-
 function isAssistantMessageEvent(
   event: SessionEvent | undefined,
 ): event is Extract<SessionEvent, { type: "assistant.message" }> {
@@ -967,10 +926,6 @@ function splitPlanText(text: string | undefined): string[] {
     .split(/\r?\n/)
     .map((line) => line.trim().replace(/^[-*]\s+/, ""))
     .filter((line) => line.length > 0);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function registerListener<K extends SessionEventType>(

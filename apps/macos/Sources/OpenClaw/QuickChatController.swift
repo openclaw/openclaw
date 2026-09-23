@@ -72,7 +72,7 @@ private final class QuickChatRecentMenuTarget: NSObject {
 
 @MainActor
 @Observable
-final class QuickChatController: NSObject, NSWindowDelegate {
+final class QuickChatController: NSObject {
     typealias GlobalMonitorInstaller = (NSEvent.EventTypeMask, @escaping (NSEvent) -> Void) -> Any?
     typealias LocalMonitorInstaller = (NSEvent.EventTypeMask, @escaping (NSEvent) -> NSEvent?) -> Any?
     typealias MonitorClearer = (inout Any?) -> Void
@@ -106,7 +106,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     @ObservationIgnored private var localMonitor: Any?
     @ObservationIgnored private var presentationTask: Task<Void, Never>?
     @ObservationIgnored private var visibleFrame = NSRect.zero
-    @ObservationIgnored private var contentHeight: CGFloat = 58
+    @ObservationIgnored private var contentHeight: CGFloat = 112
     @ObservationIgnored private var transitionID = UUID()
     @ObservationIgnored private var isStarted = false
     @ObservationIgnored private var hotkeyRegistered = false
@@ -118,6 +118,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     @ObservationIgnored private var dictationRequestID = UUID()
     @ObservationIgnored private var pasteTask: Task<Void, Never>?
     @ObservationIgnored private var pasteRequestID = UUID()
+    @ObservationIgnored private var sendDisclosureRevision: UInt64?
 
     init(
         enableUI: Bool = true,
@@ -176,6 +177,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             // over the fresh reply would rebind away from the response just sent.
             self.invalidateRecentsFetch()
             self.replyBinding.prepare(route: route)
+            self.sendDisclosureRevision = self.replyBinding.disclosureRevision
         }
     }
 
@@ -229,6 +231,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         self.recentSessionsTask?.cancel()
         self.recentSessionsTask = nil
         self.replyBinding.clear()
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
         self.panel?.delegate = nil
         self.panel = nil
         self.hostingView = nil
@@ -261,7 +264,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         let wasVisible = self.isVisible
         self.isVisible = true
         self.installDismissMonitors()
-        guard self.enableUI, !ProcessInfo.processInfo.isRunningTests else { return }
+        guard self.enableUI else { return }
 
         self.visibleFrame = self.cursorScreen()?.visibleFrame ?? .zero
         self.ensurePanel()
@@ -283,19 +286,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
 
     func dismiss() {
         self.dismiss(immediate: false)
-    }
-
-    func windowDidResignKey(_: Notification) {
-        guard self.isVisible else { return }
-        // System permission dialogs steal key focus mid-grant; the bar must survive that flow.
-        guard !self.model.isGrantingPermissions,
-              !self.model.isStartingDictation,
-              !self.model.isCapturingTextContext,
-              !self.replyBinding.isPastingReply,
-              self.windowPicker?.isInteractionActive != true,
-              !self.isMenuActive
-        else { return }
-        self.dismiss()
     }
 
     private func dismiss(immediate: Bool) {
@@ -363,50 +353,12 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         panel.contentView = host
         self.panel = panel
         self.hostingView = host
-    }
-
-    private func makeView() -> QuickChatView {
-        QuickChatView(
-            model: self.model,
-            replyBinding: self.replyBinding,
-            onDismiss: { [weak self] in self?.dismiss() },
-            onSendAccepted: { [weak self] openChat in
-                self?.handleSendAccepted(openChat: openChat)
-            },
-            onShowAgentPicker: { [weak self] in
-                self?.showAgentPicker()
-            },
-            onShowModelMenu: { [weak self] in
-                self?.showModelMenu()
-            },
-            onShowRecentSessions: { [weak self] in
-                self?.showRecentSessionsPicker()
-            },
-            onToggleDictation: { [weak self] in
-                self?.toggleDictation()
-            },
-            onStopDictation: { [weak self] in
-                self?.stopDictation()
-            },
-            onCaptureTextContext: { [weak self] in
-                self?.captureFocusedAppText()
-            },
-            onShowCaptureMenu: { [weak self] in
-                self?.showCaptureMenu()
-            },
-            onGrantPermissions: { [weak self] in
-                self?.grantMissingPermissions()
-            },
-            onPasteReply: { [weak self] in
-                self?.pasteReplyToFrontmostApp()
-            },
-            onContentHeightChange: { [weak self] height in
-                self?.updateContentHeight(height)
-            },
-            onTextViewReady: { [weak self] textView in
-                self?.textView = textView
-                self?.focusEditor()
-            })
+        // Sheets retain SwiftUI's delegate; observe their focus loss without replacing it.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(self.childWindowDidResignKey(_:)),
+            name: NSWindow.didResignKeyNotification,
+            object: nil)
     }
 
     private func handleSendAccepted(openChat: Bool) {
@@ -414,9 +366,11 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         // not live model routing state that may already have changed.
         let route = self.model.lastAcceptedRoute
         guard openChat else {
-            if let route {
+            // A newer disclosure action wins over a delayed send acknowledgement.
+            if let route, self.sendDisclosureRevision == self.replyBinding.disclosureRevision {
                 self.replyBinding.show(route: route)
             }
+            self.sendDisclosureRevision = nil
             return
         }
         self.dismiss()
@@ -425,6 +379,16 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         } else {
             self.chatOpener(nil, nil)
         }
+    }
+
+    func toggleReply() {
+        guard self.isVisible else { return }
+        if self.replyBinding.isExpanded {
+            self.replyBinding.hide()
+        } else if let route = self.model.routingTarget {
+            self.replyBinding.show(route: route)
+        }
+        self.focusEditor()
     }
 
     private func updateContentHeight(_ height: CGFloat) {
@@ -447,11 +411,16 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     }
 
     private func focusEditor() {
-        guard self.isVisible, let panel = self.panel, let textView = self.textView else { return }
+        guard self.isVisible, let panel = self.panel, panel.attachedSheet == nil,
+              let textView = self.textView
+        else { return }
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(textView)
+        let transitionID = self.transitionID
         DispatchQueue.main.async { [weak self, weak panel, weak textView] in
-            guard let self, self.isVisible, let panel, let textView else { return }
+            guard let self, self.isVisible, self.transitionID == transitionID,
+                  let panel, panel.attachedSheet == nil, let textView
+            else { return }
             panel.makeFirstResponder(textView)
         }
     }
@@ -642,8 +611,29 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     }
 
     private func dismissIfFocusWasLost() {
-        guard self.isVisible, self.panel?.isKeyWindow != true else { return }
+        guard self.canDismissForOutsideInteraction, !self.ownsWindow(NSApp?.keyWindow) else { return }
         self.dismiss()
+    }
+
+    /// These flows intentionally move focus outside the bar without ending its presentation.
+    private var canDismissForOutsideInteraction: Bool {
+        self.isVisible &&
+            !self.model.isGrantingPermissions &&
+            !self.model.isStartingDictation &&
+            !self.model.isCapturingTextContext &&
+            !self.replyBinding.isPastingReply &&
+            self.windowPicker?.isInteractionActive != true &&
+            !self.isMenuActive
+    }
+
+    private func ownsWindow(_ window: NSWindow?) -> Bool {
+        guard let panel = self.panel else { return false }
+        var current = window
+        while let window = current {
+            if window === panel { return true }
+            current = window.sheetParent ?? window.parent
+        }
+        return false
     }
 
     private func cancelPasteRequest() {
@@ -659,30 +649,19 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         guard self.monitoringEnabled, self.globalMonitor == nil, self.localMonitor == nil else { return }
         let mouseEvents: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         // Global and local monitors are paired because global monitors omit this app's clicks.
+        // AppKit calls both on the main thread; classify the recipient before it can detach.
         self.globalMonitor = self.globalMonitorInstaller(mouseEvents) { [weak self] _ in
-            let point = NSEvent.mouseLocation
-            Task { @MainActor in self?.dismissIfClickOutside(at: point) }
+            MainActor.assumeIsolated { self?.dismissIfClickOutside(window: nil) }
         }
         self.localMonitor = self.localMonitorInstaller(mouseEvents) { [weak self] event in
-            let point = NSEvent.mouseLocation
-            Task { @MainActor in self?.dismissIfClickOutside(at: point) }
+            MainActor.assumeIsolated { self?.dismissIfClickOutside(window: event.window) }
             return event
         }
     }
 
-    private func dismissIfClickOutside(at point: NSPoint) {
-        guard self.isVisible,
-              !self.model.isGrantingPermissions,
-              !self.model.isStartingDictation,
-              !self.model.isCapturingTextContext,
-              !self.replyBinding.isPastingReply,
-              self.windowPicker?.isInteractionActive != true,
-              !self.isMenuActive,
-              let panel = self.panel
-        else { return }
-        if !panel.frame.contains(point) {
-            self.dismiss()
-        }
+    private func dismissIfClickOutside(window: NSWindow?) {
+        guard self.canDismissForOutsideInteraction, !self.ownsWindow(window) else { return }
+        self.dismiss()
     }
 
     private func showAgentPicker() {
@@ -935,20 +914,79 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     }
 
     #if DEBUG
-    var hasGlobalMonitorForTesting: Bool {
-        self.globalMonitor != nil
-    }
-
-    var hasLocalMonitorForTesting: Bool {
-        self.localMonitor != nil
-    }
-
-    var hotkeyRegisteredForTesting: Bool {
-        self.hotkeyRegistered
-    }
-
     func handleSendAcceptedForTesting(openChat: Bool) {
         self.handleSendAccepted(openChat: openChat)
     }
     #endif
+}
+
+extension QuickChatController {
+    private func makeView() -> QuickChatView {
+        QuickChatView(
+            model: self.model,
+            replyBinding: self.replyBinding,
+            onDismiss: { [weak self] in self?.dismiss() },
+            onSendAccepted: { [weak self] openChat in
+                self?.handleSendAccepted(openChat: openChat)
+            },
+            onShowAgentPicker: { [weak self] in
+                self?.showAgentPicker()
+            },
+            onShowModelMenu: { [weak self] in
+                self?.showModelMenu()
+            },
+            onShowRecentSessions: { [weak self] in
+                self?.showRecentSessionsPicker()
+            },
+            onToggleReply: { [weak self] in
+                self?.toggleReply()
+            },
+            onToggleDictation: { [weak self] in
+                self?.toggleDictation()
+            },
+            onStopDictation: { [weak self] in
+                self?.stopDictation()
+            },
+            onCaptureTextContext: { [weak self] in
+                self?.captureFocusedAppText()
+            },
+            onShowCaptureMenu: { [weak self] in
+                self?.showCaptureMenu()
+            },
+            onGrantPermissions: { [weak self] in
+                self?.grantMissingPermissions()
+            },
+            onPasteReply: { [weak self] in
+                self?.pasteReplyToFrontmostApp()
+            },
+            onContentHeightChange: { [weak self] height in
+                self?.updateContentHeight(height)
+            },
+            onTextViewReady: { [weak self] textView in
+                self?.textView = textView
+                self?.focusEditor()
+            })
+    }
+}
+
+extension QuickChatController: NSWindowDelegate {
+    func windowDidResignKey(_: Notification) {
+        guard self.canDismissForOutsideInteraction else { return }
+        let transitionID = self.transitionID
+        // Let AppKit finish handing key status to the destination before checking its owner.
+        // A queued check must not close a later presentation.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.transitionID == transitionID else { return }
+            self.dismissIfFocusWasLost()
+        }
+    }
+
+    @objc
+    private func childWindowDidResignKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              window !== self.panel,
+              self.ownsWindow(window)
+        else { return }
+        self.windowDidResignKey(notification)
+    }
 }

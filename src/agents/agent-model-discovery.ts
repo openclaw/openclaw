@@ -1,36 +1,24 @@
 /** Discovers agent models and auth storage with provider/plugin normalization hooks. */
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
-import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
-import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
-  applyProviderResolvedTransportWithPlugin,
-  normalizeProviderResolvedModelWithPlugin,
-} from "../plugins/provider-runtime.js";
-import { isRecord } from "../utils.js";
-import {
-  resolveAgentCredentialsForDiscovery,
+  resolveAgentDiscoveryAuthFacts,
   type DiscoverAuthStorageOptions,
 } from "./agent-auth-discovery.js";
 import { resolveModelPluginMetadataSnapshot } from "./model-discovery-context.js";
-import type { PluginModelCatalogMetadataSnapshot } from "./plugin-model-catalog.js";
-import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.js";
+import { normalizeDiscoveredAgentModel } from "./model-discovery-normalize.js";
+import type {
+  PluginModelCatalogMetadataSnapshot,
+  PersistedPluginModelCatalog,
+} from "./plugin-model-catalog.js";
+import { AuthStorage, type AuthStorage as AgentAuthStorage } from "./sessions/auth-storage.js";
 import {
-  AuthStorage,
   ModelRegistry,
-  type AuthStorage as AgentAuthStorage,
   type ModelRegistry as AgentModelRegistry,
-} from "./sessions/index.js";
-
-type ProviderRuntimeModelLike = Model & {
-  contextTokens?: number;
-};
-
-type DiscoveredProviderRuntimeModelLike = Omit<ProviderRuntimeModelLike, "api"> & {
-  api?: string | null;
-};
+} from "./sessions/model-registry.js";
 
 const CAPTURED_MODELS_JSON_SOURCE_PATH = "captured:models.json";
 
@@ -39,14 +27,11 @@ type DiscoverModelsOptions = {
   includePluginCatalogs?: boolean;
   modelsJsonContents?: string | null;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
+  staticProviderConfigs?: Readonly<Record<string, ModelProviderConfig>>;
   providerFilter?: string;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   workspaceDir?: string;
   normalizeModels?: boolean;
-};
-
-type NormalizeDiscoveredModelOptions = Pick<DiscoverModelsOptions, "config" | "workspaceDir"> & {
-  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
 };
 
 type DiscoverCapturedModelsOptions = Omit<
@@ -56,63 +41,6 @@ type DiscoverCapturedModelsOptions = Omit<
   modelsJsonContents: string | null;
   pluginCatalogs: readonly PersistedPluginModelCatalog[];
 };
-
-/** Applies plugin model normalization and transport hooks to discovered agent models. */
-export function normalizeDiscoveredAgentModel<T>(
-  value: T,
-  agentDir: string,
-  options?: NormalizeDiscoveredModelOptions,
-): T {
-  if (!isRecord(value)) {
-    return value;
-  }
-  if (
-    typeof value.id !== "string" ||
-    typeof value.name !== "string" ||
-    typeof value.provider !== "string"
-  ) {
-    return value;
-  }
-  const model = value as unknown as DiscoveredProviderRuntimeModelLike;
-  const runtimeContext = {
-    ...(options?.config !== undefined ? { config: options.config } : {}),
-    ...(options?.workspaceDir !== undefined ? { workspaceDir: options.workspaceDir } : {}),
-  };
-  const pluginNormalized =
-    normalizeProviderResolvedModelWithPlugin({
-      provider: model.provider,
-      modelId: model.id,
-      ...runtimeContext,
-      context: {
-        provider: model.provider,
-        modelId: model.id,
-        model: model as unknown as ProviderRuntimeModelLike,
-        agentDir,
-      },
-    }) ?? model;
-  const transportNormalized =
-    applyProviderResolvedTransportWithPlugin({
-      provider: model.provider,
-      modelId: model.id,
-      ...runtimeContext,
-      context: {
-        provider: model.provider,
-        modelId: model.id,
-        model: pluginNormalized as unknown as ProviderRuntimeModelLike,
-        agentDir,
-      },
-    }) ?? pluginNormalized;
-  if (
-    !isRecord(transportNormalized) ||
-    typeof transportNormalized.id !== "string" ||
-    typeof transportNormalized.name !== "string" ||
-    typeof transportNormalized.provider !== "string" ||
-    typeof transportNormalized.api !== "string"
-  ) {
-    return value;
-  }
-  return normalizeModelCompat(transportNormalized as Model, options?.providerMetadataOwners) as T;
-}
 
 function createOpenClawModelRegistry(
   authStorage: AgentAuthStorage,
@@ -130,6 +58,7 @@ function createOpenClawModelRegistry(
     useRuntimeConfig: options?.config === undefined,
   });
   const registryOptions = {
+    config: options?.config,
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     ...(options?.includePluginCatalogs !== undefined
       ? { includePluginCatalogs: options.includePluginCatalogs }
@@ -138,6 +67,7 @@ function createOpenClawModelRegistry(
       ? { modelsJsonContents: options.modelsJsonContents }
       : {}),
     ...(options?.pluginCatalogs !== undefined ? { pluginCatalogs: options.pluginCatalogs } : {}),
+    staticProviderConfigs: options?.staticProviderConfigs,
   };
   const registry = ModelRegistry.create(authStorage, modelsJsonPath, registryOptions);
   const getAll = registry.getAll.bind(registry);
@@ -196,9 +126,23 @@ export function discoverAuthStorage(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
 ): AgentAuthStorage {
-  const credentials =
-    options?.skipCredentials === true ? {} : resolveAgentCredentialsForDiscovery(agentDir, options);
-  return AuthStorage.inMemory(credentials);
+  return discoverAuthStorageFacts(agentDir, options).authStorage;
+}
+
+/** Captures the effective profile store and its AuthStorage projection as one generation. */
+export function discoverAuthStorageFacts(
+  agentDir: string,
+  options?: DiscoverAuthStorageOptions,
+): {
+  authStorage: AgentAuthStorage;
+  store: import("./auth-profiles/types.js").AuthProfileStore;
+  credentials: import("./agent-auth-credentials.js").AgentCredentialMap;
+} {
+  const facts =
+    options?.skipCredentials === true
+      ? { store: { version: 1, profiles: {} }, credentials: {} }
+      : resolveAgentDiscoveryAuthFacts(agentDir, options);
+  return { ...facts, authStorage: AuthStorage.inMemory(facts.credentials) };
 }
 
 /** Creates the model registry used by agent model discovery. */

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { catalogPage, createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
@@ -34,6 +35,7 @@ describe("AppSidebar session catalog pagination", () => {
         agentId: "main",
         limitPerHost: 40,
         progressId: expect.any(String),
+        allowPartialResults: true,
       });
 
       const selection = context.agentSelection.state as {
@@ -50,43 +52,56 @@ describe("AppSidebar session catalog pagination", () => {
         agentId: "research",
         limitPerHost: 40,
         progressId: expect.any(String),
+        allowPartialResults: true,
       });
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("hides catalog groups that have no sessions", async () => {
-    vi.useFakeTimers();
-    try {
-      const codex = catalogPage([]);
-      const claude = catalogPage([], undefined, "claude");
-      const request = vi.fn().mockResolvedValue({
-        catalogs: [...codex.catalogs, ...claude.catalogs],
-      });
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          features: { methods: ["sessions.catalog.list"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+  it.each(["empty", "catalog error", "host error", "native start"] as const)(
+    "hides catalog groups that have no sessions with %s",
+    async (state) => {
+      vi.useFakeTimers();
+      try {
+        const codex = catalogPage([]);
+        const claude = catalogPage([], undefined, "claude");
+        for (const catalog of [...codex.catalogs, ...claude.catalogs]) {
+          if (state === "catalog error") {
+            catalog.error = { code: "UNAVAILABLE", message: "Catalog unavailable" };
+          } else if (state === "host error") {
+            catalog.hosts[0]!.error = { code: "NODE_INVOKE_FAILED", message: "Node unavailable" };
+          } else if (state === "native start") {
+            catalog.capabilities.startTerminal = true;
+          }
+        }
+        const request = vi.fn().mockResolvedValue({
+          catalogs: [...codex.catalogs, ...claude.catalogs],
+        });
+        const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+        gateway.publish({
+          hello: {
+            features: { methods: ["sessions.catalog.list"] },
+          } as ApplicationGatewaySnapshot["hello"],
+        });
+        const { sidebar } = await mountSidebar(
+          gateway.gateway,
+          createSessions("main", ["agent:main:main"]),
+        );
+        sidebar.connected = true;
+        await sidebar.updateComplete;
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
 
-      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
-      expect(sidebar.querySelector('[data-session-section="catalog:claude"]')).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
+        expect(sidebar.querySelector('[data-session-section="catalog:claude"]')).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
-  it("shows actionable catalog errors once and hides empty offline hosts", async () => {
+  it("keeps populated catalogs visible with actionable errors and hides empty offline hosts", async () => {
     vi.useFakeTimers();
     try {
       const request = vi.fn().mockResolvedValue({
@@ -95,7 +110,8 @@ describe("AppSidebar session catalog pagination", () => {
             id: "codex",
             label: "Codex",
             capabilities: { continueSession: true, archive: true },
-            hosts: [],
+            hosts: catalogPage([{ threadId: "local-session", name: "Local session" }]).catalogs[0]!
+              .hosts,
             error: { code: "unavailable", message: "Codex provider unavailable" },
           },
           {
@@ -107,6 +123,8 @@ describe("AppSidebar session catalog pagination", () => {
               createSession: { model: "anthropic/claude-opus-4-8" },
             },
             hosts: [
+              ...catalogPage([{ threadId: "remote-session", name: "Remote session" }]).catalogs[0]!
+                .hosts,
               {
                 hostId: "node:offline-a",
                 label: "Offline A",
@@ -184,10 +202,12 @@ describe("AppSidebar session catalog pagination", () => {
         claudeSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("title") ?? "";
       expect(claudeTitle).not.toContain("NODE_OFFLINE");
       expect(claudeTitle.match(/NODE_LIST_FAILED/g)).toHaveLength(1);
-      expect(claudeSection?.querySelectorAll("[data-session-catalog-host]")).toHaveLength(0);
+      expect(claudeSection?.querySelectorAll("[data-session-catalog-host]")).toHaveLength(1);
+      expect(codexSection?.textContent).toContain("Local session");
+      expect(claudeSection?.textContent).toContain("Remote session");
       expect(
         codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("title"),
-      ).toContain("Settings > Automation > Plugins");
+      ).toContain("Settings > Appearance > Session sources");
       expect(codexSection?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
       expect(claudeSection?.querySelector('[data-session-catalog-error="claude"]')).not.toBeNull();
     } finally {
@@ -195,37 +215,68 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
-  it("keeps an empty catalog reachable while a later page remains", async () => {
-    vi.useFakeTimers();
-    try {
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce(catalogPage([], "page-2"))
-        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Later session" }]));
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          features: { methods: ["sessions.catalog.list"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+  it.each(["empty", "other owners"] as const)(
+    "discovers a later matching page while the first page contains %s",
+    async (firstPageKind) => {
+      vi.useFakeTimers();
+      try {
+        const ada = { id: "profile-ada", label: "Ada", type: "human" } as const;
+        const bob = { id: "profile-bob", label: "Bob", type: "human" } as const;
+        const firstPage = catalogPage(
+          firstPageKind === "empty"
+            ? []
+            : Array.from({ length: 40 }, (_, index) => ({
+                threadId: `other-${index}`,
+                name: `Other owner ${index}`,
+              })),
+          "page-2",
+        );
+        for (const session of firstPage.catalogs[0]!.hosts[0]!.sessions) {
+          session.createdActor = bob;
+        }
+        const laterPage = catalogPage([{ threadId: "thread-1", name: "Later session" }]);
+        laterPage.catalogs[0]!.hosts[0]!.sessions[0]!.createdActor = ada;
+        const pending = deferred<typeof laterPage>();
+        const request = vi.fn((_method, params: { cursors?: Record<string, string> }) =>
+          params.cursors?.["gateway:local"] === "page-2"
+            ? pending.promise
+            : Promise.resolve(firstPage),
+        );
+        const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+        gateway.publish({
+          hello: {
+            features: { methods: ["sessions.catalog.list"] },
+          } as ApplicationGatewaySnapshot["hello"],
+        });
+        const sessions = createSessions("main", ["agent:main:main"]);
+        sessions.state.result!.owners = [ada, bob];
+        const { sidebar } = await mountSidebar(gateway.gateway, sessions);
+        sidebar.setSessionOwnerFilter(ada.id);
+        await sidebar.updateComplete;
+        sidebar.connected = true;
+        await sidebar.updateComplete;
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
 
-      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).not.toBeNull();
-      sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
-      expect(sidebar.textContent).toContain("Later session");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
+        expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
+          agentId: "main",
+          catalogId: "codex",
+          hostIds: ["gateway:local"],
+          cursors: { "gateway:local": "page-2" },
+        });
+        pending.resolve(laterPage);
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
+        expect(sidebar.textContent).toContain("Later session");
+        await sidebar.sessionData.refreshSessionCatalogs();
+        await sidebar.updateComplete;
+        expect(sidebar.textContent).toContain("Later session");
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("shows a rejected load-more request and clears it after a successful retry", async () => {
     vi.useFakeTimers();
@@ -274,6 +325,7 @@ describe("AppSidebar session catalog pagination", () => {
       expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
         agentId: "main",
         catalogId: "codex",
+        hostIds: ["gateway:local"],
         cursors: { "gateway:local": "page-2" },
       });
       expect(section()?.querySelector('[data-session-catalog-error="codex"]')).toBeNull();

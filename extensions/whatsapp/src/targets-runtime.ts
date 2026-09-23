@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements targets runtime behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
@@ -440,10 +439,9 @@ export function markdownToWhatsAppChunks(
   }
   const { ir, escapedMarkers } = prepareWhatsAppMarkdown(text, tableMode);
   const render = (chunk: MarkdownIR) => renderWhatsAppMarkdownIR(chunk, escapedMarkers);
-  const rendered = render(ir);
   let chunks =
     ir.styles.length === 0 && ir.links.length === 0
-      ? chunkMarkdownTextWithMode(rendered, limit, chunkMode)
+      ? chunkMarkdownTextWithMode(render(ir), limit, chunkMode)
       : splitWhatsAppIRForChunkMode(ir, limit, chunkMode).flatMap((source) =>
           renderMarkdownIRChunksWithinLimit({
             ir: source,

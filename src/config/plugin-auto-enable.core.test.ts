@@ -2,8 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "../plugins/discovery.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
+import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   applyPluginAutoEnable,
@@ -20,15 +22,17 @@ import {
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObject } from "./validation.js";
 
-vi.mock("../channels/plugins/configured-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../channels/plugins/configured-state.js")>();
+vi.mock("../channels/plugins/package-state-probes.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../channels/plugins/package-state-probes.js")>();
   return {
     ...actual,
-    hasBundledChannelConfiguredState: (params: {
-      channelId: string;
-      cfg: OpenClawConfig;
-      env?: NodeJS.ProcessEnv;
-    }) => {
+    hasBundledChannelPackageState: (
+      params: Parameters<typeof actual.hasBundledChannelPackageState>[0],
+    ) => {
+      if (params.metadataKey !== "configuredState") {
+        return actual.hasBundledChannelPackageState(params);
+      }
       if (params.channelId === "cache-channel") {
         return Boolean(params.env?.CACHE_CHANNEL_TOKEN?.trim());
       }
@@ -40,7 +44,7 @@ vi.mock("../channels/plugins/configured-state.js", async (importOriginal) => {
           Boolean(params.env?.[key]?.trim()),
         );
       }
-      return actual.hasBundledChannelConfiguredState(params);
+      return actual.hasBundledChannelPackageState(params);
     },
   };
 });
@@ -66,6 +70,20 @@ vi.mock("../plugins/setup-registry.js", () => ({
 
 const env = makeIsolatedEnv();
 const emptyDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
+const codexManifestResult = loadPluginManifest(path.join(process.cwd(), "extensions", "codex"));
+if (!codexManifestResult.ok) {
+  throw new Error(codexManifestResult.error);
+}
+const codexManifest = codexManifestResult.manifest;
+const nativeCatalogRegistry = makeRegistry([
+  {
+    id: codexManifest.id,
+    channels: [],
+    origin: "bundled",
+    contracts: codexManifest.contracts,
+    configSchema: codexManifest.configSchema,
+  },
+]);
 
 function makeBundledChannelCandidate(params: {
   pluginId: string;
@@ -92,6 +110,57 @@ afterEach(() => {
 });
 
 describe("applyPluginAutoEnable core", () => {
+  it.each<[string, string[] | undefined]>([
+    ["absent", undefined],
+    ["empty", []],
+    ["restrictive", ["existing"]],
+  ])("keeps first-write catalog opt-outs inactive with plugins.allow %s", (_name, allow) => {
+    const config = initializeNativeSessionCatalogPreferences({
+      plugins: allow === undefined ? {} : { allow },
+    });
+    const result = applyPluginAutoEnable({
+      config,
+      env,
+      manifestRegistry: nativeCatalogRegistry,
+    });
+    expect(result.config).toEqual(config);
+    expect(result.changes).toEqual([]);
+  });
+
+  it("retains explicit plugin selection alongside a first-write catalog opt-out", () => {
+    const config = initializeNativeSessionCatalogPreferences({
+      plugins: { allow: ["existing"], entries: { codex: { enabled: true } } },
+    });
+    const result = applyPluginAutoEnable({
+      config,
+      env,
+      manifestRegistry: nativeCatalogRegistry,
+    });
+    expect(result.config.plugins?.allow).toEqual(["existing", "codex"]);
+    expect(result.config.plugins?.entries).toEqual(config.plugins?.entries);
+  });
+
+  it.each([{ appServer: { transport: "stdio" } }, { codexDynamicToolsLoading: "direct" }])(
+    "retains authored tool config alongside a first-write catalog opt-out: %j",
+    (pluginConfig) => {
+      const config = initializeNativeSessionCatalogPreferences({
+        plugins: { allow: ["existing"], entries: { codex: { config: pluginConfig } } },
+      });
+      const result = applyPluginAutoEnable({
+        config,
+        env,
+        manifestRegistry: nativeCatalogRegistry,
+      });
+
+      expect(result.config.plugins?.allow).toEqual(["existing", "codex"]);
+      expect(result.config.plugins?.entries?.codex).toEqual({
+        ...config.plugins?.entries?.codex,
+        enabled: true,
+      });
+      expect(result.changes).toEqual(["codex tool configured, enabled automatically."]);
+    },
+  );
+
   it("detects typed channel-configured candidates", () => {
     const candidates = detectPluginAutoEnableCandidates({
       config: {
@@ -270,30 +339,43 @@ describe("applyPluginAutoEnable core", () => {
     ).toBe("google auth configured");
   });
 
-  it("auto-enables external speech providers selected by TTS config", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        tts: { provider: "gradium" },
-        plugins: { allow: ["telegram"] },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "gradium",
-          channels: [],
-          contracts: { speechProviders: ["gradium"] },
-          origin: "global",
+  it.each([
+    ["TTS", { tts: { provider: "gradium" } }, "gradium", "gradium", "speechProviders"],
+    [
+      "sole Talk speech alias",
+      { talk: { providers: { "gradium-voice": {} } } },
+      "gradium-voice",
+      "gradium",
+      "speechProviders",
+    ],
+    [
+      "Talk realtime alias",
+      { talk: { realtime: { provider: "grok-voice", providers: { "grok-voice": {} } } } },
+      "grok-voice",
+      "xai",
+      "realtimeVoiceProviders",
+    ],
+  ] as const)(
+    "auto-enables the manifest owner selected by %s",
+    (_surface, config, id, owner, key) => {
+      const result = applyPluginAutoEnable({
+        config: {
+          ...config,
+          plugins: { allow: ["telegram"] },
         },
-      ]),
-    });
+        env,
+        manifestRegistry: makeRegistry([
+          { id: owner, channels: [], contracts: { [key]: [owner, id] }, origin: "global" },
+        ]),
+      });
 
-    expect(result.config.plugins?.allow).toEqual(["telegram", "gradium"]);
-    expect(result.config.plugins?.entries?.gradium).toEqual({ enabled: true });
-    expect(result.autoEnabledReasons).toEqual({
-      gradium: ["gradium speech provider selected"],
-    });
-    expect(result.changes).toContain("gradium speech provider selected, enabled automatically.");
-  });
+      const reason = `${id} ${key === "speechProviders" ? "speech" : "realtime voice"} provider selected`;
+      expect(result.config.plugins?.allow).toEqual(["telegram", owner]);
+      expect(result.config.plugins?.entries?.[owner]).toEqual({ enabled: true });
+      expect(result.autoEnabledReasons).toEqual({ [owner]: [reason] });
+      expect(result.changes).toContain(`${reason}, enabled automatically.`);
+    },
+  );
 
   it("treats an undefined config as empty", () => {
     const result = applyPluginAutoEnable({
@@ -605,6 +687,71 @@ describe("applyPluginAutoEnable core", () => {
     ]);
   });
 
+  it("bounds repeated model-candidate preference checks without changing plugin precedence", () => {
+    let denyChecks = 0;
+    const deny = new Proxy(["blocked"], {
+      get(target, property, receiver) {
+        if (property === "includes") {
+          return (pluginId: string) => {
+            denyChecks += 1;
+            return target.includes(pluginId);
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: Object.fromEntries(
+          Array.from({ length: 128 }, (_, index) => [
+            `agent-${index}`,
+            {
+              model: {
+                primary: `secondary/model-${index}`,
+                fallbacks: [`primary/model-${index}`, `blocked/model-${index}`],
+              },
+            },
+          ]),
+        ),
+      },
+      plugins: { deny },
+    };
+    expect(validateConfigObject(config).ok).toBe(true);
+    denyChecks = 0;
+
+    const result = applyPluginAutoEnable({
+      config,
+      env,
+      manifestRegistry: makeRegistry([
+        { id: "primary", channels: [], providers: ["primary"] },
+        {
+          id: "secondary",
+          channels: [],
+          providers: ["secondary"],
+          channelConfigs: {
+            secondary: { schema: {}, preferOver: ["primary"] },
+          },
+        },
+        {
+          id: "blocked",
+          channels: [],
+          providers: ["blocked"],
+          channelConfigs: {
+            blocked: { schema: {}, preferOver: ["secondary"] },
+          },
+        },
+      ]),
+    });
+
+    expect(denyChecks).toBeLessThanOrEqual(6);
+    expect(result.config.plugins?.entries?.primary?.enabled).toBe(false);
+    expect(result.config.plugins?.entries?.secondary?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.blocked).toBeUndefined();
+    expect(result.changes).toEqual(["secondary/model-0 model configured, enabled automatically."]);
+    expect(result.autoEnabledReasons.secondary).toEqual(["secondary/model-0 model configured"]);
+  });
+
   it("does not auto-enable Codex when only the OpenAI plugin is explicitly enabled", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -661,6 +808,88 @@ describe("applyPluginAutoEnable core", () => {
     ]);
   });
 
+  it.each([
+    { name: "OpenClaw preference", runtime: "openclaw", api: undefined, codexEnabled: false },
+    { name: "Codex preference", runtime: "codex", api: undefined, codexEnabled: true },
+    {
+      name: "implicit subscription route with legacy Completions",
+      runtime: undefined,
+      api: "openai-completions",
+      codexEnabled: true,
+    },
+  ] as const)("preserves $name for auth-profile models", ({ runtime, api, codexEnabled }) => {
+    const config: OpenClawConfig = {
+      auth: {
+        profiles: { "openai:work": { provider: "openai", mode: "oauth" } },
+      },
+      ...(api
+        ? {
+            models: {
+              providers: {
+                openai: { api, baseUrl: "https://api.openai.com/v1", models: [] },
+              },
+            },
+          }
+        : {}),
+      agents: {
+        entries: {
+          main: {
+            model: "openai/gpt-5.6-sol@openai:work",
+            models: {
+              "openai/gpt-5.6-sol": runtime ? { agentRuntime: { id: runtime } } : {},
+            },
+          },
+        },
+      },
+      plugins: {
+        allow: ["openai"],
+        entries: { openai: { enabled: true } },
+      },
+    };
+    const result = applyPluginAutoEnable({
+      config,
+      env,
+      manifestRegistry: makeRegistry([
+        { id: "openai", channels: [], providers: ["openai"] },
+        {
+          id: "codex",
+          channels: [],
+          activation: { onAgentHarnesses: ["codex"] },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(codexEnabled ? true : undefined);
+    expect(result.config.plugins?.allow).toEqual(codexEnabled ? ["openai", "codex"] : ["openai"]);
+    expect(result.config.agents).toEqual(config.agents);
+    expect(result.config.auth).toEqual(config.auth);
+  });
+
+  it("preserves an OpenClaw preference on a literal model-map key", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        agents: {
+          entries: {
+            main: {
+              models: {
+                "openai/gpt-5.6-sol@variant": { agentRuntime: { id: "openclaw" } },
+              },
+            },
+          },
+        },
+        plugins: { allow: ["openai"], entries: { openai: { enabled: true } } },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        { id: "openai", channels: [], providers: ["openai"] },
+        { id: "codex", channels: [], activation: { onAgentHarnesses: ["codex"] } },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.codex?.enabled).toBeUndefined();
+    expect(result.config.plugins?.allow).toEqual(["openai"]);
+  });
+
   it("auto-enables Codex only for the native Codex harness with OpenAI model refs", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -674,35 +903,6 @@ describe("applyPluginAutoEnable core", () => {
                 },
               },
             },
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        { id: "openai", channels: [], providers: ["openai", "openai"] },
-        {
-          id: "codex",
-          channels: [],
-          providers: ["codex"],
-          activation: { onAgentHarnesses: ["codex"] },
-        },
-      ]),
-    });
-
-    expect(result.config.plugins?.entries?.openai?.enabled).toBe(true);
-    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
-    expect(result.changes).toEqual([
-      "openai/gpt-5.5 model configured, enabled automatically.",
-      "codex agent runtime configured, enabled automatically.",
-    ]);
-  });
-
-  it("auto-enables Codex when OpenAI agent models use the implicit runtime default", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.5",
           },
         },
       },
@@ -1120,23 +1320,10 @@ describe("applyPluginAutoEnable core", () => {
     expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).toHaveBeenCalledTimes(2);
   });
 
-  it("fingerprints identical snapshots once per plugin metadata lifecycle", () => {
-    const traversals = { candidates: 0, config: 0, env: 0, plugins: 0 };
-    const config = new Proxy<OpenClawConfig>(
-      {},
-      {
-        ownKeys: (target) => {
-          traversals.config += 1;
-          return Reflect.ownKeys(target);
-        },
-      },
-    );
-    const envSnapshot = new Proxy(makeIsolatedEnv(), {
-      ownKeys: (target) => {
-        traversals.env += 1;
-        return Reflect.ownKeys(target);
-      },
-    });
+  it("fingerprints identical metadata snapshots once per plugin metadata lifecycle", () => {
+    const traversals = { candidates: 0, plugins: 0 };
+    const config: OpenClawConfig = {};
+    const envSnapshot = makeIsolatedEnv();
     const discovery: PluginDiscoveryResult = {
       candidates: new Proxy([], {
         get: (target, property, receiver) => {
@@ -1176,8 +1363,6 @@ describe("applyPluginAutoEnable core", () => {
     clearPluginMetadataLifecycleCaches();
     applyPluginAutoEnable({ config, discovery, env: envSnapshot, manifestRegistry });
 
-    expect(traversals.config).toBeGreaterThan(firstTraversalCounts.config);
-    expect(traversals.env).toBeGreaterThan(firstTraversalCounts.env);
     expect(traversals.candidates).toBeGreaterThan(firstTraversalCounts.candidates);
     expect(traversals.plugins).toBeGreaterThan(firstTraversalCounts.plugins);
   });

@@ -1,15 +1,18 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI view renders usage metrics screen content.
 import { html } from "lit";
 import {
-  buildUsageAggregateTail,
-  mergeUsageDailyLatency,
-  mergeUsageLatency,
-} from "../../../../src/shared/usage-aggregates.js";
+  addCostUsageTotals,
+  createEmptyCostUsageTotals,
+} from "../../../../src/infra/session-cost-usage-totals.js";
+import { createUsageAggregateAccumulator } from "../../../../src/shared/usage-aggregates.js";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts";
+
+registerUsageEnglish();
 
 const CHARS_PER_TOKEN = 4;
 const DAY_MS = 86_400_000;
@@ -36,9 +39,9 @@ function formatUsageCost(n: number, decimals = 2): string {
 }
 
 function formatHourLabel(hour: number): string {
-  const date = new Date();
-  date.setHours(hour, 0, 0, 0);
-  return date.toLocaleTimeString(undefined, { hour: "numeric" });
+  // The bucket hour is already zoned; a fixed UTC date avoids local DST normalization.
+  const date = new Date(Date.UTC(1970, 0, 1, hour));
+  return date.toLocaleTimeString(undefined, { hour: "numeric", timeZone: "UTC" });
 }
 
 function forEachSessionHourSlice(
@@ -76,20 +79,18 @@ function forEachSessionHourSlice(
     return true;
   }
 
-  const totalMinutes = (endMs - startMs) / 60000;
+  const durationMs = endMs - startMs;
   let cursor = startMs;
   while (cursor < endMs) {
     const date = new Date(cursor);
-    const nextHour = setToHourEnd(date, timeZone);
-    const nextMs = Math.min(nextHour.getTime(), endMs);
-    const minutes = Math.max((nextMs - cursor) / 60000, 0);
+    const nextMs = Math.min(nextHourBoundary(date, timeZone), endMs);
     visitor({
       usage,
       hour: getZonedHour(date, timeZone),
       weekday: getZonedWeekday(date, timeZone),
-      share: minutes / totalMinutes,
+      share: (nextMs - cursor) / durationMs,
     });
-    cursor = nextMs + 1;
+    cursor = nextMs;
   }
 
   return true;
@@ -111,11 +112,17 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     // For local view, construct a Date from the UTC components and use getHours()
     // so the browser's DST-aware timezone logic handles offset automatically.
     if (usage.utcQuarterHourMessageCounts && usage.utcQuarterHourMessageCounts.length > 0) {
+      const bucketState: UtcQuarterBucketState = {
+        utcDateKey: undefined,
+        utcWeekday: null,
+        utcStartMs: 0,
+      };
       for (const quarterHour of usage.utcQuarterHourMessageCounts) {
-        const mapped = getHourAndWeekdayForUtcQuarterBucket(
+        const mapped = mapUtcQuarterBucket(
           quarterHour.date,
           quarterHour.quarterIndex,
           timeZone,
+          bucketState,
         );
         if (!mapped) {
           continue;
@@ -190,51 +197,94 @@ function getUtcQuarterHourBucketDate(dateStr: string, quarterIndex: number): Dat
   return date;
 }
 
-function getHourAndWeekdayForUtcQuarterBucket(
+type UtcQuarterBucketState = {
+  utcDateKey: string | undefined;
+  utcWeekday: number | null;
+  utcStartMs: number;
+};
+
+function mapUtcQuarterBucket(
   dateStr: string,
   quarterIndex: number,
   timeZone: "local" | "utc",
+  state: UtcQuarterBucketState,
 ): { hour: number; weekday: number } | null {
-  const date = getUtcQuarterHourBucketDate(dateStr, quarterIndex);
-  if (!date) {
+  if (!Number.isInteger(quarterIndex) || quarterIndex < 0 || quarterIndex > 95) {
     return null;
   }
+  if (dateStr !== state.utcDateKey) {
+    state.utcDateKey = dateStr;
+    const date = getUtcQuarterHourBucketDate(dateStr, 0);
+    state.utcWeekday = date ? date.getUTCDay() : null;
+    state.utcStartMs = date ? date.getTime() : 0;
+  }
+  if (state.utcWeekday === null) {
+    return null;
+  }
+  const localDate =
+    timeZone === "local" ? new Date(state.utcStartMs + quarterIndex * 900_000) : null;
   return {
-    hour: getZonedHour(date, timeZone),
-    weekday: getZonedWeekday(date, timeZone),
+    // Date getters return +0 even for a -0 quarter index.
+    hour: localDate ? getZonedHour(localDate, timeZone) : Math.floor((quarterIndex + 0) / 4),
+    weekday: localDate ? getZonedWeekday(localDate, timeZone) : state.utcWeekday,
   };
 }
 
-function setToHourEnd(date: Date, zone: "local" | "utc"): Date {
-  const next = new Date(date);
-  if (zone === "utc") {
-    next.setUTCMinutes(59, 59, 999);
-  } else {
-    next.setMinutes(59, 59, 999);
+function nextHourBoundary(date: Date, zone: "local" | "utc"): number {
+  const start = date.getTime();
+  const minutes = zone === "utc" ? date.getUTCMinutes() : date.getMinutes();
+  const seconds = zone === "utc" ? date.getUTCSeconds() : date.getSeconds();
+  // Local setters can move backward into the first occurrence of a repeated hour.
+  const next = start + (60 - minutes) * 60_000 - seconds * 1_000 - date.getMilliseconds();
+  if (zone === "utc" || new Date(next - 1).getTimezoneOffset() === date.getTimezoneOffset()) {
+    return next;
   }
-  return next;
+
+  // Some zones change offset within an hour (Chatham at :45). Split at that
+  // transition so the elapsed interval keeps its original local hour and weekday.
+  const offset = date.getTimezoneOffset();
+  let low = start + 1;
+  let high = next - 1;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if (new Date(middle).getTimezoneOffset() === offset) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  return low;
 }
 
 function forEachSessionTokenUsageBucket(
   session: UsageSessionEntry,
   timeZone: "local" | "utc",
-  visitor: (params: { hour: number; weekday: number; tokens: number }) => void,
+  visitor: (params: { hour: number; weekday: number; tokens: number }) => boolean | void,
 ): boolean {
   const buckets = session.usage?.utcQuarterHourTokenUsage;
   if (!buckets || buckets.length === 0) {
     return false;
   }
   let visited = false;
+  const bucketState: UtcQuarterBucketState = {
+    utcDateKey: undefined,
+    utcWeekday: null,
+    utcStartMs: 0,
+  };
   for (const bucket of buckets) {
     if (bucket.totalTokens <= 0) {
       continue;
     }
-    const mapped = getHourAndWeekdayForUtcQuarterBucket(bucket.date, bucket.quarterIndex, timeZone);
+    const mapped = mapUtcQuarterBucket(bucket.date, bucket.quarterIndex, timeZone, bucketState);
     if (!mapped) {
       continue;
     }
     visited = true;
-    visitor({ hour: mapped.hour, weekday: mapped.weekday, tokens: bucket.totalTokens });
+    if (
+      visitor({ hour: mapped.hour, weekday: mapped.weekday, tokens: bucket.totalTokens }) === false
+    ) {
+      break;
+    }
   }
   return visited;
 }
@@ -259,9 +309,10 @@ function sessionSpanTouchesSelectedHours(
     if (hours.includes(hour)) {
       return true;
     }
-    const nextHour = setToHourEnd(date, timeZone);
-    const nextMs = Math.min(nextHour.getTime(), endMs);
-    cursor = nextMs + 1;
+    if (cursor === endMs) {
+      break;
+    }
+    cursor = Math.min(nextHourBoundary(date, timeZone), endMs);
   }
   return false;
 }
@@ -276,9 +327,8 @@ function sessionTouchesSelectedHours(
   }
   let touches = false;
   const hasPreciseTokenBuckets = forEachSessionTokenUsageBucket(session, timeZone, ({ hour }) => {
-    if (hours.includes(hour)) {
-      touches = true;
-    }
+    touches = hours.includes(hour);
+    return !touches;
   });
   if (hasPreciseTokenBuckets) {
     return touches;
@@ -462,8 +512,11 @@ function renderUsageMosaic(
   );
 }
 
-function formatIsoDate(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+function formatIsoDate(date: Date, timeZone: "local" | "utc" = "local"): string {
+  const year = timeZone === "utc" ? date.getUTCFullYear() : date.getFullYear();
+  const month = (timeZone === "utc" ? date.getUTCMonth() : date.getMonth()) + 1;
+  const day = timeZone === "utc" ? date.getUTCDate() : date.getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 function parseYmdDate(dateStr: string): Date | null {
@@ -527,34 +580,6 @@ function formatFullDate(dateStr: string): string {
   return date.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
 }
 
-const emptyUsageTotals = (): UsageTotals => ({
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-});
-
-const mergeUsageTotals = (target: UsageTotals, source: Partial<UsageTotals>) => {
-  target.input += source.input ?? 0;
-  target.output += source.output ?? 0;
-  target.cacheRead += source.cacheRead ?? 0;
-  target.cacheWrite += source.cacheWrite ?? 0;
-  target.totalTokens += source.totalTokens ?? 0;
-  target.totalCost += source.totalCost ?? 0;
-  target.inputCost += source.inputCost ?? 0;
-  target.outputCost += source.outputCost ?? 0;
-  target.cacheReadCost += source.cacheReadCost ?? 0;
-  target.cacheWriteCost += source.cacheWriteCost ?? 0;
-  target.missingCostEntries += source.missingCostEntries ?? 0;
-};
-
 function buildUsageCostWindowSummary(
   daily: Array<UsageTotals & { date: string }>,
   startDate: string,
@@ -566,11 +591,11 @@ function buildUsageCostWindowSummary(
     return null;
   }
 
-  const totals = emptyUsageTotals();
+  const totals = createEmptyCostUsageTotals();
   for (const entry of daily) {
     const day = parseIsoDayIndex(entry.date);
     if (day !== null && day >= startDay && day <= endDay) {
-      mergeUsageTotals(totals, entry);
+      addCostUsageTotals(totals, entry);
     }
   }
 
@@ -623,171 +648,11 @@ const buildAggregatesFromSessions = (
     );
   }
 
-  const messages = { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
-  const toolMap = new Map<string, number>();
-  const modelMap = new Map<
-    string,
-    { provider?: string; model?: string; count: number; totals: UsageTotals }
-  >();
-  const providerMap = new Map<
-    string,
-    { provider?: string; model?: string; count: number; totals: UsageTotals }
-  >();
-  const agentMap = new Map<string, UsageTotals>();
-  const channelMap = new Map<string, UsageTotals>();
-  const dailyMap = new Map<
-    string,
-    {
-      date: string;
-      tokens: number;
-      cost: number;
-      messages: number;
-      toolCalls: number;
-      errors: number;
-    }
-  >();
-  const dailyLatencyMap = new Map<
-    string,
-    { date: string; count: number; sum: number; min: number; max: number; p95Max: number }
-  >();
-  const modelDailyMap = new Map<
-    string,
-    { date: string; provider?: string; model?: string; tokens: number; cost: number; count: number }
-  >();
-  const latencyTotals = { count: 0, sum: 0, min: Number.POSITIVE_INFINITY, max: 0, p95Max: 0 };
-
+  const accumulator = createUsageAggregateAccumulator();
   for (const session of sessions) {
-    const usage = session.usage;
-    if (!usage) {
-      continue;
-    }
-    if (usage.messageCounts) {
-      messages.total += usage.messageCounts.total;
-      messages.user += usage.messageCounts.user;
-      messages.assistant += usage.messageCounts.assistant;
-      messages.toolCalls += usage.messageCounts.toolCalls;
-      messages.toolResults += usage.messageCounts.toolResults;
-      messages.errors += usage.messageCounts.errors;
-    }
-
-    if (usage.toolUsage) {
-      for (const tool of usage.toolUsage.tools) {
-        toolMap.set(tool.name, (toolMap.get(tool.name) ?? 0) + tool.count);
-      }
-    }
-
-    if (usage.modelUsage) {
-      for (const entry of usage.modelUsage) {
-        const modelKey = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
-        const modelExisting = modelMap.get(modelKey) ?? {
-          provider: entry.provider,
-          model: entry.model,
-          count: 0,
-          totals: emptyUsageTotals(),
-        };
-        modelExisting.count += entry.count;
-        mergeUsageTotals(modelExisting.totals, entry.totals);
-        modelMap.set(modelKey, modelExisting);
-
-        const providerKey = entry.provider ?? "unknown";
-        const providerExisting = providerMap.get(providerKey) ?? {
-          provider: entry.provider,
-          model: undefined,
-          count: 0,
-          totals: emptyUsageTotals(),
-        };
-        providerExisting.count += entry.count;
-        mergeUsageTotals(providerExisting.totals, entry.totals);
-        providerMap.set(providerKey, providerExisting);
-      }
-    }
-
-    mergeUsageLatency(latencyTotals, usage.latency);
-
-    if (session.agentId) {
-      const totals = agentMap.get(session.agentId) ?? emptyUsageTotals();
-      mergeUsageTotals(totals, usage);
-      agentMap.set(session.agentId, totals);
-    }
-    if (session.channel) {
-      const totals = channelMap.get(session.channel) ?? emptyUsageTotals();
-      mergeUsageTotals(totals, usage);
-      channelMap.set(session.channel, totals);
-    }
-
-    for (const day of usage.dailyBreakdown ?? []) {
-      const daily = dailyMap.get(day.date) ?? {
-        date: day.date,
-        tokens: 0,
-        cost: 0,
-        messages: 0,
-        toolCalls: 0,
-        errors: 0,
-      };
-      daily.tokens += day.tokens;
-      daily.cost += day.cost;
-      dailyMap.set(day.date, daily);
-    }
-    for (const day of usage.dailyMessageCounts ?? []) {
-      const daily = dailyMap.get(day.date) ?? {
-        date: day.date,
-        tokens: 0,
-        cost: 0,
-        messages: 0,
-        toolCalls: 0,
-        errors: 0,
-      };
-      daily.messages += day.total;
-      daily.toolCalls += day.toolCalls;
-      daily.errors += day.errors;
-      dailyMap.set(day.date, daily);
-    }
-    mergeUsageDailyLatency(dailyLatencyMap, usage.dailyLatency);
-    for (const day of usage.dailyModelUsage ?? []) {
-      const key = `${day.date}::${day.provider ?? "unknown"}::${day.model ?? "unknown"}`;
-      const existing = modelDailyMap.get(key) ?? {
-        date: day.date,
-        provider: day.provider,
-        model: day.model,
-        tokens: 0,
-        cost: 0,
-        count: 0,
-      };
-      existing.tokens += day.tokens;
-      existing.cost += day.cost;
-      existing.count += day.count;
-      modelDailyMap.set(key, existing);
-    }
+    accumulator.add(session);
   }
-
-  const tail = buildUsageAggregateTail({
-    byChannelMap: channelMap,
-    latencyTotals,
-    dailyLatencyMap,
-    modelDailyMap,
-    dailyMap,
-  });
-
-  return {
-    messages,
-    tools: {
-      totalCalls: Array.from(toolMap.values()).reduce((sum, count) => sum + count, 0),
-      uniqueTools: toolMap.size,
-      tools: Array.from(toolMap.entries())
-        .map(([name, count]) => ({ name, count }))
-        .toSorted((a, b) => b.count - a.count),
-    },
-    byModel: Array.from(modelMap.values()).toSorted(
-      (a, b) => b.totals.totalCost - a.totals.totalCost,
-    ),
-    byProvider: Array.from(providerMap.values()).toSorted(
-      (a, b) => b.totals.totalCost - a.totals.totalCost,
-    ),
-    byAgent: Array.from(agentMap.entries())
-      .map(([agentId, totals]) => ({ agentId, totals }))
-      .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
-    ...tail,
-  };
+  return accumulator.finish();
 };
 
 type UsageInsightStats = {
@@ -871,4 +736,3 @@ export {
   renderUsageMosaic,
   sessionTouchesSelectedHours,
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

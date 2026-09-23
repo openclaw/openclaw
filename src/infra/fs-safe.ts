@@ -3,6 +3,7 @@ import "./fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureDirectoryWithinRoot, findExistingAncestor } from "@openclaw/fs-safe/advanced";
+import "@openclaw/fs-safe/errors";
 import { writeExternalFileWithinRoot as writeExternalFileWithinRootBase } from "@openclaw/fs-safe/output";
 import {
   root as fsSafeRoot,
@@ -121,6 +122,7 @@ export async function writeExternalFileWithinRoot(
     path: options.path,
     write: options.write,
     staging: "sibling",
+    producerIsolation: "private-directory",
     fallbackFileName: options.fallbackFileName ?? options.tempPrefix,
   });
   // Preserve the caller-facing path spelling while carrying forward any
@@ -154,7 +156,7 @@ export async function writeFileWithinRoot(params: {
   encoding?: BufferEncoding;
   mkdir?: boolean;
 }): Promise<void> {
-  const fsRoot = await fsSafeRoot(params.rootDir);
+  const fsRoot = await root(params.rootDir);
   await fsRoot.write(params.relativePath, params.data, {
     encoding: params.encoding,
     mkdir: params.mkdir,

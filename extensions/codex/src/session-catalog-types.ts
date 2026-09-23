@@ -1,3 +1,4 @@
+import type { CodexAppServerRuntimeOptions } from "./app-server/config.js";
 import type {
   CodexThread,
   CodexThreadForkParams,
@@ -6,11 +7,28 @@ import type {
   CodexThreadListResponse,
   CodexThreadTurnsListParams,
   CodexThreadTurnsListResponse,
+  CodexThreadItemsListParams,
+  CodexThreadItemsListResponse,
 } from "./app-server/protocol.js";
+
+export type CodexCatalogHome = {
+  /** Revalidate discovery before a new operation captures its source. */
+  assertCurrent(): void;
+  sourceHomeId: string;
+  hostId: string;
+  label: string;
+  agentDir: string;
+  appServer: CodexAppServerRuntimeOptions;
+  /** Trusted local root for rollout provenance reads; absent for remote app-server connections. */
+  localSessionsRoot?: string;
+  usesProcessHomeFallback: boolean;
+};
 
 /** Read-only metadata for one Codex app-server thread. */
 export type CodexSessionCatalogSession = {
   threadId: string;
+  /** Opaque connection identity; never exposes the underlying Codex home path. */
+  sourceHomeId?: string;
   sessionId?: string;
   name?: string | null;
   /** Display-only fallback kept separate so title search never scans prompt previews. */
@@ -32,6 +50,12 @@ export type CodexSessionCatalogSession = {
 
 export type CodexSessionCatalogPage = {
   sessions: CodexSessionCatalogSession[];
+  /** Canonical node-owned home identity; absent from older read-only node pages. */
+  sourceHomeId?: string;
+  /** The node's selected source must explicitly support Chat continuation. */
+  canContinueCodex?: boolean;
+  /** Internal provenance filtered before this page reaches the provider catalog. */
+  managedThreads?: Array<{ threadId: string; rolloutPath?: string }>;
   nextCursor?: string;
   backwardsCursor?: string;
 };
@@ -41,20 +65,55 @@ export type CodexSessionCatalogPageParams = {
   limit?: number;
   searchTerm?: string;
   cwd?: string;
-  /** Bypasses the brief list memo after a specific thread lookup misses. */
-  forceRefresh?: boolean;
 };
 
 export type CodexSessionCatalogControl = {
+  /** Available only inside the exact physical client's pinned catalog lease. */
+  forkContext?: {
+    client: import("./app-server/client.js").CodexAppServerClient;
+    appServer: CodexAppServerRuntimeOptions;
+    pluginConfig: unknown;
+    agentDir: string;
+    localSessionsRoot?: string;
+  };
+  /** Retire only this pinned physical client, preserving unrelated active leases. */
+  retireConnection?: () => void;
   clientId?: string;
   connectionFingerprint?: string;
   withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
+  /** Lifecycle hydration; listPage only reads the resident snapshot. */
+  initialize(): Promise<void>;
   listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;
+  requireEligibleThread(threadId: string): Promise<CodexThread>;
   listDescendantPage(params: CodexThreadListParams): Promise<CodexThreadListResponse>;
   listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
-  forkThread(params: CodexThreadForkParams): Promise<CodexThreadForkResponse>;
+  listItemPage(params: CodexThreadItemsListParams): Promise<CodexThreadItemsListResponse>;
+  forkThread(
+    params: CodexThreadForkParams,
+    assertCurrent?: () => void,
+  ): Promise<CodexThreadForkResponse>;
   readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
-  archiveThread(threadId: string): Promise<void>;
+  archiveThread(threadId: string, assertCurrent?: () => void): Promise<void>;
+};
+
+export type CodexSessionCatalogControlFactory = {
+  hasActiveWork(this: void): boolean;
+  /** Drain node-owned state and transports while permitting the next connection. */
+  disconnect(this: void): Promise<void>;
+  forRequest(agentId: string, source?: CodexCatalogHome): CodexSessionCatalogControl;
+  /** Native default, with the shipped agent selector retained for explicitly configured sources. */
+  forNode(agentId?: string): Promise<{
+    assertCurrent(): void;
+    control: CodexSessionCatalogControl;
+    sourceHomeId: string;
+    codexHome: string;
+    transport: CodexAppServerRuntimeOptions["start"]["transport"];
+  }>;
+  homesForAgent(agentId: string): Promise<readonly CodexCatalogHome[]>;
+  forUpstream(
+    agentId: string,
+    connectionFingerprint: string,
+  ): Promise<CodexSessionCatalogControl | undefined>;
 };
 
 export type CodexSessionCatalogError = {
@@ -63,6 +122,7 @@ export type CodexSessionCatalogError = {
 };
 
 export type CodexSessionCatalogHost = {
+  pending?: boolean;
   hostId: string;
   label: string;
   kind: "gateway" | "node";
@@ -70,6 +130,7 @@ export type CodexSessionCatalogHost = {
   nodeId?: string;
   canContinueCodex?: boolean;
   canOpenTerminalCodex?: boolean;
+  canStartTerminal?: boolean;
   sessions: CodexSessionCatalogSession[];
   nextCursor?: string;
   backwardsCursor?: string;
@@ -84,12 +145,12 @@ export type CodexSessionTranscriptPage = {
   hostId: string;
   label: string;
   threadId: string;
-  items: import("./app-server/protocol.js").CodexThreadItem[];
+  items: import("openclaw/plugin-sdk/session-catalog").SessionCatalogTranscriptItem[];
   nextCursor?: string;
-  backwardsCursor?: string;
 };
 
 export type CodexSessionCatalogParams = {
+  agentId?: string;
   search?: string;
   limitPerHost?: number;
   hostIds?: string[];

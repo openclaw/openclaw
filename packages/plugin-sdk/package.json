@@ -28,14 +28,6 @@
       "types": "./dist/src/plugin-sdk/channel-activity-runtime.d.ts",
       "default": "./src/channel-activity-runtime.ts"
     },
-    "./channel-secret-runtime": {
-      "types": "./dist/src/plugin-sdk/channel-secret-runtime.d.ts",
-      "default": "./src/channel-secret-runtime.ts"
-    },
-    "./channel-streaming": {
-      "types": "./dist/src/plugin-sdk/channel-streaming.d.ts",
-      "default": "./src/channel-streaming.ts"
-    },
     "./cli-runtime": {
       "types": "./dist/src/plugin-sdk/cli-runtime.d.ts",
       "default": "./src/cli-runtime.ts"
@@ -56,6 +48,10 @@
       "types": "./dist/src/plugin-sdk/config-runtime.d.ts",
       "default": "./src/config-runtime.ts"
     },
+    "./control-ui-link-reader": {
+      "types": "./dist/src/plugin-sdk/control-ui-link-reader.d.ts",
+      "default": "./src/control-ui-link-reader.ts"
+    },
     "./core": {
       "types": "./dist/src/plugin-sdk/core.d.ts",
       "default": "./src/core.ts"
@@ -71,6 +67,10 @@
     "./delivery-queue-runtime": {
       "types": "./dist/src/plugin-sdk/delivery-queue-runtime.d.ts",
       "default": "./src/delivery-queue-runtime.ts"
+    },
+    "./embedding-provider-runtime-contract": {
+      "types": "./dist/src/plugin-sdk/embedding-provider-runtime-contract.d.ts",
+      "default": "./src/embedding-provider-runtime-contract.ts"
     },
     "./error-runtime": {
       "types": "./dist/src/plugin-sdk/error-runtime.d.ts",
@@ -99,6 +99,10 @@
     "./model-session-runtime": {
       "types": "./dist/src/plugin-sdk/model-session-runtime.d.ts",
       "default": "./src/model-session-runtime.ts"
+    },
+    "./node-selection-runtime": {
+      "types": "./dist/src/plugin-sdk/node-selection-runtime.d.ts",
+      "default": "./src/node-selection-runtime.ts"
     },
     "./number-runtime": {
       "types": "./dist/src/plugin-sdk/number-runtime.d.ts",
@@ -212,10 +216,6 @@
       "types": "./dist/src/plugin-sdk/talk-config-runtime.d.ts",
       "default": "./src/talk-config-runtime.ts"
     },
-    "./text-runtime": {
-      "types": "./dist/src/plugin-sdk/text-runtime.d.ts",
-      "default": "./src/text-runtime.ts"
-    },
     "./text-utility-runtime": {
       "types": "./dist/src/plugin-sdk/text-utility-runtime.d.ts",
       "default": "./src/text-utility-runtime.ts"
@@ -236,9 +236,9 @@
       "types": "./dist/src/plugin-sdk/video-generation.d.ts",
       "default": "./src/video-generation.ts"
     },
-    "./zod": {
-      "types": "./dist/src/plugin-sdk/zod.d.ts",
-      "default": "./src/zod.ts"
+    "./websocket-runtime": {
+      "types": "./dist/src/plugin-sdk/websocket-runtime.d.ts",
+      "default": "./src/websocket-runtime.ts"
     }
   }
 }

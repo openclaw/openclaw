@@ -1,4 +1,7 @@
 // Qa Lab tests cover discord live plugin behavior.
+import { once } from "node:events";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { discordQaScenarioSupport } from "./discord-live.runtime.js";
@@ -9,6 +12,77 @@ describe("discord live qa runtime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("forwards Discord Requests through the guarded QA endpoint and preserves null responses", async () => {
+    const received: Array<{ authorization?: string; body: string; method?: string; url?: string }> =
+      [];
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        received.push({
+          authorization: request.headers.authorization,
+          body: Buffer.concat(chunks).toString("utf8"),
+          method: request.method,
+          url: request.url,
+        });
+        if (request.method === "DELETE") {
+          response.writeHead(204).end();
+          return;
+        }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+      });
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const port = (server.address() as AddressInfo).port;
+    const endpointFetch = testing.createDiscordQaEndpointFetcher(
+      `http://127.0.0.1:${port}/api/v10`,
+    );
+
+    try {
+      const writeResponse = await endpointFetch(
+        new Request("https://discord.com/api/v10/channels/123/messages", {
+          body: JSON.stringify({ content: "hello" }),
+          headers: {
+            authorization: "Bot qa-token",
+            "content-type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+      await expect(writeResponse.json()).resolves.toEqual({ ok: true });
+
+      const deleteResponse = await endpointFetch(
+        new Request("https://discord.com/api/v10/channels/123/messages/456", {
+          headers: { authorization: "Bot qa-token" },
+          method: "DELETE",
+        }),
+      );
+      expect(deleteResponse.status).toBe(204);
+      expect(deleteResponse.body).toBeNull();
+      expect(received).toEqual([
+        {
+          authorization: "Bot qa-token",
+          body: JSON.stringify({ content: "hello" }),
+          method: "POST",
+          url: "/api/v10/channels/123/messages",
+        },
+        {
+          authorization: "Bot qa-token",
+          body: "",
+          method: "DELETE",
+          url: "/api/v10/channels/123/messages/456",
+        },
+      ]);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("resolves required Discord QA env vars", () => {
@@ -190,6 +264,41 @@ describe("discord live qa runtime", () => {
         },
       ],
     });
+  });
+
+  it("separates text ingress from target voice authorization", () => {
+    const next = testing.buildDiscordQaConfig(
+      {},
+      {
+        guildId: "123456789012345678",
+        channelId: "223456789012345678",
+        driverBotId: "423456789012345678",
+        sutAccountId: "sut",
+        sutBotToken: "sut-token",
+      },
+      {
+        voiceChannelAccess: {
+          channelId: "523456789012345678",
+          users: ["323456789012345678"],
+        },
+      },
+    );
+
+    const account = next.channels?.discord?.accounts?.sut;
+    expect(next.channels?.discord?.voice).toEqual({
+      enabled: true,
+      mode: "stt-tts",
+      autoJoin: [],
+    });
+    expect(
+      account?.guilds?.["123456789012345678"]?.channels?.["223456789012345678"]?.users,
+    ).toEqual(["423456789012345678"]);
+    expect(
+      account?.guilds?.["123456789012345678"]?.channels?.["523456789012345678"]?.users,
+    ).toEqual(["323456789012345678"]);
+    expect(account?.guilds?.["123456789012345678"]?.users).toEqual(["423456789012345678"]);
+    expect(next.tools?.alsoAllow).toContain("transcripts");
+    expect(next.agents?.entries?.qa?.tools?.alsoAllow).toContain("transcripts");
   });
 
   it("injects tool-only Discord status reaction config for the Mantis scenario", () => {
@@ -450,18 +559,10 @@ describe("discord live qa runtime", () => {
       vi.fn(async (_input: string | URL | globalThis.Request, init?: RequestInit) => {
         expect(init?.headers).toBeInstanceOf(Headers);
         expect((init!.headers as Headers).get("authorization")).toBe("Bot token");
-        return new Response(
-          JSON.stringify([
-            { id: "623456789012345678", name: "help" },
-            { id: "623456789012345679", name: "commands" },
-          ]),
-          {
-            status: 200,
-            headers: {
-              "content-type": "application/json",
-            },
-          },
-        );
+        return Response.json([
+          { id: "623456789012345678", name: "help" },
+          { id: "623456789012345679", name: "commands" },
+        ]);
       }),
     );
 
@@ -479,21 +580,12 @@ describe("discord live qa runtime", () => {
   it("discovers the first visible Discord voice channel for the voice smoke", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify([
-              { id: "123456789012345678", name: "general", position: 0, type: 0 },
-              { id: "523456789012345678", name: "qa-voice", position: 1, type: 2 },
-              { id: "623456789012345678", name: "stage", position: 2, type: 13 },
-            ]),
-            {
-              status: 200,
-              headers: {
-                "content-type": "application/json",
-              },
-            },
-          ),
+      vi.fn(async () =>
+        Response.json([
+          { id: "123456789012345678", name: "general", position: 0, type: 0 },
+          { id: "523456789012345678", name: "qa-voice", position: 1, type: 2 },
+          { id: "623456789012345678", name: "stage", position: 2, type: 13 },
+        ]),
       ),
     );
 
@@ -508,15 +600,7 @@ describe("discord live qa runtime", () => {
   it("normalizes missing current Discord voice state to null", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          new Response(JSON.stringify({ message: "Unknown Voice State" }), {
-            status: 404,
-            headers: {
-              "content-type": "application/json",
-            },
-          }),
-      ),
+      vi.fn(async () => Response.json({ message: "Unknown Voice State" }, { status: 404 })),
     );
 
     await expect(
@@ -534,27 +618,12 @@ describe("discord live qa runtime", () => {
         "fetch",
         vi
           .fn()
+          .mockResolvedValueOnce(Response.json([{ id: "623456789012345679", name: "commands" }]))
           .mockResolvedValueOnce(
-            new Response(JSON.stringify([{ id: "623456789012345679", name: "commands" }]), {
-              status: 200,
-              headers: {
-                "content-type": "application/json",
-              },
-            }),
-          )
-          .mockResolvedValueOnce(
-            new Response(
-              JSON.stringify([
-                { id: "623456789012345679", name: "commands" },
-                { id: "623456789012345678", name: "help" },
-              ]),
-              {
-                status: 200,
-                headers: {
-                  "content-type": "application/json",
-                },
-              },
-            ),
+            Response.json([
+              { id: "623456789012345679", name: "commands" },
+              { id: "623456789012345678", name: "help" },
+            ]),
           ),
       );
 
@@ -608,97 +677,17 @@ describe("discord live qa runtime", () => {
       vi
         .fn()
         .mockResolvedValueOnce(
-          new Response(JSON.stringify({ message: "You are being rate limited.", retry_after: 0 }), {
-            status: 429,
-            headers: {
-              "content-type": "application/json",
-            },
-          }),
+          Response.json(
+            { message: "You are being rate limited.", retry_after: 0 },
+            { status: 429 },
+          ),
         )
-        .mockResolvedValueOnce(
-          new Response(JSON.stringify({ id: "423456789012345678" }), {
-            status: 200,
-            headers: {
-              "content-type": "application/json",
-            },
-          }),
-        ),
+        .mockResolvedValueOnce(Response.json({ id: "423456789012345678" })),
     );
 
     await expect(testing.getCurrentDiscordUser("token")).resolves.toEqual({
       id: "423456789012345678",
     });
     expect(fetch).toHaveBeenCalledTimes(2);
-  });
-
-  it("redacts observed message content by default in artifacts", () => {
-    expect(
-      testing.buildObservedMessagesArtifact({
-        includeContent: false,
-        redactMetadata: false,
-        observedMessages: [
-          {
-            messageId: "523456789012345678",
-            channelId: "223456789012345678",
-            guildId: "123456789012345678",
-            senderId: "323456789012345678",
-            senderIsBot: true,
-            senderUsername: "sut",
-            text: "secret text",
-            triggerMessageId: "423456789012345678",
-            triggerTimestamp: "2026-04-22T11:59:59.000Z",
-            timestamp: "2026-04-22T12:00:00.000Z",
-          },
-        ],
-      }),
-    ).toEqual([
-      {
-        messageId: "523456789012345678",
-        channelId: "223456789012345678",
-        guildId: "123456789012345678",
-        senderId: "323456789012345678",
-        senderIsBot: true,
-        senderUsername: "sut",
-        triggerMessageId: "423456789012345678",
-        triggerTimestamp: "2026-04-22T11:59:59.000Z",
-        replyToMessageId: undefined,
-        timestamp: "2026-04-22T12:00:00.000Z",
-      },
-    ]);
-  });
-
-  it("preserves observed message timing when metadata is redacted", () => {
-    expect(
-      testing.buildObservedMessagesArtifact({
-        includeContent: false,
-        redactMetadata: true,
-        observedMessages: [
-          {
-            messageId: "523456789012345678",
-            channelId: "223456789012345678",
-            guildId: "123456789012345678",
-            senderId: "323456789012345678",
-            senderIsBot: true,
-            senderUsername: "sut",
-            scenarioId: "canary",
-            scenarioTitle: "Canary",
-            matchedScenario: true,
-            text: "secret text",
-            triggerMessageId: "423456789012345678",
-            triggerTimestamp: "2026-04-22T11:59:59.000Z",
-            timestamp: "2026-04-22T12:00:00.000Z",
-          },
-        ],
-      }),
-    ).toEqual([
-      {
-        senderIsBot: true,
-        scenarioId: "canary",
-        scenarioTitle: "Canary",
-        matchedScenario: true,
-        triggerTimestamp: "2026-04-22T11:59:59.000Z",
-        timestamp: "2026-04-22T12:00:00.000Z",
-      },
-    ]);
   });
 });

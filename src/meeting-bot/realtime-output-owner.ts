@@ -1,4 +1,5 @@
 import type { RealtimeVoiceBridgeEvent } from "../talk/provider-types.js";
+import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 
 const STALE_RESPONSE_LIMIT = 16;
 const AUDIO_DELTA_EVENTS = new Set([
@@ -6,6 +7,171 @@ const AUDIO_DELTA_EVENTS = new Set([
   "response.audio.delta",
   "response.output_audio.delta",
 ]);
+const OUTPUT_MAX_PENDING_MS = 2_000;
+const OUTPUT_MAX_WRITE_MS = 500;
+const OUTPUT_MAX_PENDING_FRAMES = 256;
+
+/** Serializes native playback writes and fences queued audio across interruption. */
+export function createMeetingRealtimeOutputQueue(params: {
+  transport: MeetingRealtimeAudioTransport;
+  bytesPerMs: number;
+  onFailure: (source: string, error: unknown) => void;
+}) {
+  let stopped = false;
+  let generation = 0;
+  let writePhase: "idle" | "scheduled" | "writing" = "idle";
+  let clearPending = 0;
+  let clearAfterActive = false;
+  let pendingBytes = 0;
+  let pendingFrames = 0;
+  let pendingAudibleFrames = 0;
+  let playableUntilMs = 0;
+  let audibleUntilMs = 0;
+  let clearCount = 0;
+  let lastClearAt: string | undefined;
+  let clearTail = Promise.resolve();
+  const queue: Array<{
+    audio: Buffer;
+    audible: boolean;
+    beginsOutput: boolean;
+    generation: number;
+  }> = [];
+  const maxPendingBytes = params.bytesPerMs * OUTPUT_MAX_PENDING_MS;
+  const maxWriteBytes = params.bytesPerMs * OUTPUT_MAX_WRITE_MS;
+
+  const reset = () => {
+    generation += 1;
+    queue.length = 0;
+    pendingBytes = 0;
+    pendingFrames = 0;
+    pendingAudibleFrames = 0;
+    playableUntilMs = 0;
+    audibleUntilMs = 0;
+  };
+  const clear = (): void => {
+    if (stopped) {
+      return;
+    }
+    clearCount += 1;
+    lastClearAt = new Date().toISOString();
+    clearPending += 1;
+    clearTail = clearTail
+      .then(async () => {
+        if (!stopped) {
+          await params.transport.clearOutput();
+        }
+      })
+      .catch((error: unknown) => params.onFailure("audio output clear", error))
+      .finally(() => {
+        clearPending -= 1;
+        pump();
+      });
+  };
+  const pump = () => {
+    if (stopped || writePhase !== "idle" || clearPending > 0) {
+      return;
+    }
+    const next = queue.shift();
+    if (!next) {
+      return;
+    }
+    const batch = [next];
+    let batchBytes = next.audio.byteLength;
+    let batchFrames = 1;
+    let batchAudibleFrames = Number(next.audible);
+    while (batchBytes < maxWriteBytes) {
+      const queued = queue[0];
+      if (!queued || queued.beginsOutput || queued.audio.byteLength > maxWriteBytes - batchBytes) {
+        break;
+      }
+      queue.shift();
+      batch.push(queued);
+      batchBytes += queued.audio.byteLength;
+      batchFrames += 1;
+      batchAudibleFrames += Number(queued.audible);
+    }
+    const audio =
+      batch.length === 1
+        ? next.audio
+        : Buffer.concat(
+            batch.map((entry) => entry.audio),
+            batchBytes,
+          );
+    writePhase = "scheduled";
+    void Promise.resolve()
+      .then(async () => {
+        if (stopped || next.generation !== generation) {
+          return;
+        }
+        if (next.beginsOutput) {
+          params.transport.beginOutput?.();
+        }
+        writePhase = "writing";
+        await params.transport.writeOutput(audio);
+        if (!stopped && next.generation === generation) {
+          // Native write completion admits audio to playback; it does not mean it was heard.
+          playableUntilMs = Math.max(Date.now(), playableUntilMs);
+          for (const entry of batch) {
+            playableUntilMs += entry.audio.byteLength / params.bytesPerMs;
+            if (entry.audible) {
+              audibleUntilMs = playableUntilMs;
+            }
+          }
+        }
+      })
+      .catch((error: unknown) => {
+        if (!stopped && next.generation === generation) {
+          params.onFailure("audio output", error);
+        }
+      })
+      .finally(() => {
+        writePhase = "idle";
+        if (next.generation === generation) {
+          pendingBytes -= batchBytes;
+          pendingFrames -= batchFrames;
+          pendingAudibleFrames -= batchAudibleFrames;
+        }
+        if (clearAfterActive && !stopped) {
+          clearAfterActive = false;
+          clear();
+          return;
+        }
+        pump();
+      });
+  };
+
+  return {
+    enqueue(audio: Buffer, audible: boolean, beginsOutput: boolean): boolean {
+      if (
+        stopped ||
+        audio.byteLength > maxPendingBytes - pendingBytes ||
+        pendingFrames >= OUTPUT_MAX_PENDING_FRAMES
+      ) {
+        return false;
+      }
+      pendingBytes += audio.byteLength;
+      pendingFrames += 1;
+      pendingAudibleFrames += Number(audible);
+      queue.push({ audio, audible, beginsOutput, generation });
+      pump();
+      return true;
+    },
+    invalidate(): void {
+      // A node command can complete after a clear; clear once more before new writes.
+      clearAfterActive ||= writePhase === "writing";
+      reset();
+    },
+    clear,
+    stop(): void {
+      stopped = true;
+      clearAfterActive = false;
+      reset();
+    },
+    pending: () => ({ pendingBytes, pendingFrames }),
+    hasUnplayedAudibleAudio: () => pendingAudibleFrames > 0 || Date.now() < audibleUntilMs,
+    getHealth: () => ({ clearCount, lastClearAt }),
+  };
+}
 
 export function createMeetingRealtimeOutputOwner() {
   let nextResponseId: string | undefined;

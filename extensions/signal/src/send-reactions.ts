@@ -4,9 +4,9 @@
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest, type SignalTransportKind } from "./client-adapter.js";
+import { normalizeSignalReactionRecipient } from "./normalize.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalReactionOpts = {
@@ -19,50 +19,13 @@ export type SignalReactionOpts = {
   targetAuthor?: string;
   targetAuthorUuid?: string;
   groupId?: string;
+  assertDirectAdapterHandoff?: () => void;
 };
 
 export type SignalReactionResult = {
   ok: boolean;
   timestamp?: number;
 };
-
-function normalizeSignalId(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.replace(/^signal:/i, "").trim();
-}
-
-function normalizeSignalUuid(raw: string): string {
-  const trimmed = normalizeSignalId(raw);
-  if (!trimmed) {
-    return "";
-  }
-  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("uuid:")) {
-    return trimmed.slice("uuid:".length).trim();
-  }
-  return trimmed;
-}
-
-function resolveTargetAuthorParams(params: {
-  targetAuthor?: string;
-  targetAuthorUuid?: string;
-  fallback?: string;
-}): { targetAuthor?: string } {
-  const candidates = [params.targetAuthor, params.targetAuthorUuid, params.fallback];
-  for (const candidate of candidates) {
-    const raw = candidate?.trim();
-    if (!raw) {
-      continue;
-    }
-    const normalized = normalizeSignalUuid(raw);
-    if (normalized) {
-      return { targetAuthor: normalized };
-    }
-  }
-  return {};
-}
 
 async function sendReactionSignalCore(params: {
   recipient: string;
@@ -78,7 +41,7 @@ async function sendReactionSignalCore(params: {
   });
   const { baseUrl, account } = resolveSignalRpcContext(params.opts, accountInfo);
 
-  const normalizedRecipient = normalizeSignalUuid(params.recipient);
+  const normalizedRecipient = normalizeSignalReactionRecipient(params.recipient);
   const groupId = params.opts.groupId?.trim();
   const operation = `Signal reaction${params.remove ? " removal" : ""}`;
   if (!normalizedRecipient && !groupId) {
@@ -92,12 +55,10 @@ async function sendReactionSignalCore(params: {
     throw new Error(`Emoji is required for ${operation}`);
   }
 
-  const targetAuthorParams = resolveTargetAuthorParams({
-    targetAuthor: params.opts.targetAuthor,
-    targetAuthorUuid: params.opts.targetAuthorUuid,
-    fallback: normalizedRecipient,
-  });
-  if (groupId && !targetAuthorParams.targetAuthor) {
+  const targetAuthor = [params.opts.targetAuthor, params.opts.targetAuthorUuid, normalizedRecipient]
+    .map((candidate) => normalizeSignalReactionRecipient(candidate ?? ""))
+    .find(Boolean);
+  if (groupId && !targetAuthor) {
     throw new Error(
       `targetAuthor is required for group reaction${params.remove ? " removal" : "s"}`,
     );
@@ -107,7 +68,7 @@ async function sendReactionSignalCore(params: {
     emoji: normalizedEmoji,
     targetTimestamp: params.targetTimestamp,
     ...(params.remove ? { remove: true } : {}),
-    ...targetAuthorParams,
+    ...(targetAuthor ? { targetAuthor } : {}),
   };
   if (normalizedRecipient) {
     requestParams.recipients = [normalizedRecipient];
@@ -123,6 +84,7 @@ async function sendReactionSignalCore(params: {
     baseUrl,
     timeoutMs: params.opts.timeoutMs,
     transportKind: params.opts.transportKind ?? accountInfo.transport.kind,
+    assertDirectAdapterHandoff: params.opts.assertDirectAdapterHandoff,
   });
 
   return {

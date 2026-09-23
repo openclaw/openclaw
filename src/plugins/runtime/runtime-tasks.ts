@@ -22,6 +22,7 @@ import {
 } from "../../tasks/task-owner-access.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { PluginRuntimeTaskFlow } from "./runtime-taskflow.types.js";
+import { createRuntimeAsyncTasks } from "./runtime-tasks-async.js";
 import type {
   BoundTaskFlowsRuntime,
   BoundTaskRunsRuntime,
@@ -53,6 +54,7 @@ function mapCancelledTaskResult(
 
 function createBoundTaskRunsRuntime(params: {
   sessionKey: string;
+  agentId?: string;
   requesterOrigin?: import("../../tasks/task-registry.types.js").TaskDeliveryState["requesterOrigin"];
 }): BoundTaskRunsRuntime {
   const ownerKey = assertSessionKey(
@@ -66,18 +68,24 @@ function createBoundTaskRunsRuntime(params: {
     sessionKey: ownerKey,
     ...(requesterOrigin ? { requesterOrigin } : {}),
     get: (taskId) => {
-      const task = getTaskByIdForOwner({ taskId, callerOwnerKey: ownerKey });
+      const task = getTaskByIdForOwner({
+        taskId,
+        callerOwnerKey: ownerKey,
+        callerAgentId: params.agentId,
+      });
       return task ? mapTaskRunDetail(task) : undefined;
     },
     list: () =>
       listTasksForRelatedSessionKeyForOwner({
         relatedSessionKey: ownerKey,
         callerOwnerKey: ownerKey,
+        callerAgentId: params.agentId,
       }).map((task) => mapTaskRunView(task)),
     findLatest: () => {
       const task = findLatestTaskForRelatedSessionKeyForOwner({
         relatedSessionKey: ownerKey,
         callerOwnerKey: ownerKey,
+        callerAgentId: params.agentId,
       });
       return task ? mapTaskRunDetail(task) : undefined;
     },
@@ -85,6 +93,7 @@ function createBoundTaskRunsRuntime(params: {
       const task = resolveTaskForLookupTokenForOwner({
         token,
         callerOwnerKey: ownerKey,
+        callerAgentId: params.agentId,
       });
       return task ? mapTaskRunDetail(task) : undefined;
     },
@@ -92,6 +101,7 @@ function createBoundTaskRunsRuntime(params: {
       const task = getTaskByIdForOwner({
         taskId,
         callerOwnerKey: ownerKey,
+        callerAgentId: params.agentId,
       });
       if (!task) {
         return {
@@ -131,11 +141,7 @@ function createBoundTaskFlowsRuntime(params: {
       return undefined;
     }
     const tasks = listTasksForFlowId(flow.flowId);
-    return mapTaskFlowDetail({
-      flow,
-      tasks,
-      summary: getFlowTaskSummary(flow.flowId),
-    });
+    return mapTaskFlowDetail({ flow, tasks });
   };
 
   return {
@@ -174,6 +180,7 @@ function createRuntimeTaskRuns(): PluginRuntimeTaskRuns {
     bindSession: (params) =>
       createBoundTaskRunsRuntime({
         sessionKey: params.sessionKey,
+        agentId: params.agentId,
         requesterOrigin: params.requesterOrigin,
       }),
     fromToolContext: (ctx) =>
@@ -182,6 +189,7 @@ function createRuntimeTaskRuns(): PluginRuntimeTaskRuns {
           ctx.sessionKey,
           "Tasks runtime requires tool context with a sessionKey.",
         ),
+        agentId: ctx.agentId,
         requesterOrigin: ctx.deliveryContext,
       }),
   };
@@ -209,6 +217,7 @@ export function createRuntimeTasks(params: {
   managedTaskFlow: PluginRuntimeTaskFlow;
 }): PluginRuntimeTasks {
   return {
+    async: createRuntimeAsyncTasks(),
     runs: createRuntimeTaskRuns(),
     flows: createRuntimeTaskFlows(),
     managedFlows: params.managedTaskFlow,

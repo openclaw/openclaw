@@ -4,7 +4,24 @@
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { BundleMcpConfig } from "../../plugins/bundle-mcp.js";
+import { resolveQuestionTimeoutMs } from "../tools/ask-user-tool-normalization.js";
 import { withOpenClawMcpCaptureHeader } from "./bundle-mcp-runtime.js";
+
+export const CLAUDE_MANAGED_MCP_TIMEOUT_MS = resolveQuestionTimeoutMs(3_600);
+
+export function applyClaudeManagedMcpTimeout(config: BundleMcpConfig): BundleMcpConfig {
+  return {
+    ...config,
+    mcpServers: {
+      ...config.mcpServers,
+      openclaw: {
+        ...config.mcpServers.openclaw,
+        timeout: CLAUDE_MANAGED_MCP_TIMEOUT_MS,
+      },
+    },
+  };
+}
 
 /** Find existing Claude `--mcp-config` argument values. */
 export function findClaudeMcpConfigPaths(args?: string[]): string[] {
@@ -63,6 +80,12 @@ function mergeClaudeDisallowedTools(args: string[], deniedTools: string[]): stri
   return next;
 }
 
+function normalizeClaudeMcpIdentifierPart(value: string): string {
+  // Claude Code replaces punctuation before registering MCP permission names.
+  // Match that wire identity so a raw-name collision cannot bypass a denial.
+  return value.replaceAll(/[^a-zA-Z0-9_-]/g, "_");
+}
+
 export function injectClaudeWebSearchDisabledArgs(args: string[] | undefined): string[] {
   return mergeClaudeDisallowedTools(args ?? [], ["WebSearch"]);
 }
@@ -92,7 +115,10 @@ export function injectClaudeMcpConfigArgs(
   }
   next.push("--strict-mcp-config", "--mcp-config", mcpConfigPath);
   const deniedTools = Object.entries(mcpToolsDeny ?? {}).flatMap(([serverName, toolNames]) =>
-    toolNames.map((toolName) => `mcp__${serverName}__${toolName}`),
+    toolNames.map(
+      (toolName) =>
+        `mcp__${normalizeClaudeMcpIdentifierPart(serverName)}__${normalizeClaudeMcpIdentifierPart(toolName)}`,
+    ),
   );
   if (webSearchEnabled === false) {
     deniedTools.push("WebSearch");

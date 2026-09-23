@@ -1,12 +1,19 @@
 // Doctor security tests cover security audit checks, config findings, and repair output.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { readSecretStoreValue, writeSecretStoreEntry } from "../secrets/store/secret-store.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 
 const note = vi.hoisted(() => vi.fn());
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
@@ -34,7 +41,7 @@ vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
   };
 });
 
-import { noteSecurityWarnings } from "./doctor-security.js";
+import { collectSecurityWarnings, noteSecurityWarnings } from "./doctor-security.js";
 
 describe("noteSecurityWarnings gateway exposure", () => {
   let prevToken: string | undefined;
@@ -88,11 +95,35 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
   const lastMessage = () => String(note.mock.calls[note.mock.calls.length - 1]?.[0] ?? "");
 
+  it("does not let pending legacy exec approvals abort Doctor security checks", async () => {
+    await withTestDir({ prefix: "openclaw-doctor-security-legacy-" }, async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      process.env.HOME = home;
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, "exec-approvals.json"),
+        `${JSON.stringify({ version: 1 })}\n`,
+        "utf8",
+      );
+      closeOpenClawStateDatabaseForTest();
+      execApprovalsStoreTesting.reset();
+
+      const findings = await collectSecurityWarnings({ approvals: { exec: { enabled: false } } });
+
+      expect(findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ checkId: "doctor.approval_forwarding_disabled" }),
+        ]),
+      );
+    });
+  });
+
   async function withExecApprovalsFile(
     file: Record<string, unknown>,
     run: () => Promise<void>,
   ): Promise<void> {
-    await withTempDir({ prefix: "openclaw-doctor-security-" }, async (home) => {
+    await withTestDir({ prefix: "openclaw-doctor-security-" }, async (home) => {
       process.env.HOME = home;
       process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
       closeOpenClawStateDatabaseForTest();
@@ -150,15 +181,67 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain(`agents.${agentKey}.ask="always"`);
   }
 
+  it("treats valid trusted-proxy authentication as authenticated network exposure", async () => {
+    const findings = await collectSecurityWarnings(
+      {
+        gateway: {
+          mode: "local",
+          bind: "lan",
+          auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-user" } },
+          trustedProxies: ["127.0.0.1"],
+          controlUi: { enabled: false },
+        },
+      },
+      {},
+    );
+    expect(findings).toEqual([
+      expect.objectContaining({ checkId: "gateway.bind_network_accessible", severity: "warn" }),
+    ]);
+  });
+
+  it("retains rendered security warnings for update finalization", async () => {
+    const { createDoctorHealthFlowContext } =
+      await import("../flows/doctor-health-contributions.test-support.js");
+    const { runSecurityHealth } =
+      await import("../flows/doctor-health-contribution-runners.gateway.js");
+    const ctx = createDoctorHealthFlowContext({
+      cfg: { gateway: { bind: "lan", auth: { mode: "token", token: "SYNTHETIC_GATEWAY_TOKEN" } } },
+      env: {},
+    });
+    await runSecurityHealth(ctx);
+    expect(ctx.updateWarnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("network-accessible")]),
+    );
+  });
+
   it("warns when exposed without auth", async () => {
     const cfg = { gateway: { bind: "lan" } } as OpenClawConfig;
+    const findings = await collectSecurityWarnings(cfg, {});
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "gateway.bind_no_auth",
+        severity: "critical",
+        title: "CRITICAL",
+        detail: expect.stringContaining("without authentication"),
+        remediation: expect.stringContaining("openclaw doctor --fix"),
+      }),
+    ]);
+
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
-    expect(message).toContain("CRITICAL");
-    expect(message).toContain("without authentication");
-    expect(message).toContain("Safer remote access");
-    expect(message).toContain("ssh -N -L 18789:127.0.0.1:18789");
-    expect(message).toContain("openclaw security audit --deep");
+    expect(message).toBe(
+      [
+        '- CRITICAL: Gateway bound to "lan" (0.0.0.0) without authentication.',
+        "  Anyone on your network (or internet if port-forwarded) can fully control your agent.",
+        "  Fix: openclaw config set gateway.bind loopback",
+        "  Safer remote access: keep bind loopback and use Tailscale Serve/Funnel or an SSH tunnel.",
+        "  Example tunnel: ssh -N -L 18789:127.0.0.1:18789 user@gateway-host",
+        "  Docs: https://docs.openclaw.ai/gateway/remote",
+        "  Fix: openclaw doctor --fix to generate a token",
+        "  Or set token directly: openclaw config set gateway.auth.mode token",
+        "- Run: openclaw security audit --deep",
+      ].join("\n"),
+    );
   });
 
   it("uses env token to avoid critical warning", async () => {
@@ -207,7 +290,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     const cfg = { gateway: { bind: "lan" } } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
-    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN conflicts");
   });
 
   it("does not warn inside the managed gateway service credential context", async () => {
@@ -233,7 +316,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
-    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN conflicts");
   });
 
   it("does not warn about local gateway auth token precedence in remote mode", async () => {
@@ -247,7 +330,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
-    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN conflicts");
   });
 
   it("treats whitespace token as missing", async () => {
@@ -271,25 +354,39 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
-  it("shows explicit dmScope config command for multi-user DMs", async () => {
+  it("renders the structured non-default-account DM collision guidance", async () => {
     pluginRegistry.list = [
       {
         id: "test-channel",
         meta: { label: "Test Channel" },
         config: {
-          listAccountIds: () => ["default"],
-          inspectAccount: () => ({ enabled: true, configured: true }),
-          resolveAccount: () => ({}),
+          listAccountIds: () => ["default", "secondary"],
+          defaultAccountId: () => "default",
+          inspectAccount: (_cfg: OpenClawConfig, accountId: string) => ({
+            accountId,
+            enabled: true,
+            configured: true,
+          }),
+          resolveAccount: (_cfg: OpenClawConfig, accountId: string) => ({ accountId }),
           isEnabled: () => true,
           isConfigured: () => true,
         },
         security: {
-          resolveDmPolicy: () => ({
+          resolveDmPolicy: ({ accountId }: { accountId?: string | null }) => ({
             policy: "allowlist",
-            allowFrom: ["alice", "bob"],
-            allowFromPath: "channels.whatsapp.",
+            allowFrom: accountId === "secondary" ? ["alice", "bob"] : ["owner"],
+            allowFromPath: `channels.test-channel.accounts.${accountId}.`,
             approveHint: "approve",
           }),
+          collectWarnings: () => ["- plugin warning remains visible"],
+          collectAuditFindings: () => [
+            {
+              checkId: "channels.test-channel.audit_only",
+              severity: "warn",
+              title: "audit-only plugin finding",
+              detail: "must not appear in Doctor",
+            },
+          ],
         },
       },
     ];
@@ -300,7 +397,10 @@ describe("noteSecurityWarnings gateway exposure", () => {
       includeSetupFallbackPlugins: true,
     });
     const message = lastMessage();
-    expect(message).toContain('config set session.dmScope "per-channel-peer"');
+    expect(message).toContain("matching binding or session.dmScope");
+    expect(message).toContain("secondary");
+    expect(message).toContain("plugin warning remains visible");
+    expect(message).not.toContain("audit-only plugin finding");
   });
 
   it("clarifies approvals.exec forwarding-only behavior", async () => {
@@ -316,6 +416,36 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("disables approval forwarding only");
     expect(message).toContain("state/openclaw.sqlite#exec_approvals_config");
     expect(message).toContain("openclaw approvals get --gateway");
+  });
+
+  it("explains how to renew inactive generated exec approvals", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        agents: {
+          main: {
+            allowlist: [
+              {
+                pattern: "/usr/bin/git",
+                source: "allow-always",
+                argPattern: "sha256:argv:obsolete",
+              },
+              { pattern: "/usr/bin/python3", argPattern: "^script\\.py$" },
+            ],
+          },
+        },
+      },
+      async () => {
+        const findings = await collectSecurityWarnings({} as OpenClawConfig, {});
+        const finding = findings.find(
+          (candidate) => candidate.checkId === "doctor.exec_approvals_require_cwd_renewal",
+        );
+        expect(finding?.detail).toContain("1 older generated approval is inactive");
+        expect(finding?.remediation).toContain("openclaw doctor --fix");
+        expect(finding?.remediation).toContain('choose "Always allow here"');
+        expect(finding?.remediation).toContain("Manual allowlist rules are unchanged");
+      },
+    );
   });
 
   it("warns when filesystem tools are disabled but exec remains available", async () => {
@@ -356,7 +486,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   });
 
   it("warns when model provider API keys are stored as plaintext in config", async () => {
-    await noteSecurityWarnings({
+    const cfg = {
       models: {
         providers: {
           openai: {
@@ -364,12 +494,51 @@ describe("noteSecurityWarnings gateway exposure", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as OpenClawConfig;
+    const findings = await collectSecurityWarnings(cfg, {});
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "config.plaintext_secrets",
+        severity: "warn",
+        title: "WARNING",
+        detail: "openclaw.json contains plaintext secret-bearing config fields.",
+        remediation: expect.stringContaining("models.providers.openai.apiKey"),
+      }),
+    ]);
+
+    await noteSecurityWarnings(cfg);
 
     const message = lastMessage();
     expect(message).toContain("plaintext secret-bearing config fields");
     expect(message).toContain("models.providers.openai.apiKey");
     expect(message).toContain("openclaw secrets audit --check");
+  });
+
+  it("names non-generatable redacted store credentials and leaves them unavailable until replaced", async () => {
+    await withExecApprovalsFile({ version: 1 }, async () => {
+      const entry = { scope: { kind: "team" as const }, name: "SYNTHETIC_PROVIDER_KEY" };
+      writeSecretStoreEntry({
+        ...entry,
+        value: "synthetic-initial-key",
+        kind: "secret",
+        updatedBy: "fixture",
+      });
+      openOpenClawStateDatabase()
+        .db.prepare("UPDATE secret_store_entries SET value = ? WHERE name = ?")
+        .run(REDACTED_SENTINEL, entry.name);
+
+      const findings = await noteSecurityWarnings({});
+
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          checkId: "doctor.secret_store_redacted_value",
+          detail: expect.stringContaining(entry.name),
+          remediation: expect.stringContaining(`openclaw secrets store set ${entry.name}`),
+        }),
+      );
+      expect(lastMessage()).toContain("unavailable until replaced");
+      expect(readSecretStoreValue(entry)).toEqual({ ok: true, value: REDACTED_SENTINEL });
+    });
   });
 
   it("warns when sensitive model provider headers are stored as plaintext in config", async () => {
@@ -473,32 +642,6 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain('tools.exec.mode="full"');
     expect(message).toContain('defaults.security="allowlist"');
     expect(message).toContain("stricter side wins");
-  });
-
-  it("warns when normalized tools.exec mode is broader than host exec defaults", async () => {
-    await withExecApprovalsFile(
-      {
-        version: 1,
-        defaults: {
-          security: "allowlist",
-          ask: "on-miss",
-        },
-      },
-      async () => {
-        await noteSecurityWarnings({
-          tools: {
-            exec: {
-              mode: "full",
-            },
-          },
-        } as OpenClawConfig);
-      },
-    );
-
-    const message = lastMessage();
-    expect(message).toContain("tools.exec is broader than the host exec policy");
-    expect(message).toContain('tools.exec.mode="full"');
-    expect(message).toContain('defaults.security="allowlist"');
     expect(message).not.toContain("OpenClaw default");
   });
 
@@ -506,27 +649,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     await expectAgentExecHostPolicyWarning("*");
   });
 
-  it("does not invent a deny host policy when exec-approvals defaults.security is unset", async () => {
-    await withExecApprovalsFile(
-      {
-        version: 1,
-        agents: {},
-      },
-      async () => {
-        await noteSecurityWarnings({
-          tools: {
-            exec: {
-              mode: "ask",
-            },
-          },
-        } as OpenClawConfig);
-      },
-    );
-
-    expect(note).not.toHaveBeenCalled();
-  });
-
-  it("does not invent an on-miss host ask policy when exec-approvals defaults.ask is unset", async () => {
+  it("does not invent host policy defaults when exec-approvals defaults are unset", async () => {
     await withExecApprovalsFile(
       {
         version: 1,
@@ -670,25 +793,33 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("direct/DM targets by default");
   });
 
-  it("warns when a per-agent heartbeat relies on implicit directPolicy", async () => {
-    const cfg = {
+  it.each([
+    {
+      name: "list",
+      agents: { list: [{ id: "ops", heartbeat: { target: "last" as const } }] },
+      path: 'heartbeat.directPolicy for agent "ops"',
+    },
+    {
+      name: "keyed",
       agents: {
-        list: [
-          {
-            id: "ops",
-            heartbeat: {
-              target: "last",
-            },
-          },
-        ],
+        entries: {
+          main: { default: true },
+          ops: { heartbeat: { target: "last" as const } },
+        },
       },
-    } as OpenClawConfig;
-    await noteSecurityWarnings(cfg);
-    const message = lastMessage();
-    expect(message).toContain('Heartbeat agent "ops"');
-    expect(message).toContain('heartbeat.directPolicy for agent "ops"');
-    expect(message).toContain("direct/DM targets by default");
-  });
+      path: "agents.entries.ops.heartbeat.directPolicy",
+    },
+  ])(
+    "warns at the $name agent config path for implicit heartbeat directPolicy",
+    async (testCase) => {
+      await noteSecurityWarnings({ agents: testCase.agents } as OpenClawConfig);
+
+      const message = lastMessage();
+      expect(message).toContain('Heartbeat agent "ops"');
+      expect(message).toContain(testCase.path);
+      expect(message).toContain("direct/DM targets by default");
+    },
+  );
 
   it("degrades safely when channel account resolution fails in read-only security checks", async () => {
     pluginRegistry.list = [
@@ -722,6 +853,92 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("failed to resolve account");
     expect(message).toContain("Run: openclaw security audit --deep");
   });
+
+  it.each([
+    { channel: "discord", label: "Discord" },
+    { channel: "feishu", label: "Feishu" },
+  ])(
+    "keeps intentional $label open groupPolicy advisory in Doctor and update lint",
+    async ({ channel, label }) => {
+      const { loadBundledPluginFacade } =
+        await import("../test-utils/bundled-plugin-public-surface.js");
+      const channelPlugin =
+        channel === "discord"
+          ? (
+              await loadBundledPluginFacade<{ discordPlugin: ChannelPlugin }>({
+                pluginId: "discord",
+                artifactBasename: "api.js",
+              })
+            ).discordPlugin
+          : (
+              await loadBundledPluginFacade<{ feishuPlugin: ChannelPlugin }>({
+                pluginId: "feishu",
+                artifactBasename: "api.js",
+              })
+            ).feishuPlugin;
+      const { createCoreHealthChecks } = await import("../flows/doctor-core-checks.js");
+      const { exitCodeFromFindings } = await import("../flows/doctor-lint-flow.js");
+
+      pluginRegistry.list = [
+        {
+          id: channel,
+          meta: { label },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: channelPlugin.config.resolveAccount,
+            isEnabled: () => true,
+            isConfigured: () => true,
+          },
+          security: {
+            collectWarnings: channelPlugin.security?.collectWarnings,
+          },
+        },
+      ];
+
+      const cfg: OpenClawConfig = {
+        channels: {
+          [channel]: {
+            groupPolicy: "open",
+            ...(channel === "feishu" ? { appId: "cli_test", appSecret: "test-secret" } : {}),
+          },
+        },
+      };
+
+      const plainFindings = await noteSecurityWarnings(cfg);
+
+      const securityCheck = createCoreHealthChecks().find(
+        (check) => check.id === "core/doctor/security",
+      );
+      expect(securityCheck).toBeDefined();
+
+      const healthFindings = await securityCheck!.detect({
+        mode: "lint",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg,
+      });
+      expect(exitCodeFromFindings(healthFindings, "error")).toBe(0);
+      expect(
+        plainFindings.filter((finding) => finding.detail.includes('groupPolicy="open"')),
+      ).toEqual([expect.objectContaining({ severity: "warn" })]);
+      expect(lastMessage()).toContain("openclaw security audit --deep");
+
+      const openGroupFindings = healthFindings.filter((finding) =>
+        finding.message.includes('groupPolicy="open"'),
+      );
+      expect(openGroupFindings).toEqual([
+        expect.objectContaining({
+          checkId: "core/doctor/security",
+          severity: "warning",
+          message: expect.stringContaining(`${label} security warning`),
+        }),
+      ]);
+      expect(openGroupFindings.some((finding) => finding.severity === "error")).toBe(false);
+
+      // Candidate update lint uses --severity-min error; the advisory must remain visible under warning.
+      expect(exitCodeFromFindings(openGroupFindings, "error")).toBe(0);
+      expect(exitCodeFromFindings(openGroupFindings, "warning")).toBe(1);
+    },
+  );
 
   it("skips heartbeat directPolicy warning when delivery is internal-only or explicit", async () => {
     const cfg = {

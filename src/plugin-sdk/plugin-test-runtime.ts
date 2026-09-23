@@ -1,5 +1,44 @@
 // Focused public test helpers for plugin runtime, registry, and setup fixtures.
 
+import type { EmbeddedRunAttemptParams } from "../agents/embedded-agent-runner/run/types.js";
+
+type AgentHarnessHostTestAttempt = Omit<
+  EmbeddedRunAttemptParams,
+  "admittedRunContext" | "hostCapabilities" | "disableToolSearch" | "sessionReadScopeKey"
+>;
+
+/** Builds the production admitted-run host boundary for plugin integration tests. */
+export async function createAgentHarnessHostCapabilitiesForTest(params: {
+  attempt: AgentHarnessHostTestAttempt;
+  pluginId: string;
+}) {
+  const { createOperationalRunInstanceRef, prepareAgentRunAdmission } =
+    await import("../agents/admitted-run-context.js");
+  const { createAgentHarnessHostCapabilities } =
+    await import("../agents/harness/host-capability.js");
+  const admission = prepareAgentRunAdmission({
+    cfg: params.attempt.config ?? {},
+    facts: {
+      runId: params.attempt.runId,
+      agentId: params.attempt.agentId ?? "main",
+      ingress: { kind: "system", boundary: "plugin-test-runtime", state: "present" },
+    },
+    operationalRunInstance: createOperationalRunInstanceRef(params.attempt.runId),
+  });
+  const admittedRunContext = await admission.admit("plugin-harness", params.pluginId);
+  const host = createAgentHarnessHostCapabilities({
+    attempt: { ...params.attempt, admittedRunContext },
+    pluginId: params.pluginId,
+  });
+  return {
+    capabilities: host.capabilities,
+    close: () => {
+      host.close();
+      admission.close();
+    },
+  };
+}
+
 export { setDefaultChannelPluginRegistryForTests } from "../commands/channel-test-registry.js";
 export {
   createEmptyPluginRegistry,
@@ -13,7 +52,7 @@ export {
   resolveWebFetchProviderContractEntriesForPluginId,
   resolveWebSearchProviderContractEntriesForPluginId,
 } from "../plugins/contracts/registry.js";
-export { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+export { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 export {
   emitDiagnosticEventWithTrustedTraceContext,
   emitInternalDiagnosticEvent as emitInternalDiagnosticEventForTest,
@@ -21,6 +60,7 @@ export {
 } from "../infra/diagnostic-events.js";
 export { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-trace-propagation.js";
 export { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+export { prepareSystemRunMutableFileApproval } from "../infra/system-run-approval-binding.js";
 export { logMessageDispatchStarted, logMessageProcessed } from "../logging/diagnostic.js";
 export { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../plugins/provider-contract-public-artifacts.js";
 export {
@@ -29,11 +69,18 @@ export {
 } from "../plugins/hook-runner-global.js";
 export { addTestHook } from "../plugins/hooks.test-helpers.js";
 export { createPluginRecord } from "../plugins/status.test-helpers.js";
+export { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+export { useProviderCatalogMetadata } from "./test-helpers/provider-catalog.js";
+export { useProviderToolSchemaRuntimeForTest } from "./test-helpers/provider-tool-schemas.test-support.js";
+export { useBundledProviderPolicyArtifactsForTest } from "./test-helpers/provider-policy-artifacts.test-support.js";
+export { mockPublishedModelRuntimeForTest } from "./test-helpers/published-model-runtime.js";
 export {
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "../plugins/web-provider-public-artifacts.explicit.js";
 export {
+  createPluginRegistryOwner,
+  disposePluginRegistryInstances,
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
@@ -49,7 +96,6 @@ export { onTrustedInternalDiagnosticEvent } from "../infra/diagnostic-events.js"
 export {
   buildProviderPluginMethodChoice,
   resolveProviderModelPickerEntries,
-  resolveProviderWizardOptions,
   setProviderWizardProvidersResolverForTest,
 } from "../plugins/provider-wizard.js";
 export { resolveProviderPluginChoice } from "../plugins/provider-auth-choice.runtime.js";
@@ -61,12 +107,6 @@ export {
   restoreRegisteredEmbeddingProviders,
   type RegisteredEmbeddingProvider,
 } from "../plugins/embedding-providers.js";
-export {
-  clearMemoryEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviders,
-  restoreRegisteredMemoryEmbeddingProviders,
-  type RegisteredMemoryEmbeddingProvider,
-} from "../plugins/memory-embedding-providers.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { PluginHookRegistration } from "../plugins/hook-types.js";
 export type { RuntimeEnv } from "../runtime.js";
@@ -80,12 +120,7 @@ export {
   requireRegisteredProvider,
   type RegisteredProviderCollections,
 } from "../test-utils/plugin-registration.js";
-export {
-  createNonExitingRuntimeEnv,
-  createNonExitingTypedRuntimeEnv,
-  createRuntimeEnv,
-  createTypedRuntimeEnv,
-} from "../test-utils/plugin-runtime-env.js";
+export { createNonExitingRuntimeEnv, createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 export {
   createPluginSetupWizardAdapter,
   createPluginSetupWizardConfigure,
@@ -99,10 +134,16 @@ export {
   runSetupWizardConfigure,
   runSetupWizardFinalize,
   runSetupWizardPrepare,
-  selectFirstWizardOption,
   type WizardPrompter,
 } from "../test-utils/plugin-setup-wizard.js";
 export { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+export { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
+export async function loadWebFetchToolFactoryForTest() {
+  return (await import("../agents/tools/web-fetch.js")).createWebFetchTool;
+}
+export async function loadUserTurnTranscriptRecorderFactoryForTest() {
+  return (await import("../sessions/user-turn-transcript.js")).createUserTurnTranscriptRecorder;
+}
 export { buildPluginApi } from "../plugins/api-builder.js";
 export {
   createCapturedPluginRegistration,
@@ -114,3 +155,5 @@ export {
   createPluginRuntimeMock,
   type PluginRuntimeMediaMock,
 } from "./test-helpers/plugin-runtime-mock.js";
+
+export { createHookRunner } from "../plugins/hooks.js";

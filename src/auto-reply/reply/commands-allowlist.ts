@@ -8,7 +8,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { resolveExplicitConfigWriteTarget } from "../../channels/plugins/config-writes.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
-import { normalizeChannelId } from "../../channels/registry.js";
+import { normalizeChatChannelId } from "../../channels/registry.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -205,11 +205,13 @@ async function updatePairingStoreAllowlist(params: {
   channelId: ChannelId;
   accountId?: string;
   entry: string;
+  assertCurrent?: () => void;
 }) {
   const storeEntry = {
     channel: params.channelId,
     entry: params.entry,
     accountId: params.accountId,
+    ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
   };
   if (params.action === "add") {
     await addChannelAllowFromStoreEntry(storeEntry);
@@ -221,6 +223,7 @@ async function updatePairingStoreAllowlist(params: {
     await removeChannelAllowFromStoreEntry({
       channel: params.channelId,
       entry: params.entry,
+      ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
     });
   }
 }
@@ -282,11 +285,12 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       return nonOwner;
     }
   }
+  const assertOwnerCurrent = params.command.assertOwnerCurrent;
 
   const channelId =
-    normalizeChannelId(parsed.channel) ??
+    normalizeChatChannelId(parsed.channel) ??
     params.command.channelId ??
-    normalizeChannelId(params.command.channel);
+    normalizeChatChannelId(params.command.channel);
   if (!channelId) {
     return commandReply("⚠️ Unknown channel. Add channel=<id> to the command.");
   }
@@ -302,7 +306,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     ctxAccountId: params.ctx.AccountId,
   });
   const originChannelId =
-    params.command.channelId ?? normalizeChannelId(resolveCommandSurfaceChannel(params));
+    params.command.channelId ?? normalizeChatChannelId(resolveCommandSurfaceChannel(params));
   const originAccountId = resolveChannelAccountId({
     cfg: params.cfg,
     ctx: params.ctx,
@@ -315,9 +319,15 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     if (!plugin?.allowlist?.readConfig && !supportsStore) {
       return commandReply(`⚠️ ${channelId} does not expose allowlist configuration.`);
     }
-    const storeAllowFrom = supportsStore
-      ? await readChannelAllowFromStore(channelId, process.env, accountId).catch(() => [])
-      : [];
+    let storeAllowFrom: string[] = [];
+    let storeReadFailed = false;
+    if (supportsStore) {
+      try {
+        storeAllowFrom = await readChannelAllowFromStore(channelId, process.env, accountId);
+      } catch {
+        storeReadFailed = true;
+      }
+    }
     const configState = await readAllowlistConfig({
       cfg: params.cfg,
       channelId,
@@ -373,7 +383,11 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     if (showDm) {
       lines.push(`DM allowFrom (config): ${formatEntryList(dmDisplay, resolvedDm)}`);
     }
-    if (supportsStore && storeAllowFrom.length > 0) {
+    if (supportsStore && storeReadFailed) {
+      lines.push(
+        "Paired allowFrom (store): unavailable (read failed). Retry this command; if it still fails, run openclaw doctor.",
+      );
+    } else if (supportsStore && storeAllowFrom.length > 0) {
       lines.push(`Paired allowFrom (store): ${formatEntryList(normalizeValues(storeAllowFrom))}`);
     }
     if (showGroup) {
@@ -479,6 +493,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
           action: parsed.action,
           entry: parsed.entry,
           applyConfigEdit,
+          assertCurrent: assertOwnerCurrent,
         });
       } catch (error) {
         if (error instanceof AutoReplyConfigMutationError) {
@@ -499,6 +514,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
         channelId,
         accountId,
         entry: parsed.entry,
+        assertCurrent: assertOwnerCurrent,
       });
     }
 
@@ -537,6 +553,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     channelId,
     accountId,
     entry: parsed.entry,
+    assertCurrent: assertOwnerCurrent,
   });
 
   const actionLabel = parsed.action === "add" ? "added" : "removed";

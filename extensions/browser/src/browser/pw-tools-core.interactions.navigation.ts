@@ -22,7 +22,9 @@ import { toAIFriendlyError } from "./pw-tools-core.shared.js";
 
 export type InteractionTargetOptions = {
   cdpUrl: string;
+  browserFilesystemLocal?: boolean;
   targetId?: string;
+  assertCurrent?: () => Promise<void>;
 };
 
 export type NavigationTargetOptions = InteractionTargetOptions & BrowserNavigationPolicyOptions;
@@ -32,6 +34,25 @@ export type ElementInteractionOptions = GuardedInteractionOptions & {
   selector?: string;
   timeoutMs?: number;
 };
+
+export class BrowserInteractionAuthorityError extends Error {
+  constructor(error: unknown) {
+    const cause = toErrorObject(error, "Browser interaction authority changed");
+    super(cause.message, { cause });
+    this.name = "BrowserInteractionAuthorityError";
+  }
+}
+
+export async function assertInteractionCurrent(
+  opts: Pick<InteractionTargetOptions, "assertCurrent">,
+): Promise<void> {
+  try {
+    await opts.assertCurrent?.();
+  } catch (error) {
+    // Authority loss is fatal even inside a batch configured to continue on errors.
+    throw new BrowserInteractionAuthorityError(error);
+  }
+}
 
 export function interactionNavigationPolicy(
   opts: BrowserNavigationPolicyOptions,
@@ -76,18 +97,72 @@ export async function getRestoredPageForTarget(opts: InteractionTargetOptions) {
 }
 
 export function toFriendlyInteractionError(err: unknown, label: string): Error {
-  return isBrowserObservedDialogBlockedError(err) ? err : toAIFriendlyError(err, label);
+  return isBrowserObservedDialogBlockedError(err) || err instanceof BrowserInteractionAuthorityError
+    ? err
+    : toAIFriendlyError(err, label);
 }
 
 export function reconcileRemoteDialogAfterActionSettled(page: Page, signal?: AbortSignal): void {
   if (isBrowserObservedDialogBlockedError(signal?.reason)) {
-    markObservedDialogsHandledRemotelyForPage(page);
+    markObservedDialogsHandledRemotelyForPage(page, signal.reason.browserState.dialogs.pending);
   }
 }
 
 export function throwIfInteractionAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection");
+  }
+}
+
+export async function runCancellablePageInteraction<T>(
+  page: Page,
+  opts: GuardedInteractionOptions,
+  action: (signal: AbortSignal) => Promise<T>,
+  errorLabel?: string,
+): Promise<T> {
+  const cancellation = new AbortController();
+  const interruption = new AbortController();
+  const onAbort = () => {
+    // Dialogs interrupt the foreground call while the native action and its
+    // navigation guard remain live. Caller cancellation must join the native call.
+    const controller = isBrowserObservedDialogBlockedError(opts.signal?.reason)
+      ? interruption
+      : cancellation;
+    controller.abort(opts.signal?.reason);
+  };
+  opts.signal?.addEventListener("abort", onAbort, { once: true });
+  if (opts.signal?.aborted) {
+    onAbort();
+  }
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(interruption.signal);
+  try {
+    const result = await awaitNavigationGuardedInteraction(
+      {
+        action: () => action(cancellation.signal),
+        cdpUrl: opts.cdpUrl,
+        page,
+        ...interactionNavigationPolicy(opts),
+        targetId: opts.targetId,
+        assertCurrent: opts.assertCurrent,
+      },
+      abortPromise,
+      opts.signal,
+      () => reconcileRemoteDialogAfterActionSettled(page, opts.signal),
+    );
+    throwIfInteractionAborted(opts.signal);
+    return result;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.name === "AbortError" &&
+      error.cause === cancellation.signal.reason
+    ) {
+      throwIfInteractionAborted(cancellation.signal);
+    }
+    throw errorLabel === undefined ? error : toFriendlyInteractionError(error, errorLabel);
+  } finally {
+    opts.signal?.removeEventListener("abort", onAbort);
+    cleanup();
   }
 }
 
@@ -481,6 +556,7 @@ export async function awaitNavigationGuardedInteraction<T>(
     cdpUrl: string;
     page: Page;
     targetId?: string;
+    assertCurrent?: InteractionTargetOptions["assertCurrent"];
   } & BrowserNavigationPolicyOptions,
   abortPromise?: Promise<never>,
   signal?: AbortSignal,
@@ -528,6 +604,10 @@ export async function awaitNavigationGuardedInteraction<T>(
           ...opts,
           action: async () => {
             try {
+              // Preserve native dispatch ordering for callers without an authority check.
+              if (opts.assertCurrent) {
+                await assertInteractionCurrent(opts);
+              }
               throwIfInteractionAborted(signal);
               return await opts.action();
             } finally {

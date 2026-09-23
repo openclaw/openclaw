@@ -1,7 +1,13 @@
 /** Plugin node-host bridge for loading plugin registry commands and dispatching node capabilities. */
 import { asOptionalRecord as normalizeRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { logDebug } from "../logger.js";
+import {
+  parseComputerUseCapabilityDescriptor,
+  type ComputerUseCapabilityDescriptor,
+} from "../plugins/computer-use-contract.js";
 import type {
   PluginNodeHostCommandRegistration,
   PluginRegistry,
@@ -11,9 +17,11 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import type {
   OpenClawPluginNodeHostCommandAvailabilityContext,
   OpenClawPluginNodeHostCommandIo,
+  PluginLogger,
 } from "../plugins/types.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { preparePluginExecAuthorization } from "./plugin-exec-policy.js";
 
 /**
  * Plugin node-host command registry bridge.
@@ -35,29 +43,56 @@ function resolveNodeHostPluginRegistry() {
 export async function ensureNodeHostPluginRegistry(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  commandAllowlist?: ReadonlySet<string>;
+  onlyPluginIds?: string[];
+  logger?: PluginLogger;
 }): Promise<void> {
-  nodeHostPluginRegistry = (await loadPluginRegistryLoaderModule()).loadPluginRegistryHandle({
+  const registry = (await loadPluginRegistryLoaderModule()).loadPluginRegistryHandle({
     config: params.config,
     activationSourceConfig: params.config,
     env: params.env,
+    onlyPluginIds: params.onlyPluginIds,
+    logger: params.logger,
   });
+  // Resolve this registry's native readiness before publishing the first manifest.
+  // No process-wide preparation cache: a replacement registry owns fresh resources.
+  await withPluginRuntimeRegistryScope(registry, async () => {
+    const prepare = new Set(
+      registry.nodeHostCommands
+        .filter(
+          (entry) => !params.commandAllowlist || params.commandAllowlist.has(entry.command.command),
+        )
+        .map((entry) => entry.command.prepare),
+    );
+    await Promise.all(
+      [...prepare].map(async (callback) =>
+        callback?.({ config: params.config, env: params.env ?? process.env }),
+      ),
+    );
+  });
+  nodeHostPluginRegistry = registry;
 }
 
 /** List registered node-host capabilities and command ids in deterministic order. */
 export function listRegisteredNodeHostCapsAndCommands(
   context: OpenClawPluginNodeHostCommandAvailabilityContext,
-  options: { includeDuplex?: boolean } = {},
+  options: { includeDuplex?: boolean; commandAllowlist?: ReadonlySet<string> } = {},
 ): {
   caps: string[];
   commands: string[];
+  computerUse?: ComputerUseCapabilityDescriptor;
   nodePluginTools: NodePluginToolDescriptor[];
 } {
   const registry = resolveNodeHostPluginRegistry();
   return withPluginRuntimeRegistryScope(registry, () => {
     const caps = new Set<string>();
     const commands = new Set<string>();
+    let computerUse: ComputerUseCapabilityDescriptor | undefined;
     const nodePluginTools = new Map<string, NodePluginToolDescriptor>();
     for (const entry of registry?.nodeHostCommands ?? []) {
+      if (options.commandAllowlist && !options.commandAllowlist.has(entry.command.command)) {
+        continue;
+      }
       if (entry.command.duplex === true && options.includeDuplex === false) {
         continue;
       }
@@ -70,7 +105,10 @@ export function listRegisteredNodeHostCapsAndCommands(
         caps.add(entry.command.cap);
       }
       commands.add(entry.command.command);
-      const agentTool = buildNodePluginToolDescriptor(entry);
+      if (!options.commandAllowlist && entry.command.computerUse) {
+        computerUse = parseComputerUseCapabilityDescriptor(entry.command.computerUse(context));
+      }
+      const agentTool = options.commandAllowlist ? null : buildNodePluginToolDescriptor(entry);
       if (agentTool) {
         nodePluginTools.set(`${agentTool.pluginId}\0${agentTool.name}`, agentTool);
       }
@@ -78,6 +116,7 @@ export function listRegisteredNodeHostCapsAndCommands(
     return {
       caps: [...caps].toSorted((left, right) => left.localeCompare(right)),
       commands: [...commands].toSorted((left, right) => left.localeCompare(right)),
+      ...(computerUse ? { computerUse } : {}),
       nodePluginTools: [...nodePluginTools.values()].toSorted(
         (left, right) =>
           left.pluginId.localeCompare(right.pluginId) || left.name.localeCompare(right.name),
@@ -90,11 +129,15 @@ export function listRegisteredNodeHostCapsAndCommands(
 export function watchRegisteredNodeHostCommandAvailability(
   context: OpenClawPluginNodeHostCommandAvailabilityContext,
   onChange: () => void,
+  commandAllowlist?: ReadonlySet<string>,
 ): () => void {
   const registry = resolveNodeHostPluginRegistry();
   const cleanups: Array<() => void> = [];
   withPluginRuntimeRegistryScope(registry, () => {
     for (const entry of registry?.nodeHostCommands ?? []) {
+      if (commandAllowlist && !commandAllowlist.has(entry.command.command)) {
+        continue;
+      }
       const cleanup = entry.command.watchAvailability?.(context, () =>
         withPluginRuntimeRegistryScope(registry, onChange),
       );
@@ -111,8 +154,54 @@ export function watchRegisteredNodeHostCommandAvailability(
     });
 }
 
-function normalizeString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+/** Release plugin command state before a reconnected Gateway can invoke it again. */
+export async function notifyRegisteredNodeHostCommandDisconnect(): Promise<void> {
+  const registry = resolveNodeHostPluginRegistry();
+  const callbacks = new Set(
+    (registry?.nodeHostCommands ?? [])
+      .map((entry) => entry.command.onDisconnect)
+      .filter((callback): callback is () => Promise<void> | void => callback !== undefined),
+  );
+  await withPluginRuntimeRegistryScope(registry, async () => {
+    const results = await Promise.allSettled(
+      [...callbacks].map(async (callback) => await callback()),
+    );
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length === 1) {
+      const failure = failures[0];
+      throw failure instanceof Error
+        ? failure
+        : new Error("node-host plugin disconnect cleanup failed", { cause: failure });
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "node-host plugin disconnect cleanup failed");
+    }
+  });
+}
+
+/** Retained command work remains owned even when its capability is unavailable. */
+export function hasRegisteredNodeHostCommandActiveWork(): boolean {
+  const registry = resolveNodeHostPluginRegistry();
+  return withPluginRuntimeRegistryScope(registry, () => {
+    for (const entry of registry?.nodeHostCommands ?? []) {
+      try {
+        if (entry.command.hasActiveWork?.() !== false) {
+          if (!entry.command.hasActiveWork) {
+            logDebug(
+              `node-host: ${entry.pluginId}/${entry.command.command} has no idle hook; auto-update deferred`,
+            );
+          }
+          return true;
+        }
+      } catch (error) {
+        logDebug(`node-host: plugin work state unavailable: ${String(error)}`);
+        return true;
+      }
+    }
+    return false;
+  });
 }
 
 function isProviderSafeToolName(value: string): boolean {
@@ -126,13 +215,13 @@ function buildNodePluginToolDescriptor(
   if (!agentTool) {
     return null;
   }
-  const name = normalizeString(agentTool.name);
-  const description = normalizeString(agentTool.description);
+  const name = normalizeOptionalString(agentTool.name) ?? "";
+  const description = normalizeOptionalString(agentTool.description) ?? "";
   if (!isProviderSafeToolName(name) || !description) {
     return null;
   }
-  const mcpServer = normalizeString(agentTool.mcp?.server);
-  const mcpTool = normalizeString(agentTool.mcp?.tool);
+  const mcpServer = normalizeOptionalString(agentTool.mcp?.server) ?? "";
+  const mcpTool = normalizeOptionalString(agentTool.mcp?.tool) ?? "";
   return {
     pluginId: entry.pluginId,
     name,
@@ -161,27 +250,62 @@ export async function invokeRegisteredNodeHostCommand(
   if (!match) {
     return null;
   }
-  return await withPluginRuntimeRegistryScope(registry, async () => {
-    if (match.command.duplex === true) {
-      if (!io) {
-        throw new Error(`node command requires duplex transport: ${command}`);
-      }
-      return context
-        ? await match.command.handle(paramsJSON, io, context)
-        : await match.command.handle(paramsJSON, io);
+  let active = true;
+  const registeredCommand = match.command;
+  const pluginRecord = registry?.plugins.find((record) => record.id === match.pluginId);
+  const assertActive = () => {
+    if (
+      !active ||
+      match.command !== registeredCommand ||
+      io?.signal.aborted ||
+      context?.signal?.aborted ||
+      resolveNodeHostPluginRegistry() !== registry ||
+      !registry?.nodeHostCommands.includes(match) ||
+      !pluginRecord ||
+      !registry.plugins.includes(pluginRecord) ||
+      !pluginRecord.enabled ||
+      pluginRecord.status !== "loaded"
+    ) {
+      throw new Error("node plugin invocation authority is closed");
     }
-    return context
-      ? await match.command.handle(paramsJSON, undefined, context)
-      : await match.command.handle(paramsJSON);
-  });
+  };
+  const invokeContext = context
+    ? {
+        ...context,
+        prepareExecAuthorization: (source: "human-approved" | "session-full") =>
+          preparePluginExecAuthorization({
+            source,
+            command,
+            sessionKey: context.sessionKey,
+            assertActive,
+          }),
+      }
+    : undefined;
+  try {
+    return await withPluginRuntimeRegistryScope(registry, async () => {
+      if (match.command.duplex === true || match.command.duplex === "optional") {
+        if (match.command.duplex === true && !io) {
+          throw new Error(`node command requires duplex transport: ${command}`);
+        }
+        return invokeContext
+          ? await match.command.handle(paramsJSON, io, invokeContext)
+          : await match.command.handle(paramsJSON, io);
+      }
+      return invokeContext
+        ? await match.command.handle(paramsJSON, undefined, invokeContext)
+        : await match.command.handle(paramsJSON);
+    });
+  } finally {
+    active = false;
+  }
 }
 
 export function isRegisteredNodeHostCommandDuplex(command: string): boolean {
   const registry = resolveNodeHostPluginRegistry();
-  return (
-    (registry?.nodeHostCommands ?? []).find((entry) => entry.command.command === command)?.command
-      .duplex === true
-  );
+  const duplex = (registry?.nodeHostCommands ?? []).find(
+    (entry) => entry.command.command === command,
+  )?.command.duplex;
+  return duplex === true || duplex === "optional";
 }
 
 function resetNodeHostPluginRegistry(): void {

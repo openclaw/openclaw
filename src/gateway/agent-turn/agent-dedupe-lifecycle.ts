@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import {
+  isSubagentCoordinationInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { CommittedResetCompletion } from "../server-methods/agent-reset-phase.js";
@@ -11,7 +15,6 @@ import {
   sessionResetAckText,
 } from "../server-methods/agent-session-reset.js";
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
-import { resolveSessionStoreKey } from "../session-utils.js";
 import {
   isAcceptedAgentDedupePayload,
   isPreRegistrationAbortedAgentDedupeEntryForSession,
@@ -31,6 +34,8 @@ export function createAgentDedupeLifecycle(params: {
   lifecycleGeneration: string;
   agentDedupeKeys: string[];
   suppressVisibleSessionEffects: boolean;
+  inputProvenance?: InputProvenance;
+  privateCompletion?: true;
   ownerConnId?: string;
   ownerDeviceId?: string;
   context: AgentTurnContext;
@@ -45,9 +50,21 @@ export function createAgentDedupeLifecycle(params: {
     if (reserved) {
       return;
     }
-    const dedupeSessionResolvesGlobal = sessionKey
-      ? resolveSessionStoreKey({ cfg: params.cfg, sessionKey }) === "global"
-      : false;
+    // A private retry bypasses terminal cache replay to reconcile durable input.
+    // Preserve an exact intentional Stop for the resolved admission guard.
+    if (
+      isPreRegistrationAbortedAgentDedupeEntryForSession({
+        entry: readGatewayDedupeEntry({
+          dedupe: params.context.dedupe,
+          keys: params.agentDedupeKeys,
+        }),
+        runId: params.runId,
+        sessionKey,
+        agentId: dedupeAgentId,
+      })
+    ) {
+      return;
+    }
     const acceptedAt = Date.now();
     const pendingTimeoutMs = resolveAgentTimeoutMs({
       cfg: params.cfg,
@@ -57,6 +74,11 @@ export function createAgentDedupeLifecycle(params: {
     setGatewayDedupeEntries({
       dedupe: params.context.dedupe,
       keys: params.agentDedupeKeys,
+      // Durable private input decides replay after the prior controller ends.
+      // Its new reservation must retire stale sticky terminal projections.
+      ...(params.privateCompletion && !params.context.chatAbortControllers.has(params.runId)
+        ? { startNewAttempt: true as const }
+        : {}),
       entry: {
         ts: acceptedAt,
         ok: true,
@@ -65,10 +87,10 @@ export function createAgentDedupeLifecycle(params: {
           reservationId,
           status: "accepted" as const,
           ...(sessionKey ? { sessionKey } : {}),
-          ...(dedupeAgentId && (!sessionKey || dedupeSessionResolvesGlobal)
-            ? { agentId: dedupeAgentId }
-            : {}),
-          controlUiVisible: !params.suppressVisibleSessionEffects,
+          ...(dedupeAgentId ? { agentId: dedupeAgentId } : {}),
+          controlUiVisible:
+            !params.suppressVisibleSessionEffects &&
+            !isSubagentCoordinationInputProvenance(params.inputProvenance),
           acceptedAt,
           dedupeKeys: params.agentDedupeKeys,
           expiresAtMs: resolveAgentRunExpiresAtMs({ now: acceptedAt, timeoutMs: pendingTimeoutMs }),
@@ -103,6 +125,44 @@ export function createAgentDedupeLifecycle(params: {
     reserved = false;
   };
 
+  const bindSessionTarget = (target: {
+    sessionKey: string;
+    agentId?: string;
+    sessionId?: string;
+  }) => {
+    const entry = readGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      keys: params.agentDedupeKeys,
+    });
+    if (
+      !entry?.ok ||
+      !isAcceptedAgentDedupePayload(entry.payload) ||
+      entry.payload.reservationId !== reservationId
+    ) {
+      return;
+    }
+    const previousKey =
+      typeof entry.payload.sessionKey === "string" ? entry.payload.sessionKey : undefined;
+    // Routing and the session COMMIT owner publish this attempt's target. Stop
+    // never manufactures a pending-run incarnation from its own row lookup.
+    setGatewayDedupeEntries({
+      dedupe: params.context.dedupe,
+      keys: params.agentDedupeKeys.filter(
+        (key) => params.context.dedupe.get(key)?.payload === entry.payload,
+      ),
+      entry: {
+        ...entry,
+        payload: {
+          ...entry.payload,
+          ...target,
+          ...(previousKey && previousKey !== target.sessionKey
+            ? { sessionKeyAliases: [previousKey] }
+            : {}),
+        },
+      },
+    });
+  };
+
   const abortForLifecycleRotation = (target?: { sessionKey?: string; agentId?: string }) => {
     if (params.lifecycleGeneration === getAgentEventLifecycleGeneration()) {
       return false;
@@ -128,9 +188,7 @@ export function createAgentDedupeLifecycle(params: {
       params.io.emitAcceptance([true, responsePayload, undefined], { runId: params.runId });
       emitSessionsChanged(params.context, {
         sessionKey: completion.sessionKey,
-        ...(completion.sessionKey === "global" && completion.agentId
-          ? { agentId: completion.agentId }
-          : {}),
+        ...(completion.agentId ? { agentId: completion.agentId } : {}),
         reason: completion.reason,
       });
       return true;
@@ -165,6 +223,7 @@ export function createAgentDedupeLifecycle(params: {
   return {
     reservationId,
     reserve,
+    bindSessionTarget,
     clearUnaccepted,
     abortForLifecycleRotation,
     isReserved: () => reserved,

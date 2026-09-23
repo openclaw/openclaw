@@ -1,6 +1,7 @@
 // QA Lab projects canonical runtime-pair results into suite scenario results.
 import {
   isRuntimeParityResultPass,
+  runtimeParityCellStatus,
   type RuntimeId,
   type RuntimeParityCell,
   type RuntimeParityResult,
@@ -28,25 +29,10 @@ function formatRuntimeParityScenarioCellDetails(cell: RuntimeParityResult["cells
   return [cell.details, formatRuntimeParityCellDetails(cell)].filter(Boolean).join("\n");
 }
 
-function runtimeParityScenarioStepStatus(
-  cell: Pick<
-    RuntimeParityResult["cells"][RuntimeId],
-    "runtimeErrorClass" | "status" | "transportErrorClass"
-  >,
-) {
-  if (cell.status === "fail" || cell.runtimeErrorClass || cell.transportErrorClass) {
-    return "fail";
-  }
-  if (cell.status === "skip") {
-    return "skip";
-  }
-  return "pass";
-}
-
 function runtimeParityScenarioResultStatus(result: RuntimeParityResult) {
   const cellStatuses = new Set([
-    runtimeParityScenarioStepStatus(result.cells.openclaw),
-    runtimeParityScenarioStepStatus(result.cells.codex),
+    runtimeParityCellStatus(result.cells.openclaw),
+    runtimeParityCellStatus(result.cells.codex),
   ]);
   if (isRuntimeParityResultPass(result)) {
     return "pass";
@@ -74,12 +60,12 @@ export function buildRuntimeParityScenarioResult(params: {
     steps: [
       {
         name: openclawCell.runtime,
-        status: runtimeParityScenarioStepStatus(openclawCell),
+        status: runtimeParityCellStatus(openclawCell),
         details: formatRuntimeParityScenarioCellDetails(openclawCell),
       },
       {
         name: codexCell.runtime,
-        status: runtimeParityScenarioStepStatus(codexCell),
+        status: runtimeParityCellStatus(codexCell),
         details: formatRuntimeParityScenarioCellDetails(codexCell),
       },
       {

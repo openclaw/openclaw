@@ -1,7 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Directive tag helpers parse inline directive tags from user text.
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
+import {
+  createTextPartCodeRegionResolver,
+  indexTextParts,
+  findCodeRegions,
+  isInsideCode,
+} from "../shared/text/code-regions.js";
+import { trimTextPreservingCode } from "../shared/text/text-projection.js";
 
 export type InlineDirectiveParseResult = {
   text: string;
@@ -17,13 +23,27 @@ type InlineDirectiveParseOptions = {
   currentMessageId?: string;
   stripAudioTag?: boolean;
   stripReplyTags?: boolean;
+  preserveTrailingWhitespace?: boolean;
+  /** Observes each audio directive accepted outside canonical code regions. */
+  onAudioDirective?: () => void;
 };
 
+// TRANSITIONAL(marker-retirement): inline reply/audio markers are the last text
+// adapter for automatic-mode replies. Delete this parser family when the
+// messages.visibleReplies default flips to "message_tool" (structured fields own
+// delivery intent; persisted transcripts already carry openclawDelivery facts).
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 const INLINE_DIRECTIVE_TAG_WITH_PADDING_RE =
-  /\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*/gi;
+  /(?:\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*|^[\t ]*\[\[\s*(?:reply_to_current(?:[\t ]*\](?!\])|(?=[\t ]+\S)|[\t ]*$)|reply_to\s*:\s*(?:[^\]\r\n]*\](?!\])|[\t ]*$))[\t ]*)/iuy;
 const MAX_REPLY_DIRECTIVE_ID_LENGTH = 256;
+const UNSAFE_REPLY_DIRECTIVE_CHARS_RE = /[\p{Cc}[\]]/gu;
+const NO_INLINE_DIRECTIVES = {
+  audioAsVoice: false,
+  replyToCurrent: false,
+  hasAudioTag: false,
+  hasReplyTag: false,
+} as const;
 
 function replacementPreservesWordBoundary(source: string, offset: number, length: number): string {
   const before = source[offset - 1];
@@ -41,38 +61,153 @@ function createBlockSentinel(text: string): string {
   return sentinel;
 }
 
-function normalizeDirectiveWhitespace(text: string): string {
-  // Extract → normalize prose → restore:
-  // Stash every code block (fenced ``` / ~~~ and indent-code 4-space/tab)
-  // under a sentinel-delimited placeholder so the prose regexes never touch them.
+export function replaceOutsideCodeRegions(
+  text: string,
+  regex: RegExp,
+  replacement: (match: string, captures: unknown[], offset: number, source: string) => string,
+): string {
+  let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
+  return text.replace(regex, (...args: unknown[]) => {
+    codeRegions ??= text.includes("[[") ? findCodeRegions(text) : [];
+    const match = String(args[0]);
+    const offset = args.at(-2);
+    return typeof offset === "number" && isInsideCode(offset + match.indexOf("[["), codeRegions)
+      ? match
+      : replacement(match, args.slice(1, -2), Number(offset), text);
+  });
+}
+
+type NativeTextEdit = { start: number; end: number; text: string };
+
+function applyNativeTextEdits(parts: readonly string[], edits: NativeTextEdit[]): string[] {
+  const source = indexTextParts(parts);
+  const result = [...parts];
+  let editIndex = 0;
+  for (const span of source.spans) {
+    let cursor = span.start;
+    let text = "";
+    while (editIndex < edits.length) {
+      const edit = expectDefined(edits[editIndex], "native text edit");
+      if (edit.end <= span.start) {
+        editIndex++;
+        continue;
+      }
+      if (edit.start > span.end) {
+        break;
+      }
+      text += source.text.slice(cursor, Math.max(cursor, Math.min(edit.start, span.end)));
+      if (edit.start >= span.start) {
+        text += edit.text;
+      }
+      cursor = Math.min(span.end, Math.max(cursor, edit.end));
+      if (edit.end <= span.end) {
+        editIndex++;
+      } else {
+        break;
+      }
+    }
+    result[span.index] = text + source.text.slice(cursor, span.end);
+  }
+  // A directive can consume the virtual separator between parts. Keep every
+  // native slot/signature, but join its surviving fragments in the starting slot.
+  let owner = source.spans[0]?.index;
+  editIndex = 0;
+  for (let index = 1; index < source.spans.length; index++) {
+    const before = expectDefined(source.spans[index - 1], "preceding native part");
+    const next = expectDefined(source.spans[index], "following native part");
+    while (
+      edits[editIndex] &&
+      expectDefined(edits[editIndex], "boundary text edit").end <= before.end
+    ) {
+      editIndex++;
+    }
+    const edit = edits[editIndex];
+    if (owner !== undefined && edit && edit.start <= before.end && edit.end > before.end) {
+      result[owner] =
+        expectDefined(result[owner], "native edit owner") +
+        expectDefined(result[next.index], "native edit continuation");
+      result[next.index] = "";
+    } else {
+      owner = next.index;
+    }
+  }
+  return result;
+}
+
+/** Replace one syntax stage with full-message code ownership and native edit positions. */
+export function replaceOutsideCodeRegionParts(
+  parts: readonly string[],
+  regex: RegExp,
+  replacement: (
+    match: string,
+    captures: unknown[],
+    offset: number,
+    source: string,
+    partIndex: number,
+  ) => string,
+): string[] {
+  const source = indexTextParts(parts);
+  const edits: NativeTextEdit[] = [];
+  let part = 0;
+  replaceOutsideCodeRegions(source.text, regex, (match, captures, offset, text) => {
+    while (
+      source.spans[part + 1] &&
+      expectDefined(source.spans[part + 1], "next text part").start <= offset
+    ) {
+      part++;
+    }
+    const value = replacement(
+      match,
+      captures,
+      offset,
+      text,
+      expectDefined(source.spans[part], "directive start part").index,
+    );
+    if (value !== match) {
+      edits.push({ start: offset, end: offset + match.length, text: value });
+    }
+    return value;
+  });
+  return edits.length ? applyNativeTextEdits(parts, edits) : [...parts];
+}
+
+type DirectiveWhitespaceTailMode = "trim" | "preserve" | "normalize";
+
+function normalizeDirectiveWhitespace(
+  text: string,
+  tailMode: DirectiveWhitespaceTailMode = "trim",
+  preparedRegions?: ReturnType<typeof findCodeRegions>,
+): string {
+  // Stash canonical code regions before normalizing prose. Indented code also
+  // occurs inside Markdown containers without any backtick or tilde delimiter.
   const blockSentinel = createBlockSentinel(text);
   const blockPlaceholderRe = new RegExp(`${blockSentinel}(\\d+)${blockSentinel}`, "g");
   const blocks: string[] = [];
-  const fenceSpans = text.includes("```") || text.includes("~~~") ? parseFenceSpans(text) : [];
+  const codeRegions = preparedRegions ?? findCodeRegions(text);
   let masked = "";
   let cursor = 0;
   // The canonical scanner keeps false closers, indented closers, and open fences intact.
-  for (const span of fenceSpans) {
+  for (const span of codeRegions) {
     blocks.push(text.slice(span.start, span.end));
     masked += `${text.slice(cursor, span.start)}${blockSentinel}${blocks.length - 1}${blockSentinel}`;
     cursor = span.end;
   }
-  masked = `${masked}${text.slice(cursor)}`.replace(/(?:(?:^|\n)(?:    |\t)[^\n]*)+/gm, (block) => {
-    blocks.push(block);
-    return `${blockSentinel}${blocks.length - 1}${blockSentinel}`;
-  });
+  masked += text.slice(cursor);
 
+  const suffixStart = tailMode === "preserve" ? masked.trimEnd().length : masked.length;
+  const suffix = masked.slice(suffixStart);
   const normalized = masked
+    .slice(0, suffixStart)
     .replace(/\r\n/g, "\n")
     .replace(/([^\s])[ \t]{2,}([^\s])/g, "$1 $2")
     .replace(/^\n+/, "")
     .replace(/^[ \t](?=\S)/, "")
     .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trimEnd();
+    .replace(/\n{3,}/g, "\n\n");
 
-  return normalized.replace(blockPlaceholderRe, (_, i) =>
-    expectDefined(blocks[Number(i)], "blocks entry at number(i)"),
+  return (tailMode === "trim" ? normalized.trimEnd() : normalized + suffix).replace(
+    blockPlaceholderRe,
+    (_, i) => expectDefined(blocks[Number(i)], "blocks entry at number(i)"),
   );
 }
 
@@ -81,45 +216,16 @@ type StripInlineDirectiveTagsResult = {
   changed: boolean;
 };
 
-type MessageTextPart = {
-  type: "text";
-  text: string;
-} & Record<string, unknown>;
-
-type MessagePart = Record<string, unknown> | null | undefined;
-
-export type DisplayMessageWithContent = {
-  content?: unknown;
-} & Record<string, unknown>;
-
 export function stripInlineDirectiveTagsForDisplay(text: string): StripInlineDirectiveTagsResult {
   if (!text) {
     return { text, changed: false };
   }
-  const withoutAudio = text.replace(AUDIO_TAG_RE, "");
-  const stripped = withoutAudio.replace(REPLY_TAG_RE, "");
+  const withoutAudio = replaceOutsideCodeRegions(text, AUDIO_TAG_RE, () => "");
+  const stripped = replaceOutsideCodeRegions(withoutAudio, REPLY_TAG_RE, () => "");
   return {
     text: stripped,
     changed: stripped !== text,
   };
-}
-
-function stripUnsafeReplyDirectiveChars(value: string): string {
-  const chars: string[] = [];
-  for (const ch of value) {
-    const code = ch.charCodeAt(0);
-    if (
-      (code >= 0 && code <= 31) ||
-      code === 127 ||
-      (code >= 0x80 && code <= 0x9f) ||
-      ch === "[" ||
-      ch === "]"
-    ) {
-      continue;
-    }
-    chars.push(ch);
-  }
-  return chars.join("");
 }
 
 export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefined {
@@ -127,137 +233,211 @@ export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefi
   if (!trimmed) {
     return undefined;
   }
-  const sanitized = stripUnsafeReplyDirectiveChars(trimmed).trim();
+  const sanitized = trimmed.replace(UNSAFE_REPLY_DIRECTIVE_CHARS_RE, "").trim();
   if (!sanitized) {
     return undefined;
   }
-  const chars = Array.from(sanitized);
-  if (chars.length > MAX_REPLY_DIRECTIVE_ID_LENGTH) {
-    return chars.slice(0, MAX_REPLY_DIRECTIVE_ID_LENGTH).join("");
-  }
-  return sanitized;
+  // UTF-16 length is an upper bound on the number of code points.
+  return sanitized.length <= MAX_REPLY_DIRECTIVE_ID_LENGTH
+    ? sanitized
+    : truncateCodePoints(sanitized, MAX_REPLY_DIRECTIVE_ID_LENGTH);
 }
 
-export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDirectiveTagsResult {
-  if (!text) {
-    return { text, changed: false };
+function collectDeliveryDirectiveEdits(text: string): NativeTextEdit[] {
+  if (!text.includes("[[")) {
+    return [];
   }
-  const stripped = text.replace(INLINE_DIRECTIVE_TAG_WITH_PADDING_RE, " ");
-  const changed = stripped !== text;
-  return {
-    text: changed ? stripped.trim() : text,
-    changed,
-  };
-}
-
-function isMessageTextPart(part: MessagePart): part is MessageTextPart {
-  return Boolean(part) && part?.type === "text" && typeof part.text === "string";
-}
-
-/**
- * Strips inline directive tags from text content while preserving message shape.
- * Empty post-strip text stays empty-string to preserve caller semantics.
- * Returns the input message reference (including the original content array) when
- * no text part changed, and reuses unchanged text-part references in mixed content,
- * so identity-equality consumers avoid spurious churn.
- */
-export function stripInlineDirectiveTagsFromMessageForDisplay(
-  message: DisplayMessageWithContent | undefined,
-): DisplayMessageWithContent | undefined {
-  if (!message) {
-    return message;
-  }
-  if (!Array.isArray(message.content)) {
-    return message;
-  }
-  let cleaned: unknown[] | undefined;
-  for (let i = 0; i < message.content.length; i++) {
-    const part = message.content[i];
-    let next: unknown = part;
-    if (part && typeof part === "object" && isMessageTextPart(part as MessagePart)) {
-      const record = part as MessageTextPart;
-      const stripped = stripInlineDirectiveTagsForDisplay(record.text);
-      if (stripped.changed) {
-        next = { ...record, text: stripped.text };
-      }
+  // Only malformed prefixes at the absolute message start are control text; keep
+  // the regex non-multiline while code-region scanning preserves literal examples.
+  let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
+  const edits: NativeTextEdit[] = [];
+  let cursor = 0;
+  let searchFrom = 0;
+  // A preserved code match still owns its padding; later directives must not consume it.
+  let previousMatchEnd = 0;
+  while (searchFrom < text.length) {
+    const marker = text.indexOf("[[", searchFrom);
+    if (marker < 0) {
+      break;
     }
-    if (next === part) {
-      cleaned?.push(part);
+    // Inspect padding only at a marker; retrying from every blank line is quadratic.
+    let start = marker;
+    while (start > previousMatchEnd && /\s/u.test(text.charAt(start - 1))) {
+      start -= 1;
+    }
+    INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.lastIndex = start;
+    const match = INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.exec(text);
+    searchFrom = match ? INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.lastIndex : marker + 1;
+    if (!match) {
       continue;
     }
-    if (!cleaned) {
-      cleaned = message.content.slice(0, i);
+    previousMatchEnd = searchFrom;
+    if (isInsideCode(marker, (codeRegions ??= findCodeRegions(text)))) {
+      continue;
     }
-    cleaned.push(next);
+    // Padding before the next code block owns its line break and indentation.
+    const preserveCodePadding = codeRegions.some(
+      (region) => region.block && region.start > marker && region.start <= searchFrom,
+    );
+    cursor = preserveCodePadding ? start + match[0].trimEnd().length : searchFrom;
+    edits.push({
+      start,
+      end: cursor,
+      text: !preserveCodePadding && match[0].includes("]]") ? " " : "",
+    });
   }
-  if (!cleaned) {
-    return message;
+  if (cursor === 0) {
+    return [];
   }
-  return { ...message, content: cleaned };
+  return edits;
+}
+
+export function stripInlineDirectivePartsForDelivery(
+  parts: readonly string[],
+  options?: { preserveTrailingWhitespace?: boolean },
+): StripInlineDirectiveTagsResult[] {
+  const edits = collectDeliveryDirectiveEdits(indexTextParts(parts).text);
+  if (!edits.length) {
+    return parts.map((text) => ({ text, changed: false }));
+  }
+  const stripped = applyNativeTextEdits(parts, edits);
+  const regions = stripped.length > 1 ? createTextPartCodeRegionResolver(stripped) : undefined;
+  return stripped.map((text, index) => ({
+    text:
+      text === parts[index]
+        ? text
+        : trimTextPreservingCode(
+            text,
+            options?.preserveTrailingWhitespace ? "start" : "both",
+            regions?.(index),
+          ),
+    changed: text !== parts[index],
+  }));
+}
+
+export function stripInlineDirectiveTagsForDelivery(
+  text: string,
+  options?: { preserveTrailingWhitespace?: boolean },
+): StripInlineDirectiveTagsResult {
+  return expectDefined(
+    stripInlineDirectivePartsForDelivery([text], options)[0],
+    "single delivery directive part",
+  );
 }
 
 export function parseInlineDirectives(
   text?: string,
   options: InlineDirectiveParseOptions = {},
 ): InlineDirectiveParseResult {
-  const { currentMessageId, stripAudioTag = true, stripReplyTags = true } = options;
   if (!text) {
-    return {
-      text: "",
-      audioAsVoice: false,
-      replyToCurrent: false,
-      hasAudioTag: false,
-      hasReplyTag: false,
-    };
+    return { text: "", ...NO_INLINE_DIRECTIVES };
   }
   if (!text.includes("[[")) {
     return {
-      text: normalizeDirectiveWhitespace(text),
-      audioAsVoice: false,
-      replyToCurrent: false,
-      hasAudioTag: false,
-      hasReplyTag: false,
+      text: normalizeDirectiveWhitespace(
+        text,
+        options.preserveTrailingWhitespace ? "preserve" : "trim",
+      ),
+      ...NO_INLINE_DIRECTIVES,
     };
   }
+  return expectDefined(
+    parseInlineDirectiveParts([text], options)[0],
+    "single inline directive part",
+  );
+}
 
-  let cleaned = text;
-  let audioAsVoice = false;
-  let hasAudioTag = false;
-  let hasReplyTag = false;
-  let sawCurrent = false;
-  let lastExplicitId: string | undefined;
-
-  cleaned = cleaned.replace(AUDIO_TAG_RE, (match, offset, source) => {
-    audioAsVoice = true;
-    hasAudioTag = true;
-    return stripAudioTag ? replacementPreservesWordBoundary(source, offset, match.length) : match;
-  });
-
-  cleaned = cleaned.replace(REPLY_TAG_RE, (match, idRaw: string | undefined, offset, source) => {
-    hasReplyTag = true;
-    if (idRaw === undefined) {
-      sawCurrent = true;
-    } else {
-      const id = sanitizeReplyDirectiveId(idRaw);
-      if (id) {
-        lastExplicitId = id;
-      }
+export function parseInlineDirectiveParts(
+  parts: readonly string[],
+  options: InlineDirectiveParseOptions = {},
+): InlineDirectiveParseResult[] {
+  const {
+    currentMessageId,
+    stripAudioTag = true,
+    stripReplyTags = true,
+    preserveTrailingWhitespace = false,
+    onAudioDirective,
+  } = options;
+  const states: Array<{
+    audioAsVoice: boolean;
+    hasAudioTag: boolean;
+    hasReplyTag: boolean;
+    sawCurrent: boolean;
+    lastExplicitId?: string;
+    removedTrailingDirectiveLine: boolean;
+  }> = parts.map(() => ({
+    audioAsVoice: false,
+    hasAudioTag: false,
+    hasReplyTag: false,
+    sawCurrent: false,
+    removedTrailingDirectiveLine: false,
+  }));
+  const stripDirective = (match: string, offset: number, source: string, partIndex: number) => {
+    const state = expectDefined(states[partIndex], "directive part state");
+    if (
+      preserveTrailingWhitespace &&
+      !state.removedTrailingDirectiveLine &&
+      offset + match.length === source.trimEnd().length
+    ) {
+      const lineStart =
+        Math.max(source.lastIndexOf("\n", offset - 1), source.lastIndexOf("\r", offset - 1)) + 1;
+      state.removedTrailingDirectiveLine = /^[\t ]*$/.test(source.slice(lineStart, offset));
     }
-    return stripReplyTags ? replacementPreservesWordBoundary(source, offset, match.length) : match;
-  });
-
-  cleaned = normalizeDirectiveWhitespace(cleaned);
-
-  const replyToId =
-    lastExplicitId ?? (sawCurrent ? normalizeOptionalString(currentMessageId) : undefined);
-
-  return {
-    text: cleaned,
-    audioAsVoice,
-    replyToId,
-    replyToExplicitId: lastExplicitId,
-    replyToCurrent: sawCurrent,
-    hasAudioTag,
-    hasReplyTag,
+    return replacementPreservesWordBoundary(source, offset, match.length);
   };
+  const audioText = replaceOutsideCodeRegionParts(
+    parts,
+    AUDIO_TAG_RE,
+    (match, _captures, offset, source, partIndex) => {
+      const state = expectDefined(states[partIndex], "audio directive part");
+      state.audioAsVoice = state.hasAudioTag = true;
+      onAudioDirective?.();
+      return stripAudioTag ? stripDirective(match, offset, source, partIndex) : match;
+    },
+  );
+  const replyText = replaceOutsideCodeRegionParts(
+    audioText,
+    REPLY_TAG_RE,
+    (match, captures, offset, source, partIndex) => {
+      const state = expectDefined(states[partIndex], "reply directive part");
+      const idRaw = typeof captures[0] === "string" ? captures[0] : undefined;
+      state.hasReplyTag = true;
+      if (idRaw === undefined) {
+        state.sawCurrent = true;
+      } else {
+        const id = sanitizeReplyDirectiveId(idRaw);
+        if (id) {
+          state.lastExplicitId = id;
+        }
+      }
+      return stripReplyTags ? stripDirective(match, offset, source, partIndex) : match;
+    },
+  );
+  const regions = parts.length > 1 ? createTextPartCodeRegionResolver(replyText) : undefined;
+  return states.map((state, index) => {
+    const text = expectDefined(replyText[index], "parsed native text");
+    const tailMode = preserveTrailingWhitespace
+      ? state.removedTrailingDirectiveLine
+        ? "normalize"
+        : "preserve"
+      : "trim";
+    const normalizedText =
+      state.hasAudioTag || state.hasReplyTag || text !== parts[index]
+        ? normalizeDirectiveWhitespace(text, tailMode, regions?.(index))
+        : text;
+    if (!state.hasAudioTag && !state.hasReplyTag) {
+      return Object.assign({ text: normalizedText }, NO_INLINE_DIRECTIVES);
+    }
+    return {
+      text: normalizedText,
+      audioAsVoice: state.audioAsVoice,
+      replyToId:
+        state.lastExplicitId ??
+        (state.sawCurrent ? normalizeOptionalString(currentMessageId) : undefined),
+      replyToExplicitId: state.lastExplicitId,
+      replyToCurrent: state.sawCurrent,
+      hasAudioTag: state.hasAudioTag,
+      hasReplyTag: state.hasReplyTag,
+    };
+  });
 }

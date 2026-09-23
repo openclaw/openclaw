@@ -1,8 +1,25 @@
-import { spawnSync } from "node:child_process";
-import fs from "node:fs/promises";
-import os from "node:os";
+import type { ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { startProcessWatchdogFixture } from "../../test/helpers/process-watchdog.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  getGatewaySuspendStatus,
+  prepareGatewaySuspend,
+  resetGatewaySuspendCoordinatorForLifecycleRestart,
+} from "../infra/gateway-suspend-coordinator.js";
+import { inspectors } from "../infra/gateway-suspend-coordinator.test-support.js";
+import * as lifecycleWriteCustody from "../infra/lifecycle-write-custody.js";
+import { readLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
+import type { SpawnResult } from "../process/exec-result.js";
+import * as execSpawn from "../process/exec-spawn.js";
+import * as processExecution from "../process/exec.js";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { isPidAlive } from "../shared/pid-alive.js";
+import { readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
+import { SCHEDULED_BACKUP_COMMAND, SCHEDULED_BACKUP_DECLARATION_KEY } from "./backup-command.js";
 import { runCronCommandJob } from "./command-runner.js";
 import type { CronJob } from "./types.js";
 
@@ -22,24 +39,127 @@ function makeCommandJob(payload: Extract<CronJob["payload"], { kind: "command" }
   };
 }
 
-function isProcessRunning(pid: number): boolean {
-  const result = spawnSync("ps", ["-o", "state=", "-p", String(pid)], { encoding: "utf8" });
-  if (result.error) {
-    throw result.error;
-  }
-  const state = result.stdout.trim();
-  if (result.status === 0) {
-    return !state.startsWith("Z");
-  }
-  if (result.status === 1 && state === "" && result.stderr.trim() === "") {
-    return false;
-  }
-  throw new Error(
-    `ps failed with status ${result.status ?? "unknown"}: ${result.stderr.trim() || "no output"}`,
-  );
-}
-
 describe("runCronCommandJob", () => {
+  it.each(["owned", "display-only", "retargeted"])(
+    "records only declared backup command custody through native settlement: %s",
+    async (mode) => {
+      const settled = createDeferred<SpawnResult>();
+      const runCommand = vi
+        .spyOn(processExecution, "runCommandWithTimeout")
+        .mockReturnValue(settled.promise);
+      const job = makeCommandJob({
+        kind: "command",
+        argv: mode === "retargeted" ? ["echo", "backup"] : [...SCHEDULED_BACKUP_COMMAND],
+      });
+      job.name = SCHEDULED_BACKUP_DECLARATION_KEY;
+      if (mode !== "display-only") {
+        job.declarationKey = SCHEDULED_BACKUP_DECLARATION_KEY;
+      }
+      const ownsBackup = mode !== "display-only" && mode !== "retargeted";
+      const running = runCronCommandJob({ job });
+      try {
+        expect(readLifecycleWriteCustody()).toEqual(
+          ownsBackup ? [{ phase: "backup", count: 1 }] : [],
+        );
+        settled.resolve({
+          code: null,
+          signal: "SIGTERM",
+          killed: true,
+          stdout: "",
+          stderr: "",
+          termination: "timeout",
+          cleanup: "forced",
+        });
+        expect((await running).status).toBe("error");
+        expect(readLifecycleWriteCustody()).toEqual([]);
+      } finally {
+        settled.resolve({
+          code: 0,
+          signal: null,
+          killed: false,
+          stdout: "",
+          stderr: "",
+          termination: "exit",
+        });
+        await running;
+        runCommand.mockRestore();
+      }
+    },
+  );
+
+  it.each(["normal", "uncertain"] as const)(
+    "keeps maintenance unready until declared backup cleanup is confirmed: %s",
+    async (outcome) => {
+      const beginCustody = lifecycleWriteCustody.beginLifecycleWriteCustody;
+      let releaseCustody: (() => void) | undefined;
+      const begin = vi
+        .spyOn(lifecycleWriteCustody, "beginLifecycleWriteCustody")
+        .mockImplementation((phase) => {
+          releaseCustody = beginCustody(phase);
+          return releaseCustody;
+        });
+      const cleanup = createDeferred<SpawnResult["cleanup"]>();
+      const response = Promise.resolve<SpawnResult>({
+        code: null,
+        signal: "SIGTERM",
+        killed: true,
+        stdout: "",
+        stderr: "",
+        termination: "signal",
+        cleanup: "uncertain",
+      });
+      const runCommand = vi
+        .spyOn(processExecution, "runCommandWithTimeout")
+        .mockImplementation(() => {
+          execSpawn.retainCommandProcessCleanup(cleanup.promise);
+          return response;
+        });
+      const job = makeCommandJob({ kind: "command", argv: [...SCHEDULED_BACKUP_COMMAND] });
+      job.declarationKey = SCHEDULED_BACKUP_DECLARATION_KEY;
+      const running = runCronCommandJob({ job });
+      try {
+        await response;
+        expect(readLifecycleWriteCustody()).toEqual([{ phase: "backup", count: 1 }]);
+        cleanup.resolve(outcome);
+        expect((await running).status).toBe("error");
+        expect(
+          prepareGatewaySuspend({
+            requestId: "scheduled-backup-cleanup",
+            drain: true,
+            pauseScheduling: () => {},
+            resumeScheduling: () => {},
+            inspect: inspectors(),
+            createSuspensionId: () => "scheduled-backup-cleanup",
+          }),
+        ).toMatchObject(
+          outcome === "uncertain"
+            ? {
+                status: "draining",
+                activeCount: 1,
+                writeCustody: [{ phase: "backup", count: 1 }],
+              }
+            : { status: "ready", writeCustody: [] },
+        );
+        // Only the original owner can release after independent proof of settlement.
+        // This fixture has no live native process; resolving the scope did not prove that.
+        releaseCustody?.();
+        expect(getGatewaySuspendStatus("scheduled-backup-cleanup")).toMatchObject({
+          status: "ready",
+          writeCustody: [],
+        });
+        expect(readLifecycleWriteCustody()).toEqual([]);
+      } finally {
+        cleanup.resolve("normal");
+        await running;
+        releaseCustody?.();
+        resetGatewaySuspendCoordinatorForLifecycleRestart();
+        resetGatewayWorkAdmission();
+        begin.mockRestore();
+        runCommand.mockRestore();
+      }
+    },
+  );
+
   it("runs command argv and returns stdout as the deliverable summary", async () => {
     const result = await runCronCommandJob({
       job: makeCommandJob({
@@ -51,6 +171,7 @@ describe("runCronCommandJob", () => {
     });
 
     expect(result.status).toBe("ok");
+    expect(result.errorClassification).toBeUndefined();
     expect(result.summary).toBe("hello from cron");
     expect(result.diagnostics?.entries[0]).toMatchObject({
       ts: 123,
@@ -84,6 +205,8 @@ describe("runCronCommandJob", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("command exited with code 7");
+    expect(result.errorClassification).toEqual({ kind: "permanent" });
+    expect(result.failureNotificationDetail).toEqual({ kind: "command-exit", exitCode: 7 });
     expect(result.summary).toBe("bad thing");
     expect(result.diagnostics?.entries[0]).toMatchObject({
       source: "exec",
@@ -129,6 +252,11 @@ describe("runCronCommandJob", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("command timed out");
+    expect(result.errorClassification).toEqual({ kind: "reason", reason: "timeout" });
+    expect(result.failureNotificationDetail).toEqual({
+      kind: "command-timeout",
+      mode: "wall-clock",
+    });
     expect(result.diagnostics?.entries[0]).toMatchObject({
       ts: 456,
       source: "exec",
@@ -136,32 +264,75 @@ describe("runCronCommandJob", () => {
     });
   });
 
-  it.skipIf(process.platform === "win32")("kills shell process groups on timeout", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-command-"));
-    const childPidPath = path.join(tempDir, "child.pid");
-    const shellCommand = [
-      "sleep 60 &",
-      "child_pid=$!",
-      `printf '%s' "$child_pid" > ${JSON.stringify(childPidPath)}`,
-      'wait "$child_pid"',
-    ].join("\n");
+  it.skipIf(process.platform === "win32")("kills shell process groups on timeout", async () =>
+    withTempDir("openclaw-cron-command-", async (tempDir) => {
+      const childPidPath = path.join(tempDir, "child.pid");
+      const shellCommand = [
+        "sleep 60 &",
+        "child_pid=$!",
+        `printf '%s' "$child_pid" > ${JSON.stringify(childPidPath)}`,
+        'wait "$child_pid"',
+      ].join("\n");
 
-    const result = await runCronCommandJob({
-      job: makeCommandJob({
-        kind: "command",
-        argv: ["sh", "-lc", shellCommand],
-        timeoutSeconds: 0.5,
-      }),
-    });
+      const controller = new AbortController();
+      const realSetTimeout = setTimeout;
+      const spawnSpy = vi.spyOn(execSpawn, "spawnCommandWithInvocation");
+      let parent: ChildProcess | undefined;
+      let releaseAndWait: (() => ReturnType<typeof runCronCommandJob>) | undefined;
+      try {
+        // Hold only the command deadline until the child is live. Group exit
+        // observation and scoped cleanup must keep real time to observe the OS.
+        releaseAndWait = startProcessWatchdogFixture(() =>
+          runCronCommandJob({
+            job: makeCommandJob({
+              kind: "command",
+              argv: ["sh", "-lc", shellCommand],
+              timeoutSeconds: 0.5,
+            }),
+            abortSignal: controller.signal,
+          }),
+        );
+        const spawnResult = spawnSpy.mock.results[0];
+        if (spawnResult?.type !== "return") {
+          throw new Error("command did not spawn");
+        }
+        parent = spawnResult.value.child.nodeChildProcess;
+        let childPid = 0;
+        for (let attempt = 0; attempt < 80; attempt += 1) {
+          if (existsSync(childPidPath)) {
+            childPid = await readPidFile(childPidPath);
+            if (Number.isSafeInteger(childPid) && isPidAlive(childPid)) {
+              break;
+            }
+          }
+          await new Promise<void>((resolve) => {
+            realSetTimeout(resolve, 25);
+          });
+        }
+        expect(Number.isSafeInteger(childPid)).toBe(true);
+        expect(isPidAlive(childPid)).toBe(true);
 
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("command timed out");
-
-    const childPid = Number.parseInt(await fs.readFile(childPidPath, "utf8"), 10);
-    expect(Number.isSafeInteger(childPid)).toBe(true);
-    await expect.poll(() => isProcessRunning(childPid)).toBe(false);
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
+        const result = await releaseAndWait();
+        expect(result.status).toBe("error");
+        expect(result.error).toBe("command timed out");
+        expect(await waitForPidToExit(childPid)).toBe(true);
+      } finally {
+        try {
+          controller.abort();
+          if (parent?.pid) {
+            try {
+              process.kill(-parent.pid, "SIGKILL");
+            } catch {
+              // The command may already have reaped its process group.
+            }
+          }
+        } finally {
+          spawnSpy.mockRestore();
+          await releaseAndWait?.();
+        }
+      }
+    }),
+  );
 
   it("marks no-output timeouts as cron errors", async () => {
     const result = await runCronCommandJob({
@@ -175,6 +346,11 @@ describe("runCronCommandJob", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("command produced no output before noOutputTimeoutSeconds");
+    expect(result.errorClassification).toEqual({ kind: "reason", reason: "timeout" });
+    expect(result.failureNotificationDetail).toEqual({
+      kind: "command-timeout",
+      mode: "no-output",
+    });
     expect(result.diagnostics?.entries[0]).toMatchObject({
       source: "exec",
       severity: "error",
@@ -196,6 +372,41 @@ describe("runCronCommandJob", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("command stopped");
+    expect(result.errorClassification).toBeUndefined();
     expect(result.summary).toBeUndefined();
+    expect(result.failureNotificationDetail).toBeUndefined();
+  });
+
+  it("keeps command start failures generic", async () => {
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: ["openclaw-command-that-does-not-exist"],
+        timeoutSeconds: 5,
+      }),
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.failureNotificationDetail).toBeUndefined();
+    expect(result.errorClassification).toEqual({ kind: "permanent" });
+  });
+
+  it("leaves transient command start errors unclassified", async () => {
+    const spawnError = Object.assign(new Error("spawn EAGAIN"), { code: "EAGAIN" });
+    const runCommand = vi
+      .spyOn(processExecution, "runCommandWithTimeout")
+      .mockRejectedValueOnce(spawnError);
+
+    try {
+      const result = await runCronCommandJob({
+        job: makeCommandJob({ kind: "command", argv: [process.execPath] }),
+      });
+
+      expect(result.status).toBe("error");
+      expect(result.error).toBe("spawn EAGAIN");
+      expect(result.errorClassification).toBeUndefined();
+    } finally {
+      runCommand.mockRestore();
+    }
   });
 });

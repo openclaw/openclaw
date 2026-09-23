@@ -25,12 +25,13 @@ describe("BoundedBuffer", () => {
       overflowCalls: 0,
     },
     {
-      name: "drops oldest values until the buffer fits",
-      capacity: 2,
+      name: "drops every oldest value needed to fit a larger append",
+      capacity: 8,
+      measure: (value) => value.length,
       overflow: () => ({ mode: "drop-oldest" }),
-      values: ["a", "b", "c"],
-      accepted: [true, true, true],
-      drained: ["b", "c"],
+      values: ["a", "bb", "ccc", "dddd"],
+      accepted: [true, true, true, true],
+      drained: ["ccc", "dddd"],
       overflowCalls: 0,
     },
     {
@@ -50,5 +51,19 @@ describe("BoundedBuffer", () => {
     expect(values.map((value) => buffer.push(value))).toEqual(accepted);
     expect(buffer.drain()).toEqual(drained);
     expect(onOverflow).toHaveBeenCalledTimes(overflowCalls);
+  });
+
+  it("drains the retained FIFO after sustained overflow and can then be reused", () => {
+    const buffer = new BoundedBuffer<number | undefined>(3, { mode: "drop-oldest" });
+    for (let value = 0; value < 5_000; value += 1) {
+      buffer.push(value);
+    }
+    buffer.push(undefined);
+
+    expect(buffer.drain()).toEqual([4_998, 4_999, undefined]);
+    expect(buffer.drain()).toEqual([]);
+    buffer.push(1);
+    buffer.push(2);
+    expect(buffer.drain()).toEqual([1, 2]);
   });
 });

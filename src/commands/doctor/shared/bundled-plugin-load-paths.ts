@@ -1,5 +1,6 @@
 // Doctor warnings and repairs for redundant bundled plugin load path aliases.
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -10,8 +11,9 @@ import {
   parsePackagedBundledPluginPath,
 } from "../../../plugins/bundled-load-path-aliases.js";
 import { resolveBundledPluginSources } from "../../../plugins/bundled-sources.js";
+import { findUninspectedPluginDiagnostic } from "../../../plugins/discovery-availability.js";
+import { discoverConfiguredPluginLoadPaths } from "../../../plugins/discovery.js";
 import { resolveUserPath } from "../../../utils.js";
-import { asObjectRecord } from "./object.js";
 
 type BundledPluginLoadPathHit = {
   pluginId: string;
@@ -37,8 +39,8 @@ export function scanBundledPluginLoadPathMigrations(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): BundledPluginLoadPathHit[] {
-  const plugins = asObjectRecord(cfg.plugins);
-  const load = asObjectRecord(plugins?.load);
+  const plugins = asNullableRecord(cfg.plugins);
+  const load = asNullableRecord(plugins?.load);
   const rawPaths = Array.isArray(load?.paths) ? load.paths : [];
   if (rawPaths.length === 0) {
     return [];
@@ -70,12 +72,27 @@ export function scanBundledPluginLoadPathMigrations(
     }
   }
 
+  const { diagnostics } = discoverConfiguredPluginLoadPaths({
+    loadPaths: rawPaths.filter((rawPath): rawPath is string => typeof rawPath === "string"),
+    env,
+  });
   const hits: BundledPluginLoadPathHit[] = [];
   for (const rawPath of rawPaths) {
     if (typeof rawPath !== "string") {
       continue;
     }
     const normalized = normalizeBundledLookupPath(resolveUserPath(rawPath, env));
+    if (
+      findUninspectedPluginDiagnostic(
+        diagnostics.filter(
+          (diagnostic) =>
+            diagnostic.source !== undefined &&
+            normalizeBundledLookupPath(diagnostic.source) === normalized,
+        ),
+      )
+    ) {
+      continue;
+    }
     const match = bundledPathMap.get(normalized);
     if (!match) {
       const oldPackaged = parsePackagedBundledPluginPath(normalized);
@@ -147,7 +164,6 @@ export function maybeRepairBundledPluginLoadPaths(
   const removable = new Set(
     hits.map((hit) => normalizeBundledLookupPath(resolveUserPath(hit.fromPath, env))),
   );
-  const seen = new Set<string>();
   const rewritten: Array<(typeof paths)[number]> = [];
   for (const entry of paths) {
     if (typeof entry !== "string") {
@@ -158,10 +174,6 @@ export function maybeRepairBundledPluginLoadPaths(
     if (removable.has(resolved)) {
       continue;
     }
-    if (seen.has(resolved)) {
-      continue;
-    }
-    seen.add(resolved);
     rewritten.push(entry);
   }
 

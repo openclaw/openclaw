@@ -2,12 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { sha256File } from "../../infra/directory-durability.js";
+import { root, type Root } from "../../infra/fs-safe.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
   PluginHookSkillArtifact,
   PluginHookSkillChangedEvent,
 } from "../../plugins/hook-types.js";
-import { parseFrontmatter } from "../loading/frontmatter.js";
+import { parseSkillFrontmatter } from "../loading/frontmatter.js";
+import type { CommittedSkillChange } from "./workspace-types.js";
 
 const SKILL_FILE_CANDIDATES = ["SKILL.md", "skill.md", "skills.md", "SKILL.MD"] as const;
 const EXCLUDED_ROOT_DIRS = new Set([".clawhub", ".clawdhub", ".openclaw"]);
@@ -24,9 +27,22 @@ type SkillTreeFile = {
   sizeBytes: number;
 };
 
-async function collectSkillTreeFiles(skillDir: string, relativeDir = ""): Promise<SkillTreeFile[]> {
+async function collectSkillTreeFiles(
+  skillDir: string,
+  skillRoot: Root,
+  relativeDir = "",
+): Promise<{
+  files: SkillTreeFile[];
+  selectedSkillFile?: { file: SkillTreeFile; content: Buffer };
+}> {
   const entries = await fs.readdir(path.join(skillDir, relativeDir), { withFileTypes: true });
+  const selectedSkillPath = relativeDir
+    ? undefined
+    : SKILL_FILE_CANDIDATES.find((candidate) =>
+        entries.some((entry) => entry.name === candidate && entry.isFile()),
+      );
   const files: SkillTreeFile[] = [];
+  let selectedSkillFile: { file: SkillTreeFile; content: Buffer } | undefined;
   for (const entry of entries.toSorted((left, right) =>
     left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
   )) {
@@ -41,23 +57,36 @@ async function collectSkillTreeFiles(skillDir: string, relativeDir = ""): Promis
       throw new Error(`Skill tree contains unsupported entry ${JSON.stringify(portablePath)}.`);
     }
     if (stat.isDirectory()) {
-      files.push(...(await collectSkillTreeFiles(skillDir, relativePath)));
+      files.push(...(await collectSkillTreeFiles(skillDir, skillRoot, relativePath)).files);
       continue;
     }
     if (stat.nlink > 1) {
       throw new Error(`Skill tree contains hard-linked file ${JSON.stringify(portablePath)}.`);
     }
-    const content = await fs.readFile(absolutePath);
-    files.push({
-      path: portablePath,
-      sha256: sha256Hex(content),
-      sizeBytes: content.byteLength,
-    });
+    // Listed names are literal; a leading "~" must not expand to the user's home.
+    const opened = await skillRoot.open(path.join(skillRoot.rootReal, relativePath));
+    try {
+      if (relativePath === selectedSkillPath) {
+        const content = await opened.handle.readFile();
+        const file = {
+          path: portablePath,
+          sha256: sha256Hex(content),
+          sizeBytes: content.byteLength,
+        };
+        files.push(file);
+        selectedSkillFile = { file, content };
+      } else {
+        const { digest, bytes } = await sha256File(opened.handle);
+        files.push({ path: portablePath, sha256: digest, sizeBytes: bytes });
+      }
+    } finally {
+      await opened.handle.close();
+    }
   }
-  return files;
+  return { files, selectedSkillFile };
 }
 
-function parseSkillFrontmatter(content: Buffer): {
+function parseSkillArtifactMetadata(content: Buffer): {
   name?: string;
   description?: string;
   declaredVersion?: string;
@@ -67,7 +96,7 @@ function parseSkillFrontmatter(content: Buffer): {
     return {};
   }
   try {
-    const frontmatter = parseFrontmatter(text);
+    const frontmatter = parseSkillFrontmatter(text);
     return {
       name: normalizeOptionalString(frontmatter.name),
       description: normalizeOptionalString(frontmatter.description),
@@ -101,15 +130,13 @@ async function snapshotCommittedSkillArtifact(params: {
   sourceVersion?: string;
 }): Promise<PluginHookSkillArtifact> {
   const skillDir = path.resolve(params.skillDir);
-  const files = await collectSkillTreeFiles(skillDir);
-  const skillFileEntry = SKILL_FILE_CANDIDATES.map((candidate) =>
-    files.find((file) => file.path === candidate),
-  ).find((entry) => entry !== undefined);
-  if (!skillFileEntry) {
+  const skillRoot = await root(skillDir);
+  const { files, selectedSkillFile } = await collectSkillTreeFiles(skillDir, skillRoot);
+  if (!selectedSkillFile) {
     throw new Error(`Skill tree is missing SKILL.md: ${skillDir}`);
   }
-  const skillFile = path.join(skillDir, skillFileEntry.path);
-  const frontmatter = parseSkillFrontmatter(await fs.readFile(skillFile));
+  const skillFile = path.join(skillDir, selectedSkillFile.file.path);
+  const frontmatter = parseSkillArtifactMetadata(selectedSkillFile.content);
   const treeSha256 = sha256Hex(JSON.stringify(files));
   return {
     name: frontmatter.name ?? params.skillKey,
@@ -120,7 +147,7 @@ async function snapshotCommittedSkillArtifact(params: {
     source: params.source,
     revision: {
       ...(frontmatter.declaredVersion ? { declaredVersion: frontmatter.declaredVersion } : {}),
-      contentSha256: `sha256:${skillFileEntry.sha256}`,
+      contentSha256: `sha256:${selectedSkillFile.file.sha256}`,
       treeSha256: `sha256:${treeSha256}`,
       ...(params.sourceVersion ? { sourceVersion: params.sourceVersion } : {}),
     },
@@ -140,15 +167,9 @@ export async function snapshotCommittedSkillArtifactBestEffort(
   }
 }
 
-export async function dispatchCommittedSkillChangeBestEffort(params: {
-  action: PluginHookSkillChangedEvent["action"];
-  source: CommittedSkillChangeSource;
-  workspaceDir: string;
-  before?: PluginHookSkillArtifact;
-  after?: PluginHookSkillArtifact;
-  proposal?: PluginHookSkillChangedEvent["proposal"];
-  logger?: Logger;
-}): Promise<void> {
+export async function dispatchCommittedSkillChangeBestEffort(
+  params: CommittedSkillChange,
+): Promise<void> {
   const runner = getGlobalHookRunner();
   if (!runner?.hasHooks("skill_changed")) {
     return;

@@ -9,6 +9,7 @@ import {
   TrimmedNonEmptyStringFieldSchema,
   parseOptionalField,
 } from "./delivery-field-schemas.js";
+import { snapshotOwnCronRecord } from "./own-record.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -66,7 +67,7 @@ function hasAgentTurnOnlyPayloadHint(payload: UnknownRecord): boolean {
 }
 
 export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
-  const next: UnknownRecord = { ...payload };
+  const next = snapshotOwnCronRecord(payload);
   const kindRaw = normalizeLowercaseStringOrEmpty(next.kind);
   if (kindRaw === "agentturn") {
     next.kind = "agentTurn";
@@ -79,52 +80,31 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
-  if (typeof next.message === "string") {
-    const trimmed = normalizeOptionalString(next.message) ?? "";
-    if (trimmed) {
-      next.message = trimmed;
-    } else {
-      next.message = "";
-    }
-  }
-  if (typeof next.text === "string") {
-    const trimmed = normalizeOptionalString(next.text) ?? "";
-    if (trimmed) {
-      next.text = trimmed;
-    } else {
-      next.text = "";
+  for (const field of ["message", "text"] as const) {
+    if (typeof next[field] === "string") {
+      next[field] = normalizeOptionalString(next[field]) ?? "";
     }
   }
   if (typeof next.script === "string") {
     next.script = next.script.trim();
   }
-  if ("model" in next) {
-    if (next.model === null) {
-      next.model = null;
-    } else {
-      const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
-      if (model !== undefined) {
-        next.model = model;
+  for (const field of ["model", "thinking"] as const) {
+    if (field in next) {
+      // Preserve explicit null so patches can clear stored overrides,
+      // matching the fallbacks/toolsAllow clear paths.
+      if (next[field] === null) {
+        next[field] = null;
       } else {
-        delete next.model;
+        const value = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next[field]);
+        if (value !== undefined) {
+          next[field] = value;
+        } else {
+          delete next[field];
+        }
       }
     }
   }
-  if ("thinking" in next) {
-    // Preserve an explicit null so patches can clear a stored thinking override,
-    // matching the model/fallbacks/toolsAllow clear paths.
-    if (next.thinking === null) {
-      next.thinking = null;
-    } else {
-      const thinking = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.thinking);
-      if (thinking !== undefined) {
-        next.thinking = thinking;
-      } else {
-        delete next.thinking;
-      }
-    }
-  }
-  if ("timeoutSeconds" in next) {
+  if ("timeoutSeconds" in next && next.timeoutSeconds !== null) {
     const timeoutSeconds = parseOptionalField(TimeoutSecondsFieldSchema, next.timeoutSeconds);
     if (timeoutSeconds !== undefined) {
       next.timeoutSeconds = timeoutSeconds;
@@ -132,20 +112,14 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
       delete next.timeoutSeconds;
     }
   }
-  if ("fallbacks" in next) {
-    const fallbacks = normalizeTrimmedStringArray(next.fallbacks, { allowNull: true });
-    if (fallbacks !== undefined) {
-      next.fallbacks = fallbacks;
-    } else {
-      delete next.fallbacks;
-    }
-  }
-  if ("toolsAllow" in next) {
-    const toolsAllow = normalizeTrimmedStringArray(next.toolsAllow, { allowNull: true });
-    if (toolsAllow !== undefined) {
-      next.toolsAllow = toolsAllow;
-    } else {
-      delete next.toolsAllow;
+  for (const field of ["fallbacks", "toolsAllow"] as const) {
+    if (field in next) {
+      const value = normalizeTrimmedStringArray(next[field], { allowNull: true });
+      if (value !== undefined) {
+        next[field] = value;
+      } else {
+        delete next[field];
+      }
     }
   }
   if ("argv" in next) {
@@ -181,20 +155,14 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
       delete next.noOutputTimeoutSeconds;
     }
   }
-  if ("outputMaxBytes" in next) {
-    const outputMaxBytes = parseOptionalField(TimeoutSecondsFieldSchema, next.outputMaxBytes);
-    if (outputMaxBytes !== undefined && outputMaxBytes > 0) {
-      next.outputMaxBytes = Math.floor(outputMaxBytes);
-    } else {
-      delete next.outputMaxBytes;
-    }
-  }
-  if ("toolBudget" in next) {
-    const toolBudget = parseOptionalField(TimeoutSecondsFieldSchema, next.toolBudget);
-    if (toolBudget !== undefined && toolBudget > 0) {
-      next.toolBudget = Math.floor(toolBudget);
-    } else {
-      delete next.toolBudget;
+  for (const field of ["outputMaxBytes", "toolBudget"] as const) {
+    if (field in next) {
+      const value = parseOptionalField(TimeoutSecondsFieldSchema, next[field]);
+      if (value !== undefined && value > 0) {
+        next[field] = Math.floor(value);
+      } else {
+        delete next[field];
+      }
     }
   }
   if (
@@ -258,5 +226,5 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
     delete next.noOutputTimeoutSeconds;
     delete next.outputMaxBytes;
   }
-  return next;
+  return { ...next };
 }

@@ -46,7 +46,6 @@ function createProps(overrides: Partial<SecurityViewProps> = {}): SecurityViewPr
     security: {
       gatewayAuth: "token",
       execPolicy: "allowlist",
-      deviceAuth: true,
       browserEnabled: true,
       browserEnabledOverridden: true,
       toolProfile: "coding",
@@ -74,7 +73,6 @@ describe("renderSecurity", () => {
           security: {
             gatewayAuth: "token",
             execPolicy: "allowlist",
-            deviceAuth: true,
             browserEnabled: false,
             browserEnabledOverridden: true,
             toolProfile: "messaging",
@@ -110,7 +108,10 @@ describe("renderSecurity", () => {
 
     render(renderSecurity(createProps({ configBusy: true, onToolProfileChange })), container);
 
-    const profileButton = expectButtonByText(expectRowByTitle(container, "Tool profile"), "Full");
+    const profileButton = expectButtonByText(
+      expectRowByTitle(container, "Available tools"),
+      "Full",
+    );
     expect(
       (profileButton.closest("wa-radio-group") as HTMLElement & { disabled?: boolean }).disabled,
     ).toBe(true);
@@ -120,7 +121,7 @@ describe("renderSecurity", () => {
     expect(browserRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
   });
 
-  it("shows gateway auth and device auth as dot statuses, not pills", () => {
+  it("shows gateway auth as a dot status, not a pill", () => {
     const container = document.createElement("div");
 
     render(
@@ -129,10 +130,9 @@ describe("renderSecurity", () => {
           security: {
             gatewayAuth: "none",
             execPolicy: "allowlist",
-            deviceAuth: true,
             browserEnabled: true,
             browserEnabledOverridden: false,
-            toolProfile: "full",
+            toolProfile: "",
             toolProfileOverridden: false,
           },
         }),
@@ -144,8 +144,6 @@ describe("renderSecurity", () => {
     const authStatus = authRow.querySelector(".settings-status");
     expect(authStatus?.textContent?.trim()).toBe("none");
     expect(authStatus?.classList.contains("settings-status--warn")).toBe(true);
-    const deviceRow = expectRowByTitle(container, "Device auth");
-    expect(deviceRow.querySelector(".settings-status--ok")?.textContent?.trim()).toBe("Enabled");
   });
 
   it("opens mobile pairing from the overview", () => {
@@ -154,8 +152,8 @@ describe("renderSecurity", () => {
 
     render(renderSecurity(createProps({ onPairMobile })), container);
 
-    expectRowByTitle(container, "OpenClaw mobile");
-    const button = expectButtonByText(container, "Pair mobile device");
+    expectRowByTitle(container, "Pair a device");
+    const button = expectButtonByText(container, "Pair device");
     expect(button.disabled).toBe(false);
     button.click();
     expect(onPairMobile).toHaveBeenCalledOnce();
@@ -174,7 +172,7 @@ describe("renderSecurity", () => {
     expect(page?.querySelector("[data-testid='security-editor']")).not.toBeNull();
   });
 
-  it("shows inherited defaults without reset actions", () => {
+  it("shows inherited default descriptions", () => {
     const container = document.createElement("div");
 
     render(
@@ -183,10 +181,9 @@ describe("renderSecurity", () => {
           security: {
             gatewayAuth: "token",
             execPolicy: "allowlist",
-            deviceAuth: true,
             browserEnabled: true,
             browserEnabledOverridden: false,
-            toolProfile: "full",
+            toolProfile: "",
             toolProfileOverridden: false,
           },
         }),
@@ -194,46 +191,49 @@ describe("renderSecurity", () => {
       container,
     );
 
-    expect(expectRowByTitle(container, "Browser enabled").textContent).toContain(
-      "Using default: Enabled",
+    expect(expectRowByTitle(container, "Browser enabled").textContent).not.toContain(
+      "Using default:",
     );
-    expect(expectRowByTitle(container, "Tool profile").textContent).toContain(
-      "Using default: Full",
+    expect(expectRowByTitle(container, "Available tools").textContent).toContain(
+      "Using core and default plugin tools. Choose Full to include available optional plugin tools.",
     );
-    expect(container.querySelectorAll("button[aria-label='Reset to default']")).toHaveLength(0);
   });
 
-  it("resets explicit browser and tool-profile overrides", () => {
-    const onBrowserEnabledReset = vi.fn();
-    const onToolProfileReset = vi.fn();
-    const container = document.createElement("div");
-
-    render(
-      renderSecurity(
-        createProps({
-          security: {
-            gatewayAuth: "token",
-            execPolicy: "allowlist",
-            deviceAuth: true,
-            browserEnabled: true,
-            browserEnabledOverridden: true,
-            toolProfile: "full",
-            toolProfileOverridden: true,
-          },
-          onBrowserEnabledReset,
-          onToolProfileReset,
+  it.each([
+    { profile: "", overridden: false, busy: false, writes: 1 },
+    { profile: "full", overridden: true, busy: false, writes: 0 },
+    { profile: "", overridden: false, busy: true, writes: 0 },
+  ])(
+    "selects Full without a reselection path: $profile/$busy",
+    ({ profile, overridden, busy, writes }) => {
+      const props = createProps();
+      const onToolProfileChange = vi.fn();
+      const container = document.createElement("div");
+      render(
+        renderSecurity({
+          ...props,
+          security: { ...props.security, toolProfile: profile, toolProfileOverridden: overridden },
+          configBusy: busy,
+          onToolProfileChange,
         }),
-      ),
-      container,
-    );
+        container,
+      );
 
-    const browserRow = expectRowByTitle(container, "Browser enabled");
-    const profileRow = expectRowByTitle(container, "Tool profile");
-    expect(browserRow.textContent).toContain("Default: Enabled");
-    expect(profileRow.textContent).toContain("Default: Full");
-    browserRow.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")?.click();
-    profileRow.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")?.click();
-    expect(onBrowserEnabledReset).toHaveBeenCalledOnce();
-    expect(onToolProfileReset).toHaveBeenCalledOnce();
-  });
+      expect(onToolProfileChange).not.toHaveBeenCalled();
+      expect(container.querySelectorAll("wa-radio")).toHaveLength(4);
+      expect(container.querySelectorAll(".settings-segmented__btn--active")).toHaveLength(
+        overridden ? 1 : 0,
+      );
+      const full = expectButtonByText(container, "Full");
+      if (busy || overridden) {
+        full.click();
+      } else {
+        selectRadio(full);
+      }
+      expect(onToolProfileChange).toHaveBeenCalledTimes(writes);
+      if (writes > 0) {
+        expect(onToolProfileChange).toHaveBeenCalledWith("full");
+      }
+    },
+  );
 });

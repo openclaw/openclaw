@@ -1,4 +1,3 @@
-// Msteams plugin module implements setup surface behavior.
 import {
   createTopLevelChannelAllowFromSetter,
   createTopLevelChannelDmPolicy,
@@ -258,16 +257,11 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
         initialValue: false,
       });
       if (enableDelegated) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            msteams: {
-              ...next.channels?.msteams,
-              delegatedAuth: { enabled: true },
-            },
-          },
-        };
+        next = patchTopLevelChannelConfigSection({
+          cfg: next,
+          channel,
+          patch: { delegatedAuth: { enabled: true } },
+        });
         const noteDelegatedAuthFailure = async (err: unknown) => {
           await params.prompter.note(
             `Delegated auth setup failed: ${formatUnknownError(err)}\n` +
@@ -316,7 +310,7 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
           progress.stop();
           throw err;
         }
-        saveDelegatedTokens(tokens);
+        await saveDelegatedTokens(tokens);
         progress.stop(t("wizard.msteams.delegatedAuthConfigured"));
       }
     }

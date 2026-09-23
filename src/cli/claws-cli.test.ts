@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { persistClawInstallRecord } from "../claws/provenance.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import * as cliTestHelpers from "./claws-cli.test-helpers.js";
 
@@ -111,7 +112,6 @@ vi.mock("../claws/update-apply.js", async () => ({
 }));
 
 const { registerClawsCli } = await import("./claws-cli.js");
-const { waitUntilGatewayConfigApplied } = await import("./claws-cli.gateway-readiness.js");
 const { runClawsAddCommand } = await import("./claws-cli.runtime.js");
 const { ClawUpdateMutationError } = await import("../claws/update-apply.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -175,7 +175,11 @@ describe("claws cli", () => {
         }),
       },
       path: "state.sqlite",
-      walMaintenance: { checkpoint: () => false, close: mocks.closeReadOnlyDatabase },
+      walMaintenance: {
+        checkpoint: () => false,
+        close: mocks.closeReadOnlyDatabase,
+        reclaimFreePages: createSqliteWalReclamationResult,
+      },
     });
     mocks.applyClawAddPlan.mockReset();
     mocks.applyClawAddPlan.mockImplementation(async (plan) => ({
@@ -198,37 +202,10 @@ describe("claws cli", () => {
       summary: { claws: 0, partial: 0, missingAgents: 0, driftedFiles: 0, packageRefs: 0 },
     });
     mocks.buildClawRemovePlan.mockReset();
-    mocks.buildClawRemovePlan.mockResolvedValue({
-      schemaVersion: "openclaw.clawRemovePlan.v1",
-      dryRun: true,
-      mutationAllowed: false,
-      planIntegrity: "sha256:remove-plan",
-      target: "demo-agent",
-      agentId: "demo-agent",
-      actions: [
-        {
-          kind: "agent",
-          id: "demo-agent",
-          action: "remove",
-          target: 'agents.entries["demo-agent"]',
-          blocked: false,
-        },
-      ],
-      blockers: [],
-    });
+    const removal = cliTestHelpers.createClawRemoveFixtures();
+    mocks.buildClawRemovePlan.mockResolvedValue(removal.plan);
     mocks.applyClawRemovePlan.mockReset();
-    mocks.applyClawRemovePlan.mockResolvedValue({
-      schemaVersion: "openclaw.clawRemoveResult.v1",
-      dryRun: false,
-      status: "complete",
-      agentId: "demo-agent",
-      agentRemoved: true,
-      workspaceFiles: [],
-      packages: [],
-      mcpServers: [],
-      cronJobs: [],
-      packageRefsReleased: 1,
-    });
+    mocks.applyClawRemovePlan.mockResolvedValue(removal.result);
     mocks.buildClawUpdatePlan.mockReset();
     mocks.buildClawUpdatePlan.mockResolvedValue({
       schemaVersion: "openclaw.clawUpdatePlan.v1",
@@ -324,49 +301,6 @@ describe("claws cli", () => {
     expect(claws?.commands.map((command) => command.name())).toEqual(
       expect.arrayContaining(["inspect", "add", "status", "update", "remove", "export"]),
     );
-  });
-
-  it("accepts an already-applied Gateway config revision", async () => {
-    mocks.callGatewayFromCli.mockResolvedValue({
-      configRevisionHash: "revision-new",
-      appliedConfigHash: "revision-new",
-    });
-
-    await expect(waitUntilGatewayConfigApplied()).resolves.toBeUndefined();
-
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledOnce();
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith("config.get", { timeout: "5000" }, {});
-    expect(mocks.sleep).not.toHaveBeenCalled();
-  });
-
-  it("retries until the Gateway applies the persisted config revision", async () => {
-    mocks.callGatewayFromCli
-      .mockResolvedValueOnce({
-        configRevisionHash: "revision-new",
-        appliedConfigHash: "revision-old",
-      })
-      .mockResolvedValueOnce({
-        configRevisionHash: "revision-new",
-        appliedConfigHash: "revision-new",
-      });
-
-    await expect(waitUntilGatewayConfigApplied()).resolves.toBeUndefined();
-
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(2);
-    expect(mocks.sleep).toHaveBeenCalledOnce();
-    expect(mocks.sleep).toHaveBeenCalledWith(100);
-  });
-
-  it("reports the last Gateway error after the reload deadline", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(15_000);
-    mocks.callGatewayFromCli.mockRejectedValue(new Error("gateway unavailable"));
-
-    await expect(waitUntilGatewayConfigApplied()).rejects.toThrow(
-      "Gateway did not apply the Claw agent configuration in time: gateway unavailable",
-    );
-
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledOnce();
-    expect(mocks.sleep).toHaveBeenCalledOnce();
   });
 
   it("prints versioned experimental JSON for a development manifest", async () => {
@@ -494,7 +428,6 @@ describe("claws cli", () => {
   it("applies a minimal Claw only after explicit consent", async () => {
     const manifestPath = await writeManifest();
     const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
-    const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
     await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
     const plan = JSON.parse(mocks.logs[0] ?? "{}");
     mocks.logs.length = 0;
@@ -508,19 +441,30 @@ describe("claws cli", () => {
       plan.planIntegrity,
       "--workspace",
       workspace,
-      "--json",
     ]);
 
     expect(mocks.applyClawAddPlan).toHaveBeenCalledWith(
       expect.objectContaining({ planIntegrity: plan.planIntegrity }),
       expect.objectContaining({ consentPlanIntegrity: plan.planIntegrity }),
     );
-    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
-      schemaVersion: "openclaw.clawAddResult.v1",
-      stability: "experimental",
-      status: "complete",
-      agent: { finalId: "demo-agent", workspace: expectedWorkspace },
+    expect(mocks.logs[0]).toBe(
+      "Experimental: Claws contracts may change while RFC 0016 is under review.",
+    );
+    expect(mocks.runtime.log.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.applyClawAddPlan.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(mocks.logs).toContain("Added agent: demo-agent");
+    expect(mocks.logs.some((line) => line.startsWith("Workspace: "))).toBe(true);
+    mocks.callGatewayFromCli.mockResolvedValue({
+      config: { agents: { entries: { "demo-agent": {} } } },
+      configRevisionHash: "applied",
+      appliedConfigHash: "applied",
     });
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(1).mockReturnValue(20_000);
+    const [, options] = mocks.applyClawAddPlan.mock.calls[0]!;
+    await expect(
+      options.cronGateway.waitUntilAgentAvailable(plan.agent.finalId),
+    ).resolves.toBeUndefined();
   });
 
   it("resumes consented add with the matching in-flight workspace on disk", async () => {
@@ -757,6 +701,11 @@ describe("claws cli", () => {
     await runCli(["claws", "remove", "demo-agent", "--dry-run", "--json"]);
 
     expect(mocks.buildClawRemovePlan).toHaveBeenCalledWith("demo-agent", {
+      monitorGateway: expect.objectContaining({
+        inspect: expect.any(Function),
+        quiesce: expect.any(Function),
+        drain: expect.any(Function),
+      }),
       referencedCleanup: { mode: "retain" },
     });
     expect(mocks.applyClawRemovePlan).not.toHaveBeenCalled();
@@ -852,6 +801,12 @@ describe("claws cli", () => {
 
   it("uses the source recorded by the installed Claw when --from is omitted", async () => {
     const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
+    await mkdir(join(root, "profiles"));
+    await writeFile(
+      join(root, "profiles", "openclaw.yml"),
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n",
+      "utf8",
+    );
     mocks.readClawStatus.mockResolvedValue({
       schemaVersion: "openclaw.clawStatus.v1",
       records: [
@@ -887,6 +842,14 @@ describe("claws cli", () => {
       expect.objectContaining({
         agentId: "demo-agent",
         targetSource: expect.objectContaining({ name: "@acme/demo-agent", version: "1.2.3" }),
+        targetOpenClawProfile: expect.objectContaining({
+          agent: {
+            tools: expect.objectContaining({
+              profile: "full",
+              allow: expect.not.arrayContaining(["bundle-mcp"]),
+            }),
+          },
+        }),
       }),
     );
   });
@@ -931,6 +894,15 @@ describe("claws cli", () => {
 
   it("applies a supported update only after explicit consent", async () => {
     const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
+    const applyUpdate = mocks.applyClawUpdatePlan.getMockImplementation();
+    if (!applyUpdate) {
+      throw new Error("missing update fixture implementation");
+    }
+    mocks.applyClawUpdatePlan.mockImplementationOnce(async (...args) => {
+      const options = args[2] as { runtime?: typeof mocks.runtime };
+      (options.runtime ?? mocks.runtime).log("Installed plugin: demo");
+      return await applyUpdate(...args);
+    });
 
     await runCli([
       "claws",
@@ -963,11 +935,22 @@ describe("claws cli", () => {
         }),
       }),
     );
+    expect(mocks.logs).toHaveLength(1);
     expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
       schemaVersion: "openclaw.clawUpdateResult.v1",
       status: "complete",
       agentId: "demo-agent",
     });
+    mocks.callGatewayFromCli.mockResolvedValue({
+      config: { agents: { entries: { "demo-agent": {} } } },
+      configRevisionHash: "applied",
+      appliedConfigHash: "applied",
+    });
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(1).mockReturnValue(20_000);
+    const [plan, , options] = mocks.applyClawUpdatePlan.mock.calls[0]!;
+    await expect(
+      options.cronGateway.waitUntilAgentAvailable(plan.agentId),
+    ).resolves.toBeUndefined();
   });
 
   it("reports uncertain update mutations as partial JSON", async () => {
@@ -996,7 +979,23 @@ describe("claws cli", () => {
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("applies remove only after explicit consent", async () => {
+  it.each(
+    [true, false].flatMap((json) => ["complete", "partial"].map((status) => ({ json, status }))),
+  )("reports consented removal outcomes (json=$json, status=$status)", async ({ json, status }) => {
+    const warnings = ["Plugin cleanup is still finishing."];
+    const pluginRuntime = { operationId: "runtime-final", generation: 3, pluginIds: ["audit"] };
+    const error = {
+      code: "package_cleanup_failed",
+      message: "Plugin activation failed. Gateway generation 3: replacement applied.",
+    };
+    mocks.applyClawRemovePlan.mockResolvedValue({
+      ...cliTestHelpers.createClawRemoveFixtures().result,
+      pluginRuntime,
+      warnings,
+      status,
+      agentRemoved: status === "complete",
+      ...(status === "partial" ? { error } : {}),
+    });
     await runCli([
       "claws",
       "remove",
@@ -1004,7 +1003,7 @@ describe("claws cli", () => {
       "--yes",
       "--plan-integrity",
       "sha256:remove-plan",
-      "--json",
+      ...(json ? ["--json"] : []),
     ]);
 
     expect(mocks.applyClawRemovePlan).toHaveBeenCalledWith(
@@ -1014,11 +1013,26 @@ describe("claws cli", () => {
         referencedCleanup: { mode: "retain" },
       }),
     );
-    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
-      schemaVersion: "openclaw.clawRemoveResult.v1",
-      status: "complete",
-      agentId: "demo-agent",
-    });
+    if (json) {
+      expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+        schemaVersion: "openclaw.clawRemoveResult.v1",
+        status,
+        agentId: "demo-agent",
+        pluginRuntime,
+        warnings,
+        ...(status === "partial" ? { error } : {}),
+      });
+    } else {
+      expect(mocks.logs.filter((line) => line === `Warning: ${warnings[0]}`)).toHaveLength(1);
+      expect(mocks.logs).toContain("Plugin runtime changed in Gateway generation 3.");
+      if (status === "partial") {
+        expect(mocks.errors).toContain(error.message);
+        expect(mocks.logs).not.toContain("Removed agent: demo-agent");
+      }
+    }
+    if (status === "partial") {
+      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    }
   });
 
   it("requires the exact dry-run identity with remove consent", async () => {
@@ -1044,6 +1058,11 @@ describe("claws cli", () => {
     ]);
 
     expect(mocks.buildClawRemovePlan).toHaveBeenCalledWith("demo-agent", {
+      monitorGateway: expect.objectContaining({
+        inspect: expect.any(Function),
+        quiesce: expect.any(Function),
+        drain: expect.any(Function),
+      }),
       referencedCleanup: {
         mode: "remove-selected",
         selected: ["plugin:@acme/audit@1.0.0"],

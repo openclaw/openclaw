@@ -55,6 +55,7 @@ function expectPostJsonRequest(
   expected: {
     url: string;
     body: Record<string, unknown>;
+    elapsedMs: number;
   },
 ) {
   if (!call || typeof call !== "object") {
@@ -71,7 +72,10 @@ function expectPostJsonRequest(
   };
   expect(request.url).toBe(expected.url);
   expect(request.body).toEqual(expected.body);
-  expect(request.timeoutMs).toBe(120_000);
+  // Submission receives the remaining operation budget after preparation consumes clock ticks.
+  expect(request.timeoutMs).toBeGreaterThan(0);
+  expect(request.timeoutMs).toBeLessThanOrEqual(120_000);
+  expect(request.timeoutMs).toBeGreaterThanOrEqual(120_000 - expected.elapsedMs);
   expect(request.fetchFn).toBe(globalThis.fetch);
   expect(request.allowPrivateNetwork).toBe(false);
   expect(request.dispatcherPolicy).toBeUndefined();
@@ -236,35 +240,71 @@ describe("qwen video generation provider", () => {
 
   it("submits async Wan generation, polls task status, and downloads the resulting video", async () => {
     mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
-
-    const provider = qwenVideoGenerationProvider;
-    const result = await provider.generateVideo({
-      provider: "qwen",
-      model: "wan2.6-r2v-flash",
-      prompt: "animate this shot",
-      cfg: {},
-      inputImages: [{ url: "https://example.com/ref.png" }],
-      durationSeconds: 6,
-      audio: true,
-    });
-
-    expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
-    expectPostJsonRequest(postJsonRequestMock.mock.calls[0]?.[0], {
-      url: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
-      body: {
+    let nowMs = Date.now();
+    // Force preparation to cross a clock tick instead of relying on wall-clock timing.
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => nowMs++);
+    try {
+      const startedAt = Date.now();
+      const provider = qwenVideoGenerationProvider;
+      const result = await provider.generateVideo({
+        provider: "qwen",
         model: "wan2.6-r2v-flash",
-        input: {
-          prompt: "animate this shot",
-          reference_urls: ["https://example.com/ref.png"],
+        prompt: "animate this shot",
+        cfg: {},
+        inputImages: [{ url: "https://example.com/ref.png" }],
+        durationSeconds: 6,
+        audio: true,
+      });
+
+      expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
+      expectPostJsonRequest(postJsonRequestMock.mock.calls[0]?.[0], {
+        elapsedMs: Date.now() - startedAt,
+        url: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+        body: {
+          model: "wan2.6-r2v-flash",
+          input: {
+            prompt: "animate this shot",
+            reference_urls: ["https://example.com/ref.png"],
+          },
+          parameters: {
+            duration: 6,
+            audio: true,
+          },
         },
-        parameters: {
-          duration: 6,
-          audio: true,
-        },
-      },
+      });
+      expectDashscopeVideoTaskPoll(fetchWithTimeoutMock);
+      expectSuccessfulDashscopeVideoResult(result);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("does not poll after submission exhausts the default operation budget", async () => {
+    const startedAt = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+    const release = vi.fn(async () => {
+      clock.mockReturnValue(startedAt + 120_000);
     });
-    expectDashscopeVideoTaskPoll(fetchWithTimeoutMock);
-    expectSuccessfulDashscopeVideoResult(result);
+    postJsonRequestMock.mockResolvedValueOnce({
+      response: Response.json({ output: { task_id: "expired-task" } }),
+      release,
+    });
+
+    try {
+      await expect(
+        qwenVideoGenerationProvider.generateVideo({
+          provider: "qwen",
+          model: "wan2.6-t2v",
+          prompt: "animate this shot",
+          cfg: {},
+        }),
+      ).rejects.toThrow("Qwen video generation timed out after 120000ms");
+      expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(fetchWithTimeoutGuardedMock).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("applies configured request policy to DashScope video requests", async () => {
@@ -353,25 +393,25 @@ describe("qwen video generation provider", () => {
   });
 
   it("rejects DashScope video downloads that exceed the configured media cap", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          request_id: "req-too-large",
-          output: { task_id: "task-too-large" },
-        }),
-      },
+    postJsonRequestMock.mockImplementation(async () => ({
+      response: Response.json({
+        request_id: "req-too-large",
+        output: { task_id: "task-too-large" },
+      }),
       release: async () => {},
-    });
+    }));
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
-          output: {
-            task_status: "SUCCEEDED",
-            results: [{ video_url: "https://example.com/too-large.mp4" }],
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            output: {
+              task_status: "SUCCEEDED",
+              results: [{ video_url: "https://example.com/too-large.mp4" }],
+            },
           },
-        }),
-        headers: new Headers(),
-      })
+          { headers: new Headers() },
+        ),
+      )
       .mockResolvedValueOnce(streamedVideoResponse("too-large"));
 
     const provider = qwenVideoGenerationProvider;

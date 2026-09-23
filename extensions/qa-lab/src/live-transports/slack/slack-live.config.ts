@@ -1,12 +1,13 @@
 // QA Lab Slack credentials, instrumentation, and channel config.
-import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNonArrayRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildLiveQaApprovalForwardingConfig } from "../shared/live-approval-config.js";
 import {
   type SlackQaRuntimeEnv,
   type SlackQaConfigOverrides,
   SLACK_QA_ENV_KEYS,
   slackQaCredentialPayloadSchema,
+  type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 
 function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof SLACK_QA_ENV_KEYS)[number]) {
@@ -52,9 +53,7 @@ export function parseSlackQaCredentialPayload(payload: unknown): SlackQaRuntimeE
 }
 
 export function asPlainRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
+  return asNonArrayRecord(value);
 }
 
 type SlackQaPostMessageAttempt = {
@@ -138,32 +137,7 @@ export function buildSlackQaConfig(
   const codexEntry = baseCfg.plugins?.entries?.codex;
   const codexEntryConfig = asPlainRecord(codexEntry?.config);
   const codexAppServerConfig = asPlainRecord(codexEntryConfig.appServer);
-  const approvalForwardingConfig =
-    approvalOverrides?.exec || approvalOverrides?.plugin
-      ? {
-          approvals: {
-            ...baseCfg.approvals,
-            ...(approvalOverrides.exec
-              ? {
-                  exec: {
-                    ...baseCfg.approvals?.exec,
-                    enabled: true,
-                    mode: "session" as const,
-                  },
-                }
-              : {}),
-            ...(approvalOverrides.plugin
-              ? {
-                  plugin: {
-                    ...baseCfg.approvals?.plugin,
-                    enabled: true,
-                    mode: "session" as const,
-                  },
-                }
-              : {}),
-          },
-        }
-      : {};
+  const approvalForwardingConfig = buildLiveQaApprovalForwardingConfig(baseCfg, approvalOverrides);
   const codexAgentDefaults =
     codexApprovalConfig && primaryModel
       ? {
@@ -294,9 +268,17 @@ export function buildSlackQaConfig(
                 ? {
                     streaming: {
                       mode: "progress" as const,
+                      // These scenarios assert the portable draft compositor and
+                      // chat.update identity. Native task streams have their own
+                      // transport proof and do not expose that draft contract.
+                      nativeTransport: false,
                       progress: {
+                        // The per-run command marker is the tool-line correlation
+                        // key; the product default intentionally hides raw commands.
+                        commandText: "raw" as const,
                         label: false,
                         maxLines: 4,
+                        ...(progressOverrides.style ? { style: progressOverrides.style } : {}),
                         toolProgress: progressOverrides.toolProgress,
                         ...(progressOverrides.commentary === undefined
                           ? {}

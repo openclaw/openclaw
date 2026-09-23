@@ -1,11 +1,9 @@
 import { randomUUID } from "node:crypto";
-import fsSync, { type Stats } from "node:fs";
+import fsSync, { type BigIntStats, type Stats } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { z } from "zod";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
+import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import {
   ensureDurableDirectory,
   getPublishFileExclusiveFailureDetails,
@@ -14,10 +12,14 @@ import {
   requireDirectorySync,
   syncDirectory,
   syncDirectoryIfSupported,
+  type DirectoryReceipt,
   type DurableDirectoryReceipt,
   type PinnedDirectory,
 } from "../infra/directory-durability.js";
-import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
+import {
+  assertDirectoryIdentitySync as assertExactDirectoryIdentitySync,
+  sameFileIdentity,
+} from "../infra/fs-safe-advanced.js";
 import {
   canonicalPathFromExistingAncestor,
   ensureAbsoluteDirectory,
@@ -25,34 +27,32 @@ import {
 } from "../infra/fs-safe.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
-import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   createPrivateSqliteDirectory,
   createPrivateSqliteTempDirectory,
 } from "../infra/sqlite-private-directory.js";
-import {
-  createVerifiedSqliteSnapshot,
-  publishVerifiedSqliteFile,
-  type SqliteSnapshotValidator,
-} from "../infra/sqlite-snapshot.js";
+import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
-import { runExec } from "../process/exec.js";
-import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
-import { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db.js";
-import { assertOpenClawStateDatabaseForMaintenance } from "../state/openclaw-state-db.js";
 import {
-  sanitizeOpenClawGlobalStateSnapshot,
-  sanitizeOpenClawStateLeaseRows,
-} from "../state/openclaw-state-snapshot-sanitizer.js";
+  assertDirectory,
+  assertDirectoryIdentity,
+  assertDirectoryIdentitySync,
+  assertPrivateStagingDirectory,
+  assertTrustedStagingRoot,
+} from "./local-repository-directory-policy.js";
 import {
-  containsAsciiControlCharacter,
   copySnapshotArtifact,
   hashSnapshotArtifact,
   readSnapshotManifest,
   type SnapshotArtifactDigest,
   writeSnapshotManifest,
 } from "./manifest.js";
+import {
+  buildSnapshotValidator,
+  createOpenClawSnapshotCopy,
+  normalizeSnapshotIdentity,
+} from "./openclaw-snapshot-copy.js";
 import {
   SNAPSHOT_MANIFEST_FILENAME,
   SNAPSHOT_SQLITE_FILENAME,
@@ -81,148 +81,6 @@ const VALIDATION_STAGING_ENTRIES = new Set([
   SNAPSHOT_SQLITE_FILENAME,
   ...SQLITE_SIDECAR_SUFFIXES.map((suffix) => `${SNAPSHOT_SQLITE_FILENAME}${suffix}`),
 ]);
-const MACOS_REPLACEMENT_ACL_PERMISSIONS = new Set([
-  "add_file",
-  "add_subdirectory",
-  "chown",
-  "delete",
-  "delete_child",
-  "writesecurity",
-]);
-const WINDOWS_STAGING_ACCESS_RIGHTS = new Set([
-  "F",
-  "M",
-  "RX",
-  "R",
-  "W",
-  "D",
-  "DE",
-  "RC",
-  "WDAC",
-  "WO",
-  "AS",
-  "MA",
-  "GR",
-  "GW",
-  "GE",
-  "GA",
-  "RD",
-  "WD",
-  "AD",
-  "REA",
-  "WEA",
-  "X",
-  "DC",
-  "RA",
-  "WA",
-  "UNKNOWN",
-]);
-const WINDOWS_STAGING_REPLACEMENT_RIGHTS = new Set([
-  "F",
-  "M",
-  "D",
-  "DE",
-  "WDAC",
-  "WO",
-  "MA",
-  "GA",
-  "DC",
-  "UNKNOWN",
-]);
-const WINDOWS_TRUSTED_OWNER_SIDS = new Set([
-  "S-1-5-18", // LocalSystem
-  "S-1-5-32-544", // Builtin Administrators
-  "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464", // TrustedInstaller
-]);
-const WINDOWS_TRUSTED_ACCESS_SIDS = new Set([
-  ...WINDOWS_TRUSTED_OWNER_SIDS,
-  "S-1-3-0", // Creator Owner resolves to the trusted creator on inherited ACEs.
-]);
-// Windows descriptors can approach 64 KiB each; batched JSON and base64 need
-// bounded aggregate headroom across every ancestor.
-const WINDOWS_ACL_METADATA_MAX_BUFFER = 16 * 1024 * 1024;
-const WINDOWS_SID_PATTERN = /^S-\d+-\d+(?:-\d+)+$/iu;
-const WINDOWS_SID_SCHEMA = z
-  .string()
-  .regex(WINDOWS_SID_PATTERN)
-  .transform((value) => value.toUpperCase());
-const WINDOWS_PRINCIPAL_SCHEMA = z
-  .string()
-  .min(1)
-  .transform((value) => value.toUpperCase());
-const WINDOWS_ACCESS_ENTRY_SCHEMA = z
-  .object({
-    principal: WINDOWS_PRINCIPAL_SCHEMA,
-    accessType: z.enum(["Allow", "Deny"]),
-    rightsMask: z.number().int().nonnegative().max(0xffffffff),
-    inheritanceFlags: z.string(),
-    propagationFlags: z.string(),
-  })
-  .strict();
-const WINDOWS_PATH_SECURITY_SCHEMA = z
-  .object({
-    currentUserSid: WINDOWS_SID_SCHEMA,
-    paths: z
-      .array(
-        z
-          .object({
-            path: z.string().min(1),
-            ownerSid: WINDOWS_SID_SCHEMA,
-            entries: z.array(WINDOWS_ACCESS_ENTRY_SCHEMA).min(1),
-          })
-          .strict(),
-      )
-      .min(1),
-  })
-  .strict();
-const WINDOWS_FILE_RIGHTS = [
-  [0x000001, "RD"],
-  [0x000002, "WD"],
-  [0x000004, "AD"],
-  [0x000008, "REA"],
-  [0x000010, "WEA"],
-  [0x000020, "X"],
-  [0x000040, "DC"],
-  [0x000080, "RA"],
-  [0x000100, "WA"],
-  [0x010000, "D"],
-  [0x020000, "RC"],
-  [0x040000, "WDAC"],
-  [0x080000, "WO"],
-  [0x100000, "S"],
-  [0x02000000, "MA"],
-  [0x10000000, "GA"],
-  [0x20000000, "GE"],
-  [0x40000000, "GW"],
-  [0x80000000, "GR"],
-] as const;
-const WINDOWS_KNOWN_FILE_RIGHTS_MASK = WINDOWS_FILE_RIGHTS.reduce(
-  (mask, [right]) => mask | right,
-  0,
-);
-const WINDOWS_READ_RIGHTS_MASK =
-  0x000001 | 0x000008 | 0x000020 | 0x000080 | 0x020000 | 0x10000000 | 0x20000000 | 0x80000000;
-const WINDOWS_WRITE_RIGHTS_MASK =
-  0x000002 |
-  0x000004 |
-  0x000010 |
-  0x000040 |
-  0x000100 |
-  0x010000 |
-  0x040000 |
-  0x080000 |
-  0x10000000 |
-  0x40000000;
-let macosTrustedAclPrincipalsPromise: Promise<ReadonlySet<string>> | undefined;
-
-type WindowsAclEntry = {
-  readonly principal: string;
-  readonly rights: string[];
-  readonly rawRights: string;
-  readonly canRead: boolean;
-  readonly canWrite: boolean;
-};
-
 type LocalSqliteSnapshotProviderOptions = {
   readonly allowedDatabaseRoles?: readonly SnapshotDatabaseIdentity["role"][];
   readonly repositoryPath: string;
@@ -286,17 +144,9 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       applyPrivateModeSync(stagingDir, SNAPSHOT_DIRECTORY_MODE);
       await assertPrivateStagingDirectory(stagingIdentity, stagingDir);
       await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
-      const result = await createVerifiedSqliteSnapshot({
-        sourcePath,
+      const result = await createOpenClawSnapshotCopy({
+        database: { path: sourcePath, identity },
         targetPath: artifactPath,
-        requireNonEmptySource: identity.role !== "generic",
-        transform:
-          identity.role === "global"
-            ? sanitizeOpenClawGlobalStateSnapshot
-            : identity.role === "agent"
-              ? sanitizeOpenClawStateLeaseRows
-              : undefined,
-        validate: buildDatabaseValidator(identity),
       });
       applyPrivateModeSync(artifactPath, SNAPSHOT_FILE_MODE);
       const artifact = await hashSnapshotArtifact(stagingDir);
@@ -338,8 +188,10 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       await publishedDirectory.assertCurrent();
       const pendingPath = path.join(snapshotDir, SNAPSHOT_PENDING_FILENAME);
       const pendingHandle = await fs.open(pendingPath, "wx+", SNAPSHOT_FILE_MODE);
+      let pendingIdentity: Stats;
       try {
-        publishedEntries.set(SNAPSHOT_PENDING_FILENAME, await pendingHandle.stat());
+        pendingIdentity = await pendingHandle.stat();
+        publishedEntries.set(SNAPSHOT_PENDING_FILENAME, pendingIdentity);
         await pendingHandle.sync();
       } finally {
         await pendingHandle.close();
@@ -364,45 +216,15 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       );
       await publishedDirectory.assertCurrent();
       requireDirectorySync(await publishedDirectory.sync(), "SQLite snapshot directory");
-      await assertPendingSnapshotContents(snapshotDir);
-      const publishedManifest = await readSnapshotManifest(snapshotDir, snapshotId);
-      if (!isDeepStrictEqual(publishedManifest, manifest)) {
-        throw new Error(`SQLite snapshot manifest changed during publication: ${snapshotDir}`);
-      }
-      const publishedArtifact = await hashSnapshotArtifact(snapshotDir);
-      const publishedArtifactPath = path.join(snapshotDir, SNAPSHOT_SQLITE_FILENAME);
-      assertArtifactMatchesManifest(publishedArtifactPath, publishedArtifact, publishedManifest);
-      await verifySnapshotDatabaseFile(
-        publishedArtifactPath,
-        publishedArtifact.stat,
-        publishedManifest,
-        trustedRepositoryPath,
-      );
-      const expectedPendingIdentity = publishedEntries.get(SNAPSHOT_PENDING_FILENAME);
-      const currentPendingIdentity = fsSync.lstatSync(pendingPath);
-      if (
-        !expectedPendingIdentity ||
-        !sameFileIdentity(expectedPendingIdentity, currentPendingIdentity)
-      ) {
-        throw new Error(`SQLite snapshot pending marker changed: ${pendingPath}`);
-      }
-      await publishedDirectory.assertCurrent();
-      fsSync.unlinkSync(pendingPath);
-      requireDirectorySync(await publishedDirectory.sync(), "SQLite snapshot directory");
-      await publishedDirectory.assertCurrent();
-      const committedManifest = await readSnapshotManifest(snapshotDir, snapshotId);
-      if (!isDeepStrictEqual(committedManifest, manifest)) {
-        throw new Error(`SQLite snapshot manifest changed after commit: ${snapshotDir}`);
-      }
-      const committedArtifact = await hashSnapshotArtifact(snapshotDir);
-      assertArtifactMatchesManifest(
-        path.join(snapshotDir, SNAPSHOT_SQLITE_FILENAME),
-        committedArtifact,
-        committedManifest,
-      );
-      await assertExactSnapshotContents(snapshotDir);
-      await publishedDirectory.assertCurrent();
-      await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
+      await commitPendingSnapshot({
+        allowedDatabaseRoles: undefined,
+        repositoryIdentity,
+        repositoryPath: trustedRepositoryPath,
+        snapshotPath: snapshotDir,
+        snapshotDirectory: publishedDirectory,
+        validationRootPath: trustedRepositoryPath,
+        expected: { manifest, pendingIdentity },
+      });
       publishedEntries.delete(SNAPSHOT_PENDING_FILENAME);
       await publishedDirectory.close();
       publishedDirectory = undefined;
@@ -454,7 +276,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       manifest,
       this.#validationRootPath,
     );
-    await assertExactSnapshotContents(snapshotDir);
+    await assertSnapshotContents(snapshotDir);
     return { ok: true, manifest };
   }
 
@@ -511,8 +333,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
     await assertFreshRestorePathsAbsent(trustedTargetPath);
 
     return await withPrivateSqliteStagingDirectory({
-      rootPath: trustedRestoreParentPath,
-      expectedRootIdentity: restoreParentIdentity,
+      rootReceipt: restoreParentReceipt,
       prefix: ".tmp-restore-",
       allowedEntries: RESTORE_STAGING_ENTRIES,
       operation: async (stagingDir, stagingIdentity) => {
@@ -520,7 +341,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
         const stagedArtifact = await copySnapshotArtifact(snapshotDir, stagedSourcePath);
         await assertDirectoryIdentity(stagingDir, stagingIdentity);
         assertArtifactMatchesManifest(stagedSourcePath, stagedArtifact, manifest);
-        await assertExactSnapshotContents(snapshotDir);
+        await assertSnapshotContents(snapshotDir);
         await verifySnapshotDatabaseFile(
           stagedSourcePath,
           stagedArtifact.stat,
@@ -607,9 +428,19 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
         `SQLite snapshot must be an immediate child of repository ${this.#repositoryPath}: ${snapshotDir}`,
       );
     }
-    const repositoryStat = await fs.lstat(this.#repositoryPath);
+    const repositoryStat = await lstatIfExists(this.#repositoryPath);
+    if (!repositoryStat) {
+      throw new Error(
+        `SQLite snapshot repository does not exist: ${this.#repositoryPath}. Check the snapshot path or create a snapshot with \`openclaw backup sqlite create\`.`,
+      );
+    }
     assertDirectory(repositoryStat, this.#repositoryPath, "SQLite snapshot repository");
-    const snapshotStat = await fs.lstat(snapshotDir);
+    const snapshotStat = await lstatIfExists(snapshotDir);
+    if (!snapshotStat) {
+      throw new Error(
+        `SQLite snapshot does not exist: ${snapshotDir}. Run \`openclaw backup sqlite list --repository ${this.#repositoryPath}\` to inspect available snapshots.`,
+      );
+    }
     assertDirectory(snapshotStat, snapshotDir, "SQLite snapshot");
     if (await lstatIfExists(path.join(snapshotDir, SNAPSHOT_PENDING_FILENAME))) {
       const snapshotState = await classifySnapshotDirectory(snapshotDir);
@@ -628,7 +459,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
 }
 
 async function readVerifiedSnapshotManifest(snapshotDir: string): Promise<SnapshotManifest> {
-  await assertExactSnapshotContents(snapshotDir);
+  await assertSnapshotContents(snapshotDir);
   return await readSnapshotManifest(snapshotDir);
 }
 
@@ -677,11 +508,20 @@ async function verifySnapshotDatabaseFile(
     throw new Error(`Snapshot artifact changed before SQLite verification: ${artifactPath}`);
   }
 
-  const validationRootIdentity = await fs.lstat(validationRootPath);
+  const validationRootIdentity = await lstatIfExists(validationRootPath, { bigint: true });
+  if (!validationRootIdentity) {
+    throw new Error(
+      `SQLite validation root does not exist: ${validationRootPath}. Create a private directory there or pass an existing directory with \`--scratch\`.`,
+    );
+  }
   assertDirectory(validationRootIdentity, validationRootPath, "SQLite validation root");
+  const canonicalValidationRootPath = await fs.realpath(validationRootPath);
   await withPrivateSqliteStagingDirectory({
-    rootPath: validationRootPath,
-    expectedRootIdentity: validationRootIdentity,
+    rootReceipt: {
+      path: canonicalValidationRootPath,
+      realPath: canonicalValidationRootPath,
+      identity: validationRootIdentity,
+    },
     prefix: ".tmp-verify-",
     allowedEntries: VALIDATION_STAGING_ENTRIES,
     operation: async (validationDir) => {
@@ -726,24 +566,6 @@ async function verifySnapshotDatabaseFile(
   assertArtifactMatchesManifest(artifactPath, verifiedArtifact, manifest);
 }
 
-function normalizeSnapshotIdentity(identity: SnapshotDatabaseIdentity): SnapshotDatabaseIdentity {
-  if (identity.role === "global") {
-    return identity;
-  }
-  if (identity.role === "agent") {
-    const agentId = normalizeAgentId(identity.agentId);
-    if (!isValidAgentId(identity.agentId) || agentId !== identity.agentId) {
-      throw new Error(`SQLite snapshot agent id must be canonical: ${identity.agentId}`);
-    }
-    return { role: "agent", agentId };
-  }
-  const id = identity.id.trim();
-  if (!id || id !== identity.id || id.length > 256 || containsAsciiControlCharacter(id)) {
-    throw new Error("SQLite snapshot generic database id is invalid.");
-  }
-  return { role: "generic", id };
-}
-
 function buildDatabaseManifest(
   identity: SnapshotDatabaseIdentity,
   sourcePath: string,
@@ -759,27 +581,10 @@ function buildDatabaseManifest(
   return { role: "generic", id: identity.id, basename, userVersion };
 }
 
-function buildDatabaseValidator(
-  identity: SnapshotDatabaseIdentity | SnapshotDatabaseManifest,
-): SqliteSnapshotValidator {
-  if (identity.role === "global") {
-    return (database, pathname) =>
-      assertOpenClawStateDatabaseForMaintenance(database, { pathname });
-  }
-  if (identity.role === "agent") {
-    return (database, pathname) =>
-      assertOpenClawAgentDatabaseForMaintenance(database, {
-        agentId: identity.agentId,
-        pathname,
-      });
-  }
-  return () => undefined;
-}
-
 function buildManifestDatabaseValidator(
   manifest: SnapshotDatabaseManifest,
-): SqliteSnapshotValidator {
-  const validateOwner = buildDatabaseValidator(manifest);
+): import("../infra/sqlite-snapshot.js").SqliteSnapshotValidator {
+  const validateOwner = buildSnapshotValidator(manifest);
   return (database, pathname) => {
     validateOwner(database, pathname);
     const userVersion = readSqliteUserVersion(database);
@@ -800,26 +605,22 @@ async function ensurePrivateDirectory(
   directoryPath: string,
   scopeLabel: string,
 ): Promise<DurableDirectoryReceipt> {
-  let expectedExistingIdentity: Stats | undefined;
+  let expectedExistingIdentity: BigIntStats | undefined;
   if (process.platform !== "win32") {
-    try {
-      const existingIdentity = await fs.lstat(directoryPath);
-      assertDirectory(existingIdentity, directoryPath, scopeLabel);
+    expectedExistingIdentity = await lstatIfExists(directoryPath, { bigint: true });
+    if (expectedExistingIdentity) {
+      assertDirectory(expectedExistingIdentity, directoryPath, scopeLabel);
       // Repair only after ownership and ancestors prove another user cannot
       // redirect chmod, then bind the durability pin to that exact directory.
-      await assertTrustedStagingRoot(existingIdentity, directoryPath, {
+      const realPath = await assertTrustedStagingRoot(expectedExistingIdentity, directoryPath, {
         allowModeRepair: true,
       });
+      assertExactDirectoryIdentitySync(directoryPath, {
+        dev: expectedExistingIdentity.dev,
+        ino: expectedExistingIdentity.ino,
+        realPath,
+      });
       applyPrivateModeSync(directoryPath, SNAPSHOT_DIRECTORY_MODE);
-      const repairedIdentity = await fs.lstat(directoryPath);
-      if (!sameFileIdentity(existingIdentity, repairedIdentity)) {
-        throw new Error(`${scopeLabel} changed during private mode repair: ${directoryPath}`);
-      }
-      expectedExistingIdentity = repairedIdentity;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
     }
   }
   const receipt = await ensureDurableDirectory({
@@ -878,31 +679,6 @@ async function ensureRestoreParentDirectory(
   return receipt;
 }
 
-function assertDirectory(stat: Stats, pathname: string, label: string): void {
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    throw new Error(`${label} must be a real directory: ${pathname}`);
-  }
-}
-
-async function assertDirectoryIdentity(
-  directoryPath: string,
-  expectedIdentity: Stats,
-): Promise<void> {
-  const currentIdentity = await fs.lstat(directoryPath);
-  assertDirectory(currentIdentity, directoryPath, "SQLite staging directory");
-  if (!sameFileIdentity(currentIdentity, expectedIdentity)) {
-    throw new Error(`SQLite staging directory changed during operation: ${directoryPath}`);
-  }
-}
-
-function assertDirectoryIdentitySync(directoryPath: string, expectedIdentity: Stats): void {
-  const currentIdentity = fsSync.lstatSync(directoryPath);
-  assertDirectory(currentIdentity, directoryPath, "SQLite staging directory");
-  if (!sameFileIdentity(currentIdentity, expectedIdentity)) {
-    throw new Error(`SQLite staging directory changed during operation: ${directoryPath}`);
-  }
-}
-
 async function publishSnapshotEntryNoOverwrite(
   sourcePath: string,
   targetPath: string,
@@ -948,23 +724,14 @@ async function publishSnapshotEntryNoOverwrite(
   publishedEntries.set(entryName, finalTargetIdentity);
 }
 
-async function assertExactSnapshotContents(snapshotDir: string): Promise<void> {
-  await assertSnapshotContents(
-    snapshotDir,
-    new Set([SNAPSHOT_MANIFEST_FILENAME, SNAPSHOT_SQLITE_FILENAME]),
-  );
-}
-
-async function assertPendingSnapshotContents(snapshotDir: string): Promise<void> {
-  await assertSnapshotContents(
-    snapshotDir,
-    new Set([SNAPSHOT_MANIFEST_FILENAME, SNAPSHOT_PENDING_FILENAME, SNAPSHOT_SQLITE_FILENAME]),
-  );
-}
-
-async function assertSnapshotContents(snapshotDir: string, expected: Set<string>): Promise<void> {
+async function assertSnapshotContents(snapshotDir: string, allowPending = false): Promise<void> {
+  const expected = new Set([SNAPSHOT_MANIFEST_FILENAME, SNAPSHOT_SQLITE_FILENAME]);
   const entries = await fs.readdir(snapshotDir, { withFileTypes: true });
   for (const entry of entries) {
+    if (allowPending && entry.name === SNAPSHOT_PENDING_FILENAME) {
+      readPendingSnapshotIdentity(path.join(snapshotDir, entry.name));
+      continue;
+    }
     if (!expected.delete(entry.name)) {
       throw new Error(
         `SQLite snapshot contains unexpected entry: ${path.join(snapshotDir, entry.name)}`,
@@ -1014,13 +781,19 @@ async function classifySnapshotDirectory(snapshotDir: string): Promise<SnapshotD
   return complete ? "complete-pending" : "incomplete";
 }
 
-async function recoverCompletePendingSnapshot(params: {
+type PendingSnapshotCommitParams = {
   allowedDatabaseRoles: readonly SnapshotDatabaseIdentity["role"][] | undefined;
   repositoryIdentity: Stats;
   repositoryPath: string;
   snapshotPath: string;
   validationRootPath: string;
-}): Promise<SnapshotManifest> {
+  snapshotDirectory: PinnedDirectory;
+  expected?: { manifest: SnapshotManifest; pendingIdentity: Stats };
+};
+
+async function recoverCompletePendingSnapshot(
+  params: Omit<PendingSnapshotCommitParams, "snapshotDirectory" | "expected">,
+): Promise<SnapshotManifest> {
   const trustedRepositoryPath = await assertTrustedStagingRoot(
     params.repositoryIdentity,
     params.repositoryPath,
@@ -1030,68 +803,86 @@ async function recoverCompletePendingSnapshot(params: {
     label: "SQLite pending snapshot directory",
   });
   try {
-    const snapshotIdentity = snapshotDirectory.receipt.identity;
-    await assertPrivateStagingDirectory(snapshotIdentity, params.snapshotPath);
-    await snapshotDirectory.assertCurrent();
-    const snapshotState = await classifySnapshotDirectory(params.snapshotPath);
-    if (snapshotState === "incomplete") {
-      throw new Error(`SQLite snapshot is incomplete: ${params.snapshotPath}`);
-    }
-    const manifest = await readSnapshotManifest(params.snapshotPath);
-    assertAllowedDatabaseRole(manifest, params.allowedDatabaseRoles);
-    const artifact = await hashSnapshotArtifact(params.snapshotPath);
-    const artifactPath = path.join(params.snapshotPath, SNAPSHOT_SQLITE_FILENAME);
-    assertArtifactMatchesManifest(artifactPath, artifact, manifest);
-    await verifySnapshotDatabaseFile(
-      artifactPath,
-      artifact.stat,
-      manifest,
-      params.validationRootPath,
-    );
-    requireDirectorySync(await snapshotDirectory.sync(), "SQLite pending snapshot directory");
-
-    const pendingPath = path.join(params.snapshotPath, SNAPSHOT_PENDING_FILENAME);
-    const pendingIdentity = lstatIfExistsSync(pendingPath);
-    if (pendingIdentity) {
-      if (
-        pendingIdentity.isSymbolicLink() ||
-        !pendingIdentity.isFile() ||
-        pendingIdentity.nlink > 1
-      ) {
-        throw new Error(`SQLite snapshot pending marker is unsafe: ${pendingPath}`);
-      }
-      await snapshotDirectory.assertCurrent();
-      const currentPendingIdentity = lstatIfExistsSync(pendingPath);
-      if (currentPendingIdentity) {
-        if (!sameFileIdentity(pendingIdentity, currentPendingIdentity)) {
-          throw new Error(`SQLite snapshot pending marker changed: ${pendingPath}`);
-        }
-        try {
-          fsSync.unlinkSync(pendingPath);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-            throw error;
-          }
-        }
-      }
-    }
-
-    // Both durable payload files already exist. Removing the exact marker and
-    // syncing this directory completes the interrupted repository commit.
-    // A concurrent recovery may win the unlink; syncing here still commits it.
-    requireDirectorySync(await snapshotDirectory.sync(), "SQLite pending snapshot directory");
-    await snapshotDirectory.assertCurrent();
-    const committedManifest = await readVerifiedSnapshotManifest(params.snapshotPath);
-    if (!isDeepStrictEqual(committedManifest, manifest)) {
-      throw new Error(`SQLite snapshot manifest changed during recovery: ${params.snapshotPath}`);
-    }
-    const committedArtifact = await hashSnapshotArtifact(params.snapshotPath);
-    assertArtifactMatchesManifest(artifactPath, committedArtifact, committedManifest);
-    await assertDirectoryIdentity(trustedRepositoryPath, params.repositoryIdentity);
-    return committedManifest;
+    await assertPrivateStagingDirectory(snapshotDirectory.receipt.identity, params.snapshotPath);
+    return await commitPendingSnapshot({
+      ...params,
+      repositoryPath: trustedRepositoryPath,
+      snapshotDirectory,
+    });
   } finally {
     await snapshotDirectory.close().catch(() => undefined);
   }
+}
+
+async function commitPendingSnapshot(
+  params: PendingSnapshotCommitParams,
+): Promise<SnapshotManifest> {
+  const { snapshotPath, snapshotDirectory, expected } = params;
+  const scopeLabel = expected ? "SQLite snapshot directory" : "SQLite pending snapshot directory";
+  await snapshotDirectory.assertCurrent();
+  await assertSnapshotContents(snapshotPath, true);
+  const manifest = await readSnapshotManifest(snapshotPath);
+  if (expected && !isDeepStrictEqual(manifest, expected.manifest)) {
+    throw new Error(`SQLite snapshot manifest changed during publication: ${snapshotPath}`);
+  }
+  assertAllowedDatabaseRole(manifest, params.allowedDatabaseRoles);
+  const artifact = await hashSnapshotArtifact(snapshotPath);
+  const artifactPath = path.join(snapshotPath, SNAPSHOT_SQLITE_FILENAME);
+  assertArtifactMatchesManifest(artifactPath, artifact, manifest);
+  await verifySnapshotDatabaseFile(
+    artifactPath,
+    artifact.stat,
+    manifest,
+    params.validationRootPath,
+  );
+  if (!expected) {
+    requireDirectorySync(await snapshotDirectory.sync(), scopeLabel);
+  }
+
+  // A creator and a recovery reader can commit the same verified payloads.
+  const pendingPath = path.join(snapshotPath, SNAPSHOT_PENDING_FILENAME);
+  const pendingIdentity = readPendingSnapshotIdentity(pendingPath);
+  if (pendingIdentity) {
+    if (expected && !sameFileIdentity(expected.pendingIdentity, pendingIdentity)) {
+      throw new Error(`SQLite snapshot pending marker changed: ${pendingPath}`);
+    }
+    await snapshotDirectory.assertCurrent();
+    const currentPendingIdentity = readPendingSnapshotIdentity(pendingPath);
+    if (currentPendingIdentity) {
+      if (!sameFileIdentity(pendingIdentity, currentPendingIdentity)) {
+        throw new Error(`SQLite snapshot pending marker changed: ${pendingPath}`);
+      }
+      try {
+        fsSync.unlinkSync(pendingPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+    }
+  }
+
+  requireDirectorySync(await snapshotDirectory.sync(), scopeLabel);
+  await snapshotDirectory.assertCurrent();
+  const committedManifest = await readSnapshotManifest(snapshotPath);
+  if (!isDeepStrictEqual(committedManifest, manifest)) {
+    const phase = expected ? "after commit" : "during recovery";
+    throw new Error(`SQLite snapshot manifest changed ${phase}: ${snapshotPath}`);
+  }
+  const committedArtifact = await hashSnapshotArtifact(snapshotPath);
+  assertArtifactMatchesManifest(artifactPath, committedArtifact, committedManifest);
+  await assertSnapshotContents(snapshotPath);
+  await snapshotDirectory.assertCurrent();
+  await assertDirectoryIdentity(params.repositoryPath, params.repositoryIdentity);
+  return committedManifest;
+}
+
+function readPendingSnapshotIdentity(pendingPath: string): Stats | undefined {
+  const identity = lstatIfExistsSync(pendingPath);
+  if (identity && (identity.isSymbolicLink() || !identity.isFile() || identity.nlink > 1)) {
+    throw new Error(`SQLite snapshot pending marker is unsafe: ${pendingPath}`);
+  }
+  return identity;
 }
 
 async function assertFreshRestorePathsAbsent(databasePath: string): Promise<void> {
@@ -1120,9 +911,17 @@ function assertNoSqliteSidecarsSync(databasePath: string): void {
   }
 }
 
-async function lstatIfExists(pathname: string): Promise<Stats | undefined> {
+async function lstatIfExists(pathname: string): Promise<Stats | undefined>;
+async function lstatIfExists(
+  pathname: string,
+  options: { bigint: true },
+): Promise<BigIntStats | undefined>;
+async function lstatIfExists(
+  pathname: string,
+  options?: { bigint: true },
+): Promise<Stats | BigIntStats | undefined> {
   try {
-    return await fs.lstat(pathname);
+    return await fs.lstat(pathname, options);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
@@ -1177,17 +976,16 @@ async function removePrivateDirectoryIfOwned(
 }
 
 async function withPrivateSqliteStagingDirectory<T>(options: {
-  rootPath: string;
-  expectedRootIdentity: Stats;
+  rootReceipt: Omit<DirectoryReceipt, "identity"> & { identity: Stats | BigIntStats };
   prefix: string;
   allowedEntries: ReadonlySet<string>;
   operation: (directoryPath: string, directoryIdentity: Stats) => Promise<T>;
 }): Promise<T> {
   const trustedRootPath = await assertTrustedStagingRoot(
-    options.expectedRootIdentity,
-    options.rootPath,
+    options.rootReceipt.identity,
+    options.rootReceipt.path,
   );
-  await assertDirectoryIdentity(trustedRootPath, options.expectedRootIdentity);
+  await assertDirectoryIdentity(trustedRootPath, options.rootReceipt.identity);
   const directoryPath = await createPrivateSqliteTempDirectory(trustedRootPath, options.prefix);
   const directoryIdentity = await fs.lstat(directoryPath);
 
@@ -1195,7 +993,7 @@ async function withPrivateSqliteStagingDirectory<T>(options: {
   try {
     applyPrivateModeSync(directoryPath, SNAPSHOT_DIRECTORY_MODE);
     await assertPrivateStagingDirectory(directoryIdentity, directoryPath);
-    await assertDirectoryIdentity(trustedRootPath, options.expectedRootIdentity);
+    await assertDirectoryIdentity(trustedRootPath, options.rootReceipt.identity);
     outcome = {
       ok: true,
       value: await options.operation(directoryPath, directoryIdentity),
@@ -1230,354 +1028,24 @@ async function withPrivateSqliteStagingDirectory<T>(options: {
       cause: cleanupOutcome.error,
     });
   }
-  requireDirectorySync(
-    await syncDirectory({
-      path: trustedRootPath,
-      realPath: trustedRootPath,
-      identity: options.expectedRootIdentity,
-    }),
-    "Private SQLite staging root",
-  );
+  requireDirectorySync(await syncDirectory(options.rootReceipt), "Private SQLite staging root");
   if (!outcome.ok) {
     throw outcome.error;
   }
   return outcome.value;
 }
 
-async function assertTrustedStagingRoot(
-  expectedIdentity: Stats,
-  rootPath: string,
-  options: { allowModeRepair?: boolean } = {},
-): Promise<string> {
-  const resolvedRootPath = path.resolve(rootPath);
-  const trustedRootPath = await fs.realpath(resolvedRootPath);
-  const rootIdentity = await fs.lstat(trustedRootPath);
-  assertDirectory(rootIdentity, trustedRootPath, "Private SQLite staging root");
-  if (!sameFileIdentity(rootIdentity, expectedIdentity)) {
-    throw new Error(`Private SQLite staging root changed during operation: ${resolvedRootPath}`);
-  }
-  if (process.platform === "win32") {
-    await assertTrustedWindowsStagingPath(trustedRootPath);
-    return trustedRootPath;
-  }
-  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  const unsafeMode = (rootIdentity.mode & 0o022) !== 0;
-  if (
-    uid === undefined ||
-    rootIdentity.uid !== uid ||
-    (unsafeMode && options.allowModeRepair !== true)
-  ) {
-    throw new Error(
-      `Private SQLite staging root must be owned by the current user and not writable by other users: ${resolvedRootPath}`,
-    );
-  }
-  if (process.platform === "darwin") {
-    await assertTrustedMacosAcl(trustedRootPath, options.allowModeRepair !== true);
-  }
-  await assertTrustedPosixStagingAncestors(trustedRootPath, rootIdentity, uid);
-  return trustedRootPath;
-}
-
-async function assertPrivateStagingDirectory(
-  expectedIdentity: Stats,
-  directoryPath: string,
-): Promise<void> {
-  const currentIdentity = await fs.lstat(directoryPath);
-  assertDirectory(currentIdentity, directoryPath, "Private SQLite staging directory");
-  if (!sameFileIdentity(currentIdentity, expectedIdentity)) {
-    throw new Error(`Private SQLite staging directory changed during operation: ${directoryPath}`);
-  }
-  if (process.platform === "win32") {
-    // The parent root was already checked for private and inherit-only ACEs.
-    // An untrusted principal cannot alter or replace children beneath that root.
-    return;
-  }
-  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  if (uid === undefined || currentIdentity.uid !== uid || (currentIdentity.mode & 0o077) !== 0) {
-    throw new Error(`Private SQLite staging directory permissions are unsafe: ${directoryPath}`);
-  }
-  if (process.platform === "darwin") {
-    await assertTrustedMacosAcl(directoryPath, true);
-  }
-}
-
-async function assertTrustedPosixStagingAncestors(
-  rootPath: string,
-  rootIdentity: Stats,
-  uid: number,
-): Promise<void> {
-  // A private root is still replaceable when one of its ancestors is writable
-  // by another user. Sticky directories are safe only for user-owned children.
-  let childIdentity = rootIdentity;
-  let currentPath = path.dirname(rootPath);
-  while (currentPath !== rootPath) {
-    const currentIdentity = await fs.lstat(currentPath);
-    assertDirectory(currentIdentity, currentPath, "SQLite staging ancestor");
-    const writableByOtherUsers = (currentIdentity.mode & 0o022) !== 0;
-    const ownerCanReplaceChild = currentIdentity.uid !== uid && currentIdentity.uid !== 0;
-    const stickyOwnerIsTrusted = currentIdentity.uid === uid || currentIdentity.uid === 0;
-    const stickyProtectsChild =
-      (currentIdentity.mode & 0o1000) !== 0 && stickyOwnerIsTrusted && childIdentity.uid === uid;
-    if (ownerCanReplaceChild || (writableByOtherUsers && !stickyProtectsChild)) {
-      throw new Error(
-        `SQLite staging ancestor must not allow another user to replace its child: ${currentPath}`,
-      );
-    }
-    if (process.platform === "darwin") {
-      await assertTrustedMacosAcl(currentPath, false);
-    }
-    const parentPath = path.dirname(currentPath);
-    if (parentPath === currentPath) {
-      return;
-    }
-    childIdentity = currentIdentity;
-    currentPath = parentPath;
-  }
-}
-
-type MacosAclEntry = {
-  effect: "allow" | "deny";
-  permissions: ReadonlySet<string>;
-  principal: string;
-};
-
-function parseMacosAclEntries(output: string, pathname: string): MacosAclEntry[] {
-  const lines = output.split(/\r?\n/u);
-  const header = lines.shift();
-  if (!header) {
-    throw new Error(`Unable to inspect macOS ACL for SQLite staging: ${pathname}`);
-  }
-  const entries: MacosAclEntry[] = [];
-  for (const line of lines) {
-    if (!/^\s*\d+:\s/u.test(line)) {
-      continue;
-    }
-    const match = line.match(/^\s*\d+:\s+(.+?)\s+(?:inherited\s+)?(allow|deny)\s+([a-z_,]+)\s*$/u);
-    if (!match) {
-      throw new Error(`Unable to parse macOS ACL for SQLite staging: ${pathname}`);
-    }
-    const [, principal, effect, permissions] = match;
-    if (!principal || !permissions || (effect !== "allow" && effect !== "deny")) {
-      throw new Error(`Unable to parse macOS ACL for SQLite staging: ${pathname}`);
-    }
-    entries.push({
-      principal: normalizeAclPrincipal(principal),
-      effect,
-      permissions: new Set(permissions.split(",")),
-    });
-  }
-  if (/^[^\s]{10}\+/u.test(header) && entries.length === 0) {
-    throw new Error(`Unable to parse macOS ACL for SQLite staging: ${pathname}`);
-  }
-  return entries;
-}
-
-function normalizeAclPrincipal(principal: string): string {
-  return principal.trim().toLowerCase();
-}
-
-async function resolveTrustedMacosAclPrincipals(): Promise<ReadonlySet<string>> {
-  macosTrustedAclPrincipalsPromise ??= (async () => {
-    const dsmemberutil = resolveSystemBin("dsmemberutil");
-    if (!dsmemberutil) {
-      throw new Error("Unable to resolve dsmemberutil for macOS ACL verification.");
-    }
-    const currentUsername = os.userInfo().username;
-    const usernames = new Set([currentUsername, "root"]);
-    const trusted = new Set<string>();
-    for (const username of usernames) {
-      const { stdout } = await runExec(dsmemberutil, ["getuuid", "-U", username], {
-        timeoutMs: 5_000,
-        maxBuffer: 64 * 1024,
-      });
-      const uuid = stdout.trim();
-      if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(uuid)) {
-        throw new Error(`Unable to resolve trusted macOS ACL principal for ${username}.`);
-      }
-      trusted.add(normalizeAclPrincipal(uuid));
-      trusted.add(normalizeAclPrincipal(username));
-      trusted.add(normalizeAclPrincipal(`user:${username}`));
-    }
-    return trusted;
-  })();
-  return await macosTrustedAclPrincipalsPromise;
-}
-
-async function assertTrustedMacosAcl(pathname: string, requirePrivate: boolean): Promise<void> {
-  const ls = resolveSystemBin("ls");
-  if (!ls) {
-    throw new Error(`Unable to verify macOS ACL for SQLite staging: ${pathname}`);
-  }
-  let entries: MacosAclEntry[];
+/** Create or strictly admit a Git repository through the local snapshot root trust policy. */
+export async function ensurePrivateSnapshotRepositoryRoot(rootPath: string): Promise<string> {
   try {
-    const [result, trustedPrincipals] = await Promise.all([
-      runExec(ls, ["-lden", "--", pathname], {
-        timeoutMs: 5_000,
-        maxBuffer: 1024 * 1024,
-      }),
-      resolveTrustedMacosAclPrincipals(),
-    ]);
-    entries = parseMacosAclEntries(result.stdout, pathname).filter(
-      (entry) => !trustedPrincipals.has(entry.principal),
-    );
+    return await assertTrustedStagingRoot(await fs.lstat(rootPath), rootPath);
   } catch (error) {
-    throw new Error(`Unable to verify macOS ACL for SQLite staging: ${pathname}`, {
-      cause: error,
-    });
-  }
-  const unsafeEntry = entries.find(
-    (entry) =>
-      entry.effect === "allow" &&
-      (requirePrivate ||
-        [...entry.permissions].some((permission) =>
-          MACOS_REPLACEMENT_ACL_PERMISSIONS.has(permission),
-        )),
-  );
-  if (unsafeEntry) {
-    throw new Error(`macOS ACL permits untrusted SQLite staging access: ${pathname}`);
-  }
-}
-
-async function assertTrustedWindowsStagingPath(rootPath: string): Promise<void> {
-  const paths = [rootPath];
-  let currentPath = path.dirname(rootPath);
-  while (currentPath !== rootPath) {
-    paths.push(currentPath);
-    const parentPath = path.dirname(currentPath);
-    if (parentPath === currentPath) {
-      break;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
     }
-    currentPath = parentPath;
   }
-  let security: z.infer<typeof WINDOWS_PATH_SECURITY_SCHEMA>;
-  try {
-    security = await inspectWindowsPathSecurity(paths);
-  } catch {
-    throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${rootPath}`);
-  }
-  if (security.paths.length !== paths.length) {
-    throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${rootPath}`);
-  }
-  for (const [index, pathname] of paths.entries()) {
-    const pathSecurity = security.paths[index];
-    if (!pathSecurity || path.resolve(pathSecurity.path) !== path.resolve(pathname)) {
-      throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${pathname}`);
-    }
-    assertTrustedWindowsAcl(pathname, index === 0, security.currentUserSid, pathSecurity);
-  }
-}
-
-function assertTrustedWindowsAcl(
-  pathname: string,
-  requirePrivate: boolean,
-  currentUserSid: string,
-  security: z.infer<typeof WINDOWS_PATH_SECURITY_SCHEMA>["paths"][number],
-): void {
-  if (security.ownerSid !== currentUserSid && !WINDOWS_TRUSTED_OWNER_SIDS.has(security.ownerSid)) {
-    throw new Error(`Windows staging path is owned by an untrusted principal: ${pathname}`);
-  }
-  const allowedEntries = security.entries.filter((entry) => entry.accessType === "Allow");
-  if (allowedEntries.length === 0) {
-    throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${pathname}`);
-  }
-  const unsafeEntries = allowedEntries
-    .filter(
-      (entry) =>
-        entry.principal !== currentUserSid && !WINDOWS_TRUSTED_ACCESS_SIDS.has(entry.principal),
-    )
-    .map(windowsSecurityEntryToAclEntry)
-    .filter((entry) => windowsAclEntryPermitsUnsafeStagingAccess(entry, requirePrivate));
-  if (unsafeEntries.length > 0) {
-    throw new Error(`Windows ACL permits untrusted SQLite staging access: ${pathname}`);
-  }
-}
-
-function windowsSecurityEntryToAclEntry(
-  entry: z.infer<typeof WINDOWS_ACCESS_ENTRY_SCHEMA>,
-): WindowsAclEntry {
-  const rights: string[] = WINDOWS_FILE_RIGHTS.filter(
-    ([right]) => (entry.rightsMask & right) !== 0,
-  ).map(([, name]) => name);
-  if ((entry.rightsMask & ~WINDOWS_KNOWN_FILE_RIGHTS_MASK) !== 0) {
-    rights.push("UNKNOWN");
-  }
-  const inheritanceFlags = new Set(entry.inheritanceFlags.split(",").map((flag) => flag.trim()));
-  const propagationFlags = new Set(entry.propagationFlags.split(",").map((flag) => flag.trim()));
-  const rawFlags = [
-    inheritanceFlags.has("ObjectInherit") ? "(OI)" : "",
-    inheritanceFlags.has("ContainerInherit") ? "(CI)" : "",
-    propagationFlags.has("NoPropagateInherit") ? "(NP)" : "",
-    propagationFlags.has("InheritOnly") ? "(IO)" : "",
-  ].join("");
-  return {
-    principal: entry.principal,
-    rights,
-    rawRights: `${rawFlags}(${rights.join(",")})`,
-    canRead: (entry.rightsMask & WINDOWS_READ_RIGHTS_MASK) !== 0,
-    canWrite: (entry.rightsMask & WINDOWS_WRITE_RIGHTS_MASK) !== 0,
-  };
-}
-
-function windowsAclEntryPermitsUnsafeStagingAccess(
-  entry: WindowsAclEntry,
-  requirePrivate: boolean,
-): boolean {
-  // Inherit-only ACEs on ordinary ancestors are covered when the protected
-  // root is inspected. Private roots must also reject rights inherited by files.
-  if (!requirePrivate && /\(IO\)/iu.test(entry.rawRights)) {
-    return false;
-  }
-  const rights = entry.rights.map((right) => right.toUpperCase());
-  const unsafeRights = requirePrivate
-    ? WINDOWS_STAGING_ACCESS_RIGHTS
-    : WINDOWS_STAGING_REPLACEMENT_RIGHTS;
-  return (
-    (requirePrivate && (entry.canWrite || entry.canRead)) ||
-    rights.some((right) => unsafeRights.has(right))
-  );
-}
-
-async function inspectWindowsPathSecurity(
-  pathnames: readonly string[],
-): Promise<z.infer<typeof WINDOWS_PATH_SECURITY_SCHEMA>> {
-  const encodedPaths = Buffer.from(JSON.stringify(pathnames), "utf8").toString("base64");
-  const command = [
-    "$ErrorActionPreference = 'Stop'",
-    `$paths = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedPaths}')))`,
-    "$pathSecurity = @($paths | ForEach-Object { $path = [string]$_; $acl = Get-Acl -LiteralPath $path; $entries = @($acl.Access | ForEach-Object { $identity = $_.IdentityReference; try { $principal = $identity.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $principal = [string]$identity.Value }; $rightsMask = ([int64][int32]$_.FileSystemRights) -band 0xffffffffL; [pscustomobject]@{ principal = $principal; accessType = [string]$_.AccessControlType; rightsMask = $rightsMask; inheritanceFlags = [string]$_.InheritanceFlags; propagationFlags = [string]$_.PropagationFlags } }); [pscustomobject]@{ path = $path; ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value; entries = $entries } })",
-    "$payload = [pscustomobject]@{ currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; paths = $pathSecurity }",
-    "$json = ConvertTo-Json -InputObject $payload -Compress -Depth 4",
-    "[Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json)))",
-  ].join("; ");
-  const stdout = await runEncodedWindowsPowerShell(command, WINDOWS_ACL_METADATA_MAX_BUFFER);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(Buffer.from(stdout.trim(), "base64").toString("utf8"));
-  } catch (error) {
-    throw new Error("Unable to parse Windows ACL metadata.", { cause: error });
-  }
-  const result = WINDOWS_PATH_SECURITY_SCHEMA.safeParse(parsed);
-  if (!result.success) {
-    throw new Error("Invalid Windows ACL metadata.", { cause: result.error });
-  }
-  return result.data;
-}
-
-async function runEncodedWindowsPowerShell(command: string, maxBuffer: number): Promise<string> {
-  const powershell = resolveSystemBin("powershell");
-  if (!powershell) {
-    throw new Error("Unable to resolve PowerShell for Windows SQLite path security.");
-  }
-  const encodedCommand = Buffer.from(command, "utf16le").toString("base64");
-  const { stdout } = await runExec(
-    powershell,
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCommand],
-    {
-      timeoutMs: 10_000,
-      maxBuffer,
-    },
-  );
-  return stdout;
+  const receipt = await ensurePrivateDirectory(rootPath, "Git backup repository");
+  return await assertTrustedStagingRoot(receipt.identity, rootPath);
 }
 
 async function removePublishedSnapshotDirectoryIfOwned(

@@ -1,41 +1,35 @@
 import type { DatabaseSync } from "node:sqlite";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
-const BOARD_SCHEMA_START = "CREATE TABLE IF NOT EXISTS board_tabs (";
-const BOARD_SCHEMA_END = "CREATE TABLE IF NOT EXISTS heartbeat_outcomes (";
 const BOARD_WIDGETS_SCHEMA_START = "CREATE TABLE IF NOT EXISTS board_widgets (";
-const BOARD_WIDGETS_SCHEMA_END = "CREATE INDEX IF NOT EXISTS idx_agent_board_widgets_tab_position";
 const BOARD_WIDGETS_MIGRATION_TABLE = "board_widgets_plugin_kind_migration_new";
 const PLUGIN_CONTENT_KIND_CLAUSE_PATTERN =
   /content_kind\s+IN\s*\(\s*'html'\s*,\s*'mcp-app'\s*,\s*'plugin'\s*\)/iu;
 const PLUGIN_PAYLOAD_BRANCH_PATTERN =
   /\s+OR\s+\(content_kind\s*=\s*'plugin'\s+AND\s+html\s+IS\s+NULL\s+AND\s+descriptor_json\s+IS\s+NOT\s+NULL\s+AND\s+view_generation\s+IS\s+NULL\)/iu;
 
-function splitBoardSchema(sql: string): { board: string; withoutBoard: string } {
-  const start = sql.indexOf(BOARD_SCHEMA_START);
-  const end = sql.indexOf(BOARD_SCHEMA_END, start);
-  if (start === -1 || end === -1) {
-    throw new Error("OpenClaw agent board schema markers are missing from the canonical schema.");
-  }
-  return {
-    board: sql.slice(start, end),
-    withoutBoard: `${sql.slice(0, start)}${sql.slice(end)}`,
-  };
-}
-
-const boardSchema = splitBoardSchema(OPENCLAW_AGENT_SCHEMA_SQL);
-
-const OPENCLAW_AGENT_BOARD_SCHEMA_SQL = boardSchema.board;
+const OPENCLAW_AGENT_BOARD_SCHEMA_SQL = extractSqliteTableSchema(
+  OPENCLAW_AGENT_SCHEMA_SQL,
+  "board_tabs",
+  {
+    endMarker: "CREATE TABLE IF NOT EXISTS session_progress_cards (",
+    includeEndMarker: false,
+    errorMessage: "OpenClaw agent board schema markers are missing from the canonical schema.",
+  },
+);
 export const AGENT_V14_BOARD_SCHEMA_SQL = OPENCLAW_AGENT_BOARD_SCHEMA_SQL;
-export const OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL = boardSchema.withoutBoard;
+export const OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL = OPENCLAW_AGENT_SCHEMA_SQL.replace(
+  OPENCLAW_AGENT_BOARD_SCHEMA_SQL,
+  "",
+);
 
 function canonicalBoardWidgetsCreateSql(): string {
-  const start = OPENCLAW_AGENT_BOARD_SCHEMA_SQL.indexOf(BOARD_WIDGETS_SCHEMA_START);
-  const end = OPENCLAW_AGENT_BOARD_SCHEMA_SQL.indexOf(BOARD_WIDGETS_SCHEMA_END, start);
-  if (start === -1 || end === -1) {
-    throw new Error("OpenClaw agent board widget schema markers are missing.");
-  }
-  return OPENCLAW_AGENT_BOARD_SCHEMA_SQL.slice(start, end).trim();
+  return extractSqliteTableSchema(OPENCLAW_AGENT_BOARD_SCHEMA_SQL, "board_widgets", {
+    endMarker: "CREATE INDEX IF NOT EXISTS idx_agent_board_widgets_tab_position",
+    includeEndMarker: false,
+    errorMessage: "OpenClaw agent board widget schema markers are missing.",
+  }).trim();
 }
 
 function legacyBoardWidgetsCreateSql(): string {

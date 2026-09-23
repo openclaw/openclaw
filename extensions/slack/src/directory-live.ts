@@ -1,4 +1,3 @@
-// Slack plugin module implements directory live behavior.
 import type { ConversationsListResponse, UsersListResponse } from "@slack/web-api";
 import type {
   ChannelDirectoryEntry,
@@ -11,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSlackAccount } from "./accounts.js";
 import { createSlackLookupClient } from "./client.js";
-import { collectSlackCursorPages } from "./cursor-pages.js";
+import { collectSlackCursorPages, fetchSlackChannelListPage } from "./cursor-pages.js";
 
 type SlackUser = NonNullable<UsersListResponse["members"]>[number];
 type SlackChannel = NonNullable<ConversationsListResponse["channels"]>[number];
@@ -135,13 +134,7 @@ export async function listSlackDirectoryGroupsLive(
   }
   const query = normalizeQuery(params.query);
   const channels = await collectSlackCursorPages({
-    fetchPage: (cursor) =>
-      client.conversations.list({
-        types: "public_channel,private_channel",
-        exclude_archived: false,
-        limit: 1000,
-        cursor,
-      }),
+    fetchPage: (cursor) => fetchSlackChannelListPage(client, cursor),
     collectPageItems: (res) => (Array.isArray(res.channels) ? res.channels : []),
   });
 

@@ -9,9 +9,13 @@ import {
  *
  * Keeps provider-specific id formats replay-safe while preserving allowed native ids.
  */
-import { sha256HexPrefix } from "../infra/crypto-digest.js";
+import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
-import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
+import {
+  createCompletedToolCallPredicate,
+  isAllowedToolCallName,
+  normalizeAllowedToolNames,
+} from "./tool-call-shared.js";
 
 export type ToolCallIdMode = "strict" | "strict9";
 const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
@@ -84,7 +88,7 @@ export function extractToolResultIds(msg: Extract<AgentMessage, { role: "toolRes
   return extractPairingToolResultIds(msg);
 }
 
-function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
+export function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
   const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
   const hasArguments =
     "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
@@ -100,6 +104,7 @@ function toolCallNeedsReplayMutation(block: ReplaySafeToolCallBlock): boolean {
 function isReplaySafeThinkingAssistantMessage(
   message: Extract<AgentMessage, { role: "assistant" }>,
   allowedToolNames: Set<string> | null,
+  isCompleted: ReturnType<typeof createCompletedToolCallPredicate>,
 ): boolean {
   const content = message.content;
   if (!Array.isArray(content)) {
@@ -127,7 +132,7 @@ function isReplaySafeThinkingAssistantMessage(
       !hasToolCallInput(typedBlock) ||
       !toolCallId ||
       seenToolCallIds.has(toolCallId) ||
-      !isAllowedToolCallName(typedBlock.name, allowedToolNames) ||
+      !isAllowedToolCallName(typedBlock.name, isCompleted(typedBlock) ? null : allowedToolNames) ||
       toolCallNeedsReplayMutation(typedBlock)
     ) {
       return false;
@@ -143,13 +148,14 @@ function collectReplaySafeThinkingToolIds(
 ): { reservedIds: Set<string>; preservedIndexes: Set<number> } {
   const reserved = new Set<string>();
   const preservedIndexes = new Set<number>();
+  const isCompleted = createCompletedToolCallPredicate(messages);
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (!message || typeof message !== "object" || message.role !== "assistant") {
       continue;
     }
     const assistant = message;
-    if (!isReplaySafeThinkingAssistantMessage(assistant, allowedToolNames)) {
+    if (!isReplaySafeThinkingAssistantMessage(assistant, allowedToolNames, isCompleted)) {
       continue;
     }
     const toolCalls = extractToolCallsFromAssistant(assistant);
@@ -165,7 +171,7 @@ function collectReplaySafeThinkingToolIds(
 }
 
 function shortHash(text: string, length = 8): string {
-  return sha256HexPrefix(text, length);
+  return sha256HexPrefixCore(text, length);
 }
 
 function isNativeAnthropicToolUseId(id: string): boolean {
@@ -363,7 +369,7 @@ function rewriteAssistantToolCallIds(params: {
       return block;
     }
     changed = true;
-    return Object.assign({}, block as unknown as Record<string, unknown>, { id: nextId });
+    return Object.assign({}, block, { id: nextId });
   });
 
   if (!changed) {
@@ -372,7 +378,8 @@ function rewriteAssistantToolCallIds(params: {
   return { ...params.message, content: next as typeof params.message.content };
 }
 
-function rewriteToolResultIds(params: {
+/** Keeps every persisted tool-result ID alias aligned with its canonical call. */
+export function rewriteToolResultIds(params: {
   message: Extract<AgentMessage, { role: "toolResult" }>;
   resolveId: (id: string) => string;
 }): Extract<AgentMessage, { role: "toolResult" }> {

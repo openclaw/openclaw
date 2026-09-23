@@ -3,16 +3,25 @@ import {
   beginMcpLoopbackToolCallCapture,
   clearMcpLoopbackToolCallCapture,
   type McpLoopbackToolCallStart,
-  type McpLoopbackToolCallTerminalOutcome,
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
+import {
+  normalizeAcceptedSessionSpawnResult,
+  type AcceptedSessionSpawn,
+} from "../accepted-session-spawn.js";
 import type { CliOutput, CliToolUseStartDelta } from "../cli-output-contracts.js";
+import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
   resolveMessageToolSourceReplyFinal,
 } from "../embedded-agent-message-tool-source-reply.js";
+import {
+  extractMessagingToolSendResult,
+  extractMessagingToolSourceReplyPayload,
+  isDeliveredMessagingToolSendToCurrentSource,
+} from "../embedded-agent-messaging-extraction.js";
 import {
   isMessagingTool,
   isMessagingToolDeliveryAction,
@@ -23,11 +32,16 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
 import {
-  extractMessagingToolSendResult,
-  extractMessagingToolSourceReplyPayload,
-} from "../embedded-agent-subscribe.tools.js";
-import { rotateClaudeLiveMcpCaptureKeyForContext } from "./claude-live-session.js";
-import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
+  extractToolResultMediaArtifact,
+  filterToolResultMediaUrls,
+} from "../embedded-agent-tool-media.js";
+import { readToolResultDetails } from "../tool-result-error.js";
+import { closeCliLiveSession } from "./cli-live-session-registry.js";
+import {
+  attachCliMessagingDeliveryEvidence,
+  projectCliMessagingDeliveryEvidence,
+} from "./delivery-evidence.js";
+import * as Deadline from "./execute-ask-user-deadline.js";
 import {
   appendUniqueCliMessagingEvidence,
   buildMessagingToolSendEvidenceKey,
@@ -41,33 +55,16 @@ import type { PreparedCliRunContext } from "./types.js";
 const CLI_LOOPBACK_CORRELATION_MAX_CALLS = 64;
 const CLI_MCP_DELIVERY_DRAIN_GRACE_MS = 5_000;
 const CLI_MCP_REQUEST_ADMISSION_GRACE_MS = 250;
-
-type CliToolTerminalOutcome = McpLoopbackToolCallTerminalOutcome | { outcome: "completed" };
-type CliLoopbackCall = {
-  admitted: McpLoopbackToolCallStart;
-  current: McpLoopbackToolCallStart;
-  boundToolCallId?: string;
-  outcome?: CliToolTerminalOutcome;
-  ambiguous: boolean;
-  ambiguityGroup?: CliLoopbackAmbiguityGroup;
-};
-type CliLoopbackAmbiguityGroup = {
-  calls: Set<CliLoopbackCall>;
-  activeToolCallIds: Set<string>;
-};
-type ActiveCliTool = {
-  toolName: string;
-  args: Record<string, unknown>;
-  loopbackCall?: CliLoopbackCall;
-  loopbackAmbiguous: boolean;
-  ambiguityGroup?: CliLoopbackAmbiguityGroup;
-};
+type ActiveCliTool = Deadline.ActiveCliTool;
+type CliLoopbackCall = Deadline.CliLoopbackCall;
 
 export function createCliToolTracking(context: PreparedCliRunContext) {
   let gatewayCaptureKey: string | undefined;
   let yielded = false;
+  let yieldAcknowledgment: string | undefined;
   let didSendViaMessagingTool = false;
   let didDeliverSourceReplyViaMessageTool = false;
+  let sourceReplyDelivered: true | undefined;
   let inFlightUnclassifiedMcpRequests = 0;
   let inFlightMessagingToolCalls = 0;
   const inFlightPreparedMessagingCalls = new Set<McpLoopbackToolCallStart>();
@@ -78,6 +75,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   const cliLoopbackCalls: CliLoopbackCall[] = [];
   const activeCliTools = new Map<string, ActiveCliTool>();
   let cliLoopbackCorrelationOverflowed = false;
+  const askUserDeadlines = Deadline.createAskUserDeadlineTracking(
+    activeCliTools,
+    () => cliLoopbackCorrelationOverflowed,
+  );
   const messagingToolSentTexts: string[] = [];
   const messagingToolSentTextKeys = new Set<string>();
   const messagingToolSentMediaUrls: string[] = [];
@@ -85,6 +86,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   const messagingToolSentTargets: MessagingToolSend[] = [];
   const messagingToolSentTargetKeys = new Set<string>();
   const messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[] = [];
+  const toolMediaUrls: string[] = [];
+  const toolMediaUrlKeys = new Set<string>();
+  let toolAudioAsVoice = false;
+  let toolTrustedLocalMedia = false;
+  const acceptedSessionSpawns: AcceptedSessionSpawn[] = [];
   const matchesCliLoopbackCall = (
     toolName: string,
     toolArgs: Record<string, unknown>,
@@ -99,7 +105,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         activeTool.loopbackCall !== undefined && calls.includes(activeTool.loopbackCall),
     ),
   ) => {
-    const groups = new Set<CliLoopbackAmbiguityGroup>();
+    const groups = new Set<Deadline.CliLoopbackAmbiguityGroup>();
     for (const call of calls) {
       if (call.ambiguityGroup) {
         groups.add(call.ambiguityGroup);
@@ -142,6 +148,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       activeTool.ambiguityGroup = group;
       group.activeToolCallIds.add(toolCallId);
     }
+    askUserDeadlines.refresh();
   };
   const matchingActiveCliTools = (call: McpLoopbackToolCallStart): Array<[string, ActiveCliTool]> =>
     Array.from(activeCliTools.entries()).filter(([, activeTool]) =>
@@ -162,6 +169,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         }
       }
       cliLoopbackCalls.length = 0;
+      askUserDeadlines.refresh();
       return undefined;
     }
     const retained: CliLoopbackCall = { admitted: call, current: call, ambiguous: false };
@@ -180,6 +188,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       activeTool.ambiguityGroup = call.ambiguityGroup;
       call.ambiguityGroup.activeToolCallIds.add(toolCallId);
     }
+    askUserDeadlines.refresh();
   };
   const removeCliLoopbackCall = (call: CliLoopbackCall | undefined) => {
     if (!call) {
@@ -220,22 +229,44 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     result?: unknown;
     isError?: boolean;
   }) => {
-    if (!isDeliveredMessagingToolResult(params)) {
+    const deliveryFact = readEmbeddedMessageDeliveryFact(
+      readToolResultDetails(params.result)?.messageDelivery,
+    );
+    const delivered = deliveryFact
+      ? deliveryFact.status === "settled" &&
+        (params.isError !== true || deliveryFact.partialDelivery)
+      : isDeliveredMessagingToolResult(params);
+    if (!delivered) {
       return;
     }
     didSendViaMessagingTool = true;
+    // Implicit source replies can settle without an argument-derived target.
+    if (deliveryFact?.sourceReplyDelivered === true) {
+      sourceReplyDelivered = true;
+    }
     const toolArgs = params.args ?? {};
     const isMessagingSend = isMessagingToolSendAction(params.toolName, toolArgs);
     const content = isMessagingSend ? extractCliMessagingContent(toolArgs, params.result) : {};
-    const deliveredCurrentSourceReply =
-      isMessagingSend &&
-      isDeliveredMessageToolOnlySourceReplyResult({
-        sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
-        toolName: params.toolName,
-        args: params.args,
-        result: params.result,
-        isError: params.isError,
-      });
+    const confirmedTarget =
+      params.target && extractMessagingToolSendResult(params.target, params.result);
+    const deliveredCurrentSourceReply = isDeliveredMessageToolOnlySourceReplyResult({
+      sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
+      toolName: params.toolName,
+      args: params.args,
+      result: params.result,
+      isError: params.isError,
+      allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
+        send: confirmedTarget,
+        config: context.params.config,
+        currentProvider: context.params.messageChannel ?? context.params.messageProvider,
+        currentAccountId: context.params.agentAccountId,
+        currentChannelId: context.params.currentChannelId,
+        currentThreadId: context.params.currentThreadTs,
+        sessionKey: context.params.sessionKey,
+        deliveredPayload: params.result,
+      }),
+      deliveryConfirmed: true,
+    });
     const sourceReplyFinal = deliveredCurrentSourceReply
       ? resolveMessageToolSourceReplyFinal(toolArgs)
       : undefined;
@@ -250,27 +281,27 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         messagingToolSentMediaUrlKeys,
         content.mediaUrls ?? [],
       );
-      if (deliveredCurrentSourceReply) {
-        didDeliverSourceReplyViaMessageTool = true;
-        const payload = extractMessagingToolSourceReplyPayload(params.result);
-        if (payload) {
-          if (messagingToolSourceReplyPayloads.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-            messagingToolSourceReplyPayloads.shift();
-          }
-          // Each internal source-reply send is a distinct delivery, even when
-          // two intentional sends have identical text or media.
-          messagingToolSourceReplyPayloads.push({
-            ...payload,
-            ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
-          });
+    }
+    if (deliveredCurrentSourceReply) {
+      didDeliverSourceReplyViaMessageTool = true;
+      const payload = extractMessagingToolSourceReplyPayload(params.result);
+      if (payload) {
+        if (messagingToolSourceReplyPayloads.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
+          messagingToolSourceReplyPayloads.shift();
         }
+        // Each internal source-reply send is a distinct delivery, even when
+        // two intentional sends have identical text or media.
+        messagingToolSourceReplyPayloads.push({
+          ...payload,
+          ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
+        });
       }
     }
-    if (!params.target) {
+    if (!confirmedTarget) {
       return;
     }
     const targetWithContent = {
-      ...extractMessagingToolSendResult(params.target, params.result),
+      ...confirmedTarget,
       ...content,
       ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
     };
@@ -307,19 +338,20 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           currentChannelId: context.params.currentChannelId,
           currentThreadTs: context.params.currentThreadTs,
           currentMessageId: context.params.currentMessageId,
+          replyToMode: context.params.replyToMode,
         },
       },
       call.args,
     );
   };
-  const beginGatewayCapture = (captureKey: string | undefined) => {
+  const beginGatewayCapture = (captureKey: string | undefined, assertCurrent: () => void) => {
     if (!captureKey || gatewayCaptureKey === captureKey) {
       return;
     }
     if (gatewayCaptureKey) {
       throw new Error("CLI MCP capture key changed during an active attempt");
     }
-    context.preparedBackend.mcpClientGrantCapture?.activate(captureKey);
+    context.preparedBackend.mcpClientGrantCapture?.activate(captureKey, assertCurrent);
     gatewayCaptureKey = captureKey;
     const isPotentialDelivery = (toolName: string) =>
       isMessagingTool(normalizeCliMessagingToolName(toolName));
@@ -328,8 +360,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       isMessagingToolDeliveryAction(normalizeCliMessagingToolName(toolName), toolArgs);
     beginMcpLoopbackToolCallCapture({
       captureKey,
-      onYield: () => {
+      onYield: (_message, acknowledgment) => {
         yielded = true;
+        yieldAcknowledgment = acknowledgment;
       },
       onRequestStart: () => {
         inFlightUnclassifiedMcpRequests += 1;
@@ -370,6 +403,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         const candidate = candidates.at(0);
         if (candidates.length === 1 && candidate && !candidate.ambiguous) {
           candidate.current = current;
+          const toolName = normalizeCliMessagingToolName(current.toolName);
+          askUserDeadlines.update(candidate, toolName, current.args);
         } else if (candidates.length > 0) {
           markCliLoopbackCallsAmbiguous(candidates);
         }
@@ -396,7 +431,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         inFlightPreparedMessagingCalls.delete(call);
       },
       onToolCallResult: (call) => {
-        const terminalOutcome: CliToolTerminalOutcome =
+        const terminalOutcome: Deadline.CliToolTerminalOutcome =
           call.outcome === "blocked"
             ? { outcome: call.outcome, deniedReason: call.deniedReason }
             : { outcome: call.outcome };
@@ -414,6 +449,16 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           markCliLoopbackCallsAmbiguous(candidates);
         }
         const toolName = normalizeCliMessagingToolName(call.toolName);
+        const acceptedSessionSpawn =
+          toolName === "sessions_spawn" && call.outcome === "completed" && "result" in call
+            ? normalizeAcceptedSessionSpawnResult(call.result)
+            : null;
+        if (
+          acceptedSessionSpawn &&
+          acceptedSessionSpawns.length < CLI_LOOPBACK_CORRELATION_MAX_CALLS
+        ) {
+          acceptedSessionSpawns.push(acceptedSessionSpawn);
+        }
         if (isMessagingToolDeliveryAction(toolName, call.args)) {
           commitMessagingToolResult({
             toolName,
@@ -422,6 +467,16 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
             result: "result" in call ? call.result : undefined,
             isError: call.outcome !== "completed",
           });
+        } else if (call.outcome === "completed" && "result" in call) {
+          const artifact = extractToolResultMediaArtifact(call.result);
+          const mediaUrls = artifact
+            ? filterToolResultMediaUrls(toolName, artifact.mediaUrls, call.result)
+            : [];
+          appendUniqueCliMessagingEvidence(toolMediaUrls, toolMediaUrlKeys, mediaUrls);
+          if (mediaUrls.length > 0) {
+            toolAudioAsVoice ||= artifact?.audioAsVoice === true;
+            toolTrustedLocalMedia ||= artifact?.trustedLocalMedia === true;
+          }
         }
       },
     });
@@ -489,6 +544,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     result?: unknown;
   }) => {
     const activeTool = activeCliTools.get(event.toolCallId);
+    if (activeTool?.loopbackCall) {
+      askUserDeadlines.clear(activeTool.loopbackCall);
+    }
     activeCliTools.delete(event.toolCallId);
     retireCliLoopbackCorrelation(event.toolCallId, activeTool);
     const pending = pendingMessagingCalls.get(event.toolCallId);
@@ -502,6 +560,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         isError: event.isError,
       });
     }
+    return activeTool?.loopbackAmbiguous ? undefined : activeTool?.loopbackCall?.current.args;
   };
   const resolveCliLoopbackTerminalOutcome = (toolCallId: string) => {
     const activeTool = activeCliTools.get(toolCallId);
@@ -541,7 +600,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         return;
       }
       if (params.useManagedClaudeLiveSession) {
-        await rotateClaudeLiveMcpCaptureKeyForContext(context);
+        // The child still holds the process-env capture key. If drain cannot
+        // prove idle, kill it so a stale key cannot admit later sends.
+        await closeCliLiveSession(context, "mcp-capture-rotation");
       }
       const internalStates = await Promise.all(
         Array.from(inFlightPreparedMessagingCalls).map(isPreparedInternalSourceReply),
@@ -567,7 +628,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   };
 
   const finalizeCapture = (finalizeParsedTools: () => void) => {
-    // Captured MCP calls may settle after the CLI process exits. Drain first so
+    // Captured MCP calls may settle after the attempt returns. Drain first so
     // finalization can use their trusted terminal outcomes.
     try {
       finalizeParsedTools();
@@ -587,13 +648,20 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   const evidence = () => ({
     didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool,
+    sourceReplyDelivered,
     messagingToolSentTexts,
     messagingToolSentMediaUrls,
     messagingToolSentTargets,
     messagingToolSourceReplyPayloads,
+    toolMediaUrls,
+    toolAudioAsVoice,
+    toolTrustedLocalMedia,
+    acceptedSessionSpawns,
   });
   return {
     beginGatewayCapture,
+    getActiveLoopbackAskUserDeadline: askUserDeadlines.get,
+    onActiveLoopbackAskUserDeadlineChange: askUserDeadlines.onChange,
     handleCliToolUseStart,
     handleCliToolResult,
     resolveCliLoopbackTerminalOutcome,
@@ -604,21 +672,15 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       return {
         ...output,
         ...(yielded ? { yielded: true as const } : {}),
-        ...(current.didSendViaMessagingTool ? { didSendViaMessagingTool: true } : {}),
-        ...(current.didDeliverSourceReplyViaMessageTool
-          ? { didDeliverSourceReplyViaMessageTool: true }
+        ...(yieldAcknowledgment ? { yieldAcknowledgment } : {}),
+        ...projectCliMessagingDeliveryEvidence(current, true),
+        ...(current.toolMediaUrls.length > 0
+          ? { toolMediaUrls: current.toolMediaUrls.slice() }
           : {}),
-        ...(current.messagingToolSentTexts.length > 0
-          ? { messagingToolSentTexts: current.messagingToolSentTexts.slice() }
-          : {}),
-        ...(current.messagingToolSentMediaUrls.length > 0
-          ? { messagingToolSentMediaUrls: current.messagingToolSentMediaUrls.slice() }
-          : {}),
-        ...(current.messagingToolSentTargets.length > 0
-          ? { messagingToolSentTargets: current.messagingToolSentTargets.slice() }
-          : {}),
-        ...(current.messagingToolSourceReplyPayloads.length > 0
-          ? { messagingToolSourceReplyPayloads: current.messagingToolSourceReplyPayloads.slice() }
+        ...(current.toolAudioAsVoice ? { toolAudioAsVoice: true } : {}),
+        ...(current.toolTrustedLocalMedia ? { toolTrustedLocalMedia: true } : {}),
+        ...(current.acceptedSessionSpawns.length > 0
+          ? { acceptedSessionSpawns: current.acceptedSessionSpawns.slice() }
           : {}),
       };
     },

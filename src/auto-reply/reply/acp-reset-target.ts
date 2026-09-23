@@ -14,33 +14,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { DEFAULT_ACCOUNT_ID, isAcpSessionKey } from "../../routing/session-key.js";
 
-const acpResetTargetDeps = {
-  getSessionBindingService,
-  listAcpBindings,
-  resolveConfiguredBindingRecord,
-};
-
-const acpResetTargetTestApi = {
-  setDepsForTest(
-    overrides?: Partial<{
-      getSessionBindingService: typeof getSessionBindingService;
-      listAcpBindings: typeof listAcpBindings;
-      resolveConfiguredBindingRecord: typeof resolveConfiguredBindingRecord;
-    }>,
-  ) {
-    acpResetTargetDeps.getSessionBindingService =
-      overrides?.getSessionBindingService ?? getSessionBindingService;
-    acpResetTargetDeps.listAcpBindings = overrides?.listAcpBindings ?? listAcpBindings;
-    acpResetTargetDeps.resolveConfiguredBindingRecord =
-      overrides?.resolveConfiguredBindingRecord ?? resolveConfiguredBindingRecord;
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.acpResetTargetTestApi")] =
-    acpResetTargetTestApi;
-}
-
 function resolveResetTargetAccountId(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -65,7 +38,7 @@ function resolveRawConfiguredAcpSessionKey(params: {
   conversationId: string;
   parentConversationId?: string;
 }): string | undefined {
-  for (const binding of acpResetTargetDeps.listAcpBindings(params.cfg)) {
+  for (const binding of listAcpBindings(params.cfg)) {
     const bindingChannel = normalizeLowercaseStringOrEmpty(
       normalizeOptionalString(binding.match.channel),
     );
@@ -106,17 +79,24 @@ function resolveRawConfiguredAcpSessionKey(params: {
   return undefined;
 }
 
-export function resolveEffectiveResetTargetSessionKey(params: {
+export async function resolveEffectiveResetTargetSessionKey(params: {
   cfg: OpenClawConfig;
   channel?: string | null;
   accountId?: string | null;
   conversationId?: string | null;
   parentConversationId?: string | null;
+  commandTargetSessionKey?: string | null;
   activeSessionKey?: string | null;
   allowNonAcpBindingSessionKey?: boolean;
   skipConfiguredFallbackWhenActiveSessionNonAcp?: boolean;
   fallbackToActiveAcpWhenUnbound?: boolean;
-}): string | undefined {
+}): Promise<string | undefined> {
+  const commandTargetSessionKey = normalizeOptionalString(params.commandTargetSessionKey);
+  if (commandTargetSessionKey) {
+    return params.allowNonAcpBindingSessionKey || isAcpSessionKey(commandTargetSessionKey)
+      ? commandTargetSessionKey
+      : undefined;
+  }
   const activeSessionKey = normalizeOptionalString(params.activeSessionKey);
   const activeAcpSessionKey =
     activeSessionKey && isAcpSessionKey(activeSessionKey) ? activeSessionKey : undefined;
@@ -135,7 +115,7 @@ export function resolveEffectiveResetTargetSessionKey(params: {
   const parentConversationId = normalizeOptionalString(params.parentConversationId) || undefined;
   const allowNonAcpBindingSessionKey = Boolean(params.allowNonAcpBindingSessionKey);
 
-  const serviceBinding = acpResetTargetDeps.getSessionBindingService().resolveByConversation({
+  const serviceBinding = await getSessionBindingService().resolveByConversationAsync({
     channel,
     accountId,
     conversationId,
@@ -154,7 +134,7 @@ export function resolveEffectiveResetTargetSessionKey(params: {
     return undefined;
   }
 
-  const configuredBinding = acpResetTargetDeps.resolveConfiguredBindingRecord({
+  const configuredBinding = resolveConfiguredBindingRecord({
     cfg: params.cfg,
     channel,
     accountId,

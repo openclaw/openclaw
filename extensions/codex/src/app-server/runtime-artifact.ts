@@ -4,13 +4,17 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  resolveWindowsExecutablePath,
-  resolveWindowsSpawnProgram,
-} from "openclaw/plugin-sdk/windows-spawn";
+import { isPathInside, sha256File } from "openclaw/plugin-sdk/file-access-runtime";
+import { resolveWindowsExecutablePath } from "openclaw/plugin-sdk/windows-spawn";
 import type { CodexAppServerClient, CodexAppServerRuntimeIdentity } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
-import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
+import { isCodexAppServerProxyLaunch } from "./launch-args.js";
+import { resolvePackagedCodexNativeCommand } from "./managed-binary.js";
+import type { CodexAppServerSpawnIdentity } from "./spawn-identity.js";
+import {
+  resolveCodexAppServerSpawnEnv,
+  resolveCodexAppServerSpawnInvocation,
+} from "./transport-stdio.js";
 
 const ARTIFACT_ID_PREFIX = "codex-app-server:v1:";
 const ARTIFACT_HASH_DOMAIN = "openclaw-codex-app-server-runtime-artifact-v1\0";
@@ -21,19 +25,6 @@ const MAX_ARTIFACT_DEPTH = 64;
 const MAX_ARTIFACT_ENTRIES = 32_768;
 const MAX_ARTIFACT_FILES = 8192;
 const MAX_ARTIFACT_TOTAL_BYTES = 1024n * 1024n * 1024n;
-const READ_CHUNK_BYTES = 64 * 1024;
-const CODE_MODE_HOST_PATH_ENV = "CODEX_CODE_MODE_HOST_PATH";
-const RUNTIME_INJECTION_ENV_KEYS = new Set([
-  "NODE_PATH",
-  "LD_AUDIT",
-  "LD_LIBRARY_PATH",
-  "LD_PRELOAD",
-  "DYLD_FALLBACK_FRAMEWORK_PATH",
-  "DYLD_FALLBACK_LIBRARY_PATH",
-  "DYLD_FRAMEWORK_PATH",
-  "DYLD_INSERT_LIBRARIES",
-  "DYLD_LIBRARY_PATH",
-]);
 const SAFE_NODE_OPTIONS_BOOLEAN_FLAGS = new Set([
   "--enable-network-family-autoselection",
   "--network-family-autoselection",
@@ -57,14 +48,6 @@ const SAFE_NODE_OPTIONS_NUMERIC_FLAGS = new Set([
 ]);
 const SAFE_NODE_OPTIONS_DNS_RESULT_ORDERS = new Set(["ipv4first", "ipv6first", "verbatim"]);
 const ARTIFACT_BINDINGS_SYMBOL = Symbol.for("openclaw.codexAppServerRuntimeArtifactBindings");
-
-type CodexRuntimeArtifactSpawnIdentity = Readonly<{
-  command: string;
-  argsFingerprint: string;
-  commandSource?: CodexAppServerStartOptions["commandSource"];
-  managedCommandOrder?: CodexAppServerStartOptions["managedCommandOrder"];
-  nativeCommand?: string;
-}>;
 
 type CodexRuntimeFilesystemDescriptor = Readonly<{
   version: 1;
@@ -167,30 +150,23 @@ async function readRegularFileFingerprint(params: {
     if (params.budget.totalBytes + before.size > MAX_ARTIFACT_TOTAL_BYTES) {
       throw new Error("Codex runtime artifact exceeds the bounded content size");
     }
-    const hash = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(READ_CHUNK_BYTES);
-    let offset = 0n;
-    while (offset < before.size) {
-      throwIfAborted(params.signal);
-      const length = Number(
-        before.size - offset < BigInt(buffer.length) ? before.size - offset : BigInt(buffer.length),
-      );
-      const { bytesRead } = await handle.read(buffer, 0, length, Number(offset));
-      if (bytesRead === 0) {
-        throw new Error(`Codex runtime artifact changed while reading: ${params.filePath}`);
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      offset += BigInt(bytesRead);
-    }
+    const hash = await sha256File(handle, {
+      maxBytes: Number(before.size),
+      signal: params.signal,
+    });
     const after = await handle.stat({ bigint: true });
     const current = await fs.stat(params.filePath, { bigint: true });
-    if (!sameOpenedFile(before, after) || !sameOpenedFile(after, current)) {
+    if (
+      BigInt(hash.bytes) !== before.size ||
+      !sameOpenedFile(before, after) ||
+      !sameOpenedFile(after, current)
+    ) {
       throw new Error(`Codex runtime artifact changed while reading: ${params.filePath}`);
     }
     params.budget.fileCount += 1;
     params.budget.totalBytes += after.size;
     return {
-      contentHash: hash.digest("hex"),
+      contentHash: hash.digest,
       mode: String(after.mode),
       size: String(after.size),
     };
@@ -234,37 +210,20 @@ async function listPackageFiles(params: {
   return files;
 }
 
-function pathIsWithin(rootPath: string, candidatePath: string): boolean {
-  const relative = path.relative(rootPath, candidatePath);
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
-  );
-}
-
-function assertNoRuntimeInjectionEnvironment(env: NodeJS.ProcessEnv): void {
+function assertSafeNodeOptions(env: NodeJS.ProcessEnv): void {
   for (const [rawKey, value] of Object.entries(env)) {
     const key = rawKey.toUpperCase();
-    if (!value?.trim()) {
+    if (key !== "NODE_OPTIONS" || !value?.trim()) {
       continue;
     }
-    if (key === "NODE_OPTIONS") {
-      const result = attestNodeOptions(value);
-      if (result.ok) {
-        continue;
-      }
-      if (result.option) {
-        throw new Error(
-          `Codex runtime artifact cannot attest NODE_OPTIONS option ${result.option}`,
-        );
-      }
-      throw new Error("Codex runtime artifact cannot safely parse NODE_OPTIONS");
+    const result = attestNodeOptions(value);
+    if (result.ok) {
+      continue;
     }
-    if (RUNTIME_INJECTION_ENV_KEYS.has(key) || key.startsWith("DYLD_")) {
-      // These variables can load code outside the selected launcher/package.
-      // Exact setup attestation must fail instead of minting a partial identity.
-      throw new Error(`Codex runtime artifact cannot attest injected runtime environment: ${key}`);
+    if (result.option) {
+      throw new Error(`Codex runtime artifact cannot attest NODE_OPTIONS option ${result.option}`);
     }
+    throw new Error("Codex runtime artifact cannot safely parse NODE_OPTIONS");
   }
 }
 
@@ -396,7 +355,7 @@ async function hashSelectedArtifactFiles(
     }
   }
   const externalFiles = [...new Set(allFiles)]
-    .filter((filePath) => !packageRoot || !pathIsWithin(packageRoot, filePath))
+    .filter((filePath) => !packageRoot || !isPathInside(packageRoot, filePath))
     .toSorted(compareArtifactNames);
   const budget: ArtifactHashBudget = { fileCount: 0, totalBytes: 0n };
   const hash = createHash("sha256");
@@ -537,7 +496,7 @@ async function resolvePackageRoot(nativePath: string): Promise<string | undefine
       return undefined;
     }
     const root = await fs.realpath(candidate);
-    return pathIsWithin(root, nativePath) ? root : undefined;
+    return isPathInside(root, nativePath) ? root : undefined;
   } catch {
     return undefined;
   }
@@ -557,22 +516,9 @@ function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
-function readEffectiveSpawnEnvironmentValue(
-  env: NodeJS.ProcessEnv,
-  name: string,
-): string | undefined {
-  if (process.platform !== "win32") {
-    return env[name];
-  }
-  const effectiveKey = Object.keys(env)
-    .toSorted(compareArtifactNames)
-    .find((key) => key.toUpperCase() === name.toUpperCase());
-  return effectiveKey ? env[effectiveKey] : undefined;
-}
-
 async function captureFilesystemDescriptor(params: {
   startOptions: CodexAppServerStartOptions;
-  spawnIdentity: CodexRuntimeArtifactSpawnIdentity;
+  spawnIdentity: Readonly<CodexAppServerSpawnIdentity>;
   signal?: AbortSignal;
 }): Promise<CodexRuntimeFilesystemDescriptor> {
   throwIfAborted(params.signal);
@@ -581,68 +527,64 @@ async function captureFilesystemDescriptor(params: {
       "Verified Codex inference requires a local stdio runtime artifact; WebSocket attestation is unsupported",
     );
   }
+  if (isCodexAppServerProxyLaunch(params.startOptions.args)) {
+    throw new Error(
+      "Verified Codex inference requires a local runtime artifact; app-server proxy attestation is unsupported",
+    );
+  }
   const env = resolveCodexAppServerSpawnEnv(params.startOptions);
-  assertNoRuntimeInjectionEnvironment(env);
+  assertSafeNodeOptions(env);
+  const invocation = resolveCodexAppServerSpawnInvocation(params.startOptions, env);
   // child_process resolves relative launchers and PATH entries after applying cwd.
   // Attestation must use the same base or it can bind bytes that spawn never executes.
   const spawnCwd = path.resolve(params.startOptions.cwd ?? process.cwd());
   const commandPath = await resolveCommandPath(params.startOptions.command, env, spawnCwd);
   const commandRealPath = await fs.realpath(commandPath);
+  let nativeCommand = params.spawnIdentity.nativeCommand;
   let invocationPaths: string[];
-  if (process.platform === "win32") {
-    const program = resolveWindowsSpawnProgram({
-      command: params.startOptions.command,
-      platform: process.platform,
-      env,
-      execPath: process.execPath,
-      packageName: "@openai/codex",
-    });
-    if (program.resolution === "node-entrypoint" && !params.spawnIdentity.nativeCommand) {
+  if (process.platform === "win32" || invocation.resolution === "node-entrypoint") {
+    const entrypoint = invocation.resolution === "node-entrypoint" ? invocation.argv[0] : undefined;
+    if (entrypoint && !nativeCommand) {
+      const entrypointPath = await resolveCommandPath(entrypoint, env, spawnCwd);
+      nativeCommand = resolvePackagedCodexNativeCommand(await fs.realpath(entrypointPath));
+    }
+    if (invocation.resolution === "node-entrypoint" && !nativeCommand) {
       throw new Error(
         "Codex runtime cannot attest a custom Node launcher without its native target",
       );
     }
-    const invocationCandidates = [commandRealPath, program.command, ...program.leadingArgv];
+    const invocationCandidates = [
+      commandRealPath,
+      invocation.command,
+      ...(entrypoint ? [entrypoint] : []),
+    ];
     invocationPaths = [];
     for (const candidate of invocationCandidates) {
       const resolved = await resolveCommandPath(candidate, env, spawnCwd);
       invocationPaths.push(await fs.realpath(resolved));
     }
   } else {
+    nativeCommand ??= resolvePackagedCodexNativeCommand(commandRealPath);
     invocationPaths = await resolvePosixInvocationPaths({
       commandRealPath,
       env,
       cwd: spawnCwd,
-      nativeCommand: params.spawnIdentity.nativeCommand,
+      nativeCommand,
     });
   }
   invocationPaths = [...new Set(invocationPaths)].toSorted(compareArtifactNames);
   if (invocationPaths.length > MAX_ARTIFACT_INVOCATION_PATHS) {
     throw new Error("Codex runtime launcher exceeds the bounded invocation file count");
   }
-  const nativeCandidate = params.spawnIdentity.nativeCommand ?? invocationPaths[0];
-  if (!nativeCandidate) {
-    throw new Error("Codex runtime did not resolve a native executable");
-  }
-  const nativePath = await fs.realpath(await resolveCommandPath(nativeCandidate, env, spawnCwd));
+  const nativePath = await fs.realpath(
+    await resolveCommandPath(nativeCommand ?? invocation.command, env, spawnCwd),
+  );
   const packageRoot = await resolvePackageRoot(nativePath);
-  const configuredCodeModeHost = readEffectiveSpawnEnvironmentValue(
-    env,
-    CODE_MODE_HOST_PATH_ENV,
-  )?.trim();
-  const adjacentCodeModeHost = path.join(
+  const codeModeHostCandidatePath = path.join(
     path.dirname(nativePath),
     process.platform === "win32" ? "codex-code-mode-host.exe" : "codex-code-mode-host",
   );
-  const codeModeHostCandidatePath = configuredCodeModeHost
-    ? path.isAbsolute(configuredCodeModeHost)
-      ? configuredCodeModeHost
-      : path.resolve(spawnCwd, configuredCodeModeHost)
-    : adjacentCodeModeHost;
   const codeModeHostPath = await resolveOptionalRegularFile(codeModeHostCandidatePath);
-  if (configuredCodeModeHost && !codeModeHostPath) {
-    throw new Error("Configured Codex code-mode host runtime artifact is unavailable");
-  }
   const descriptor: CodexRuntimeFilesystemDescriptor = {
     version: 1,
     commandPath,
@@ -709,8 +651,7 @@ function validateFilesystemDescriptorShape(descriptor: CodexRuntimeFilesystemDes
   }
   if (
     descriptor.managedCommandOrder !== undefined &&
-    descriptor.managedCommandOrder !== "package-first" &&
-    descriptor.managedCommandOrder !== "desktop-first"
+    !["package-first", "package-only", "desktop-first"].includes(descriptor.managedCommandOrder)
   ) {
     throw new Error("Invalid Codex managed command order");
   }
@@ -806,7 +747,7 @@ function fingerprintBinding(
 /** Captures exact candidate bytes immediately before app-server startup. */
 export async function captureCodexAppServerRuntimeArtifactBeforeStart(params: {
   startOptions: CodexAppServerStartOptions;
-  spawnIdentity: CodexRuntimeArtifactSpawnIdentity;
+  spawnIdentity: Readonly<CodexAppServerSpawnIdentity>;
   signal?: AbortSignal;
 }): Promise<CodexAppServerRuntimeArtifactCapture> {
   const descriptor = await captureFilesystemDescriptor(params);
@@ -818,7 +759,7 @@ export async function captureCodexAppServerRuntimeArtifactBeforeStart(params: {
 export async function finalizeCodexAppServerRuntimeArtifact(params: {
   before: CodexAppServerRuntimeArtifactCapture;
   startOptions: CodexAppServerStartOptions;
-  spawnIdentity: CodexRuntimeArtifactSpawnIdentity;
+  spawnIdentity: Readonly<CodexAppServerSpawnIdentity>;
   runtimeIdentity: CodexAppServerRuntimeIdentity | undefined;
   signal?: AbortSignal;
 }): Promise<AgentHarnessRuntimeArtifactBinding> {

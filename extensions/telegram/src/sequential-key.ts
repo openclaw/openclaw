@@ -1,4 +1,3 @@
-// Telegram plugin module implements sequential key behavior.
 import type { Message, UserFromGetMe } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
@@ -12,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { hasTelegramApprovalCallbackPrefix } from "./approval-callback-data.js";
 import {
+  getCachedTelegramForumFlag,
   resolveTelegramBotHasTopicsEnabled,
   resolveTelegramMessageForumFlagHint,
   resolveTelegramMessageThreadSpec,
@@ -21,17 +21,25 @@ import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
 import type { TelegramPollRegistryEntry } from "./poll-registry.js";
 import { hasTelegramQuestionCallbackPrefix } from "./question-callback-data.js";
 
-const TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS = new Set([
+const TELEGRAM_READ_ONLY_COMMAND_KEYS = new Set([
+  "agents",
   "commands",
   "context",
   "help",
+  "models",
   "status",
+  "subagents",
   "tasks",
   "tools",
   "whoami",
 ]);
 
-const TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS = new Set(["queue", "steer"]);
+// Control-lane admission is an inspection/interrupt privilege, not a restatement of
+// `activeRunSafe`. `activeRunSafe` only says a command may execute while a turn is
+// active; it also covers session-mutating commands (`/new`, `/reset`, `/think`) whose
+// writes must stay ordered behind their own topic's pending input. `/approve` belongs
+// here because the run that requested the approval is holding its own lane.
+const TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS = new Set(["approve", "queue", "steer"]);
 
 type TelegramSequentialKeyContext = {
   chat?: { id?: number };
@@ -85,98 +93,57 @@ function getTelegramMessageReactionSequentialKey(
     : undefined;
 }
 
+/** Registry key for a text command, or undefined when the text is not one. */
+function resolveTelegramCommandKeyForControlLane(params: {
+  rawText?: string;
+  botUsername?: string;
+}): string | undefined {
+  const trimmed = params.rawText?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const alias = maybeResolveTextAlias(
+    normalizeCommandBody(
+      trimmed,
+      params.botUsername ? { botUsername: params.botUsername } : undefined,
+    ),
+  );
+  if (!alias) {
+    return undefined;
+  }
+  return listChatCommands().find((entry) =>
+    entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
+  )?.key;
+}
+
 export function isTelegramReadOnlyControlLaneText(params: {
   rawText?: string;
   botUsername?: string;
 }): boolean {
-  // Only read-only status commands should bypass the per-topic lane.
-  // Diagnostics and export commands materialize state and should not interleave with an active turn.
-  const normalizedBody = normalizeCommandBody(
-    params.rawText?.trim() ?? "",
-    params.botUsername ? { botUsername: params.botUsername } : undefined,
-  );
-  const alias = maybeResolveTextAlias(normalizedBody);
-  if (!alias) {
-    return false;
-  }
-  const command = listChatCommands().find((entry) =>
-    entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
-  );
-  return command?.category === "status" && TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS.has(command.key);
-}
-
-function isTelegramTargetedStopCommand(rawText?: string, botUsername?: string): boolean {
-  const trimmed = rawText?.trim();
-  if (!trimmed) {
-    return false;
-  }
-  // Isolated ingress may not have getMe() metadata yet. A targeted Telegram
-  // /stop@bot command still needs the control lane so it can cancel a busy turn.
-  const match = trimmed.match(/^\/stop@([A-Za-z0-9_]+)(?:$|\s|[.!?…,，。;；:：'"’”)\]}])/iu);
-  if (!match) {
-    return false;
-  }
-  const normalizedBotUsername = botUsername?.trim().toLowerCase();
-  if (!normalizedBotUsername) {
-    return true;
-  }
-  return match[1]?.toLowerCase() === normalizedBotUsername;
-}
-
-function resolveTelegramCommandAliasForControlLane(
-  rawText?: string,
-  botUsername?: string,
-): string | undefined {
-  const trimmed = rawText?.trim();
-  if (!trimmed?.startsWith("/")) {
-    return undefined;
-  }
-
-  const targetedMatch = trimmed.match(
-    /^\/([A-Za-z0-9_-]+)(?:@([A-Za-z0-9_]+))?(?:$|\s|[.!?…,，。;；:：'"’”)\]}])/iu,
-  );
-  const targetBotUsername = targetedMatch?.[2]?.trim().toLowerCase();
-  const normalizedBotUsername = botUsername?.trim().toLowerCase();
-  if (targetBotUsername && normalizedBotUsername && targetBotUsername !== normalizedBotUsername) {
-    return undefined;
-  }
-
-  if (targetBotUsername && !normalizedBotUsername) {
-    const commandAlias = `/${targetedMatch?.[1]?.toLowerCase() ?? ""}`;
-    return commandAlias === "/" ? undefined : commandAlias;
-  }
-
-  return (
-    maybeResolveTextAlias(
-      normalizeCommandBody(trimmed, botUsername ? { botUsername } : undefined),
-    ) ?? undefined
-  );
+  // Read-only commands must not supersede pending work when they enter the control lane.
+  // Diagnostics and export commands materialize state and remain on the ordinary lane.
+  const key = resolveTelegramCommandKeyForControlLane(params);
+  return key !== undefined && TELEGRAM_READ_ONLY_COMMAND_KEYS.has(key);
 }
 
 function isTelegramActiveRunControlLaneText(params: {
   rawText?: string;
   botUsername?: string;
 }): boolean {
-  const alias = resolveTelegramCommandAliasForControlLane(params.rawText, params.botUsername);
-  if (!alias) {
-    return false;
-  }
-  const command = listChatCommands().find((entry) =>
-    entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
-  );
-  return command ? TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS.has(command.key) : false;
+  const key = resolveTelegramCommandKeyForControlLane(params);
+  return key !== undefined && TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS.has(key);
 }
 
-function isTelegramControlLaneText(params: { rawText?: string; botUsername?: string }): boolean {
-  if (
-    isAbortRequestText(
-      params.rawText,
-      params.botUsername ? { botUsername: params.botUsername } : undefined,
-    )
-  ) {
-    return true;
-  }
-  if (isTelegramTargetedStopCommand(params.rawText, params.botUsername)) {
+export function isTelegramControlLaneText(params: {
+  rawText?: string;
+  botUsername?: string;
+}): boolean {
+  // Live polling and webhook admission already have bot identity. In defensive pre-identity
+  // paths, accepting every @target admits foreign-bot commands; only canonical aborts fence.
+  const abortCommandOptions = params.botUsername
+    ? { botUsername: params.botUsername }
+    : { targetedCommandMode: "pre-identity" as const };
+  if (isAbortRequestText(params.rawText, abortCommandOptions)) {
     return true;
   }
   if (isTelegramActiveRunControlLaneText(params)) {
@@ -247,7 +214,29 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     }
     return "telegram:approval";
   }
-  const threadSpec = msg ? resolveTelegramMessageThreadSpec(msg) : undefined;
+  // Raw durable-ingress fixtures and malformed updates can carry a partial
+  // message. Treat missing chat identity as an unknown lane instead of
+  // crashing before the queue records the update.
+  //
+  // General forum topic (topic:1) messages lack both `is_topic_message` and
+  // `is_forum` in the payload, so the forum flag hint is undefined. Fall back
+  // to the in-memory cache (populated by earlier messages or getChat calls)
+  // so the lane key resolves to `telegram:${chatId}:topic:1` rather than the
+  // base lane, preventing a cross-lane session-init race.
+  const forumHint = msg?.chat
+    ? resolveTelegramMessageForumFlagHint({
+        chatType: msg.chat.type,
+        isForum: msg.chat.is_forum,
+        isTopicMessage: msg.is_topic_message,
+      })
+    : undefined;
+  const cachedForumFlag =
+    forumHint === undefined && msg?.chat?.type === "supergroup" && typeof msg.chat.id === "number"
+      ? getCachedTelegramForumFlag(msg.chat.id)
+      : undefined;
+  const threadSpec = msg?.chat
+    ? resolveTelegramMessageThreadSpec(msg, forumHint ?? cachedForumFlag)
+    : undefined;
   const threadId =
     threadSpec?.scope === "dm"
       ? shouldUseTelegramDmThreadSession({

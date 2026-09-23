@@ -6,8 +6,9 @@ import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mts";
+import { collectModuleReferencesFromSource } from "../../../../scripts/lib/guard-inventory-utils.mjs";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugin-sdk/test-helpers/public-artifacts.js";
-import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { expectNoReaddirSyncDuring } from "../../../test-utils/fs-scan-assertions.js";
 import {
   listGitTrackedFiles,
@@ -20,7 +21,7 @@ const REPO_ROOT = resolve(ROOT_DIR, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
-const bundledPluginRecords = loadPluginManifestRegistry({
+const bundledPluginRecords = loadPluginManifestRegistryCore({
   config: {},
 }).plugins.filter((plugin) => plugin.origin === "bundled");
 const bundledPluginRoots = new Map(
@@ -43,7 +44,6 @@ const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "msteams",
   "nostr",
   "nextcloud-talk",
-  "qqbot",
   "signal",
   "slack",
   "synology-chat",
@@ -84,7 +84,7 @@ function createGuardedSource(
 const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
   ...["discord", "slack", "telegram", "imessage", "whatsapp", "signal"].flatMap((pluginId) => {
     const relativePaths =
-      pluginId === "signal" ? ["src/shared.ts", "src/runtime-api.ts"] : ["src/shared.ts"];
+      pluginId === "signal" ? ["src/shared.ts", "runtime-api.ts"] : ["src/shared.ts"];
     return relativePaths.map((relativePath) =>
       createGuardedSource(pluginId, relativePath, [
         new RegExp(`["']openclaw/plugin-sdk/${pluginId}["']`),
@@ -168,9 +168,7 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "nextcloud-talk",
   "nostr",
   "ollama",
-  "open-prose",
   "copilot-proxy",
-  "qqbot",
   "sglang",
   "zai",
   "signal",
@@ -498,6 +496,14 @@ function getSourceAnalysis(path: string): SourceAnalysis {
   return analysis;
 }
 
+function expectNoCorePluginPrivateSrcImports(file: string, text: string): void {
+  const imports = collectModuleReferencesFromSource(text, {
+    fileName: file,
+    acceptSpecifier: (specifier) => /(?:^|\/)extensions\/[^/]+\/src\//u.test(specifier),
+  });
+  expect(imports, `${file} should not import plugin-private src paths`).toEqual([]);
+}
+
 function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void {
   for (const specifier of imports) {
     const normalized = specifier.replaceAll("\\", "/");
@@ -638,12 +644,34 @@ describe("channel import guardrails", () => {
     expect(collectExtensionForbiddenImportMatches(["src/infra/outbound/send-deps"])).toEqual([]);
   });
 
+  it.each([
+    'import { client } from "../../extensions/feishu/src/client.js";',
+    'import "../../extensions/feishu/src/client.js";',
+    'await import("../../extensions/feishu/src/client.js");',
+    'export * from "../../extensions/feishu/src/client.js";',
+    'export { client } from "../../extensions/feishu/src/client.js";',
+    'require("../../extensions/feishu/src/client.js");',
+    'import client = require("../../extensions/feishu/src/client");',
+  ])("rejects core plugin-private module references: %s", (source) => {
+    expect(() => expectNoCorePluginPrivateSrcImports("source.ts", source)).toThrow(
+      "should not import plugin-private src paths",
+    );
+  });
+
+  it("allows diagnostic paths and import examples without loading plugin-private modules", () => {
+    expectNoCorePluginPrivateSrcImports(
+      "source.ts",
+      [
+        'const modulePath = "extensions/feishu/src/client.ts";',
+        '// import "../../extensions/feishu/src/client.js";',
+        'const example = `require("../../extensions/feishu/src/client.js")`;',
+      ].join("\n"),
+    );
+  });
+
   it("keeps core production files off plugin-private src imports", () => {
     for (const file of collectCoreSourceFiles()) {
-      const text = readSource(file);
-      expect(text, `${file} should not import plugin-private src paths`).not.toMatch(
-        /["'][^"']*extensions\/[^/"']+\/src\//,
-      );
+      expectNoCorePluginPrivateSrcImports(file, readSource(file));
     }
   });
 

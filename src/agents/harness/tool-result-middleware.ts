@@ -12,10 +12,8 @@ import type {
 } from "../../plugins/agent-tool-result-middleware-types.js";
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import {
-  hasMessagingDeliveryReceipt,
-  isDeliveredMessagingToolResult,
-} from "../embedded-agent-message-tool-source-reply.js";
+import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
+import { isDeliveredMessagingToolResult } from "../embedded-agent-message-tool-source-reply.js";
 import { isMessagingToolSendAction } from "../embedded-agent-messaging.js";
 import { isToolResultError } from "../tool-result-error.js";
 
@@ -309,24 +307,20 @@ function coerceMiddlewareToolResult(
   return isValidMiddlewareToolResult(result) ? result : undefined;
 }
 
-/**
- * Coerce an arbitrary value into a JSON-safe shape that satisfies
- * `isValidMiddlewareDetails`. Round-trips through `JSON.stringify` with a
- * WeakSet replacer that drops functions, symbols, and `undefined`; coerces
- * bigints to their decimal string form; breaks cycles at the offending
- * reference; and collapses payloads larger than the validator byte cap to a
- * `{ truncated, originalSizeBytes }` marker. Returns `null` for inputs that
- * cannot be represented at all (top-level function/symbol/undefined).
- */
+// Normalize incoming details to satisfy the validator's byte and shape limits.
 function sanitizeMiddlewareDetailsValue(value: unknown): unknown {
   const serialized = serializeMiddlewareValue(value);
   if (serialized === undefined) {
     return null;
   }
   const bytes = Buffer.byteLength(serialized, "utf8");
-  return bytes > MAX_MIDDLEWARE_DETAILS_BYTES
-    ? { truncated: true, originalSizeBytes: bytes }
-    : JSON.parse(serialized);
+  if (bytes <= MAX_MIDDLEWARE_DETAILS_BYTES) {
+    const parsed = JSON.parse(serialized);
+    if (hasValidMiddlewareDetailsShape(parsed)) {
+      return parsed;
+    }
+  }
+  return { truncated: true, originalSizeBytes: bytes };
 }
 
 /**
@@ -369,16 +363,22 @@ function buildDeliveredMessagingFailureFallback(
   event: AgentToolResultMiddlewareEvent,
   result: OpenClawAgentToolResult,
 ): OpenClawAgentToolResult | undefined {
+  const deliveryFact = readEmbeddedMessageDeliveryFact(
+    isRecord(result.details) ? result.details.messageDelivery : undefined,
+  );
+  const delivered = deliveryFact
+    ? deliveryFact.status === "settled"
+    : isDeliveredMessagingToolResult({
+        toolName: event.toolName,
+        args: event.args,
+        result,
+        requirePluginDeliveryId: true,
+      });
   if (
     event.isError === true ||
     isToolResultError(result) ||
     !isMessagingToolSendAction(event.toolName, event.args) ||
-    !isDeliveredMessagingToolResult({
-      toolName: event.toolName,
-      args: event.args,
-      result,
-    }) ||
-    !hasMessagingDeliveryReceipt(result)
+    !delivered
   ) {
     return undefined;
   }

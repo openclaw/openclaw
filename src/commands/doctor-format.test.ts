@@ -3,27 +3,27 @@ import { describe, expect, it } from "vitest";
 import { buildGatewayRuntimeHints } from "./doctor-format.js";
 
 describe("buildGatewayRuntimeHints", () => {
-  it("prioritizes macOS GUI-session failures over generic missing supervision", () => {
+  it("renders macOS GUI-session recovery for the selected profile", () => {
     const hints = buildGatewayRuntimeHints(
       {
         status: "unknown",
-        missingSupervision: true,
         missingGuiSession: true,
       },
-      { platform: "darwin", env: {} },
+      { platform: "darwin", env: { OPENCLAW_PROFILE: "work" } },
     );
 
     expect(hints.join("\n")).toContain("logged-in macOS GUI session");
-    expect(hints.join("\n")).not.toContain("LaunchAgent installed but not loaded");
+    expect(hints.join("\n")).toContain("openclaw --profile work gateway restart");
   });
 
-  it("surfaces suspicious systemd cgroup hygiene with inspection commands", () => {
+  it.each(["user", "system"] as const)("inspects the %s systemd cgroup", (scope) => {
     expect(
       buildGatewayRuntimeHints(
         {
           status: "running",
           pid: 1234,
           systemd: {
+            scope,
             unit: "openclaw-gateway.service",
             killMode: "process",
             tasksCurrent: 807,
@@ -35,10 +35,19 @@ describe("buildGatewayRuntimeHints", () => {
     ).toEqual([
       "Systemd cgroup hygiene looks elevated: cgroup hygiene: KillMode=process, tasks=807, memory=11.1GiB.",
       "This usually means old helper or browser processes may still be attached to the gateway service.",
-      "Run: systemctl --user show openclaw-gateway.service -p KillMode -p TasksCurrent -p MemoryCurrent -p MainPID",
-      "Run: systemd-cgls --user-unit openclaw-gateway.service",
+      `Run: systemctl --${scope} show openclaw-gateway.service -p KillMode -p TasksCurrent -p MemoryCurrent -p MainPID`,
+      `Run: systemd-cgls ${scope === "system" ? "--unit" : "--user-unit"} openclaw-gateway.service`,
       "After reviewing service settings, run: openclaw gateway restart",
     ]);
+  });
+
+  it("points stopped system services to their actual journal", () => {
+    const hints = buildGatewayRuntimeHints(
+      { status: "stopped", systemd: { scope: "system", unit: "openclaw.service" } },
+      { platform: "linux", env: {} },
+    );
+    expect(hints).toContain("Logs: journalctl --system -u openclaw.service -n 200 --no-pager");
+    expect(hints.join("\n")).not.toContain("journalctl --user");
   });
 
   it("uses the provided env when rendering WSL systemd recovery hints", () => {
@@ -56,6 +65,50 @@ describe("buildGatewayRuntimeHints", () => {
     expect(hints).toContain("Then run: wsl --shutdown (from PowerShell) and reopen your distro.");
     expect(hints).toContain("Verify: systemctl --user status");
     expect(hints.join("\n")).not.toContain("systemd user services are unavailable");
+  });
+
+  it("classifies systemd recovery from structured inspection diagnostics", () => {
+    const hints = buildGatewayRuntimeHints(
+      {
+        status: "unknown",
+        detail: "service runtime inspection failed; retry with openclaw status --deep",
+        inspectionFailure: {
+          code: "service-runtime-inspection-failed",
+          detail: "systemctl --user unavailable: Failed to connect to bus",
+        },
+      },
+      { platform: "linux", env: {} },
+    );
+
+    expect(hints.some((hint) => hint.includes("systemd user services are unavailable"))).toBe(true);
+  });
+
+  it.each([
+    {
+      env: { OPENCLAW_PROFILE: "blue" },
+      command: "openclaw --profile blue gateway",
+    },
+    {
+      env: { OPENCLAW_CONTAINER_HINT: "sandbox" },
+      command: "openclaw --container sandbox gateway",
+    },
+    {
+      env: { OPENCLAW_PROFILE: "blue", OPENCLAW_CONTAINER_HINT: "sandbox" },
+      command: "openclaw --container sandbox gateway",
+    },
+  ])("preserves the active target in systemd recovery commands: $command", ({ env, command }) => {
+    const hints = buildGatewayRuntimeHints(
+      {
+        status: "unknown",
+        detail: "systemctl --user unavailable: Failed to connect to bus",
+      },
+      { platform: "linux", env },
+    );
+
+    expect(hints.some((hint) => hint.includes(command))).toBe(true);
+    expect(hints.some((hint) => hint.includes("headless server"))).toBe(
+      !env.OPENCLAW_CONTAINER_HINT,
+    );
   });
 
   it("guides recovery when systemd hit its restart start limit (crash loop)", () => {

@@ -5,24 +5,27 @@ import {
   ErrorCodes,
   errorShape,
   validateExecApprovalGetParams,
+  validateExecApprovalGrantsListParams,
+  validateExecApprovalGrantsRevokeParams,
   validateExecApprovalRequestParams,
   validateExecApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveExecCommandHighlighting } from "../../config/exec-command-highlighting.js";
+import { sanitizeApprovalScope, type ApprovalScope } from "../../infra/approval-scope.js";
 import { resolveCommandAnalysisSummaryForDisplay } from "../../infra/command-analysis/explain.js";
+import { lookupCronRunExecSource } from "../../infra/cron-run-exec-source.js";
+import { resolveExecApprovalCommandDisplay } from "../../infra/exec-approval-command-display.js";
+import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
-  resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalDisplayTextWithStatus,
   sanitizeExecApprovalWarningText,
-} from "../../infra/exec-approval-command-display.js";
-import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+} from "../../infra/exec-approval-text-sanitize.js";
+import { normalizeExecAsk, normalizeExecSecurity } from "../../infra/exec-approvals-core.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   normalizeExecApprovalUnavailableDecisions,
   resolveExecApprovalRequestAllowedDecisions,
-  type ExecApprovalRequest,
-  type ExecApprovalResolved,
 } from "../../infra/exec-approvals.js";
 import {
   buildSystemRunApprovalBinding,
@@ -30,14 +33,20 @@ import {
 } from "../../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { InvalidApprovalIdError, type ExecApprovalManager } from "../exec-approval-manager.js";
-import { runApprovalRequestDeliveries } from "./approval-request-delivery.js";
+import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { InvalidApprovalIdError } from "../exec-approval-registration.js";
+import {
+  buildCronExecOperationBinding,
+  listCronStandingGrants,
+  parseCronExecOperationBinding,
+  revokeCronStandingGrant,
+} from "../operator-approval-standing-grants.js";
+import { resolveGrantExpiryDaysConfig } from "../standing-grant-expiry-config.js";
+import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import {
   handleApprovalWaitDecision,
-  handlePendingApprovalRequest,
   bindApprovalRequesterMetadata,
   bindApprovalReviewerDeviceIds,
-  buildRequestedApprovalEvent,
   handleApprovalResolve,
   listVisiblePendingApprovalRequests,
   registerPendingApprovalRecord,
@@ -45,7 +54,8 @@ import {
   respondPendingApprovalLookupError,
   resolvePendingApprovalRecord,
 } from "./approval-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import { handlePendingExecApprovalRequest } from "./exec-approval-request-delivery.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
@@ -53,16 +63,9 @@ const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
 } as const;
 const RESERVED_PLUGIN_APPROVAL_ID_PREFIX = "plugin:";
 
-type ExecApprovalIosPushDelivery = {
-  handleRequested?: (
-    request: ExecApprovalRequest,
-    opts?: {
-      isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
-    },
-  ) => Promise<boolean>;
-  handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
-  handleExpired?: (request: ExecApprovalRequest) => Promise<void>;
-};
+type ExecApprovalIosPushDelivery = NonNullable<
+  GatewayRequestContext["execApprovalIosPushDelivery"]
+>;
 
 function normalizeCommandSpans(
   spans: { startIndex: number; endIndex: number }[] | undefined,
@@ -98,17 +101,22 @@ export function createExecApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: ExecApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   return {
-    "exec.approval.get": async ({ params, respond, client }) => {
+    "exec.approval.get": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client, context } = options;
       if (!assertValidParams(params, validateExecApprovalGetParams, "exec.approval.get", respond)) {
         return;
       }
       const p = params as { id: string };
-      const resolved = resolvePendingApprovalRecord({
+      const resolved = await resolvePendingApprovalRecord({
+        authority,
         manager,
         inputId: p.id,
         client,
+        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         exposeAmbiguousPrefixError: true,
       });
+      authority.assertCurrent();
       if (!resolved.ok) {
         respondPendingApprovalLookupError({ respond, response: resolved.response });
         return;
@@ -131,8 +139,18 @@ export function createExecApprovalHandlers(
         undefined,
       );
     },
-    "exec.approval.list": async ({ respond, client }) => {
-      respond(true, listVisiblePendingApprovalRequests({ manager, client }), undefined);
+    "exec.approval.list": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { respond, client, context } = options;
+      const approvals = await listVisiblePendingApprovalRequests({
+        authority,
+        manager,
+        client,
+        approvalKind: "exec",
+        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+      });
+      authority.assertCurrent();
+      respond(true, approvals, undefined);
     },
     "exec.approval.request": async ({ params, respond, context, client }) => {
       if (
@@ -145,39 +163,7 @@ export function createExecApprovalHandlers(
       ) {
         return;
       }
-      const p = params as {
-        id?: string;
-        command: string;
-        commandArgv?: string[];
-        env?: Record<string, string>;
-        cwd?: string;
-        systemRunPlan?: unknown;
-        nodeId?: string;
-        host?: string;
-        security?: string;
-        ask?: string;
-        warningText?: string | null;
-        unavailableDecisions?: string[];
-        commandSpans?: {
-          startIndex: number;
-          endIndex: number;
-        }[];
-        agentId?: string;
-        resolvedPath?: string;
-        sessionKey?: string;
-        sessionId?: string;
-        runId?: string;
-        toolCallId?: string;
-        turnSourceChannel?: string;
-        turnSourceTo?: string;
-        turnSourceAccountId?: string;
-        turnSourceThreadId?: string | number;
-        approvalReviewerDeviceIds?: string[];
-        requireDeliveryRoute?: boolean;
-        suppressDelivery?: boolean;
-        timeoutMs?: number;
-        twoPhase?: boolean;
-      };
+      const p = params;
       const twoPhase = p.twoPhase === true;
       const timeoutMs =
         typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
@@ -186,21 +172,37 @@ export function createExecApprovalHandlers(
       const explicitId = p.id ?? null;
       const host = normalizeOptionalString(p.host) ?? "";
       const nodeId = normalizeOptionalString(p.nodeId) ?? "";
+      const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
+      if (
+        trustedAgentRuntime &&
+        context.validateAgentRuntimeApprovalAuthority?.(trustedAgentRuntime) !== true
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "agent runtime approval authority is no longer active",
+          ),
+        );
+        return;
+      }
       const approvalContext = resolveSystemRunApprovalRequestContext({
         host,
         command: p.command,
         commandArgv: p.commandArgv,
         systemRunPlan: p.systemRunPlan,
         cwd: p.cwd,
-        agentId: p.agentId,
-        sessionKey: p.sessionKey,
+        agentId: trustedAgentRuntime?.agentId ?? p.agentId,
+        sessionKey: trustedAgentRuntime?.sessionKey ?? p.sessionKey,
       });
       const effectiveCommandArgv = approvalContext.commandArgv;
       const effectiveCwd = approvalContext.cwd;
       const effectiveAgentId = approvalContext.agentId;
       const effectiveSessionKey = approvalContext.sessionKey;
       const effectiveCommandText = approvalContext.commandText;
-      const requestRunId = normalizeOptionalString(p.runId);
+      const requestRunId =
+        trustedAgentRuntime?.operationalRunInstance.runId ?? normalizeOptionalString(p.runId);
       if (host === "node" && !nodeId) {
         respond(
           false,
@@ -287,7 +289,7 @@ export function createExecApprovalHandlers(
               env: p.env,
             })
           : null;
-      if (explicitId && manager.getSnapshot(explicitId)) {
+      if (explicitId && (await manager.getSnapshot(explicitId))) {
         respond(
           false,
           undefined,
@@ -298,6 +300,35 @@ export function createExecApprovalHandlers(
       const unavailableDecisions = normalizeExecApprovalUnavailableDecisions(
         p.unavailableDecisions,
       );
+      // Record the cron fact where it happens: the cron run owner registered
+      // its job identity for this active run; a matching gateway-host request
+      // carries it so an allow-always resolution can mint a standing grant
+      // scoped to this exact operation instead of a JSON allowlist digest.
+      const cronRunExecSource =
+        host === "gateway" && requestRunId ? lookupCronRunExecSource(requestRunId) : undefined;
+      const cronExecutionSource =
+        cronRunExecSource && effectiveAgentId && cronRunExecSource.agentId === effectiveAgentId
+          ? {
+              jobId: cronRunExecSource.jobId,
+              jobConfigRevision: cronRunExecSource.jobConfigRevision,
+            }
+          : null;
+      // Automation cards say what allow-always mints. The default expiry is
+      // read at request time for display; the resolve transaction re-reads it
+      // when stamping the grant, so a config change between the two shows the
+      // stale number at worst and never mis-stamps the row.
+      const grantDefaultExpiryDays = cronExecutionSource
+        ? resolveGrantExpiryDaysConfig(context.getRuntimeConfig())
+        : null;
+      const standingGrantScope: ApprovalScope | null =
+        cronExecutionSource && cronRunExecSource && effectiveCommandText
+          ? {
+              kind: "standing-grant",
+              automation: sanitizeExecApprovalDisplayText(cronRunExecSource.jobName).slice(0, 128),
+              command: sanitizeExecApprovalDisplayText(effectiveCommandText).slice(0, 256),
+              ...(grantDefaultExpiryDays !== null ? { expiresInDays: grantDefaultExpiryDays } : {}),
+            }
+          : null;
       const request = {
         command: sanitizedCommandText,
         commandPreview:
@@ -308,12 +339,25 @@ export function createExecApprovalHandlers(
         envKeys: envBinding.envKeys.length > 0 ? envBinding.envKeys : undefined,
         systemRunBinding: systemRunBinding?.binding ?? null,
         systemRunPlan: approvalContext.plan,
-        cwd: effectiveCwd ?? null,
+        // cwd/resolvedPath are display-only in the stored record (execution
+        // binds effectiveCwd via systemRunBinding above); sanitize like the
+        // command so bidi/invisible chars cannot spoof reviewer surfaces.
+        cwd: effectiveCwd ? sanitizeExecApprovalDisplayText(effectiveCwd) : null,
+        // nodeId/agentId/sessionKey stay raw: they are matched against the
+        // node registry and session routing, so escaping would break real
+        // lookups without display gain (hostile values match nothing).
         nodeId: host === "node" ? nodeId : null,
-        host: host || null,
-        security: p.security ?? null,
-        ask: p.ask ?? null,
+        // host is enum-gated ("node" checks); escape is identity for valid
+        // values and defuses invisible-char spoofing in reviewer meta rows.
+        host: host ? sanitizeExecApprovalDisplayText(host) : null,
+        // Closed enums: arbitrary strings become null instead of reaching
+        // reviewer surfaces; decision resolution already treats them as null.
+        security: normalizeExecSecurity(p.security) ?? null,
+        ask: normalizeExecAsk(p.ask) ?? null,
         warningText: warningText ? sanitizeExecApprovalWarningText(warningText) : null,
+        // Server-derived automation scope wins: the gateway owns the cron
+        // fact, so a client-declared scope never masks what allow-always mints.
+        scope: standingGrantScope ?? (p.scope ? sanitizeApprovalScope(p.scope) : null),
         commandAnalysis,
         commandSpans,
         unavailableDecisions: unavailableDecisions.length > 0 ? unavailableDecisions : undefined,
@@ -322,15 +366,31 @@ export function createExecApprovalHandlers(
           unavailableDecisions,
         }),
         agentId: effectiveAgentId ?? null,
-        resolvedPath: p.resolvedPath ?? null,
+        resolvedPath: p.resolvedPath ? sanitizeExecApprovalDisplayText(p.resolvedPath) : null,
         sessionKey: effectiveSessionKey ?? null,
-        sessionId: normalizeOptionalString(p.sessionId) ?? null,
+        sessionId: trustedAgentRuntime ? null : (normalizeOptionalString(p.sessionId) ?? null),
         runId: requestRunId ?? null,
         toolCallId: normalizeOptionalString(p.toolCallId) ?? null,
-        turnSourceChannel: normalizeOptionalString(p.turnSourceChannel) ?? null,
-        turnSourceTo: normalizeOptionalString(p.turnSourceTo) ?? null,
-        turnSourceAccountId: normalizeOptionalString(p.turnSourceAccountId) ?? null,
-        turnSourceThreadId: p.turnSourceThreadId ?? null,
+        turnSourceChannel: trustedAgentRuntime
+          ? (trustedAgentRuntime.turnSourceChannel ?? null)
+          : (normalizeOptionalString(p.turnSourceChannel) ?? null),
+        turnSourceTo: trustedAgentRuntime
+          ? (trustedAgentRuntime.turnSourceTo ?? null)
+          : (normalizeOptionalString(p.turnSourceTo) ?? null),
+        turnSourceAccountId: trustedAgentRuntime
+          ? (trustedAgentRuntime.turnSourceAccountId ?? null)
+          : (normalizeOptionalString(p.turnSourceAccountId) ?? null),
+        turnSourceThreadId: trustedAgentRuntime
+          ? (trustedAgentRuntime.turnSourceThreadId ?? null)
+          : (p.turnSourceThreadId ?? null),
+        cronExecutionSource,
+        cronOperationBinding: cronExecutionSource
+          ? buildCronExecOperationBinding({
+              command: effectiveCommandText,
+              cwd: effectiveCwd,
+              env: p.env,
+            })
+          : null,
       };
       // This check is adjacent to manager creation with no await between them.
       // The abort owner records the tombstone before sweeping pending approvals.
@@ -361,6 +421,13 @@ export function createExecApprovalHandlers(
         throw error;
       }
       bindApprovalRequesterMetadata({ record, client });
+      if (trustedAgentRuntime) {
+        record.agentRuntimeDelegatedAuthority = trustedAgentRuntime.delegatedAuthority;
+      }
+      const trustedExecutionIdentity = trustedAgentRuntime?.executionIdentity;
+      if (trustedExecutionIdentity && requestRunId === trustedExecutionIdentity.runId) {
+        record.executionIdentityToken = trustedExecutionIdentity;
+      }
       if (client?.internal?.approvalRuntime === true) {
         // Reviewer ids widen approval visibility, so only the server-trusted
         // approval runtime may bind them onto a pending exec approval.
@@ -369,61 +436,42 @@ export function createExecApprovalHandlers(
           deviceIds: p.approvalReviewerDeviceIds,
         });
       }
-      // Use register() to synchronously add to pending map before sending any response.
-      // This ensures the approval ID is valid immediately after the "accepted" response.
-      const decisionPromise = registerPendingApprovalRecord({
+      const registration = await registerPendingApprovalRecord({
         manager,
         record,
         timeoutMs,
         respond,
         context,
       });
-      if (!decisionPromise) {
+      if (!registration) {
         return;
       }
-      const requestEvent: ExecApprovalRequest = buildRequestedApprovalEvent(record);
-      const forwardRequest = opts?.forwarder?.handleRequested.bind(opts.forwarder);
-      const iosPushRequest = opts?.iosPushDelivery?.handleRequested?.bind(opts.iosPushDelivery);
-      await handlePendingApprovalRequest({
+      await handlePendingExecApprovalRequest({
         manager,
         record,
-        decisionPromise,
         respond,
         context,
         clientConnId: client?.connId,
-        requestEventName: "exec.approval.requested",
-        requestEvent,
         twoPhase,
-        approvalKind: "exec",
         requireDeliveryRoute: p.requireDeliveryRoute,
         suppressDelivery: p.suppressDelivery,
-        deliverRequest: () =>
-          runApprovalRequestDeliveries({
-            context,
-            record,
-            forward: forwardRequest
-              ? [() => forwardRequest(requestEvent), "exec approvals: forward request failed"]
-              : undefined,
-            iosPush: iosPushRequest
-              ? [
-                  (isTargetVisible) => iosPushRequest(requestEvent, { isTargetVisible }),
-                  "exec approvals: iOS push request failed",
-                ]
-              : undefined,
-          }),
-        afterDecision: async (decision) => {
-          if (decision === null) {
-            await opts?.iosPushDelivery?.handleExpired?.(requestEvent);
-          }
-        },
-        afterDecisionErrorLabel: "exec approvals: iOS push expire failed",
+        // The gateway-derived cron fact wins even when an older in-process
+        // caller omits the flag: cron cards belong on approval surfaces only.
+        deliverToApprovalClientsOnly:
+          p.deliverToApprovalClientsOnly === true || cronExecutionSource !== null,
+        forwardRequest: opts?.forwarder?.handleRequested.bind(opts.forwarder),
+        getIosPushDelivery: () => opts?.iosPushDelivery,
       });
     },
-    "exec.approval.waitDecision": async ({ params, respond, client, context }) => {
+    "exec.approval.waitDecision": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client, context } = options;
       await handleApprovalWaitDecision({
+        authority,
         manager,
         inputId: (params as { id?: string }).id,
         client,
+        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         respond,
         resolveTerminalReason: (snapshot) => {
           const runId = normalizeOptionalString(snapshot.request.runId);
@@ -431,7 +479,64 @@ export function createExecApprovalHandlers(
         },
       });
     },
-    "exec.approval.resolve": async ({ params, respond, client, context }) => {
+    "exec.approval.grants.list": async ({ params, respond }) => {
+      if (
+        !assertValidParams(
+          params,
+          validateExecApprovalGrantsListParams,
+          "exec.approval.grants.list",
+          respond,
+        )
+      ) {
+        return;
+      }
+      // SAFETY: validated against ExecApprovalGrantsListParamsSchema above.
+      const p = params as { limit?: number };
+      const grants = listCronStandingGrants(p.limit ? { limit: p.limit } : {}).map((grant) => {
+        const operation = parseCronExecOperationBinding(grant.operationBinding);
+        return {
+          grantId: grant.grantId,
+          mintedByApprovalId: grant.mintedByApprovalId,
+          agentId: grant.agentId,
+          cronJobId: grant.cronJobId,
+          cronJobName: grant.cronJobName,
+          command: sanitizeExecApprovalDisplayText(operation?.command ?? "(unreadable)").slice(
+            0,
+            512,
+          ),
+          cwd: operation?.cwd ? sanitizeExecApprovalDisplayText(operation.cwd).slice(0, 512) : null,
+          createdAtMs: grant.createdAtMs,
+          expiresAtMs: grant.expiresAtMs,
+          revokedAtMs: grant.revokedAtMs,
+          revokedBy: grant.revokedBy,
+          lastUsedAtMs: grant.lastUsedAtMs,
+          useCount: grant.useCount,
+        };
+      });
+      respond(true, { grants }, undefined);
+    },
+    "exec.approval.grants.revoke": async ({ params, respond, client }) => {
+      if (
+        !assertValidParams(
+          params,
+          validateExecApprovalGrantsRevokeParams,
+          "exec.approval.grants.revoke",
+          respond,
+        )
+      ) {
+        return;
+      }
+      // SAFETY: validated against ExecApprovalGrantsRevokeParamsSchema above.
+      const p = params as { grantId: string };
+      // Same actor attribution as approval resolution; recorded for the ledger.
+      const revokedBy =
+        client?.connect?.client?.displayName ?? client?.connect?.client?.id ?? "operator";
+      const result = revokeCronStandingGrant({ grantId: p.grantId, revokedBy });
+      respond(true, { outcome: result.outcome }, undefined);
+    },
+    "exec.approval.resolve": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client, context } = options;
       const resolveParams = resolveApprovalDecisionParams({
         rawParams: params,
         validate: validateExecApprovalResolveParams,
@@ -441,16 +546,27 @@ export function createExecApprovalHandlers(
       if (!resolveParams) {
         return;
       }
-      const { inputId, decision } = resolveParams;
+      const { inputId, decision, reviewer } = resolveParams;
+      // Grant terms freeze at resolve time. An explicit per-resolve override
+      // (custom operator UIs) wins over the configured default; the manager
+      // applies tools.exec.grantExpiryDays when this stays undefined.
+      // SAFETY: schema-validated above; the typeof guard re-narrows the field.
+      const overrideDays = (params as { grantExpiresInDays?: unknown }).grantExpiresInDays;
+      const grantExpiresAtMs =
+        decision === "allow-always" && typeof overrideDays === "number"
+          ? Date.now() + Math.floor(overrideDays) * 86_400_000
+          : undefined;
       let autoReviewResolution = false;
       await handleApprovalResolve({
         approvalKind: "exec",
+        authority,
         manager,
         inputId,
         decision,
         respond,
         context,
         client,
+        reviewer,
         exposeAmbiguousPrefixError: true,
         validateDecision: (snapshot) => {
           const autoReviewIdentity =
@@ -481,10 +597,33 @@ export function createExecApprovalHandlers(
                 details: APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS,
               };
         },
-        resolveRecord: ({ approvalId, decision: decisionLocal, resolvedBy }) =>
-          autoReviewResolution
-            ? manager.resolveAutoReview(approvalId, resolvedBy)
-            : manager.resolve(approvalId, decisionLocal, resolvedBy),
+        resolveRecord: async ({
+          approvalId,
+          decision: decisionLocal,
+          resolvedBy,
+          resolver,
+          guard,
+        }) => {
+          if (autoReviewResolution) {
+            return manager.resolveAutoReview(approvalId, resolvedBy, undefined, guard);
+          }
+          const grantOptions = {
+            guard,
+            ...(grantExpiresAtMs !== undefined ? { grantExpiresAtMs } : {}),
+          };
+          return resolver
+            ? (
+                await manager.resolveDetailed(
+                  approvalId,
+                  decisionLocal,
+                  resolver,
+                  resolvedBy,
+                  "operator",
+                  grantOptions,
+                )
+              ).outcome === "resolved"
+            : manager.resolve(approvalId, decisionLocal, resolvedBy, grantOptions);
+        },
         forwardResolved: (resolvedEvent) => opts?.forwarder?.handleResolved(resolvedEvent),
         forwardResolvedErrorLabel: "exec approvals: forward resolve failed",
         extraResolvedHandlers: opts?.iosPushDelivery?.handleResolved

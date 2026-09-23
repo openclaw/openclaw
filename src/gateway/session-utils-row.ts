@@ -1,117 +1,426 @@
+import { createHash } from "node:crypto";
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveContextTokensForModel } from "../agents/context.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
+import { resolveModelContextTokenProjection } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
-import {
-  getSessionDisplaySubagentRunByChildSessionKey,
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
-  isSubagentRunLive,
-  resolveSubagentSessionStatus,
-} from "../agents/subagent-registry-read.js";
+import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
+import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
+import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
-  buildGroupDisplayName,
-  buildGroupDisplayTitle,
   resolveFreshSessionTotalTokens,
-  resolveSessionGoalDisplayState,
-  SESSION_TOTAL_TOKENS_VERSION,
+  resolveProjectedSessionContextTokens,
+  type InternalSessionEntry,
   type SessionEntry,
+  resolveProjectedSessionContextBudgetStatus,
+  SESSION_TOTAL_TOKENS_VERSION,
 } from "../config/sessions.js";
+import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import {
+  sessionCreatorProfileId,
+  MAX_SESSION_PARTICIPANTS,
+} from "../config/sessions/session-entry-provenance.js";
+import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  buildProjectedAgentRunIndex,
+  resolveProjectedAgentRunModel,
+  type ProjectedAgentRunIndex,
+} from "../infra/agent-run-registry.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
-import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
+import { deriveSessionUnread } from "../shared/session-unread.js";
+import { runSynchronousWork } from "../shared/synchronous-work.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
+import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
-import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
-import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
+import {
+  projectSessionActor,
+  projectSessionOwner,
+  projectSessionParticipants,
+} from "./session-identity-projection.js";
+import { isSessionPermissionChangePending } from "./session-permission-change.js";
+import { projectSessionProviderReview } from "./session-provider-review-projection.js";
+import { readSessionRowModelFacts } from "./session-row-model-facts.js";
+import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type {
-  SessionActorProfileIdentity,
+  GatewaySessionModelSource,
   SessionListRowContext,
 } from "./session-utils-contracts.js";
 import {
-  buildCompactionCheckpointPreview,
   deriveSessionTitle,
-  deriveSessionUnread,
+  prepareSessionTitleRead,
   resolveEstimatedSessionCostUsd,
-  resolveLatestCompactionCheckpoint,
   resolvePositiveNumber,
-  resolveProjectableCompactionCheckpoints,
-  resolveRuntimeChildSessionKeys,
+  buildStoreChildSessionLinksWork,
+  type SessionChildLink,
+  resolveSessionChildOwners,
 } from "./session-utils-core.js";
 import {
-  resolveGatewaySessionThinkingProjectionInternal,
-  resolveSessionDisplayModelIdentityRefCached,
-} from "./session-utils-model.js";
+  resolveGatewaySessionDisplayName,
+  projectGatewaySessionRunState,
+  resolveGatewaySessionKind,
+  resolveGatewaySessionGoal,
+} from "./session-utils-display.js";
+import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import {
-  mergeChildSessionKeys,
-  resolveChildSessionKeys,
-  resolveSessionSelectedModelRef,
-  resolveTranscriptUsageFallback,
+  buildSessionListRowMetadataContext,
+  resolveTranscriptUsageFallbacks,
 } from "./session-utils-projection.js";
-import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
+import { parseGroupKey } from "./session-utils-store.js";
+import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
+import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
-/** Adds current durable human profile display data without persisting rename-prone metadata. */
-export function projectSessionActor(
-  actor: SessionEntry["createdActor"],
-  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> = new Map(),
-): SessionCreatedActor | undefined {
-  if (!actor) {
-    return undefined;
-  }
-  const id = normalizeOptionalString(actor.id);
-  if (actor.type !== "human" || !id) {
-    return { type: actor.type, ...(id ? { id } : {}) };
-  }
-  let identity = userProfileIdentityById.get(id);
-  if (!userProfileIdentityById.has(id)) {
-    const display = resolveCurrentUserProfileDisplay(id);
-    identity =
-      display.kind === "unresolved"
-        ? undefined
-        : {
-            ...(display.label ? { label: display.label } : {}),
-            ...(display.hasUploadedAvatar ? { avatarUrl: display.avatarUrl } : {}),
-          };
-    userProfileIdentityById.set(id, identity);
-  }
-  return { type: actor.type, id, ...identity };
-}
-
-export function buildGatewaySessionRow(params: {
+export function readSessionRowInputs(params: {
   cfg: OpenClawConfig;
   storePath: string;
+  storeAgentId?: string;
+  active?: boolean;
+  /** A supplied resident model avoids transcript reads; null uses only stored model facts. */
+  activeModel?: { provider: string; model: string } | null;
   store: Record<string, SessionEntry>;
+  modelSource?: GatewaySessionModelSource;
   key: string;
-  entry?: SessionEntry;
-  modelCatalog?: ModelCatalogEntry[];
+  entry?: InternalSessionEntry;
+  preparedAcpMeta?: SessionEntry["acp"] | null;
+  modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   transcriptUsageMaxBytes?: number;
-  storeChildSessionsByKey?: Map<string, string[]>;
+  storeChildSessionLinksByKey?: Map<string, SessionChildLink[]>;
+  excludedChildKeys?: ReadonlySet<string>;
   rowContext?: SessionListRowContext;
-  agentId?: string;
+  configuredAgentIds?: ReadonlySet<string>;
+  agentId: string;
   skipTranscriptUsageFallback?: boolean;
   lightweightListRow?: boolean;
-}): GatewaySessionRow {
-  const { cfg, storePath, store, key, entry } = params;
+  includeSwarmChildren?: boolean;
+}) {
+  const { cfg, storePath, store, key, entry, agentId } = params;
   const lightweight = params.lightweightListRow === true;
   const now = params.now ?? Date.now();
-  const agentStatus = resolveActiveSessionAgentStatus(entry?.agentStatus, now);
+  const rowContext =
+    params.rowContext ??
+    buildSessionListRowMetadataContext({ now, sessionKeys: [key, ...Object.keys(store)] });
+  const displayName = resolveGatewaySessionDisplayName(key, entry);
+  const { selectedModel, rowModelIdentity, thinkingProjection, catalogEntry } =
+    readSessionRowModelFacts({
+      cfg,
+      key,
+      entry,
+      preparedAcpMeta: params.preparedAcpMeta,
+      source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
+      agentId,
+      rowContext,
+      modelCatalog: params.modelCatalog,
+      lightweightListRow: lightweight,
+    });
+  const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
+  const usageByFallbackModel =
+    params.skipTranscriptUsageFallback !== true
+      ? resolveTranscriptUsageFallbacks({
+          cfg,
+          key,
+          entry,
+          storePath,
+          freshTotalTokens: freshSessionTotalTokens,
+          fallbackModelRefs: [
+            undefined,
+            ...(rowContext.subagentRunsByChildSessionKey.get(key) ?? []).map((run) => run.model),
+          ],
+          allowPluginNormalization: !lightweight,
+          maxTranscriptBytes: params.transcriptUsageMaxBytes,
+          rowContext,
+          agentId,
+          storeAgentId: params.storeAgentId,
+        })
+      : undefined;
+  const { provider, model } = selectedModel;
+  // Display aliases do not change the selected route's catalog or runtime policy.
+  const activeModel = resolveGatewaySessionActiveModel({
+    cfg,
+    active: params.active,
+    activeModel: params.activeModel,
+    storeAgentId: params.storeAgentId,
+    selectedModel,
+    projectedAgentRuns: (rowContext.projectedAgentRuns ??= buildProjectedAgentRunIndex()),
+    entry,
+    agentId,
+    sessionId: entry?.sessionId,
+    sessionKey: key,
+    storePath,
+  });
+
+  const titleRead = prepareSessionTitleRead(entry, displayName, params);
+  let derivedTitle = titleRead?.derivedTitle;
+  let lastMessagePreview: string | undefined;
+  if (entry?.sessionId && titleRead?.needsTranscript) {
+    const fields = readScopedSessionTitleFieldsFromTranscript({
+      agentId: params.storeAgentId ?? agentId,
+      sessionEntry: entry,
+      sessionId: entry.sessionId,
+      sessionKey: key,
+      storePath,
+    });
+    if (params.includeDerivedTitles) {
+      derivedTitle ??= deriveSessionTitle(entry, fields.firstUserMessage, displayName);
+    }
+    lastMessagePreview = (params.includeLastMessage && fields.lastMessagePreview) || undefined;
+  }
+
+  const contextWindowProfile = resolveModelContextWindowProfile({
+    catalogEntry,
+    selected: entry?.contextWindow,
+  });
+  const modelContext = resolveModelContextTokenProjection({
+    cfg,
+    provider,
+    model,
+    modelContextTokens: catalogEntry?.contextTokens,
+    modelContextWindow: contextWindowProfile.contextTokens,
+    allowAsyncLoad: false,
+  });
+  const resolvedModelContextTokens = resolvePositiveNumber(modelContext.contextTokens);
+
+  const pluginExtensions =
+    !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
+  const repositoryWorkspace = entry?.repositoryWorkspaceId
+    ? getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId)
+    : undefined;
+
+  return {
+    inputs: {
+      cfg,
+      key,
+      entry,
+      lightweight,
+      swarm: buildSessionSwarmSummary(
+        params.rowContext?.subagentRuns.swarmRunsByRequesterSessionKey.get(key) ?? [],
+        key,
+        agentId,
+        { includeChildren: params.includeSwarmChildren },
+      ),
+      permissionModePending: isSessionPermissionChangePending(entry?.sessionId),
+      repository:
+        repositoryWorkspace?.agentId === agentId && repositoryWorkspace.sessionKey === key
+          ? {
+              url: repositoryWorkspace.url,
+              ...(repositoryWorkspace.requestedRef
+                ? { ref: repositoryWorkspace.requestedRef }
+                : {}),
+              branch: repositoryWorkspace.branch,
+            }
+          : undefined,
+      userProfileIdentityById: rowContext.userProfileIdentityById,
+      identityProjection: rowContext.identityProjection,
+      configuredAgentIds: params.configuredAgentIds,
+      agentId,
+      displayName,
+      derivedTitle,
+      lastMessagePreview,
+      thinkingProjection,
+      agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
+      contextWindowProfile,
+      fastModeState: resolveFastModeState({
+        cfg,
+        provider,
+        model,
+        agentId,
+        sessionEntry: entry,
+      }),
+      hasAutomation: sessionHasAutomation(key, cfg, agentId) ? true : undefined,
+      rowModelIdentity,
+      selectedModel,
+      contextTokens: resolveProjectedSessionContextTokens({
+        entry,
+        provider,
+        model,
+        agentHarnessId: thinkingProjection.agentRuntime.id,
+        resolvedContextTokens: contextWindowProfile.contextTokens
+          ? Math.min(
+              resolvedModelContextTokens ?? contextWindowProfile.contextTokens,
+              contextWindowProfile.contextTokens,
+            )
+          : resolvedModelContextTokens,
+        authoredContextTokens: resolvePositiveNumber(modelContext.authoredContextTokens),
+      }),
+      pluginExtensions,
+      includeSwarmSummary: params.rowContext !== undefined,
+      childLinks: (
+        params.storeChildSessionLinksByKey ??
+        runSynchronousWork(
+          buildStoreChildSessionLinksWork({
+            store,
+            keys: [key],
+            subagentRunsByChildSessionKey: rowContext.subagentRunsByChildSessionKey,
+          }),
+        )
+      ).get(key),
+      usageByFallbackModel,
+      freshSessionTotalTokens,
+      estimatedCostUsd: lightweight
+        ? asNonNegativeFiniteNumber(entry?.estimatedCostUsd)
+        : resolveEstimatedSessionCostUsd({
+            cfg,
+            provider,
+            model,
+            entry,
+            rowContext,
+          }),
+      subagentRunInputs: rowContext.subagentRuns.inputs,
+    },
+    presentation: {
+      now,
+      subagentRuns: rowContext.subagentRuns,
+      projectedAgentRuns: rowContext.projectedAgentRuns,
+      projectedSubagentActivity: rowContext.projectedSubagentActivity,
+      activeModel,
+      excludedChildKeys: params.excludedChildKeys,
+    },
+  };
+}
+
+export function buildGatewaySessionRow(
+  params: Parameters<typeof readSessionRowInputs>[0],
+): GatewaySessionRow {
+  const { inputs, presentation } = readSessionRowInputs(params);
+  return presentSessionRow(materializeSessionRow(inputs), presentation);
+}
+
+export function resolveGatewaySessionActiveModel(params: {
+  cfg: OpenClawConfig;
+  active?: boolean;
+  activeModel?: { provider: string; model: string } | null;
+  agentId?: string;
+  storeAgentId?: string;
+  sessionId?: string;
+  sessionKey: string;
+  projectedAgentRuns: ProjectedAgentRunIndex;
+  selectedModel?: { provider: string; model: string };
+  modelSource?: GatewaySessionModelSource;
+  entry?: InternalSessionEntry;
+  storePath?: string;
+}): { provider: string; model: string } | undefined {
+  if (!params.agentId) {
+    return undefined;
+  }
+  const liveModel = resolveProjectedAgentRunModel({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    index: params.projectedAgentRuns,
+  });
+  if (params.active ?? (liveModel !== undefined || params.entry?.status === "running")) {
+    return liveModel ?? undefined;
+  }
+  if (!params.entry?.fallbackNotice || params.storePath === undefined) {
+    return undefined;
+  }
+  const selectedModel =
+    params.selectedModel ??
+    (params.modelSource
+      ? resolveSessionSelectedModelRef({
+          cfg: params.cfg,
+          source: params.modelSource,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        })
+      : undefined);
+  if (!selectedModel) {
+    return undefined;
+  }
+
+  const fallbackEntry =
+    params.activeModel === undefined
+      ? readSessionFallbackModel({
+          selectedProvider: selectedModel.provider,
+          selectedModel: selectedModel.model,
+          sessionEntry: params.entry,
+          config: params.cfg,
+          sessionScope: {
+            agentId: params.storeAgentId ?? params.agentId,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+          },
+        })
+      : params.activeModel
+        ? { modelProvider: params.activeModel.provider, model: params.activeModel.model }
+        : undefined;
+  const { selected, active } = resolveSelectedAndActiveModel({
+    selectedProvider: selectedModel.provider,
+    selectedModel: selectedModel.model,
+    sessionEntry: fallbackEntry ?? params.entry,
+  });
+  return resolveActiveFallbackState({
+    selectedModelRef: selected.label,
+    activeModelRef: active.label,
+    config: params.cfg,
+    state: params.entry,
+  }).active
+    ? { provider: active.provider, model: active.model }
+    : undefined;
+}
+
+/** Opaque cache-busting revision for the channel-avatar route; never leaks the reference. */
+function channelAvatarRevision(reference: string): string {
+  return createHash("sha256").update(reference).digest("base64url").slice(0, 12);
+}
+
+/** Profile publications invalidate display facts independently of stored session metadata. */
+function projectSessionRowProfiles(input: ReturnType<typeof readSessionRowInputs>["inputs"]) {
+  const { entry, cfg, userProfileIdentityById, configuredAgentIds, identityProjection } = input;
+  const owner = (identityProjection?.owner ?? projectSessionOwner)(
+    entry,
+    userProfileIdentityById,
+    cfg,
+    configuredAgentIds,
+  );
+  const projected = (identityProjection?.participants ?? projectSessionParticipants)(
+    entry,
+    userProfileIdentityById,
+    cfg,
+  );
+  const ownerKey = owner?.actor.identity && JSON.stringify(owner.actor.identity);
+  const participants = [...projected].flatMap(([key, participant]) =>
+    key === ownerKey ? [] : [participant],
+  );
+  return {
+    createdActor: projectSessionActor(
+      entry?.createdActor,
+      userProfileIdentityById,
+      cfg,
+      Boolean(sessionCreatorProfileId(entry?.createdActor)),
+    ),
+    owner,
+    // Keep the released v4 summary stable; expanded identities are additive for newer clients.
+    participants: participants.length
+      ? participants.slice(0, SESSION_PARTICIPANT_LIMIT)
+      : undefined,
+    expandedParticipants: participants.length
+      ? participants.slice(0, MAX_SESSION_PARTICIPANTS)
+      : undefined,
+    participantCount: participants.length || undefined,
+    archivedBy: projectSessionActor(entry?.archivedBy, userProfileIdentityById, cfg),
+  };
+}
+
+export function refreshSessionRowProfiles(materialized: ReturnType<typeof materializeSessionRow>) {
+  Object.assign(materialized.row, projectSessionRowProfiles(materialized.source));
+}
+
+export function materializeSessionRow(input: ReturnType<typeof readSessionRowInputs>["inputs"]) {
+  const { cfg, key, entry } = input;
   const observerDigest =
     entry?.observerDigest &&
     // Strictly newer: a run end and restart can share a millisecond, and the
@@ -119,298 +428,40 @@ export function buildGatewaySessionRow(params: {
     (entry.startedAt === undefined || entry.observerDigest.updatedAt > entry.startedAt)
       ? entry.observerDigest
       : undefined;
-  const updatedAt = entry?.updatedAt ?? null;
-  const parsed = parseGroupKey(key);
-  const sessionKind = classifySessionKind(key, entry);
-  // The older Gateway wire kind folds cron/spawn-child into direct.
-  const gatewayKind =
-    sessionKind === "cron" || sessionKind === "spawn-child" ? "direct" : sessionKind;
   const deliveryFields = projectSessionDeliveryFields(entry?.delivery);
-  const channel = deliveryFields.channel ?? parsed?.channel;
-  const subject = entry?.subject;
-  const groupChannel = entry?.groupChannel;
-  const space = entry?.space;
-  const id = parsed?.id;
-  const origin = deliveryFields.origin;
-  const originLabel = origin?.label;
-  const parsedAgent = parseAgentSessionKey(key);
-  const isDashboardSession = parsedAgent?.rest.startsWith("dashboard:") === true;
-  const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
-  // A user-assigned label is an explicit rename; it must win over stored
-  // channel-derived display names or renames silently vanish on refresh.
-  // Group sessions prefer the human chat title (subject/#channel) over the
-  // stored compact token displayName (e.g. "slack:g-general").
-  const displayName =
-    entry?.label ??
-    (isGroupSession ? buildGroupDisplayTitle({ subject, groupChannel, space }) : undefined) ??
-    entry?.displayName ??
-    (isGroupSession && channel
-      ? buildGroupDisplayName({
-          provider: channel,
-          subject,
-          groupChannel,
-          space,
-          id,
-          key,
-        })
-      : undefined) ??
-    // Dashboard origin labels identify the authenticated sender. Using them as
-    // titles leaks account names into the sidebar while the generated title is pending.
-    (isDashboardSession ? undefined : originLabel);
-  const sessionAgentId = normalizeAgentId(
-    parsedAgent?.agentId ?? params.agentId ?? resolveDefaultAgentId(cfg),
-  );
-  const skipTranscriptUsage = params.skipTranscriptUsageFallback === true;
-  const rowContext = params.rowContext;
-  const subagentRun = rowContext
-    ? rowContext.subagentRuns.getDisplaySubagentRun(key)
-    : getSessionDisplaySubagentRunByChildSessionKey(key);
-  const subagentOwner =
-    normalizeOptionalString(subagentRun?.controllerSessionKey) ||
-    normalizeOptionalString(subagentRun?.requesterSessionKey);
-  const liveSubagentRunActive = isSubagentRunLive(subagentRun);
-  const persistedSessionStatus = entry?.status;
-  const persistedSessionEndedAt = entry?.endedAt;
-  const persistedSessionStartedAt = entry?.startedAt;
-  const persistedSessionRuntimeMs = entry?.runtimeMs;
-  const subagentRunState = subagentRun
-    ? liveSubagentRunActive
-      ? "active"
-      : typeof subagentRun.execution.endedAt === "number" ||
-          persistedSessionStatus === "done" ||
-          persistedSessionStatus === "failed" ||
-          persistedSessionStatus === "killed" ||
-          persistedSessionStatus === "timeout" ||
-          typeof persistedSessionEndedAt === "number"
-        ? "historical"
-        : "interrupted"
-    : undefined;
-  const subagentStatus = subagentRun
-    ? liveSubagentRunActive
-      ? resolveSubagentSessionStatus(subagentRun)
-      : persistedSessionStatus === "running"
-        ? undefined
-        : (persistedSessionStatus ??
-          (typeof subagentRun.execution.endedAt === "number"
-            ? resolveSubagentSessionStatus(subagentRun)
-            : undefined))
-    : undefined;
-  const subagentStartedAt = subagentRun
-    ? liveSubagentRunActive
-      ? getSubagentSessionStartedAt(subagentRun)
-      : (persistedSessionStartedAt ?? getSubagentSessionStartedAt(subagentRun))
-    : undefined;
-  const subagentEndedAt = subagentRun
-    ? liveSubagentRunActive
-      ? subagentRun.execution.endedAt
-      : (persistedSessionEndedAt ?? subagentRun.execution.endedAt)
-    : undefined;
-  const subagentRuntimeMs = subagentRun
-    ? liveSubagentRunActive
-      ? getSubagentSessionRuntimeMs(subagentRun, now)
-      : (persistedSessionRuntimeMs ??
-        (typeof subagentRun.execution.endedAt === "number"
-          ? getSubagentSessionRuntimeMs(subagentRun, now)
-          : undefined))
-    : undefined;
-  const selectedModel = resolveSessionSelectedModelRef({
-    cfg,
-    entry,
-    agentId: sessionAgentId,
-    rowContext,
-    allowPluginNormalization: !lightweight,
-  });
-  const resolvedModel = resolveSessionModelIdentityRef(
-    cfg,
-    entry,
-    sessionAgentId,
-    subagentRun?.model,
-    { allowPluginNormalization: !lightweight },
-  );
-  const runtimeModelPresent =
-    Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
-  const freshSessionTotalTokens = resolveNonNegativeNumber(resolveFreshSessionTotalTokens(entry));
-  const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
-  const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
-  const needsTranscriptEstimatedCostUsd =
-    !skipTranscriptUsage &&
-    resolveEstimatedSessionCostUsd({
-      cfg,
-      provider: resolvedModel.provider,
-      model: resolvedModel.model ?? DEFAULT_MODEL,
-      entry,
-      rowContext,
-    }) === undefined;
-  const transcriptUsage =
-    !skipTranscriptUsage &&
-    (needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd)
-      ? resolveTranscriptUsageFallback({
-          cfg,
-          key,
-          entry,
-          storePath,
-          fallbackProvider: resolvedModel.provider,
-          fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
-          maxTranscriptBytes: params.transcriptUsageMaxBytes,
-          rowContext: params.rowContext,
-          agentId: sessionAgentId,
-        })
-      : null;
-  const preferLiveSubagentModelIdentity =
-    Boolean(subagentRun?.model?.trim()) && subagentStatus === "running";
-  const shouldUseTranscriptModelIdentity =
-    runtimeModelPresent &&
-    !preferLiveSubagentModelIdentity &&
-    (needsTranscriptTotalTokens || needsTranscriptContextTokens);
-  const resolvedModelIdentity = {
-    provider: resolvedModel.provider,
-    model: resolvedModel.model ?? DEFAULT_MODEL,
-  };
-  const modelIdentity = shouldUseTranscriptModelIdentity
-    ? {
-        provider: transcriptUsage?.modelProvider ?? resolvedModelIdentity.provider,
-        model: transcriptUsage?.model ?? resolvedModelIdentity.model,
-      }
-    : resolvedModelIdentity;
-  const { provider: modelProvider, model } = modelIdentity;
-  const totalTokens =
-    freshSessionTotalTokens ?? resolveNonNegativeNumber(transcriptUsage?.totalTokens);
-  const totalTokensFresh =
-    freshSessionTotalTokens !== undefined ||
-    (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0)
-      ? true
-      : transcriptUsage?.totalTokensFresh === true;
-  const goal = entry?.goal
-    ? resolveSessionGoalDisplayState(
-        {
-          goal: entry.goal,
-          totalTokens,
-          totalTokensFresh,
-          totalTokensVersion: totalTokensFresh ? SESSION_TOTAL_TOKENS_VERSION : undefined,
-        },
-        now,
-        // Session listing is read-only; stale goal baselines are adopted only
-        // by goal commands/tools that can persist the first fresh snapshot.
-        { adoptFreshBaseline: false },
-      )
-    : undefined;
-  const childSessions = params.storeChildSessionsByKey
-    ? mergeChildSessionKeys(
-        resolveRuntimeChildSessionKeys(key, now, rowContext?.subagentRuns),
-        params.storeChildSessionsByKey.get(key),
-      )
-    : resolveChildSessionKeys(key, store, now, rowContext?.subagentRuns);
-  const compactionCheckpoints = resolveProjectableCompactionCheckpoints(entry);
-  const compactionCheckpointCount = Array.isArray(entry?.compactionCheckpoints)
-    ? compactionCheckpoints.length
-    : undefined;
-  const latestCompactionCheckpoint = buildCompactionCheckpointPreview(
-    resolveLatestCompactionCheckpoint(compactionCheckpoints),
-  );
-  const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelProvider;
-  const selectedOrRuntimeModel = selectedModel?.model ?? model;
-  const rowModelIdentity = lightweight
-    ? { provider: selectedOrRuntimeModelProvider, model: selectedOrRuntimeModel }
-    : resolveSessionDisplayModelIdentityRefCached({
-        cfg,
-        agentId: sessionAgentId,
-        provider: selectedOrRuntimeModelProvider,
-        model: selectedOrRuntimeModel,
-        rowContext: params.rowContext,
-      });
-  const rowModelProvider = rowModelIdentity.provider;
-  const rowModel = rowModelIdentity.model;
-  const acpSessionKey = resolveStoredSessionKeyForAgentStore({
-    cfg,
-    agentId: sessionAgentId,
-    sessionKey: key,
-  });
-  const estimatedCostUsd = lightweight
-    ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
-    : (resolveEstimatedSessionCostUsd({
-        cfg,
-        provider: rowModelProvider,
-        model: rowModel,
-        entry,
-        rowContext: params.rowContext,
-      }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd));
-  const contextTokens = lightweight
-    ? (resolvePositiveNumber(entry?.contextTokens) ??
-      resolvePositiveNumber(
-        resolveContextTokensForModel({
-          cfg,
-          provider: rowModelProvider,
-          model: rowModel,
-          allowAsyncLoad: false,
-        }),
-      ))
-    : (resolvePositiveNumber(entry?.contextTokens) ??
-      resolvePositiveNumber(transcriptUsage?.contextTokens) ??
-      resolvePositiveNumber(
-        resolveContextTokensForModel({
-          cfg,
-          provider: rowModelProvider,
-          model: rowModel,
-          allowAsyncLoad: false,
-        }),
-      ));
+  const channel = deliveryFields.channel ?? parseGroupKey(key)?.channel;
+  const storedOrigin = deliveryFields.origin;
+  const avatar = normalizeOptionalString(storedOrigin?.avatar);
+  const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
+  const pinnedAt =
+    entry?.pinnedAt !== undefined && isPinnableSessionEntry(key, entry)
+      ? entry.pinnedAt
+      : undefined;
 
-  let derivedTitle: string | undefined;
-  let lastMessagePreview: string | undefined;
-  if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
-    const fields = readScopedSessionTitleFieldsFromTranscript({
-      agentId: sessionAgentId,
-      sessionEntry: entry,
-      sessionId: entry.sessionId,
-      sessionKey: key,
-      storePath,
-    });
-    if (params.includeDerivedTitles) {
-      derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage, displayName);
-    }
-    if (params.includeLastMessage && fields.lastMessagePreview) {
-      lastMessagePreview = fields.lastMessagePreview;
-    }
-  }
-
-  const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
-  const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
-    cfg,
-    agentId: sessionAgentId,
-    provider: thinkingProvider,
-    model: thinkingModel,
-    sessionKey: acpSessionKey,
-    entry,
-    modelCatalog: params.modelCatalog,
-    rowContext,
-  });
-  const fastModeState = resolveFastModeState({
-    cfg,
-    provider: selectedOrRuntimeModelProvider ?? DEFAULT_PROVIDER,
-    model: selectedOrRuntimeModel ?? DEFAULT_MODEL,
-    agentId: sessionAgentId,
-    sessionEntry:
-      entry?.fastMode !== undefined
-        ? {
-            fastMode: entry.fastMode,
-          }
-        : undefined,
-  });
-  const pluginExtensions =
-    !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
-
-  return {
+  // Reserve temporal fields in wire order; presentation fills a fresh copy.
+  const row: GatewaySessionRow = {
     key,
+    // Only explicitly requested summaries may clear swarm state in event merges.
+    ...(input.includeSwarmSummary ? { swarm: input.swarm } : {}),
     visibility: entry ? (entry.visibility ?? "shared") : undefined,
     incognito: entry?.incognito,
-    spawnedBy: subagentOwner || entry?.spawnedBy,
-    // The live registry controller takes precedence over the persisted spawner.
-    controlOwnerSessionKey: subagentOwner || entry?.spawnedBy,
+    spawnedBy: undefined,
+    controlOwnerSessionKey: undefined,
     swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
+    workspaceDir: entry?.spawnedCwd ?? entry?.spawnedWorkspaceDir,
+    projectId: entry?.projectId,
+    permissionMode: entry?.permissionMode,
+    sandboxMode: entry?.sandboxMode,
+    nativeRuntimeConsent: entry?.nativeRuntimeConsent,
+    permissionModePending: input.permissionModePending,
+    ...(entry?.permissionMode !== undefined && entry.sessionRoot !== undefined
+      ? { sessionRoot: entry.sessionRoot }
+      : {}),
     worktree: entry?.worktree,
+    repositoryWorkspaceId: entry?.repositoryWorkspaceId,
+    ...(input.repository ? { repository: input.repository } : {}),
     execNode: entry?.execNode,
     execCwd: entry?.execCwd,
     forkedFromParent: sessionEntryForkedFromParent(entry) ? true : undefined,
@@ -418,33 +469,43 @@ export function buildGatewaySessionRow(params: {
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
     createdVia: entry?.createdVia,
-    createdActor: projectSessionActor(entry?.createdActor, rowContext?.userProfileIdentityById),
+    ...projectSessionRowProfiles(input),
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
-    kind: gatewayKind,
+    kind: resolveGatewaySessionKind(key, entry),
     label: entry?.label,
+    autoLabel: entry?.autoLabel,
+    icon: entry?.icon,
+    color: entry?.color,
+    channelAvatarUrl: avatar
+      ? buildControlUiChannelAvatarUrl(controlUiBasePath, key, channelAvatarRevision(avatar))
+      : undefined,
     category: entry?.category,
     boardFace: entry?.boardFace,
-    ...sessionClassificationForRow(cfg, key, sessionAgentId, entry),
-    displayName,
-    derivedTitle,
-    lastMessagePreview,
+    boardPresentation: entry?.boardPresentation,
+    ...sessionClassificationForRow(cfg, key, input.agentId, entry),
+    displayName: input.displayName,
+    derivedTitle: input.derivedTitle,
+    lastMessagePreview: input.lastMessagePreview,
     channel,
-    subject,
-    groupChannel,
-    space,
+    subject: entry?.subject,
+    groupChannel: entry?.groupChannel,
+    space: entry?.space,
     chatType: entry?.chatType,
-    origin,
-    updatedAt,
+    origin: storedOrigin
+      ? (({ avatar: _avatar, ...safeOrigin }) => safeOrigin)(storedOrigin)
+      : undefined,
+    updatedAt: entry?.updatedAt ?? null,
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
-    archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById),
-    pinned: entry?.pinnedAt !== undefined,
-    pinnedAt: entry?.pinnedAt,
+    archiveReason: entry?.archiveReason,
+    pinned: pinnedAt !== undefined,
+    pinnedAt,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
-    agentStatus,
+    markedUnreadAt: entry?.markedUnreadAt,
+    agentStatus: undefined,
     observerDigest: observerDigest
       ? {
           ...(observerDigest.agentId ? { agentId: observerDigest.agentId } : {}),
@@ -460,15 +521,19 @@ export function buildGatewaySessionRow(params: {
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
-    thinkingLevel: thinkingProjection.thinkingLevel,
-    thinkingLevels: thinkingProjection.thinkingLevels,
-    thinkingOptions: thinkingProjection.thinkingOptions,
-    thinkingDefault: thinkingProjection.thinkingDefault,
+    restartRecoveryStatus: entry?.mainRestartRecovery?.tombstone ? "tombstoned" : undefined,
+    thinkingLevel: input.thinkingProjection.thinkingLevel,
+    contextWindow: input.contextWindowProfile.contextWindow,
+    contextWindows: input.contextWindowProfile.contextWindows,
+    contextWindowDefault: input.contextWindowProfile.contextWindowDefault,
+    thinkingLevels: input.thinkingProjection.thinkingLevels,
+    thinkingOptions: input.thinkingProjection.thinkingOptions,
+    thinkingDefault: input.thinkingProjection.thinkingDefault,
     fastMode: entry?.fastMode,
     toolOverrides: entry?.toolOverrides,
-    effectiveFastMode: fastModeState.mode,
-    effectiveFastModeSource: fastModeState.source,
-    fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
+    effectiveFastMode: input.fastModeState.mode,
+    effectiveFastModeSource: input.fastModeState.source,
+    fastAutoOnSeconds: input.fastModeState.fastAutoOnSeconds,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
     reasoningLevel: entry?.reasoningLevel,
@@ -476,21 +541,24 @@ export function buildGatewaySessionRow(params: {
     sendPolicy: entry?.sendPolicy,
     inputTokens: entry?.inputTokens,
     outputTokens: entry?.outputTokens,
-    totalTokens,
-    totalTokensFresh,
-    goal,
-    estimatedCostUsd,
-    status: subagentRun ? subagentStatus : entry?.status,
+    totalTokens: undefined,
+    totalTokensFresh: undefined,
+    goal: undefined,
+    estimatedCostUsd: undefined,
+    status: undefined,
+    subagentRunState: undefined,
+    hasActiveSubagentRun: undefined,
+    startedAt: undefined,
+    endedAt: undefined,
+    runtimeMs: undefined,
     lastRunError: entry?.lastRunError,
-    hasAutomation: sessionHasAutomation(key, cfg) ? true : undefined,
-    subagentRunState,
-    hasActiveSubagentRun: subagentRun ? liveSubagentRunActive : undefined,
-    startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
-    endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
-    runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
+    providerReview: projectSessionProviderReview(entry, key),
+    lastRunId: entry?.lastRunId,
+    hasAutomation: input.hasAutomation,
     // Navigation lineage is persisted; runtime control is exposed separately above.
     parentSessionKey: entry?.parentSessionKey,
-    childSessions,
+    parentSessionId: entry?.parentSessionId,
+    childSessions: undefined,
     responseUsage: entry?.responseUsage,
     effectiveResponseUsage: resolveEffectiveResponseUsage(
       entry?.responseUsage,
@@ -503,19 +571,106 @@ export function buildGatewaySessionRow(params: {
       channel: INTERNAL_MESSAGE_CHANNEL,
       sessionEntry: entry,
     }).mode,
-    modelProvider: rowModelProvider,
-    model: rowModel,
+    modelProvider: input.rowModelIdentity.provider,
+    model: input.rowModelIdentity.model,
+    activeModelProvider: undefined,
+    activeModel: undefined,
+    modelOverrideSource:
+      input.selectedModel.storedOverrideSource === "parent"
+        ? "inherited"
+        : resolveSessionModelOverrideSource(entry),
     modelSelectionLocked: entry?.modelSelectionLocked,
-    agentRuntime: thinkingProjection.agentRuntime,
-    contextTokens,
-    contextBudgetStatus: entry?.contextBudgetStatus,
+    runtimeSelectionLocked: input.thinkingProjection.runtimeSelectionLocked,
+    agentRuntime: input.agentRuntime,
+    contextTokens: input.contextTokens,
+    contextBudgetStatus: resolveProjectedSessionContextBudgetStatus({
+      entry,
+      provider: input.selectedModel.provider,
+      model: input.selectedModel.model,
+      contextTokens: input.contextTokens,
+    }),
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel,
     lastTo: deliveryFields.lastTo,
     lastAccountId: deliveryFields.lastAccountId,
     lastThreadId: deliveryFields.lastThreadId,
-    compactionCheckpointCount,
-    latestCompactionCheckpoint,
-    pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
+    pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
   };
+  return { row, source: input };
+}
+
+export function presentSessionRow(
+  materialized: ReturnType<typeof materializeSessionRow>,
+  options: Partial<ReturnType<typeof readSessionRowInputs>["presentation"]> & { now: number },
+): GatewaySessionRow {
+  const row = { ...materialized.row };
+  const { source } = materialized;
+  const { entry, freshSessionTotalTokens } = source;
+  const { now } = options;
+  // Stamp the temporal projection, not the reusable materialized inputs.
+  // Completed list caches retain this sample when they replay the finished row.
+  row.snapshotAt = now;
+  const subagentRuns =
+    options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });
+  const { subagentRun, subagentOwner, fields } = projectGatewaySessionRunState({
+    key: row.key,
+    entry,
+    now,
+    rowContext: {
+      subagentRuns,
+      projectedAgentRuns: options.projectedAgentRuns,
+      projectedSubagentActivity: options.projectedSubagentActivity,
+    },
+  });
+  Object.assign(row, fields);
+  const usage = source.usageByFallbackModel?.get(subagentRun?.model);
+  row.totalTokens = freshSessionTotalTokens ?? asNonNegativeFiniteNumber(usage?.totalTokens);
+  row.totalTokensFresh =
+    freshSessionTotalTokens !== undefined ||
+    (typeof row.totalTokens === "number" && row.totalTokens > 0) ||
+    usage?.totalTokensFresh === true;
+  row.agentStatus = resolveActiveSessionAgentStatus(entry?.agentStatus, now);
+  row.spawnedBy = row.controlOwnerSessionKey = subagentOwner || entry?.spawnedBy;
+  row.goal = resolveGatewaySessionGoal(entry, now, {
+    totalTokens: row.totalTokens,
+    totalTokensFresh: row.totalTokensFresh,
+    totalTokensVersion: row.totalTokensFresh ? SESSION_TOTAL_TOKENS_VERSION : undefined,
+  });
+  row.estimatedCostUsd =
+    source.estimatedCostUsd ??
+    asNonNegativeFiniteNumber(source.lightweight ? undefined : usage?.estimatedCostUsd);
+  const children = source.childLinks?.flatMap(({ key, entry: childEntry }) => {
+    if (options.excludedChildKeys?.has(key)) {
+      return [];
+    }
+    const childActive = projectGatewaySessionRunState({
+      key,
+      entry: childEntry,
+      now,
+      rowContext: {
+        subagentRuns,
+        projectedAgentRuns: options.projectedAgentRuns,
+        projectedSubagentActivity: options.projectedSubagentActivity,
+      },
+    }).fields.hasActiveSubagentRun;
+    if (
+      !resolveSessionChildOwners({
+        key,
+        entry: childEntry,
+        now,
+        subagentRuns,
+        hasActiveRun: childActive,
+      }).includes(row.key)
+    ) {
+      return [];
+    }
+    if (childActive) {
+      row.hasActiveSubagentRun = true;
+    }
+    return [key];
+  });
+  row.childSessions = children?.length ? children : undefined;
+  row.activeModelProvider = options.activeModel?.provider;
+  row.activeModel = options.activeModel?.model;
+  return row;
 }

@@ -7,6 +7,7 @@ import {
   isIpInCidr,
   isLoopbackIpAddress,
   isPrivateOrLoopbackIpAddress,
+  isRfc8215LocalUseNat64Ipv6Address,
   normalizeIpAddress,
 } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -64,13 +65,14 @@ export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
     return false;
   }
   const headers = req.headers ?? {};
-  return Boolean(
-    headers.forwarded ||
-    headers["x-real-ip"] ||
-    Object.keys(headers).some((header) =>
-      normalizeLowercaseStringOrEmpty(header).startsWith("x-forwarded-"),
-    ),
-  );
+  return Object.keys(headers).some((header) => {
+    const normalized = normalizeLowercaseStringOrEmpty(header);
+    return (
+      normalized === "forwarded" ||
+      normalized === "x-real-ip" ||
+      normalized.startsWith("x-forwarded-")
+    );
+  });
 }
 
 /** Return whether a request is a clean loopback request without forwarded identity headers. */
@@ -110,9 +112,11 @@ export function resolveLocalInterfaceAddressMatch(
 /**
  * Returns true if the IP belongs to a private or loopback network range.
  * Private ranges: RFC1918, link-local, ULA IPv6, and CGNAT (100.64/10), plus loopback.
+ * Excludes RFC8215 local-use NAT64: SSRF policy blocks that allocation, but
+ * Gateway trust decisions cannot infer a private mapped destination from it.
  */
 export function isPrivateOrLoopbackAddress(ip: string | undefined): boolean {
-  return isPrivateOrLoopbackIpAddress(ip);
+  return isPrivateOrLoopbackIpAddress(ip) && !isRfc8215LocalUseNat64Ipv6Address(ip);
 }
 
 function normalizeIp(ip: string | undefined): string | undefined {
@@ -239,7 +243,7 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-export function resolveRequestClientIp(
+export function resolveRequestClientIpFromHeaders(
   req?: IncomingMessage,
   trustedProxies?: string[],
   allowRealIpFallback = false,
@@ -354,15 +358,22 @@ export function defaultGatewayBindMode(tailscaleMode?: string): GatewayBindMode 
 async function canBindToHost(host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const testServer = net.createServer();
-    testServer.once("error", () => {
-      resolve(false);
-    });
-    testServer.once("listening", () => {
+    const timeout = setTimeout(() => finish(false), 3000);
+    const finish = (canBind: boolean) => {
+      clearTimeout(timeout);
       testServer.close();
-      resolve(true);
-    });
-    // Use port 0 to let OS pick an available port for testing
-    testServer.listen(0, host);
+      resolve(canBind);
+    };
+    testServer.once("error", () => finish(false));
+    // Keep this handler after timeout: a late bind must still close its socket.
+    // Promise settlement is one-shot, so late events cannot change the result.
+    testServer.once("listening", () => finish(true));
+    try {
+      // Use port 0 to let OS pick an available port for testing.
+      testServer.listen(0, host);
+    } catch {
+      finish(false);
+    }
   });
 }
 
@@ -421,6 +432,18 @@ export function isLoopbackHost(host: string): boolean {
     return true;
   }
   return isLoopbackAddress(parsed.unbracketedHost);
+}
+
+// Gateway-local policy rejects dotted localhost and intentionally allows any URL scheme.
+export function isLoopbackGatewayUrl(rawUrl: string): boolean {
+  try {
+    const hostname = new URL(rawUrl).hostname.toLowerCase();
+    const unbracketed =
+      hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+    return unbracketed === "localhost" || isLoopbackIpAddress(unbracketed);
+  } catch {
+    return false;
+  }
 }
 
 /**

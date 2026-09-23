@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
+import { icons } from "./icons.ts";
 
 type FilePreviewModalElement = HTMLElement & {
   files: typeof files;
@@ -68,6 +71,8 @@ describe("openclaw-file-preview-modal", () => {
     container.replaceChildren();
     container.remove();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
 
   it("filters files by path or contents", async () => {
@@ -79,6 +84,23 @@ describe("openclaw-file-preview-modal", () => {
     expect(shadowText(modal)).toContain("noreply@example.com");
   });
 
+  it("uses the composer skill glyph for skill files but keeps ordinary Markdown icons", async () => {
+    const modal = await renderPreview({
+      activePath: "SKILL.md",
+      previewFiles: [
+        { path: "SKILL.md", size: "1 KB", contents: "Skill instructions" },
+        { path: "README.md", size: "1 KB", contents: "Documentation" },
+      ],
+    });
+    const reference = document.createElement("div");
+    render(icons.pencilSparkles, reference);
+    const expectedIcon = reference.querySelector("svg")?.outerHTML;
+    const skillIcon = modal.shadowRoot?.querySelector('[data-path="SKILL.md"] .item-icon svg');
+    const markdownIcon = modal.shadowRoot?.querySelector('[data-path="README.md"] .item-icon svg');
+    expect(skillIcon?.outerHTML).toBe(expectedIcon);
+    expect(markdownIcon?.outerHTML).not.toBe(expectedIcon);
+  });
+
   it("shows the Escape shortcut only on the close button", async () => {
     const modal = await renderPreview();
     const state = modal.shadowRoot?.querySelector<HTMLElement>(".state");
@@ -88,17 +110,6 @@ describe("openclaw-file-preview-modal", () => {
     expect(state?.querySelector(".kbd")).toBeNull();
     expect(closeButton?.textContent?.replace(/\s+/g, " ").trim()).toBe("Close esc");
     expect(closeButton?.querySelector(".kbd")?.textContent).toBe("esc");
-  });
-
-  it("stacks the file list above its preview on narrow screens", () => {
-    const styles = OpenClawFilePreviewModal.styles.cssText;
-
-    expect(styles).toMatch(
-      /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);[^}]*grid-template-rows:/u,
-    );
-    expect(styles).toMatch(
-      /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.list\s*\{[^}]*border-right:\s*0;[^}]*border-bottom:/u,
-    );
   });
 
   it("emits controlled query, select, and close events", async () => {
@@ -223,11 +234,13 @@ describe("openclaw-file-preview-modal", () => {
     expect(firstChunks.map((chunk) => chunk.textContent ?? "").join("\n")).toBe(firstContents);
 
     body!.scrollTop = 2200;
+    expect(body!.scrollTop).toBe(2200);
 
-    const updatedModal = await renderPreview({ activePath: "second.ts", previewFiles });
-    const updatedBody = updatedModal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
+    modal.activePath = "second.ts";
+    await modal.updateComplete;
+    const updatedBody = modal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
     const secondChunks = [
-      ...(updatedModal.shadowRoot?.querySelectorAll<HTMLElement>(".code-chunk") ?? []),
+      ...(modal.shadowRoot?.querySelectorAll<HTMLElement>(".code-chunk") ?? []),
     ];
 
     expect(updatedBody?.scrollTop).toBe(0);
@@ -248,44 +261,77 @@ describe("openclaw-file-preview-modal", () => {
 
     await vi.waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(contents);
-      expect(copyButton?.dataset.copied).toBe("1");
+      expect(copyButton?.getAttribute("aria-label")).toBe("Copied!");
     });
   });
 
-  it("rerenders default copy when the locale changes", async () => {
-    const modal = await renderPreview();
-    i18n.registerTranslation("pt-BR", {
-      common: { close: "Fechar" },
-      filePreview: {
-        label: "Arquivos de suporte",
-        listLabel: "Arquivos",
-        searchPlaceholder: "Buscar arquivos…",
-        readOnly: "somente leitura",
-        emptyTitle: "Nenhum arquivo corresponde",
-        emptySubtitle: "Tente outro nome ou conteúdo.",
-        copyFile: "Copiar arquivo",
-        fileCount: "{count} arquivos",
-        filteredFileCount: "{count}/{total} arquivos",
-        noMatches: "Nenhum arquivo corresponde.",
-        navigate: "navegar",
-        kind: {
-          text: "Texto",
-          shell: "Shell",
-          file: "Arquivo",
+  it.each([true, false])(
+    "restores localized file-copy labels after pending success %s",
+    async (copied) => {
+      const write = createDeferred();
+      const writeText = vi.fn(() => write.promise);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      Object.defineProperty(document, "execCommand", { configurable: true, value: () => false });
+      const schedule = vi.spyOn(window, "setTimeout");
+      const modal = await renderPreview();
+      const button = modal.shadowRoot!.querySelector<HTMLButtonElement>(".chat-copy-btn")!;
+      button.click();
+      expect(button.disabled).toBe(true);
+      i18n.registerTranslation("pt-BR", {
+        common: { close: "Fechar", copied: "Copiado!", copyFailed: "Falha ao copiar" },
+        filePreview: {
+          label: "Arquivos de suporte",
+          listLabel: "Arquivos",
+          searchPlaceholder: "Buscar arquivos…",
+          readOnly: "somente leitura",
+          emptyTitle: "Nenhum arquivo corresponde",
+          emptySubtitle: "Tente outro nome ou conteúdo.",
+          copyFile: "Copiar arquivo",
+          fileCount: "{count} arquivos",
+          filteredFileCount: "{count}/{total} arquivos",
+          noMatches: "Nenhum arquivo corresponde.",
+          navigate: "navegar",
+          kind: {
+            text: "Texto",
+            shell: "Shell",
+            file: "Arquivo",
+          },
         },
-      },
-    });
+      });
 
-    await i18n.setLocale("pt-BR");
-    await modal.updateComplete;
+      await i18n.setLocale("pt-BR");
+      await modal.updateComplete;
 
-    expect(
-      modal.shadowRoot?.querySelector<HTMLElement & { label: string }>("openclaw-modal-dialog")
-        ?.label,
-    ).toBe("Arquivos de suporte");
-    expect(shadowText(modal)).toContain("2 arquivos");
-    expect(shadowText(modal)).toContain("Fechar");
-  });
+      expect(
+        modal.shadowRoot?.querySelector<HTMLElement & { label: string }>("openclaw-modal-dialog")
+          ?.label,
+      ).toBe("Arquivos de suporte");
+      expect(shadowText(modal)).toContain("2 arquivos");
+      expect(shadowText(modal)).toContain("Fechar");
+      expect(button.getAttribute("aria-label")).toBe("Copiar arquivo");
+      if (copied) {
+        write.resolve();
+      } else {
+        write.reject(new DOMException("Clipboard access denied"));
+      }
+      const feedback = modal.shadowRoot!.querySelector<HTMLElement>("[role=status]")!;
+      await vi.waitFor(() =>
+        expect(feedback.textContent).toBe(copied ? "Copiado!" : "Falha ao copiar"),
+      );
+      expect(feedback.hidden).toBe(false);
+      expect(button.getAttribute("aria-label")).toBe(feedback.textContent);
+      expect(writeText).toHaveBeenCalledWith("Morning digest template");
+      const reset = schedule.mock.calls.find(
+        ([, delay]) => delay === (copied ? 1_500 : 2_000),
+      )?.[0];
+      if (typeof reset !== "function") {
+        throw new Error("Expected copy feedback to schedule its reset");
+      }
+      reset();
+      expect(button.getAttribute("aria-label")).toBe("Copiar arquivo");
+      expect(feedback.hidden).toBe(true);
+    },
+  );
 
   it("localizes generic file-kind chips", async () => {
     i18n.registerTranslation("pt-BR", {

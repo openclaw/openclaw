@@ -9,6 +9,7 @@ import {
   asFiniteNumberInRange,
   asPositiveSafeInteger as normalizePositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PromptImageOrderEntry } from "./prompt-image-order.js";
 
@@ -19,6 +20,8 @@ export type MediaFact = {
   contentType?: string;
   kind?: MediaKind;
   fileName?: string;
+  /** Composer attachment provenance for display; never part of model input. */
+  origin?: "paste" | "file";
   sizeBytes?: number;
   durationMs?: number;
   width?: number;
@@ -69,16 +72,14 @@ export function readRuntimePromptMediaFacts(message: object): MediaFact[] | unde
 /** Reads the canonical persisted media envelope without consulting legacy top-level fields. */
 export function readPersistedMediaFacts(message: object): MediaFact[] | undefined {
   const media = readPersistedMediaFactInputs(message);
-  return media ? normalizeMediaFacts(media) : undefined;
+  return media?.map((entry, index) => normalizeMediaFact<MediaFactInput>(entry, index));
 }
 
-function readPersistedMediaFactInputs(message: object): MediaFactInput[] | undefined {
-  const metadata = (message as Record<string, unknown>)["__openclaw"];
-  const media =
-    metadata && typeof metadata === "object" && !Array.isArray(metadata)
-      ? (metadata as Record<string, unknown>).media
-      : undefined;
-  return Array.isArray(media) ? (media as MediaFactInput[]) : undefined;
+function readPersistedMediaFactInputs(message: object): Array<MediaFactInput | null> | undefined {
+  const metadata = asNonArrayRecord(asNonArrayRecord(message)["__openclaw"]);
+  return Array.isArray(metadata.media)
+    ? (metadata.media as Array<MediaFactInput | null>)
+    : undefined;
 }
 
 const LEGACY_MEDIA_CONTEXT_KEYS = [
@@ -122,7 +123,7 @@ export function hasMeaningfulRetiredMediaCarrier(message: object): boolean {
   if (resolveMediaFacts(retired as MediaFactSource).some(isMeaningfulMediaFact)) {
     return true;
   }
-  const canonical = normalizeMediaFacts(readPersistedMediaFactInputs(message));
+  const canonical = readPersistedMediaFacts(message) ?? [];
   if (canonical.length === 0) {
     return false;
   }
@@ -199,7 +200,10 @@ export function canonicalizePersistedUserMessageMedia<T extends object>(
   const topLevelMedia = Array.isArray(record.media)
     ? (record.media as readonly MediaFactInput[])
     : undefined;
-  const source: MediaFactSource = { ...record, media: canonical ?? topLevelMedia };
+  const source: MediaFactSource = {
+    ...record,
+    media: (canonical ?? topLevelMedia) as readonly MediaFactInput[] | undefined,
+  };
   const hasAmbiguousLegacyAlignment = hasAmbiguousSparseLegacyMediaAlignment(source);
   if (hadLegacy && hasAmbiguousLegacyAlignment) {
     throw new Error("legacy media arrays have ambiguous sparse positional alignment");
@@ -231,6 +235,7 @@ export function canonicalizePersistedUserMessageMedia<T extends object>(
       ...(fact.contentType && !bareLegacyKind ? { contentType: fact.contentType } : {}),
       ...(explicitKind ? { kind: explicitKind } : {}),
       ...(fact.fileName ? { fileName: fact.fileName } : {}),
+      ...(fact.origin ? { origin: fact.origin } : {}),
       ...(fact.sizeBytes !== undefined ? { sizeBytes: fact.sizeBytes } : {}),
       ...(fact.durationMs ? { durationMs: fact.durationMs } : {}),
       ...(fact.width ? { width: fact.width } : {}),
@@ -248,11 +253,7 @@ export function canonicalizePersistedUserMessageMedia<T extends object>(
   for (const key of PERSISTED_LEGACY_MEDIA_KEYS) {
     delete next[key];
   }
-  const metadata = record["__openclaw"];
-  const openclaw =
-    metadata && typeof metadata === "object" && !Array.isArray(metadata)
-      ? { ...(metadata as Record<string, unknown>) }
-      : {};
+  const openclaw = { ...asNonArrayRecord(record["__openclaw"]) };
   if (media.length > 0 || canonical !== undefined || topLevelMedia !== undefined) {
     openclaw.media = media;
   }
@@ -284,7 +285,7 @@ export function readRuntimePromptImageOrder(message: object): PromptImageOrderEn
 }
 
 /** Returns whether a declared MIME only describes otherwise unclassified binary bytes. */
-export function isGenericBinaryMediaContentType(contentType?: string | null): boolean {
+function isGenericBinaryMediaContentType(contentType?: string | null): boolean {
   const normalizedContentType = normalizeMimeType(contentType);
   return (
     normalizedContentType === "application/octet-stream" ||
@@ -292,30 +293,49 @@ export function isGenericBinaryMediaContentType(contentType?: string | null): bo
   );
 }
 
-/** Returns whether a fact can produce native image input. */
-export function isImageMediaFact(fact: MediaFactInput): boolean {
+/** Resolves attachment kind from authoritative facts before source or filename hints. */
+export function resolveMediaFactKind(fact: MediaFactInput): MediaKind | undefined {
   if (fact.kind && fact.kind !== "unknown") {
-    return fact.kind === "image" || fact.kind === "sticker";
+    return fact.kind;
   }
   const normalizedContentType = normalizeMimeType(fact.contentType);
   if (normalizedContentType && !isGenericBinaryMediaContentType(normalizedContentType)) {
     const mimeKind = kindFromMime(normalizedContentType);
     if (mimeKind) {
-      return mimeKind === "image";
+      return mimeKind;
     }
     // Legacy channel-mode projections persist bare image or sticker kind as MediaType.
-    return normalizedContentType === "image" || normalizedContentType === "sticker";
+    return LEGACY_MEDIA_KINDS.has(normalizedContentType as MediaKind)
+      ? (normalizedContentType as MediaKind)
+      : undefined;
   }
-  const pathValue = normalizeOptionalString(fact.path) ?? normalizeOptionalString(fact.url);
-  const inferredMime = mimeTypeFromFilePath(pathValue);
-  if (inferredMime === "image/svg+xml") {
-    return false;
+  const source = normalizeOptionalString(fact.path) ?? normalizeOptionalString(fact.url);
+  if (!source) {
+    return undefined;
   }
-  if (kindFromMime(inferredMime) === "image") {
-    return true;
+  for (const candidate of [fact.path, fact.url, fact.fileName, source]) {
+    const inferredMime = mimeTypeFromFilePath(candidate);
+    if (inferredMime !== undefined) {
+      // A recognized source, including SVG, takes precedence over later filename hints.
+      return inferredMime === "image/svg+xml" ? undefined : kindFromMime(inferredMime);
+    }
+    const extension = getFileExtension(candidate);
+    if (extension === ".tif" || extension === ".tiff") {
+      return "image";
+    }
   }
-  const extension = getFileExtension(pathValue);
-  return extension === ".tif" || extension === ".tiff";
+  return undefined;
+}
+
+/** Returns whether a fact can produce native image input. */
+export function isImageMediaFact(fact: MediaFactInput): boolean {
+  const kind = resolveMediaFactKind(fact);
+  return kind === "image" || kind === "sticker";
+}
+
+/** Returns whether a fact can produce native video input. */
+export function isVideoMediaFact(fact: MediaFactInput): boolean {
+  return resolveMediaFactKind(fact) === "video";
 }
 
 type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {
@@ -349,35 +369,38 @@ type MediaFactSource = MediaFactLegacyProjection & {
 };
 
 function normalizeMediaFact<TInput extends MediaFactInput>(
-  media: TInput,
+  media: TInput | null,
   index: number,
   defaults: MediaFactDefaults<TInput> = {},
 ): MediaFact {
-  const workspaceDir = normalizeOptionalString(media.workspaceDir) ?? defaults.workspaceDir;
-  const contentType = normalizeOptionalString(media.contentType);
-  const durationMs = normalizePositiveInteger(media.durationMs);
-  const width = normalizePositiveInteger(media.width);
-  const height = normalizePositiveInteger(media.height);
-  const normalized: MediaFact = {
-    path: normalizeOptionalString(media.path),
-    url: normalizeOptionalString(media.url),
+  // Sparse arrays serialize missing attachment positions as null; persisted
+  // slots must remain empty facts instead of crashing transcript hydration.
+  const input = asNonArrayRecord(media) as TInput;
+  const workspaceDir = normalizeOptionalString(input.workspaceDir) ?? defaults.workspaceDir;
+  const contentType = normalizeOptionalString(input.contentType);
+  const durationMs = normalizePositiveInteger(input.durationMs);
+  const width = normalizePositiveInteger(input.width);
+  const height = normalizePositiveInteger(input.height);
+  return {
+    path: normalizeOptionalString(input.path),
+    url: normalizeOptionalString(input.url),
     contentType,
     kind:
-      media.kind ??
+      input.kind ??
       defaults.kind ??
       (isGenericBinaryMediaContentType(contentType) ? undefined : kindFromMime(contentType)),
-    fileName: normalizeOptionalString(media.fileName),
-    sizeBytes: normalizeNonNegativeNumber(media.sizeBytes),
+    fileName: normalizeOptionalString(input.fileName),
+    ...(input.origin === "paste" || input.origin === "file" ? { origin: input.origin } : {}),
+    sizeBytes: normalizeNonNegativeNumber(input.sizeBytes),
     ...(durationMs ? { durationMs } : {}),
     ...(width ? { width } : {}),
     ...(height ? { height } : {}),
-    transcribed: media.transcribed === true || defaults.transcribed?.(media, index) === true,
-    messageId: normalizeOptionalString(media.messageId) ?? defaults.messageId,
+    transcribed: input.transcribed === true || defaults.transcribed?.(input, index) === true,
+    messageId: normalizeOptionalString(input.messageId) ?? defaults.messageId,
     ...(workspaceDir ? { workspaceDir } : {}),
-    ...(media.staged === true ? { staged: true } : {}),
-    ...(media.hydrationSuppressed === true ? { hydrationSuppressed: true } : {}),
+    ...(input.staged === true ? { staged: true } : {}),
+    ...(input.hydrationSuppressed === true ? { hydrationSuppressed: true } : {}),
   };
-  return normalized;
 }
 
 /** True when every path-bearing canonical fact has explicit staging proof. */
@@ -453,6 +476,7 @@ function resolveMediaFactsWithPrecedence(
           : (fact?.contentType ?? legacyContentType),
         kind: fact?.kind,
         fileName: fact?.fileName,
+        origin: fact?.origin,
         sizeBytes: fact?.sizeBytes,
         durationMs: fact?.durationMs,
         width: fact?.width,

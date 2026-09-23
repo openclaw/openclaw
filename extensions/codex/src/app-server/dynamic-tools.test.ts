@@ -1,20 +1,24 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
+  getPluginToolMeta,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createTerminalPresentationContractTool } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import {
+  buildContractReplyPayloads,
+  createContractToolTerminalObserver,
+  createOwnerBackedContractTool,
+  createTerminalPresentationContractTool,
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -27,27 +31,47 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Codex tests cover dynamic tools plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { estimateToolResultTextChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  handleDynamicToolCallWithTimeout,
+  toCodexDynamicToolProtocolResponse,
+} from "./dynamic-tool-execution.js";
 import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type CodexDynamicToolCallParams,
+  type CodexDynamicToolCallResponse,
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type JsonValue,
 } from "./protocol.js";
-import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
+import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
+const MEMORY_STORE_ARGS: JsonValue = { text: "Tuesday 09:00 release window" };
+const MEMORY_FORGET_ARGS: JsonValue = {
+  memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d",
+};
 
 const COMPUTER_FRAME_IMAGE =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 const REPLACEMENT_FRAME_IMAGE =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+
+// Synthetic, non-usable credential fixtures for model-visible redaction coverage.
+const SYNTHETIC_BEARER_CREDENTIAL = "bearer-model-visible-credential-1234567890";
+const SYNTHETIC_ACCESS_TOKEN =
+  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.c3ludGhldGljLXNpZ25hdHVyZQ";
+const SYNTHETIC_CREDENTIAL_REPORT = [
+  "Deployment finished in 42s.",
+  `Authorization: Bearer ${SYNTHETIC_BEARER_CREDENTIAL}`,
+  `https://example.test/callback?access_token=${SYNTHETIC_ACCESS_TOKEN}`,
+  "API_TOKEN = computeToken()",
+].join("\n");
 
 function frameImageIdentity(data: string, mimeType = "image/png") {
   return createHash("sha256")
@@ -55,11 +79,26 @@ function frameImageIdentity(data: string, mimeType = "image/png") {
     .digest("hex");
 }
 
+function createDynamicToolCall(
+  tool: string,
+  arguments_: JsonValue = {},
+  callId = "call-1",
+): CodexDynamicToolCallParams {
+  return {
+    threadId: "thread-1",
+    turnId: "turn-1",
+    callId,
+    namespace: null,
+    tool,
+    arguments: arguments_,
+  };
+}
+
 function createTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
   return {
     name: "tts",
     description: "Convert text to speech.",
-    parameters: { type: "object", properties: {} },
+    parameters: { type: "object", properties: {}, additionalProperties: true },
     execute: vi.fn(),
     ...overrides,
   } as unknown as AnyAgentTool;
@@ -101,11 +140,11 @@ function createBridgeWithToolResult(
   });
 }
 
-function expectInputText(text: string) {
-  return {
+function expectInputText(response: CodexDynamicToolCallResponse, text: string) {
+  expect(toCodexDynamicToolProtocolResponse(response)).toEqual({
     success: true,
     contentItems: [{ type: "inputText", text }],
-  };
+  });
 }
 
 const requireRecord = createRequireRecord("object", "expected-label");
@@ -193,12 +232,484 @@ async function handleMessageToolCall(
   });
 }
 
+const STRICT_INSTRUCTION_SCHEMA = {
+  type: "object",
+  properties: { instruction: { type: "string" } },
+  required: ["instruction"],
+  additionalProperties: false,
+} as const;
+
+type SchemaToolNamespace =
+  | null
+  | typeof CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE
+  | typeof CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE;
+
+async function runSchemaToolCall(params: {
+  arguments: JsonValue;
+  callId: string;
+  name?: string;
+  namespace?: SchemaToolNamespace;
+  parameters?: AnyAgentTool["parameters"];
+  prepareArguments?: AnyAgentTool["prepareArguments"];
+}) {
+  const name = params.name ?? "strict_tool";
+  const namespace = params.namespace ?? null;
+  const execute = vi.fn(async () => textToolResult("done"));
+  const tool = createTool({
+    name,
+    parameters: params.parameters ?? STRICT_INSTRUCTION_SCHEMA,
+    prepareArguments: params.prepareArguments,
+    execute,
+  });
+  const bridge = createCodexDynamicToolBridge({
+    tools: [tool],
+    signal: new AbortController().signal,
+    loading: namespace === CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE ? "searchable" : undefined,
+    directToolNames:
+      namespace === CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE ? [name] : undefined,
+  });
+  const response = await bridge.handleToolCall({
+    threadId: "thread-1",
+    turnId: "turn-1",
+    callId: params.callId,
+    namespace,
+    tool: name,
+    arguments: params.arguments,
+  });
+  return { bridge, execute, response, tool };
+}
+
+function expectSchemaRejection(
+  response: Awaited<ReturnType<typeof runSchemaToolCall>>["response"],
+  execute: ReturnType<typeof vi.fn>,
+  message: string,
+) {
+  expect(execute).not.toHaveBeenCalled();
+  expect(response).toMatchObject({
+    success: false,
+    executionStarted: false,
+    contentItems: [{ type: "inputText", text: expect.stringContaining(message) }],
+  });
+}
+
 afterEach(() => {
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
 describe("createCodexDynamicToolBridge", () => {
+  it("rejects invalid deferred-tool arguments before execution", async () => {
+    const { execute, response } = await runSchemaToolCall({
+      arguments: { instruction: 47 },
+      callId: "call-deferred-invalid",
+      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+    });
+
+    expectSchemaRejection(response, execute, "instruction: must be string");
+  });
+
+  it("rejects the beta.2 session_status wrong-type regression before execution", async () => {
+    const { execute, response } = await runSchemaToolCall({
+      arguments: { sessionKey: 47 },
+      callId: "call-session-status",
+      name: "session_status",
+      parameters: {
+        type: "object",
+        properties: { sessionKey: { type: "string" } },
+        additionalProperties: false,
+      },
+      namespace: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+    });
+
+    expectSchemaRejection(response, execute, "sessionKey: must be string");
+  });
+
+  it("bounds high-cardinality validation errors returned to Codex", async () => {
+    const propertyNames = Array.from({ length: 10 }, (_, index) => `field${index}`);
+    const invalidArguments = Object.fromEntries(propertyNames.map((name) => [name, 47]));
+    const { execute, response } = await runSchemaToolCall({
+      arguments: invalidArguments,
+      callId: "call-many-invalid-fields",
+      name: "bounded_validation_tool",
+      parameters: {
+        type: "object",
+        properties: Object.fromEntries(propertyNames.map((name) => [name, { type: "string" }])),
+        required: propertyNames,
+        additionalProperties: false,
+      },
+    });
+
+    expectSchemaRejection(response, execute, "more violation(s) omitted");
+    const contentItem = requireRecord(response.contentItems[0], "validation response");
+    expect(contentItem.text).toEqual(expect.any(String));
+    expect((contentItem.text as string).length).toBeLessThanOrEqual(800);
+  });
+
+  it("bounds oversized unexpected-property details returned to Codex", async () => {
+    const propertyName = `unexpected_property_${"x".repeat(240)}`;
+    const { execute, response } = await runSchemaToolCall({
+      arguments: { [propertyName]: true },
+      callId: "call-oversized-validation-detail",
+      name: "bounded_validation_detail_tool",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+    });
+
+    expectSchemaRejection(response, execute, "[detail truncated]");
+    const contentItem = requireRecord(response.contentItems[0], "validation response");
+    expect(contentItem.text).toEqual(expect.any(String));
+    expect((contentItem.text as string).length).toBeLessThanOrEqual(260);
+  });
+
+  it("prepares raw null arguments before native Codex schema validation", async () => {
+    const prepareArguments = vi.fn(function (this: AnyAgentTool, arguments_: unknown) {
+      return arguments_ === null ? { preparedBy: this.name } : arguments_;
+    });
+    const { execute, response } = await runSchemaToolCall({
+      arguments: null,
+      callId: "call-null-compatibility",
+      name: "optional_object_tool",
+      parameters: {
+        type: "object",
+        properties: { preparedBy: { type: "string" } },
+        additionalProperties: false,
+      },
+      prepareArguments,
+      namespace: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+    });
+
+    expect(prepareArguments).toHaveBeenCalledWith(null);
+    expectInputText(response, "done");
+    expectExecuteCall(execute, {
+      callId: "call-null-compatibility",
+      args: { preparedBy: "optional_object_tool" },
+    });
+  });
+
+  it.each([
+    {
+      label: "repairs primitive input",
+      initial: 47,
+      adjusted: { instruction: "repaired" },
+      executes: true,
+    },
+    {
+      label: "repairs invalid input",
+      initial: { instruction: 47 },
+      adjusted: { instruction: "repaired" },
+      executes: true,
+    },
+    {
+      label: "rejects invalid rewritten input",
+      initial: { instruction: "inspect" },
+      adjusted: { instruction: 47 },
+      executes: false,
+    },
+  ])("validates final arguments after a hook $label", async (testCase) => {
+    const beforeToolCall = vi.fn(async () => ({ params: testCase.adjusted }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const callId = `call-hook-schema-${testCase.executes}`;
+    const { execute, response } = await runSchemaToolCall({
+      arguments: testCase.initial,
+      callId,
+      name: "hook_schema_tool",
+    });
+
+    if (testCase.executes) {
+      expectInputText(response, "done");
+      expectExecuteCall(execute, {
+        callId,
+        args: { instruction: "repaired" },
+      });
+    } else {
+      expectSchemaRejection(response, execute, "instruction: must be string");
+    }
+  });
+
+  it("leaves external MCP tool argument validation to the MCP bridge", async () => {
+    const tool = createOwnerBackedContractTool({
+      pluginId: "mcp-bridge",
+      name: "external_mcp_tool",
+      result: textToolResult("mcp handled"),
+    });
+    tool.parameters = {
+      type: "object",
+      properties: { instruction: { type: "string" } },
+      required: ["instruction"],
+      additionalProperties: false,
+    };
+    const meta = getPluginToolMeta(tool);
+    expect(meta).toBeDefined();
+    Object.assign(meta ?? {}, {
+      mcp: {
+        serverName: "external",
+        safeServerName: "external",
+        toolName: tool.name,
+        operation: "tool",
+      },
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+
+    const response = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-external-mcp",
+      namespace: null,
+      tool: tool.name,
+      arguments: { instruction: 47 },
+    });
+
+    expectInputText(response, "mcp handled");
+  });
+
+  it("scopes normalized input validation to the projected Codex wrapper", async () => {
+    const execute = vi.fn(async () => textToolResult("done"));
+    const source = wrapToolWithBeforeToolCallHook(
+      createTool({
+        name: "provider_scoped_tool",
+        parameters: {
+          type: "object",
+          properties: { instruction: { type: "string" } },
+          required: ["instruction"],
+          additionalProperties: false,
+        },
+        execute,
+      }),
+    );
+    const bridge = createCodexDynamicToolBridge({
+      tools: [source],
+      signal: new AbortController().signal,
+    });
+
+    const response = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-provider-scoped-codex",
+      namespace: null,
+      tool: source.name,
+      arguments: { instruction: 47 },
+    });
+
+    expect(response.success).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
+
+    await source.execute?.("call-provider-scoped-source", { instruction: 47 });
+
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("isolates cached validators for same-name tools with different schemas", async () => {
+    const call = (instructionType: "string" | "number", callId: string) =>
+      runSchemaToolCall({
+        arguments: { instruction: "inspect" },
+        callId,
+        name: "schema_cache_tool",
+        parameters: {
+          type: "object",
+          properties: { instruction: { type: instructionType } },
+          required: ["instruction"],
+          additionalProperties: false,
+        },
+      });
+    const stringCase = await call("string", "call-cache-string");
+    const numberCase = await call("number", "call-cache-number");
+
+    expectInputText(stringCase.response, "done");
+    expectSchemaRejection(numberCase.response, numberCase.execute, "instruction: must be number");
+  });
+
+  it("surfaces a rejected owner-backed memory write before a false final claim", async () => {
+    const tool = createOwnerBackedContractTool({
+      pluginId: "memory-lancedb",
+      name: "memory_store",
+      result: textToolResult("Memory storage is disabled in incognito mode.", {
+        status: "blocked",
+        error: "incognito mode",
+      }),
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+    const call = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-memory-store",
+      namespace: null,
+      tool: "memory_store",
+      arguments: { text: "Tuesday 09:00 release window" },
+    } as const;
+
+    const response = await handleDynamicToolCallWithTimeout({
+      call,
+      toolBridge: bridge,
+      signal: new AbortController().signal,
+      timeoutMs: 1_000,
+      observeToolTerminal: createContractToolTerminalObserver("run-codex-memory"),
+    });
+    const payloads = buildContractReplyPayloads({
+      assistantText: "Got it - I'll remember the Tuesday release window.",
+      lastToolError: response.terminalResolution?.lastToolError,
+    });
+
+    expect(response.terminalResolution?.lastToolError).toMatchObject({
+      mutatingAction: true,
+    });
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toContain("I'll remember");
+    expect(JSON.stringify(toCodexDynamicToolProtocolResponse(response))).not.toContain(
+      "memory-lancedb",
+    );
+  });
+
+  it("surfaces a rejected owner-backed memory delete before a false final claim", async () => {
+    const tool = createOwnerBackedContractTool({
+      pluginId: "memory-lancedb",
+      name: "memory_forget",
+      result: textToolResult("unused"),
+    });
+    tool.execute = vi.fn(async () => {
+      throw new Error("memory delete failed");
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+    const response = await handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-memory-forget",
+        namespace: null,
+        tool: "memory_forget",
+        arguments: { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" },
+      },
+      toolBridge: bridge,
+      signal: new AbortController().signal,
+      timeoutMs: 1_000,
+      observeToolTerminal: createContractToolTerminalObserver("run-codex-forget"),
+    });
+    const payloads = buildContractReplyPayloads({
+      assistantText: "Done - I forgot that memory.",
+      lastToolError: response.terminalResolution?.lastToolError,
+    });
+
+    expect(response.terminalResolution?.lastToolError).toMatchObject({
+      mutatingAction: true,
+    });
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toContain("I forgot");
+    expect(JSON.stringify(toCodexDynamicToolProtocolResponse(response))).not.toContain(
+      "memory-lancedb",
+    );
+  });
+
+  it.each([
+    {
+      name: "memory_store",
+      args: MEMORY_STORE_ARGS,
+      assistantText: "Got it - I'll remember the Tuesday release window.",
+    },
+    {
+      name: "memory_forget",
+      args: MEMORY_FORGET_ARGS,
+      assistantText: "Done - I forgot that memory.",
+    },
+  ])("leaves unowned same-name Codex tool $name outside correction", async (testCase) => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: testCase.name,
+          execute: vi.fn(async () =>
+            textToolResult("Mutation unavailable.", {
+              status: "blocked",
+              error: "unavailable",
+            }),
+          ),
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+    const response = await handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: `call-unowned-${testCase.name}`,
+        namespace: null,
+        tool: testCase.name,
+        arguments: testCase.args,
+      },
+      toolBridge: bridge,
+      signal: new AbortController().signal,
+      timeoutMs: 1_000,
+      observeToolTerminal: createContractToolTerminalObserver(`run-unowned-${testCase.name}`),
+    });
+    const payloads = buildContractReplyPayloads({
+      assistantText: testCase.assistantText,
+      lastToolError: response.terminalResolution?.lastToolError,
+    });
+
+    expect(response.terminalResolution?.lastToolError).toMatchObject({ mutatingAction: false });
+    expect(response.terminalResolution?.lastToolError).not.toHaveProperty("ownerKey");
+    expect(payloads).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      name: "memory_store",
+      args: MEMORY_STORE_ARGS,
+      result: textToolResult("Stored memory.", { action: "created" }),
+      assistantText: "Stored the Tuesday release window.",
+    },
+    {
+      name: "memory_forget",
+      args: MEMORY_FORGET_ARGS,
+      result: textToolResult("Forgotten memory.", { action: "deleted" }),
+      assistantText: "Forgot that memory.",
+    },
+  ])("does not warn after a successful owner-backed Codex $name", async (testCase) => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createOwnerBackedContractTool({
+          pluginId: "memory-lancedb",
+          name: testCase.name,
+          result: testCase.result,
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+    const response = await handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: `call-successful-${testCase.name}`,
+        namespace: null,
+        tool: testCase.name,
+        arguments: testCase.args,
+      },
+      toolBridge: bridge,
+      signal: new AbortController().signal,
+      timeoutMs: 1_000,
+      observeToolTerminal: createContractToolTerminalObserver(`run-successful-${testCase.name}`),
+    });
+    const payloads = buildContractReplyPayloads({
+      assistantText: testCase.assistantText,
+      lastToolError: response.terminalResolution?.lastToolError,
+    });
+
+    expect(response.success).toBe(true);
+    expect(response.terminalResolution?.lastToolError).toBeUndefined();
+    expect(payloads).toHaveLength(1);
+  });
+
   it("keeps OpenClaw control-path tools direct while deferring broad tools", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [
@@ -206,6 +717,7 @@ describe("createCodexDynamicToolBridge", () => {
         createTool({ name: "message" }),
         createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME }),
         createTool({ name: "agents_list" }),
+        createTool({ name: "agents_wait" }),
         createTool({ name: "sessions_spawn" }),
         createTool({ name: "sessions_yield" }),
       ],
@@ -217,6 +729,7 @@ describe("createCodexDynamicToolBridge", () => {
     const message = specs.find((tool) => tool.name === "message");
     const heartbeat = specs.find((tool) => tool.name === HEARTBEAT_RESPONSE_TOOL_NAME);
     const agentsList = specs.find((tool) => tool.name === "agents_list");
+    const agentsWait = specs.find((tool) => tool.name === "agents_wait");
     const sessionsSpawn = specs.find((tool) => tool.name === "sessions_spawn");
     const sessionsYield = specs.find((tool) => tool.name === "sessions_yield");
 
@@ -236,6 +749,7 @@ describe("createCodexDynamicToolBridge", () => {
       deferLoading: true,
     });
     expectNoNamespace(agentsList);
+    expectNoNamespace(agentsWait);
     expectNoNamespace(sessionsSpawn);
     expectNoNamespace(sessionsYield);
     expect(bridge.resultContentSourceForTool("web_search")).toBe("network");
@@ -264,6 +778,24 @@ describe("createCodexDynamicToolBridge", () => {
       },
     );
     expectNoNamespace(specs.find((tool) => tool.name === "message"));
+  });
+
+  it("keeps progress_card direct when searchable loading defers broad tools", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "progress_card" }), createTool({ name: "web_search" })],
+      signal: new AbortController().signal,
+      loading: "searchable",
+    });
+
+    const specs = flattenSpecsWithNamespace(bridge.specs);
+    const progressCard = specs.find((tool) => tool.name === "progress_card");
+    const webSearch = specs.find((tool) => tool.name === "web_search");
+    expectNoNamespace(progressCard);
+    expectDynamicSpec(webSearch, {
+      name: "web_search",
+      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      deferLoading: true,
+    });
   });
 
   it("isolates direct-only tools in Codex's model-only namespace", () => {
@@ -356,18 +888,11 @@ describe("createCodexDynamicToolBridge", () => {
     expect(specNames(bridge.specs)).toEqual([HEARTBEAT_RESPONSE_TOOL_NAME, "message"]);
 
     const result = await bridge.handleToolCall(
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: null,
-        tool: HEARTBEAT_RESPONSE_TOOL_NAME,
-        arguments: {},
-      },
+      createDynamicToolCall(HEARTBEAT_RESPONSE_TOOL_NAME),
       { onAgentToolResult },
     );
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [
         {
@@ -404,93 +929,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
-  it("treats an accepted child session spawn result as a successful dynamic tool call", async () => {
-    // An accepted sessions_spawn launch carries details.status "accepted" with a
-    // runId + childSessionKey. The launch succeeded (the child session was
-    // accepted), so Codex must see a successful tool call, not an error.
-    // Regression for #96833: the former Codex-only success allowlist omitted
-    // "accepted", so the launch was persisted with isError: true and reported
-    // to Codex as success: false.
-    const onAgentToolResult = vi.fn();
-    const bridge = createBridgeWithToolResult(
-      "sessions_spawn",
-      textToolResult("Accepted: launching child session to scan logs.", {
-        status: "accepted",
-        runId: "run_5f3a9c",
-        childSessionKey: "child-7b21",
-        mode: "run",
-      }),
-    );
-
-    const result = await bridge.handleToolCall(
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-accepted",
-        namespace: null,
-        tool: "sessions_spawn",
-        arguments: { task: "scan logs" },
-      },
-      { onAgentToolResult },
-    );
-
-    // success: true proves the accepted launch is not classified as an error;
-    // the content assertion proves the tool actually executed (not a denial path).
-    expect(result.success).toBe(true);
-    expect(result.contentItems).toEqual([
-      { type: "inputText", text: "Accepted: launching child session to scan logs." },
-    ]);
-    expect(onAgentToolResult).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "sessions_spawn", isError: false }),
-    );
-    expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
-      { runId: "run_5f3a9c", childSessionKey: "child-7b21" },
-    ]);
-  });
-
-  it("preserves an accepted sessions_spawn after result middleware strips its details", async () => {
-    const registry = createEmptyPluginRegistry();
-    const handler = vi.fn(async (event: { result: AgentToolResult<unknown> }) => ({
-      result: {
-        ...event.result,
-        content: [{ type: "text" as const, text: "Child launch recorded." }],
-        details: {},
-      },
-    }));
-    registry.agentToolResultMiddlewares.push({
-      pluginId: "result-compactor",
-      pluginName: "Result Compactor",
-      rawHandler: handler,
-      handler,
-      runtimes: ["codex"],
-      source: "test",
-    });
-    setActivePluginRegistry(registry);
-    const bridge = createBridgeWithToolResult(
-      "sessions_spawn",
-      textToolResult("Accepted: launching child session.", {
-        status: "accepted",
-        runId: "run_compacted",
-        childSessionKey: "child-compacted",
-      }),
-    );
-
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-compacted",
-      namespace: null,
-      tool: "sessions_spawn",
-      arguments: { task: "scan logs" },
-    });
-
-    expect(result).toEqual(expectInputText("Child launch recorded."));
-    expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
-      { runId: "run_compacted", childSessionKey: "child-compacted" },
-    ]);
-  });
-
-  it("retains only MCP App preview details for OpenClaw transcript projection", async () => {
+  it("retains all sanitized details for OpenClaw transcript projection", async () => {
     const mcpAppPreview = {
       kind: "canvas",
       view: { id: "mcp-app-view-1", title: "Nearby food" },
@@ -520,10 +959,14 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { limit: 4 },
     });
 
-    expect(result.transcriptDetails).toEqual({ mcpAppPreview });
-    expect(Object.keys(result)).not.toContain("transcriptDetails");
-    expect(JSON.stringify(result)).not.toContain("mcpAppPreview");
-    expect(JSON.stringify(result)).not.toContain("privateModelPayload");
+    expect(result.transcriptDetails).toEqual({
+      mcpAppPreview,
+      structuredContent: { privateModelPayload: true },
+    });
+    const protocolResponse = toCodexDynamicToolProtocolResponse(result);
+    expect(Object.keys(protocolResponse)).not.toContain("transcriptDetails");
+    expect(JSON.stringify(protocolResponse)).not.toContain("mcpAppPreview");
+    expect(JSON.stringify(protocolResponse)).not.toContain("privateModelPayload");
   });
 
   it("still reports a forbidden sessions_spawn result as a failed dynamic tool call", async () => {
@@ -590,14 +1033,7 @@ describe("createCodexDynamicToolBridge", () => {
       }),
     );
     const foundResult = await foundBridge.handleToolCall(
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-found",
-        namespace: null,
-        tool: "get_goal",
-        arguments: {},
-      },
+      createDynamicToolCall("get_goal", {}, "call-found"),
       { onAgentToolResult: onFoundResult },
     );
     expect(foundResult.success).toBe(true);
@@ -611,14 +1047,7 @@ describe("createCodexDynamicToolBridge", () => {
       textToolResult('{\n  "status": "missing"\n}', { status: "missing" }),
     );
     const missingResult = await missingBridge.handleToolCall(
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-missing",
-        namespace: null,
-        tool: "get_goal",
-        arguments: {},
-      },
+      createDynamicToolCall("get_goal", {}, "call-missing"),
       { onAgentToolResult: onMissingResult },
     );
     expect(missingResult.success).toBe(true);
@@ -661,14 +1090,9 @@ describe("createCodexDynamicToolBridge", () => {
       textToolResult("Plugin action completed.", { status: "plugin-defined-outcome" }),
     );
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-plugin-defined-outcome",
-      namespace: null,
-      tool: "plugin_tool",
-      arguments: {},
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("plugin_tool", {}, "call-plugin-defined-outcome"),
+    );
 
     expect(result.success).toBe(true);
   });
@@ -706,29 +1130,66 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
-  it("repairs a null dynamic-tool schema type before Codex registration", () => {
-    const bridge = createCodexDynamicToolBridge({
-      tools: [
-        createTool({
-          name: "codex_app__automation_update",
-          parameters: {
-            type: null,
-            properties: {
-              action: { type: "string", description: null },
-            },
-          } as never,
-        }),
-      ],
-      signal: new AbortController().signal,
+  it("validates execution against the repaired schema published to Codex", async () => {
+    const { bridge, execute, response } = await runSchemaToolCall({
+      arguments: { action: "inspect" },
+      callId: "call-repaired-schema",
+      name: "codex_app__automation_update",
+      parameters: {
+        type: null,
+        properties: { action: { type: "string", description: null } },
+      } as never,
     });
 
     expect(flattenSpecsWithNamespace(bridge.specs)[0]?.inputSchema).toEqual({
       type: "object",
-      properties: {
-        action: { type: "string" },
-      },
+      properties: { action: { type: "string" } },
     });
     expect(bridge.telemetry.quarantinedTools).toEqual([]);
+    expectInputText(response, "done");
+    expectExecuteCall(execute, {
+      callId: "call-repaired-schema",
+      args: { action: "inspect" },
+    });
+  });
+
+  it("publishes and executes a repaired schema with a literal prototype property", async () => {
+    const args = { ["__proto__"]: "synthetic value" };
+    const schema = {
+      type: "object",
+      properties: { ["__proto__"]: { type: "string", description: null } },
+      required: ["__proto__"],
+      additionalProperties: false,
+    };
+    const { bridge, execute, response } = await runSchemaToolCall({
+      arguments: args,
+      callId: "call-literal-schema-property",
+      parameters: schema,
+    });
+
+    expect(flattenSpecsWithNamespace(bridge.specs)[0]?.inputSchema).toStrictEqual({
+      ...schema,
+      properties: { ["__proto__"]: { type: "string" } },
+    });
+    expectInputText(response, "done");
+    expectExecuteCall(execute, { callId: "call-literal-schema-property", args });
+  });
+
+  it("enforces the strict empty-object schema published to Codex", async () => {
+    const { bridge, execute, response } = await runSchemaToolCall({
+      arguments: { unexpected: true },
+      callId: "call-strict-empty-schema",
+      name: "strict_empty_tool",
+      parameters: {},
+    });
+
+    expect(flattenSpecsWithNamespace(bridge.specs)[0]?.inputSchema).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+    expectSchemaRejection(response, execute, 'must not have additional properties: "unexpected"');
   });
 
   it("quarantines dynamic tools with unsupported input schemas", async () => {
@@ -798,22 +1259,176 @@ describe("createCodexDynamicToolBridge", () => {
       }),
     );
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "fuzzplugin_move_angles",
-      arguments: {},
-    });
+    const result = await bridge.handleToolCall(createDynamicToolCall("fuzzplugin_move_angles"));
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: fuzzplugin_move_angles" }],
     });
     expect(result.executionStarted).toBe(false);
     expect(result.executedArguments).toEqual({});
     expect(badExecute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "punctuation in direct mode",
+      name: "bad.name",
+      placement: "direct" as const,
+      source: "both" as const,
+      diagnosticTool: "bad.name",
+    },
+    {
+      label: "leading whitespace in searchable mode",
+      name: " bad",
+      placement: "searchable" as const,
+      source: "available" as const,
+      diagnosticTool: " bad",
+    },
+    {
+      label: "trailing whitespace in a direct-only tool",
+      name: "bad ",
+      placement: "direct-only" as const,
+      source: "registered" as const,
+      diagnosticTool: "bad ",
+    },
+    {
+      label: "whitespace-only name",
+      name: "   ",
+      placement: "direct" as const,
+      source: "both" as const,
+      diagnosticTool: "   ",
+    },
+    {
+      label: "Unicode in searchable mode",
+      name: "mémoire",
+      placement: "searchable" as const,
+      source: "available" as const,
+      diagnosticTool: "mémoire",
+    },
+    {
+      label: "129 characters in a direct-only tool",
+      name: "a".repeat(129),
+      placement: "direct-only" as const,
+      source: "registered" as const,
+      diagnosticTool: "a".repeat(129),
+    },
+    {
+      label: "reserved mcp name",
+      name: "mcp",
+      placement: "direct" as const,
+      source: "both" as const,
+      diagnosticTool: "mcp",
+    },
+    {
+      label: "reserved mcp namespace prefix",
+      name: "mcp__read",
+      placement: "searchable" as const,
+      source: "both" as const,
+      diagnosticTool: "mcp__read",
+    },
+  ])("quarantines Codex-invalid dynamic tool names: $label", async (testCase) => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const execute = vi.fn(async () => textToolResult("healthy sibling executed"));
+    const placement =
+      testCase.placement === "direct-only" ? { catalogMode: "direct-only" as const } : {};
+    const invalidTool = createTool({ name: testCase.name, ...placement });
+    const sibling = createTool({ name: "valid_sibling", execute, ...placement });
+    const registeredOnly = createTool({ name: "registered_sibling", ...placement });
+    const tools = [sibling, ...(testCase.source === "registered" ? [] : [invalidTool])];
+    const registeredTools = [
+      sibling,
+      registeredOnly,
+      ...(testCase.source === "available" ? [] : [invalidTool]),
+    ];
+    const bridgeOptions = {
+      tools,
+      registeredTools,
+      signal: new AbortController().signal,
+      ...(testCase.placement === "direct" ? { loading: "direct" as const } : {}),
+    };
+    const bridge = createCodexDynamicToolBridge(bridgeOptions);
+    const healthyBridge = createCodexDynamicToolBridge({
+      ...bridgeOptions,
+      tools: [sibling],
+      registeredTools: [sibling, registeredOnly],
+    });
+
+    expect(bridge.availableTools.map((tool) => tool.name)).toEqual(["valid_sibling"]);
+    expect(bridge.availableSpecs).toEqual(healthyBridge.availableSpecs);
+    expect(bridge.specs).toEqual(healthyBridge.specs);
+    expect(codexDynamicToolsFingerprint(bridge.specs)).toBe(
+      codexDynamicToolsFingerprint(healthyBridge.specs),
+    );
+    expect(specNames(bridge.availableSpecs)).toEqual(["valid_sibling"]);
+    expect(specNames(bridge.specs).toSorted()).toEqual(["registered_sibling", "valid_sibling"]);
+    const siblingSpec = flattenSpecsWithNamespace(bridge.availableSpecs)[0];
+    if (testCase.placement === "searchable") {
+      expect(siblingSpec).toMatchObject({
+        name: "valid_sibling",
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        deferLoading: true,
+      });
+    } else if (testCase.placement === "direct-only") {
+      expect(siblingSpec).toMatchObject({
+        name: "valid_sibling",
+        namespace: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+      });
+      expect(siblingSpec).not.toHaveProperty("deferLoading");
+    } else {
+      expectDynamicSpec(siblingSpec, { name: "valid_sibling" });
+      expectNoNamespace(siblingSpec);
+    }
+    expect(bridge.telemetry.quarantinedTools).toEqual([
+      expect.objectContaining({ tool: testCase.diagnosticTool }),
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("retained 1 available and 2 registered tools"),
+      expect.objectContaining({
+        availableToolCount: 1,
+        registeredToolCount: 2,
+      }),
+    );
+
+    const validResult = await bridge.handleToolCall(
+      createDynamicToolCall("valid_sibling", {}, "call-valid"),
+    );
+    expect(validResult.success).toBe(true);
+    expect(execute).toHaveBeenCalledOnce();
+
+    const invalidResult = await bridge.handleToolCall(
+      createDynamicToolCall(testCase.name, {}, "call-invalid"),
+    );
+    expect(invalidResult).toMatchObject({
+      success: false,
+      executionStarted: false,
+    });
+    expect(invalidResult.contentItems).toEqual([
+      {
+        type: "inputText",
+        text: `Unknown OpenClaw tool: ${testCase.name}`,
+      },
+    ]);
+  });
+
+  it("reports an empty final surface when all dynamic tool names are invalid", () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "bad.name" }), createTool({ name: "mcp" })],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableTools).toEqual([]);
+    expect(bridge.availableSpecs).toEqual([]);
+    expect(bridge.specs).toEqual([]);
+    expect(bridge.telemetry.quarantinedTools.map((tool) => tool.tool)).toEqual(["bad.name", "mcp"]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("retained 0 available and 0 registered tools"),
+      expect.objectContaining({
+        availableToolCount: 0,
+        registeredToolCount: 0,
+      }),
+    );
   });
 
   it("uses the bridge's executable projection for authority snapshots", () => {
@@ -974,14 +1589,7 @@ describe("createCodexDynamicToolBridge", () => {
       hookContext: { contextWindowTokens: 128_000 },
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "large_lookup",
-      arguments: {},
-    });
+    const result = await bridge.handleToolCall(createDynamicToolCall("large_lookup"));
 
     expect(result.success).toBe(true);
     const firstItem = result.contentItems[0];
@@ -1006,14 +1614,9 @@ describe("createCodexDynamicToolBridge", () => {
         contextWindowTokens: 128_000,
       });
 
-      const result = await bridge.handleToolCall({
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-weighted",
-        namespace: null,
-        tool: "large_lookup",
-        arguments: {},
-      });
+      const result = await bridge.handleToolCall(
+        createDynamicToolCall("large_lookup", {}, "call-weighted"),
+      );
       const firstItem = result.contentItems[0];
       if (firstItem?.type !== "inputText" || typeof firstItem.text !== "string") {
         throw new Error("expected inputText tool result");
@@ -1046,14 +1649,9 @@ describe("createCodexDynamicToolBridge", () => {
         },
       );
 
-      const result = await bridge.handleToolCall({
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-context-cap",
-        namespace: null,
-        tool: "large_lookup",
-        arguments: {},
-      });
+      const result = await bridge.handleToolCall(
+        createDynamicToolCall("large_lookup", {}, "call-context-cap"),
+      );
       const firstItem = result.contentItems[0];
       if (firstItem?.type !== "inputText" || typeof firstItem.text !== "string") {
         throw new Error("expected inputText tool result");
@@ -1074,14 +1672,9 @@ describe("createCodexDynamicToolBridge", () => {
       hookContext: { contextWindowTokens: 8_000 },
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-small-context",
-      namespace: null,
-      tool: "small_context_lookup",
-      arguments: {},
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("small_context_lookup", {}, "call-small-context"),
+    );
     const firstItem = result.contentItems[0];
     if (firstItem?.type !== "inputText" || typeof firstItem.text !== "string") {
       throw new Error("expected inputText tool result");
@@ -1107,14 +1700,7 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "large_lookup",
-      arguments: {},
-    });
+    const result = await bridge.handleToolCall(createDynamicToolCall("large_lookup"));
 
     expect(result.contentItems).toEqual([{ type: "inputText", text: `${prefix}\n${noticeText}` }]);
   });
@@ -1136,14 +1722,7 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "large_lookup",
-      arguments: {},
-    });
+    const result = await bridge.handleToolCall(createDynamicToolCall("large_lookup"));
 
     expect(result.success).toBe(true);
     const text = result.contentItems
@@ -1153,6 +1732,126 @@ describe("createCodexDynamicToolBridge", () => {
     expect(text).toContain("OpenClaw truncated dynamic tool result");
     expect(text).toContain("original 20000 chars");
     expect(text).not.toContain("b".repeat(10_000));
+  });
+
+  it.each([
+    { label: "successful", middleware: false, details: {} },
+    { label: "successful with result middleware", middleware: true, details: {} },
+    { label: "failed", middleware: false, details: { ok: false } },
+    { label: "failed with result middleware", middleware: true, details: { ok: false } },
+  ])(
+    "redacts credentials from $label dynamic tool content items",
+    async ({ middleware, details }) => {
+      if (middleware) {
+        const registry = createEmptyPluginRegistry();
+        const passthrough = async (event: { result: AgentToolResult<unknown> }) => ({
+          result: event.result,
+        });
+        registry.agentToolResultMiddlewares.push({
+          pluginId: "passthrough-result",
+          pluginName: "Passthrough result",
+          rawHandler: passthrough,
+          handler: passthrough,
+          runtimes: ["codex"],
+          source: "test",
+        });
+        setActivePluginRegistry(registry);
+      }
+      const bridge = createBridgeWithToolResult(
+        "credential_lookup",
+        textToolResult(SYNTHETIC_CREDENTIAL_REPORT, details),
+      );
+
+      const result = await bridge.handleToolCall(
+        createDynamicToolCall("credential_lookup", {}, "call-credential"),
+      );
+
+      const firstItem = result.contentItems[0];
+      if (firstItem?.type !== "inputText" || typeof firstItem.text !== "string") {
+        throw new Error("expected inputText tool result");
+      }
+      expect(firstItem.text).not.toContain(SYNTHETIC_BEARER_CREDENTIAL);
+      expect(firstItem.text).not.toContain(SYNTHETIC_ACCESS_TOKEN);
+      expect(firstItem.text).toContain("Deployment finished in 42s.");
+      expect(firstItem.text).toContain("API_TOKEN = computeToken()");
+    },
+  );
+
+  it("redacts credentials split across adjacent dynamic tool text items", async () => {
+    const bridge = createBridgeWithToolResult("credential_lookup", {
+      content: [
+        { type: "text", text: "Deployment finished.\nAuthorization: Bearer " },
+        { type: "text", text: SYNTHETIC_BEARER_CREDENTIAL },
+        { type: "text", text: "\nArtifacts remain available." },
+      ],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("credential_lookup", {}, "call-split-credential"),
+    );
+
+    const text = result.contentItems
+      .map((item) => (item.type === "inputText" && typeof item.text === "string" ? item.text : ""))
+      .join("");
+    expect(text).not.toContain(SYNTHETIC_BEARER_CREDENTIAL);
+    expect(text).toContain("Authorization: Bearer");
+    expect(text).toContain("Deployment finished.");
+    expect(text).toContain("Artifacts remain available.");
+  });
+
+  it("preserves Unicode characters when redaction repartitions adjacent text items", async () => {
+    const bridge = createBridgeWithToolResult("credential_lookup", {
+      content: [
+        { type: "text", text: "Authorization: Bearer abcdefg\n" },
+        { type: "text", text: "123😀tail" },
+      ],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("credential_lookup", {}, "call-split-unicode"),
+    );
+
+    const textItems = result.contentItems.flatMap((item) =>
+      item.type === "inputText" && typeof item.text === "string" ? [item.text] : [],
+    );
+    const unpairedSurrogate =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(textItems).toHaveLength(2);
+    expect(textItems.every((text) => !unpairedSurrogate.test(text))).toBe(true);
+    expect(textItems.join("")).toBe("Authorization: Bearer ***\n123😀tail");
+  });
+
+  it("redacts a credential that crosses the dynamic tool result budget", async () => {
+    const maxChars = 16_000;
+    const totalChars = 20_000;
+    const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalChars} chars, weighted budget ${maxChars}; rerun with narrower args.)`;
+    const textBudget = maxChars - noticeText.length - 1;
+    // Newlines bound the credential token so the filler stays outside its mask.
+    const marker = `\nAuthorization: Bearer ${SYNTHETIC_BEARER_CREDENTIAL}\n`;
+    // Place the credential so an unsanitized slice would cut through it and strand a fragment.
+    const prefix = "a".repeat(textBudget - 45);
+    const suffix = "z".repeat(totalChars - prefix.length - marker.length);
+    const bridge = createBridgeWithToolResult("credential_lookup", {
+      content: [
+        { type: "text", text: `${prefix}${marker}${suffix}` },
+        { type: "image", mimeType: "image/png", data: COMPUTER_FRAME_IMAGE },
+      ],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("credential_lookup", {}, "call-credential-budget"),
+    );
+
+    const text = result.contentItems
+      .map((item) => (item.type === "inputText" && typeof item.text === "string" ? item.text : ""))
+      .join("");
+    expect(text).not.toContain(SYNTHETIC_BEARER_CREDENTIAL);
+    expect(text).not.toContain("bearer-model-visible");
+    expect(text).toContain("OpenClaw truncated dynamic tool result");
+    expect(result.contentItems).toContainEqual(expect.objectContaining({ type: "inputImage" }));
   });
 
   it("shares weighted budget across mixed text blocks while preserving images", async () => {
@@ -1169,14 +1868,9 @@ describe("createCodexDynamicToolBridge", () => {
       { contextWindowTokens: 128_000 },
     );
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-mixed-weighted",
-      namespace: null,
-      tool: "mixed_lookup",
-      arguments: {},
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("mixed_lookup", {}, "call-mixed-weighted"),
+    );
     const text = result.contentItems
       .map((item) => (item.type === "inputText" && typeof item.text === "string" ? item.text : ""))
       .join("");
@@ -1210,19 +1904,130 @@ describe("createCodexDynamicToolBridge", () => {
         arguments: { prompt: "hello" },
       });
 
-      expect(result).toEqual(expectInputText("Generated media reply."));
+      expectInputText(result, "Generated media reply.");
       expect(bridge.telemetry.toolMediaUrls).toEqual([mediaUrl]);
       expect(bridge.telemetry.toolAudioAsVoice).toBe(audioAsVoice === true);
     },
   );
 
-  it("preserves audio-as-voice metadata from tts results", async () => {
+  it.each([
+    { tool: "tts", timedOut: false },
+    { tool: "tts", timedOut: true },
+    { tool: "message", timedOut: false },
+    { tool: "message", timedOut: true },
+    { tool: "sessions_spawn", timedOut: false },
+    { tool: "sessions_spawn", timedOut: true },
+    { tool: "cron", timedOut: false },
+    { tool: "cron", timedOut: true },
+  ])(
+    "accepts artifacts separately from committed $tool effects (timeout: $timedOut)",
+    async ({ tool, timedOut }) => {
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const registry = createEmptyPluginRegistry();
+      const middleware = async (event: { result: AgentToolResult<unknown> }) => {
+        entered.resolve();
+        await release.promise;
+        return { result: event.result };
+      };
+      registry.agentToolResultMiddlewares.push({
+        pluginId: "held-result",
+        pluginName: "Held result",
+        rawHandler: middleware,
+        handler: middleware,
+        runtimes: ["codex"],
+        source: "test",
+      });
+      setActivePluginRegistry(registry);
+      const result =
+        tool === "tts"
+          ? mediaResult("/tmp/reply.opus", true)
+          : tool === "message"
+            ? textToolResult("Sent.", {
+                ok: true,
+                result: { messageId: "message-1", channelId: "C123" },
+              })
+            : tool === "cron"
+              ? textToolResult("Added.", { ok: true })
+              : textToolResult("Accepted.", {
+                  status: "accepted",
+                  runId: "child-run",
+                  childSessionKey: "child-session",
+                  expectsCompletionMessage: true,
+                });
+      const outer = new AbortController();
+      const bridge = createCodexDynamicToolBridge({
+        tools: [createTool({ name: tool, execute: vi.fn(async () => result) })],
+        signal: outer.signal,
+      });
+      const handle = vi.spyOn(bridge, "handleToolCall");
+      const onAgentToolResult = vi.fn();
+      vi.useFakeTimers();
+      try {
+        const response = handleDynamicToolCallWithTimeout({
+          call: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: "held-result",
+            namespace: null,
+            tool,
+            arguments:
+              tool === "message"
+                ? { action: "send", target: "C123", text: "hello" }
+                : tool === "cron"
+                  ? { action: "add" }
+                  : { text: "hello" },
+          },
+          toolBridge: bridge,
+          signal: outer.signal,
+          timeoutMs: 1,
+          onAgentToolResult,
+        });
+        await entered.promise;
+        if (timedOut) {
+          await vi.advanceTimersByTimeAsync(1);
+          expect(await response).toMatchObject({ success: false });
+          expect(outer.signal.aborted).toBe(false);
+        }
+        release.resolve();
+        // Drain the actual bridge continuation, not just the watchdog winner.
+        await handle.mock.results[0]?.value;
+        expect(await response).toMatchObject({ success: !timedOut });
+        expect(onAgentToolResult).toHaveBeenCalledOnce();
+        if (tool === "tts") {
+          expect(bridge.telemetry.toolMediaUrls).toEqual(timedOut ? [] : ["/tmp/reply.opus"]);
+          expect(bridge.telemetry.toolAudioAsVoice).toBe(!timedOut);
+        } else if (tool === "message") {
+          expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+          expect(bridge.telemetry.messagingToolSentTexts).toEqual(["hello"]);
+        } else if (tool === "cron") {
+          expect(bridge.telemetry.successfulCronAdds).toBe(1);
+        } else {
+          expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
+            {
+              runId: "child-run",
+              childSessionKey: "child-session",
+              expectsCompletionMessage: true,
+            },
+          ]);
+        }
+      } finally {
+        release.resolve();
+        await Promise.allSettled(handle.mock.results.map((entry) => entry.value));
+        handle.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("preserves audio-as-voice metadata from unowned tts results", async () => {
     const toolResult = {
       content: [{ type: "text", text: "(spoken) hello" }],
       details: {
         media: {
           mediaUrl: "/tmp/reply.opus",
           audioAsVoice: true,
+          trustedLocalMedia: true,
         },
       },
     } satisfies AgentToolResult<unknown>;
@@ -1243,13 +2048,70 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { text: "hello" },
     });
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: true,
       contentItems: [{ type: "inputText", text: "(spoken) hello" }],
     });
     expect(bridge.telemetry.toolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(bridge.telemetry.toolAutoDeliveryMediaUrls).toEqual([]);
     expect(bridge.telemetry.toolAudioAsVoice).toBe(true);
   });
+
+  it("does not grant local media or auto-delivery to a plugin tool named tts", async () => {
+    const tool = createOwnerBackedContractTool({
+      pluginId: "tts-collision",
+      name: "tts",
+      result: {
+        content: [{ type: "text", text: "plugin audio" }],
+        details: {
+          media: {
+            mediaUrl: "/tmp/plugin.opus",
+            audioAsVoice: true,
+            trustedLocalMedia: true,
+          },
+        },
+      },
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+
+    await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "tts",
+      arguments: { text: "hello" },
+    });
+
+    expect(bridge.telemetry.toolMediaUrls).toEqual([]);
+    expect(bridge.telemetry.toolAutoDeliveryMediaUrls).toEqual([]);
+  });
+
+  it.each([
+    { name: "dir_fetch", trustedLocalMedia: true, expected: ["/tmp/plugin-file.txt"] },
+    { name: "browser", trustedLocalMedia: false, expected: [] },
+  ])(
+    "applies concrete plugin metadata to local media from $name",
+    async ({ name, trustedLocalMedia, expected }) => {
+      const tool = createOwnerBackedContractTool({
+        pluginId: "file-transfer",
+        name,
+        result: mediaResult("/tmp/plugin-file.txt"),
+        trustedLocalMedia,
+      });
+      const bridge = createCodexDynamicToolBridge({
+        tools: [tool],
+        signal: new AbortController().signal,
+      });
+
+      await bridge.handleToolCall(createDynamicToolCall(name));
+
+      expect(bridge.telemetry.toolMediaUrls).toEqual(expected);
+    },
+  );
 
   it("records messaging tool side effects while returning concise text to app-server", async () => {
     const toolResult = {
@@ -1274,7 +2136,7 @@ describe("createCodexDynamicToolBridge", () => {
       threadId: "thread-ts-1",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTexts).toEqual(["hello from Codex"]);
     expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual(["/tmp/reply.png"]);
@@ -1303,7 +2165,12 @@ describe("createCodexDynamicToolBridge", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
     );
-    const execute = vi.fn(async () => textToolResult("Sent."));
+    const execute = vi.fn(async () =>
+      textToolResult("Sent.", {
+        messageId: "rewritten-message",
+        messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
+      }),
+    );
     const bridge = createCodexDynamicToolBridge({
       tools: [createTool({ name: "message", execute })],
       signal: new AbortController().signal,
@@ -1387,7 +2254,10 @@ describe("createCodexDynamicToolBridge", () => {
           name: "message",
           execute: vi.fn(async () => {
             hasRepliedRef.value = true;
-            return textToolResult("Sent.");
+            return textToolResult("Sent.", {
+              messageId: "implicit-thread-message",
+              messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
+            });
           }),
         }),
       ],
@@ -1467,6 +2337,8 @@ describe("createCodexDynamicToolBridge", () => {
     const bridge = createBridgeWithToolResult(
       "message",
       textToolResult("Sent.", {
+        messageId: "provider-routed-message",
+        messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
         toolSend: {
           to: "channel:resolved-id",
           threadId: "root-post-id",
@@ -1494,123 +2366,12 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
-  it("records message tool media attachment aliases as delivery evidence", async () => {
-    const toolResult = {
-      content: [{ type: "text", text: "Sent." }],
-      details: { messageId: "message-1" },
-    } satisfies AgentToolResult<unknown>;
-    const tool = createTool({
-      name: "message",
-      execute: vi.fn(async () => toolResult),
-    });
-    const bridge = createCodexDynamicToolBridge({
-      tools: [tool],
-      signal: new AbortController().signal,
-    });
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "send",
-      text: "song attached",
-      media: "/tmp/generated-song.mp3",
-      attachments: [{ filePath: "/tmp/generated-cover.png" }],
-    });
-
-    expect(result).toEqual(expectInputText("Sent."));
-    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
-    expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([
-      "/tmp/generated-song.mp3",
-      "/tmp/generated-cover.png",
-    ]);
-    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
-      {
-        tool: "message",
-        provider: "message",
-        to: undefined,
-        threadId: undefined,
-        text: "song attached",
-        mediaUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
-      },
-    ]);
-  });
-
-  it("transfers remote Slack file uploads over the Codex app-server connection", async () => {
-    const openClawState = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "codex-remote-slack-upload-",
-    });
-    const workspaceDir = await mkdtemp(path.join(os.tmpdir(), "codex-remote-upload-"));
-    try {
-      const relativePath = "reports/slack-upload.txt";
-      const localPath = path.join(workspaceDir, relativePath);
-      const remoteContent = "authoritative remote Slack attachment\n";
-      await mkdir(path.dirname(localPath), { recursive: true });
-      await writeFile(localPath, remoteContent);
-
-      const toolResult = textToolResult("Uploaded.", { messageId: "message-1" });
-      const execute = vi.fn(async () => toolResult);
-      const remotePath = `/remote/codex-workspace/${relativePath}`;
-      const readRemoteWorkspaceFile = vi.fn<CodexRemoteWorkspaceFileReader>(async () => ({
-        dataBase64: Buffer.from(remoteContent).toString("base64"),
-      }));
-      const bridge = createCodexDynamicToolBridge({
-        tools: [createTool({ name: "message", execute })],
-        signal: new AbortController().signal,
-        hookContext: {
-          workspaceDir,
-          remoteWorkspaceRoot: "/remote/codex-workspace",
-          remoteWorkspaceRequestTimeoutMs: 90_000,
-        },
-      });
-      bridge.setRemoteWorkspaceFileReader?.(readRemoteWorkspaceFile);
-
-      const result = await handleMessageToolCall(bridge, {
-        action: "upload-file",
-        channel: "slack",
-        to: "channel:C123",
-        filePath: remotePath,
-      });
-
-      expect(result).toEqual(expectInputText("Uploaded."));
-      const executedArgs = requireRecord(
-        callArg(execute, 0, 1, "Slack upload args"),
-        "upload args",
-      );
-      const stagedPath = executedArgs.filePath;
-      expectExecuteCall(execute, {
-        callId: "call-1",
-        args: {
-          action: "upload-file",
-          channel: "slack",
-          to: "channel:C123",
-          filePath: stagedPath,
-        },
-      });
-      expect(stagedPath).not.toBe(localPath);
-      expect(stagedPath).toEqual(
-        expect.stringContaining(`${path.sep}media${path.sep}outbound${path.sep}`),
-      );
-      expect(readRemoteWorkspaceFile).toHaveBeenCalledWith({
-        path: remotePath,
-        maxBytes: 64 * 1024 * 1024,
-        workspaceRoot: "/remote/codex-workspace",
-        signal: expect.any(AbortSignal),
-        timeoutMs: expect.any(Number),
-      });
-      expect(readRemoteWorkspaceFile.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(0);
-      expect(readRemoteWorkspaceFile.mock.calls[0]?.[0].timeoutMs).toBeLessThanOrEqual(90_000);
-      await expect(readFile(String(stagedPath), "utf8")).resolves.toBe(remoteContent);
-      await expect(readFile(localPath, "utf8")).resolves.toBe(remoteContent);
-    } finally {
-      await rm(workspaceDir, { recursive: true, force: true });
-      await openClawState.cleanup();
-    }
-  });
-
   it("records internal UI source replies separately from outbound messaging evidence", async () => {
     const toolResult = textToolResult("Sent to current chat.", {
       status: "ok",
       deliveryStatus: "sent",
       sourceReplySink: "internal-ui",
+      mediaUrl: "/tmp/reply.png",
       sourceReply: {
         text: "visible reply",
         mediaUrls: ["/tmp/reply.png"],
@@ -1623,11 +2384,12 @@ describe("createCodexDynamicToolBridge", () => {
       message: "<think>private</think>visible reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent to current chat."));
+    expectInputText(result, "Sent to current chat.");
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
     expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([]);
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
+    expect(bridge.telemetry.sourceReplyDelivered).toBeUndefined();
     expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
       {
         text: "visible reply",
@@ -1649,13 +2411,13 @@ describe("createCodexDynamicToolBridge", () => {
       message: "visible reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBe(true);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: true,
     });
-    expect(Object.keys(result)).not.toContain("terminate");
+    expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
   });
 
   it("keeps omitted source-reply finality terminal when the tool requests termination", async () => {
@@ -1692,7 +2454,7 @@ describe("createCodexDynamicToolBridge", () => {
       final: false,
     });
 
-    expect(progressResult).toEqual(expectInputText("Sent."));
+    expectInputText(progressResult, "Sent.");
     expect(progressResult.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
@@ -1705,52 +2467,63 @@ describe("createCodexDynamicToolBridge", () => {
       final: true,
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBe(true);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: true,
     });
-    expect(Object.keys(result)).not.toContain("terminate");
+    expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
   });
 
-  it("keeps message-tool-only source replies terminal when middleware redacts receipt details", async () => {
-    const registry = createEmptyPluginRegistry();
-    registry.agentToolResultMiddlewares.push({
-      pluginId: "receipt-redactor",
-      pluginName: "Receipt redactor",
-      rawHandler: () => undefined,
-      handler: (event: { result: AgentToolResult<unknown> }) => ({
-        result: {
-          content: event.result.content,
-          details: { redacted: true },
-        },
-      }),
-      runtimes: ["codex"],
-      source: "test",
-    });
-    setActivePluginRegistry(registry);
-    const bridge = createBridgeWithToolResult(
-      "message",
-      textToolResult("Sent.", {
-        receipt: {
-          primaryPlatformMessageId: "imessage-6264",
-          platformMessageIds: ["imessage-6264"],
-        },
-      }),
-      { sourceReplyDeliveryMode: "message_tool_only" },
-    );
+  it.each([undefined, "message_tool_only"] as const)(
+    "preserves implicit source delivery when middleware redacts details in %s mode",
+    async (sourceReplyDeliveryMode) => {
+      const registry = createEmptyPluginRegistry();
+      registry.agentToolResultMiddlewares.push({
+        pluginId: "receipt-redactor",
+        pluginName: "Receipt redactor",
+        rawHandler: () => undefined,
+        handler: (event: { result: AgentToolResult<unknown> }) => ({
+          result: {
+            content: event.result.content,
+            details: { redacted: true },
+          },
+        }),
+        runtimes: ["codex"],
+        source: "test",
+      });
+      setActivePluginRegistry(registry);
+      const bridge = createBridgeWithToolResult(
+        "message",
+        textToolResult("Sent.", {
+          messageDelivery: {
+            status: "settled",
+            primaryPlatformMessageId: "imessage-6264",
+            partialDelivery: false,
+            createdThreadIds: [],
+            sourceReplyDelivered: true,
+          },
+          receipt: {
+            primaryPlatformMessageId: "imessage-6264",
+            platformMessageIds: ["imessage-6264"],
+          },
+        }),
+        { sourceReplyDeliveryMode },
+      );
 
-    const result = await handleMessageToolCall(bridge, {
-      action: "send",
-      message: "visible reply",
-      final: true,
-    });
+      const result = await handleMessageToolCall(bridge, {
+        action: "send",
+        message: "visible reply",
+        final: true,
+      });
 
-    expect(result).toEqual(expectInputText("Sent."));
-    expect(result.terminate).toBe(true);
-    expect(Object.keys(result)).not.toContain("terminate");
-  });
+      expectInputText(result, "Sent.");
+      expect(result.terminate).toBe(sourceReplyDeliveryMode ? true : undefined);
+      expect(bridge.telemetry.sourceReplyDelivered).toBe(true);
+      expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
+    },
+  );
 
   it("does not treat target telemetry alone as delivered message-tool-only source reply evidence", async () => {
     const bridge = createBridgeWithToolResult("message", textToolResult("Sent."), {
@@ -1764,15 +2537,9 @@ describe("createCodexDynamicToolBridge", () => {
       message: "visible reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
-    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
-      expect.objectContaining({
-        tool: "message",
-        provider: "imessage",
-        to: "chat-1",
-        text: "visible reply",
-      }),
-    ]);
+    expectInputText(result, "Sent.");
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -1782,6 +2549,7 @@ describe("createCodexDynamicToolBridge", () => {
       "message",
       textToolResult("Sent.", { ok: true, messageId: "imessage-853" }),
       {
+        sessionKey: "agent:main:imessage:dm:source",
         sourceReplyDeliveryMode: "message_tool_only",
         currentChannelProvider: "imessage",
         currentChannelId: "imessage:+12069106512",
@@ -1799,13 +2567,13 @@ describe("createCodexDynamicToolBridge", () => {
       final: true,
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBe(true);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: true,
     });
-    expect(Object.keys(result)).not.toContain("terminate");
+    expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
   });
 
   it("keeps normalized explicit source routes terminal", async () => {
@@ -1830,6 +2598,7 @@ describe("createCodexDynamicToolBridge", () => {
       "message",
       textToolResult("Sent.", { ok: true, messageId: "sms-853" }),
       {
+        sessionKey: "agent:main:sms:dm:source",
         sourceReplyDeliveryMode: "message_tool_only",
         currentChannelProvider: "sms",
         currentChannelId: "sms:+12069106512",
@@ -1846,7 +2615,7 @@ describe("createCodexDynamicToolBridge", () => {
       final: true,
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([
       expect.objectContaining({
         tool: "message",
@@ -1857,22 +2626,23 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
     expect(result.terminate).toBe(true);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(Object.keys(result)).not.toContain("terminate");
+    expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
   });
 
-  it("keeps message-tool-only source replies terminal when the reply receipt matches the current message id", async () => {
+  it("uses the message owner's source confirmation for provider-native routes", async () => {
     const bridge = createBridgeWithToolResult(
       "message",
       textToolResult("Sent.", {
-        ok: true,
-        messageId: "provider-message-1",
-        repliedTo: "provider-guid-857",
+        messageDelivery: {
+          status: "settled",
+          partialDelivery: false,
+          createdThreadIds: [],
+          sourceReplyDelivered: true,
+        },
       }),
       {
         sourceReplyDeliveryMode: "message_tool_only",
-        currentChannelProvider: "imessage",
         currentChannelId: "imessage:any;-;+12069106512",
-        currentMessageId: "provider-guid-857",
       },
     );
 
@@ -1882,51 +2652,13 @@ describe("createCodexDynamicToolBridge", () => {
       target: "+12069106512",
       messageId: "857",
       message: "visible reply",
-      buttons: [],
-      final: true,
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
-    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
-      expect.objectContaining({
-        tool: "message",
-        provider: "imessage",
-        to: "+12069106512",
-        text: "visible reply",
-      }),
-    ]);
     expect(result.terminate).toBe(true);
-    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(Object.keys(result)).not.toContain("terminate");
-  });
-
-  it("keeps message-tool-only source replies terminal when a text receipt matches the current message id", async () => {
-    const receiptText = JSON.stringify({
-      ok: true,
-      messageId: "provider-message-1",
-      repliedTo: "provider-guid-861",
+    expect(bridge.telemetry.sourceReplyDelivered).toBe(true);
+    expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
+      sourceReplyFinal: true,
     });
-    const bridge = createBridgeWithToolResult("message", textToolResult(receiptText), {
-      sourceReplyDeliveryMode: "message_tool_only",
-      currentChannelProvider: "imessage",
-      currentChannelId: "imessage:any;-;+12069106512",
-      currentMessageId: "provider-guid-861",
-    });
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "reply",
-      channel: "imessage",
-      target: "+12069106512",
-      messageId: "861",
-      message: "visible reply",
-      buttons: [],
-      final: true,
-    });
-
-    expect(result).toEqual(expectInputText(receiptText));
-    expect(result.terminate).toBe(true);
-    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(Object.keys(result)).not.toContain("terminate");
   });
 
   it("does not let dry-run reply receipts terminate message-tool-only source replies", async () => {
@@ -1951,7 +2683,7 @@ describe("createCodexDynamicToolBridge", () => {
       buttons: [],
     });
 
-    expect(result).toEqual(expectInputText(receiptText));
+    expectInputText(result, receiptText);
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -1980,56 +2712,11 @@ describe("createCodexDynamicToolBridge", () => {
       message: "visible reply",
     });
 
-    expect(result).toEqual(expectInputText("Dry run."));
+    expectInputText(result, "Dry run.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
-  });
-
-  it("keeps message-tool-only source replies terminal for explicit native target segments", async () => {
-    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
-      sourceReplyDeliveryMode: "message_tool_only",
-      currentChannelProvider: "imessage",
-      currentChannelId: "imessage:any;-;+12069106512",
-    });
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "reply",
-      channel: "imessage",
-      target: "+12069106512",
-      messageId: "863",
-      message: "visible reply",
-      buttons: [],
-      final: true,
-    });
-
-    expect(result).toEqual(expectInputText("Sent."));
-    expect(result.terminate).toBe(true);
-    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(Object.keys(result)).not.toContain("terminate");
-  });
-
-  it("keeps message-tool-only source replies terminal when the provider is only in the current channel id", async () => {
-    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
-      sourceReplyDeliveryMode: "message_tool_only",
-      currentChannelId: "imessage:any;-;+12069106512",
-    });
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "reply",
-      channel: "imessage",
-      target: "+12069106512",
-      messageId: "865",
-      message: "visible reply",
-      buttons: [],
-      final: true,
-    });
-
-    expect(result).toEqual(expectInputText("Sent."));
-    expect(result.terminate).toBe(true);
-    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(Object.keys(result)).not.toContain("terminate");
   });
 
   it("keeps omitted finality terminal when the message tool returns termination", async () => {
@@ -2051,13 +2738,13 @@ describe("createCodexDynamicToolBridge", () => {
       buttons: [],
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBe(true);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: true,
     });
-    expect(Object.keys(result)).not.toContain("terminate");
+    expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
   });
 
   it("lets explicit progress override legacy message-tool-owned termination", async () => {
@@ -2080,7 +2767,7 @@ describe("createCodexDynamicToolBridge", () => {
       final: false,
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: false,
@@ -2097,8 +2784,9 @@ describe("createCodexDynamicToolBridge", () => {
       message: "visible reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
-    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+    expectInputText(result, "Sent.");
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
+    expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -2129,7 +2817,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     expect(firstResult.terminate).toBe(true);
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
-    expect(secondResult).toEqual(expectInputText("No message sent."));
+    expectInputText(secondResult, "No message sent.");
     expect(secondResult.terminate).toBeUndefined();
   });
 
@@ -2147,7 +2835,7 @@ describe("createCodexDynamicToolBridge", () => {
       final: true,
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -2168,7 +2856,7 @@ describe("createCodexDynamicToolBridge", () => {
       message: "cross-provider reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -2190,7 +2878,7 @@ describe("createCodexDynamicToolBridge", () => {
       message: "sibling thread reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -2211,7 +2899,7 @@ describe("createCodexDynamicToolBridge", () => {
       message: "sibling thread reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -2232,7 +2920,7 @@ describe("createCodexDynamicToolBridge", () => {
       message: "thread reply from top-level source",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -2261,7 +2949,7 @@ describe("createCodexDynamicToolBridge", () => {
       message: "cross-channel reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -2303,7 +2991,7 @@ describe("createCodexDynamicToolBridge", () => {
       message: "cross-chat reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([
       expect.objectContaining({
         tool: "message",
@@ -2335,7 +3023,7 @@ describe("createCodexDynamicToolBridge", () => {
       to: "C123",
     });
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [{ type: "inputText", text: "send failed" }],
     });
@@ -2345,11 +3033,11 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
   });
 
-  it("records heartbeat response tool outcomes", async () => {
+  it("accepts heartbeat response tool outcomes", async () => {
     const bridge = createBridgeWithToolResult(
       HEARTBEAT_RESPONSE_TOOL_NAME,
-      textToolResult("Recorded.", {
-        status: "recorded",
+      textToolResult("Accepted.", {
+        status: "accepted",
         outcome: "needs_attention",
         notify: true,
         summary: "Build is blocked.",
@@ -2358,16 +3046,9 @@ describe("createCodexDynamicToolBridge", () => {
       }),
     );
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: HEARTBEAT_RESPONSE_TOOL_NAME,
-      arguments: {},
-    });
+    const result = await bridge.handleToolCall(createDynamicToolCall(HEARTBEAT_RESPONSE_TOOL_NAME));
 
-    expect(result).toEqual(expectInputText("Recorded."));
+    expectInputText(result, "Accepted.");
     expect(bridge.telemetry.heartbeatToolResponse).toEqual({
       outcome: "needs_attention",
       notify: true,
@@ -2402,16 +3083,11 @@ describe("createCodexDynamicToolBridge", () => {
       details: {},
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "exec",
-      arguments: { command: "git status" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("exec", { command: "git status" }),
+    );
 
-    expect(result).toEqual(expectInputText("exec compacted"));
+    expectInputText(result, "exec compacted");
     const event = requireRecord(callArg(handler, 0, 0, "middleware event"), "middleware event");
     expect(event.threadId).toBe("thread-1");
     expect(event.turnId).toBe("turn-1");
@@ -2472,7 +3148,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { action: "screenshot" },
     });
 
-    expect(result).toEqual(expectInputText("screenshot removed"));
+    expectInputText(result, "screenshot removed");
     expect(computerContextEpoch).toEqual({ value: 1 });
   });
 
@@ -2644,14 +3320,7 @@ describe("createCodexDynamicToolBridge", () => {
       computerContextEpoch,
     });
 
-    await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "shot-older",
-      namespace: null,
-      tool: "computer",
-      arguments: {},
-    });
+    await bridge.handleToolCall(createDynamicToolCall("computer", {}, "shot-older"));
 
     expect(computerContextEpoch).toEqual({ value: 2, frameToolCallId: "shot-newer" });
   });
@@ -2689,7 +3358,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { text: "hello" },
     });
 
-    expect(result).toEqual(expectInputText("message sent: msg_123"));
+    expectInputText(result, "message sent: msg_123");
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
@@ -2711,16 +3380,9 @@ describe("createCodexDynamicToolBridge", () => {
       details: { status: "failed", exitCode: 1 },
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "exec",
-      arguments: { command: "false" },
-    });
+    const result = await bridge.handleToolCall(createDynamicToolCall("exec", { command: "false" }));
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [{ type: "inputText", text: "failed output" }],
     });
@@ -2746,17 +3408,9 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
 
-    const result = await bridge.handleToolCall(
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: null,
-        tool: "exec",
-        arguments: { command: "pwd" },
-      },
-      { onAgentToolResult },
-    );
+    const result = await bridge.handleToolCall(createDynamicToolCall("exec", { command: "pwd" }), {
+      onAgentToolResult,
+    });
 
     expect(result).toMatchObject({ success: false });
     expect(onAgentToolResult).toHaveBeenCalledWith({
@@ -2782,17 +3436,9 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
 
-    const result = await bridge.handleToolCall(
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: null,
-        tool: "lobster",
-        arguments: {},
-      },
-      { onAgentToolResult },
-    );
+    const result = await bridge.handleToolCall(createDynamicToolCall("lobster"), {
+      onAgentToolResult,
+    });
 
     expect(result).toMatchObject({ success: true });
     expect(onAgentToolResult).toHaveBeenCalledWith({
@@ -2819,17 +3465,9 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
 
-    await bridge.handleToolCall(
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: null,
-        tool: "memory_lookup_custom",
-        arguments: {},
-      },
-      { onAgentToolResult },
-    );
+    await bridge.handleToolCall(createDynamicToolCall("memory_lookup_custom"), {
+      onAgentToolResult,
+    });
 
     expect(onAgentToolResult).toHaveBeenCalledOnce();
     expect(onAgentToolResult).toHaveBeenCalledWith({
@@ -2840,6 +3478,53 @@ describe("createCodexDynamicToolBridge", () => {
       },
       isError: true,
     });
+  });
+
+  it("preserves successful execution when its observer throws an unreadable error", async () => {
+    const observerError = Object.defineProperty(new Error(), "message", {
+      get() {
+        throw new Error("observer message getter escaped");
+      },
+    });
+    const onAgentToolResult = vi.fn(() => {
+      throw observerError;
+    });
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    warn.mockClear();
+    const rawResult = textToolResult("committed effect", { receipt: "effect-1" });
+    const execute = vi.fn(async () => rawResult);
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: new AbortController().signal,
+    });
+    const outcome = await bridge
+      .handleToolCall(
+        createDynamicToolCall("exec", { command: "write synthetic effect" }, "observer-success"),
+        { onAgentToolResult },
+      )
+      .then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+    expect(execute).toHaveBeenCalledOnce();
+    expect(outcome).toMatchObject({
+      result: {
+        success: true,
+        diagnosticTerminalType: "completed",
+        executionStarted: true,
+        sideEffectEvidence: true,
+        contentItems: [{ type: "inputText", text: "committed effect" }],
+      },
+    });
+    expect(onAgentToolResult).toHaveBeenCalledExactlyOnceWith({
+      toolName: "exec",
+      result: rawResult,
+      isError: false,
+    });
+    expect(rawResult).toEqual(textToolResult("committed effect", { receipt: "effect-1" }));
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "onAgentToolResult handler failed: tool=exec error=Error",
+    );
   });
 
   it("reports thrown dynamic tool failures to the private result observer", async () => {
@@ -2856,17 +3541,9 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
 
-    await bridge.handleToolCall(
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: null,
-        tool: "memory_lookup_custom",
-        arguments: {},
-      },
-      { onAgentToolResult },
-    );
+    await bridge.handleToolCall(createDynamicToolCall("memory_lookup_custom"), {
+      onAgentToolResult,
+    });
 
     expect(onAgentToolResult).toHaveBeenCalledWith({
       toolName: "memory_lookup_custom",
@@ -2920,27 +3597,23 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { prompt: "lighthouse" },
     });
 
-    expect(result).toEqual(expectInputText("Background task started."));
+    const protocolResponse = toCodexDynamicToolProtocolResponse(result);
+    expectInputText(protocolResponse, "Background task started.");
     expect(result.asyncStarted).toBe(true);
     expect(result.sideEffectEvidence).toBe(true);
     expect(result.terminate).toBe(true);
-    expect(Object.keys(result)).not.toContain("asyncStarted");
-    expect(Object.keys(result)).not.toContain("terminate");
+    expect(Object.keys(protocolResponse)).not.toContain("asyncStarted");
+    expect(Object.keys(protocolResponse)).not.toContain("terminate");
   });
 
   it("marks executed dynamic tool results as side-effect evidence", async () => {
     const bridge = createBridgeWithToolResult("exec", textToolResult("done"));
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "exec",
-      arguments: { command: "touch /tmp/openclaw-replay-test" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("exec", { command: "touch /tmp/openclaw-replay-test" }),
+    );
 
-    expect(result).toEqual(expectInputText("done"));
+    expectInputText(result, "done");
     expect(result.sideEffectEvidence).toBe(true);
   });
 
@@ -2956,7 +3629,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { url: "https://example.com/private" },
     });
 
-    expect(result).toEqual(expectInputText("done"));
+    expectInputText(result, "done");
     expect(result.sideEffectEvidence).toBeUndefined();
   });
 
@@ -3139,16 +3812,9 @@ describe("createCodexDynamicToolBridge", () => {
       hookContext: { runId: "run-invalid-arguments", onToolOutcome },
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "exec",
-      arguments: {},
-    });
+    const result = await bridge.handleToolCall(createDynamicToolCall("exec"));
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [{ type: "inputText", text: "invalid arguments" }],
     });
@@ -3196,16 +3862,9 @@ describe("createCodexDynamicToolBridge", () => {
       },
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "browser",
-      arguments: {},
-    });
+    const result = await bridge.handleToolCall(createDynamicToolCall("browser"));
 
-    expect(result).toEqual(expectInputText("Generated media reply."));
+    expectInputText(result, "Generated media reply.");
     expect(bridge.telemetry.toolMediaUrls).toStrictEqual([]);
   });
 
@@ -3238,16 +3897,11 @@ describe("createCodexDynamicToolBridge", () => {
       details: {},
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "exec",
-      arguments: { command: "git status" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("exec", { command: "git status" }),
+    );
 
-    expect(result).toEqual(expectInputText("legacy compacted"));
+    expectInputText(result, "legacy compacted");
   });
 
   it("keeps config out of Codex tool-result contexts", async () => {
@@ -3302,14 +3956,7 @@ describe("createCodexDynamicToolBridge", () => {
       },
     });
 
-    await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "exec",
-      arguments: { command: "pwd" },
-    });
+    await bridge.handleToolCall(createDynamicToolCall("exec", { command: "pwd" }));
 
     expectExecuteCall(execute, { callId: "call-1", args: { command: "pwd" } });
     expect(middlewareContexts).toHaveLength(1);
@@ -3352,14 +3999,7 @@ describe("createCodexDynamicToolBridge", () => {
       },
     );
 
-    await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "exec",
-      arguments: { command: "pwd" },
-    });
+    await bridge.handleToolCall(createDynamicToolCall("exec", { command: "pwd" }));
 
     await vi.waitFor(() => {
       expect(afterToolCall).toHaveBeenCalledTimes(1);
@@ -3405,16 +4045,9 @@ describe("createCodexDynamicToolBridge", () => {
       },
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "exec",
-      arguments: { command: "pwd" },
-    });
+    const result = await bridge.handleToolCall(createDynamicToolCall("exec", { command: "pwd" }));
 
-    expect(result).toEqual(expectInputText("done"));
+    expectInputText(result, "done");
     expect(result.executedArguments).toEqual({ command: "pwd", mode: "safe" });
     const beforeEvent = requireRecord(
       callArg(beforeToolCall, 0, 0, "before_tool_call event"),
@@ -3679,7 +4312,7 @@ describe("createCodexDynamicToolBridge", () => {
       to: "chat-1",
     });
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [{ type: "inputText", text: "blocked by policy" }],
     });
@@ -3733,14 +4366,9 @@ describe("createCodexDynamicToolBridge", () => {
       hookContext: { runId: "run-hook-timeout" },
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-hook-timeout",
-      namespace: null,
-      tool: "exec",
-      arguments: { command: "pwd" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("exec", { command: "pwd" }, "call-hook-timeout"),
+    );
 
     expect(result.success).toBe(false);
     expect(result.diagnosticTerminalType).toBe("error");
@@ -3754,14 +4382,9 @@ describe("createCodexDynamicToolBridge", () => {
     async (status) => {
       const bridge = createBridgeWithToolResult("exec", textToolResult("tool stopped", { status }));
 
-      const result = await bridge.handleToolCall({
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: `call-${status}`,
-        namespace: null,
-        tool: "exec",
-        arguments: { command: "pwd" },
-      });
+      const result = await bridge.handleToolCall(
+        createDynamicToolCall("exec", { command: "pwd" }, `call-${status}`),
+      );
 
       expect(result.success).toBe(false);
       expect(result.diagnosticTerminalType).toBe("error");
@@ -3787,14 +4410,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     const result = await bridge.handleToolCall(
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-timeout",
-        namespace: null,
-        tool: "exec",
-        arguments: { command: "pwd" },
-      },
+      createDynamicToolCall("exec", { command: "pwd" }, "call-timeout"),
       { onAgentToolResult },
     );
 
@@ -3831,23 +4447,30 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     const result = await bridge.handleToolCall(
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-hostile-error",
-        namespace: null,
-        tool: "exec",
-        arguments: { command: "pwd" },
-      },
+      createDynamicToolCall("exec", { command: "pwd" }, "call-hostile-error"),
       { onAgentToolResult },
     );
 
-    expect(result).toMatchObject({
+    const protocolResponse = {
       success: false,
-      diagnosticTerminalReason: "failed",
-      contentItems: [{ type: "inputText", text: "OpenClaw dynamic tool call failed." }],
+      contentItems: [{ type: "inputText", text: "Error" }],
+    };
+    expect(result.diagnosticTerminalReason).toBe("failed");
+    expect(result).toMatchObject({
+      ...protocolResponse,
+      diagnosticTerminalType: "error",
+      executionStarted: true,
+      sideEffectEvidence: true,
     });
-    expect(onAgentToolResult).toHaveBeenCalledOnce();
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual(protocolResponse);
+    expect(onAgentToolResult).toHaveBeenCalledExactlyOnceWith({
+      toolName: "exec",
+      result: {
+        content: [{ type: "text", text: "Error" }],
+        details: { status: "failed", error: "Error" },
+      },
+      isError: true,
+    });
   });
 
   it("preserves report-only approval blocks for the outer lifecycle owner", async () => {
@@ -3873,14 +4496,9 @@ describe("createCodexDynamicToolBridge", () => {
       hookContext: { runId: "run-approval-report" },
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-approval-report",
-      namespace: null,
-      tool: "exec",
-      arguments: { command: "pwd" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("exec", { command: "pwd" }, "call-approval-report"),
+    );
 
     expect(result.success).toBe(false);
     expect(result.diagnosticTerminalType).toBe("blocked");
@@ -3923,14 +4541,9 @@ describe("createCodexDynamicToolBridge", () => {
       },
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-scheduled-hook",
-      namespace: null,
-      tool: "exec",
-      arguments: { command: "pwd" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("exec", { command: "pwd" }, "call-scheduled-hook"),
+    );
 
     expect(result).toMatchObject({
       success: false,
@@ -4007,16 +4620,11 @@ describe("createCodexDynamicToolBridge", () => {
       hookContext: { runId: "run-middleware" },
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "exec",
-      arguments: { command: "status" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("exec", { command: "status" }),
+    );
 
-    expect(result).toEqual(expectInputText("compacted output"));
+    expectInputText(result, "compacted output");
     await vi.waitFor(() => {
       expect(events).toEqual(["before_tool_call", "execute", "middleware", "after_tool_call"]);
     });
@@ -4046,14 +4654,7 @@ describe("createCodexDynamicToolBridge", () => {
       const bridge = createBridgeWithToolResult("exec", textToolResult("raw failure", { status }));
 
       const result = await bridge.handleToolCall(
-        {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: `call-raw-${status}`,
-          namespace: null,
-          tool: "exec",
-          arguments: { command: "status" },
-        },
+        createDynamicToolCall("exec", { command: "status" }, `call-raw-${status}`),
         { onAgentToolResult },
       );
 
@@ -4106,9 +4707,7 @@ describe("createCodexDynamicToolBridge", () => {
       text: "hello",
     });
 
-    expect(result).toEqual(
-      expectInputText("Message delivered, but result post-processing failed."),
-    );
+    expectInputText(result, "Message delivered, but result post-processing failed.");
     expect(result.sideEffectEvidence).toBe(true);
   });
 
@@ -4144,7 +4743,7 @@ describe("createCodexDynamicToolBridge", () => {
       text: "hello",
     });
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [
         { type: "inputText", text: "Tool output unavailable due to post-processing error." },
@@ -4192,14 +4791,7 @@ describe("createCodexDynamicToolBridge", () => {
       },
     });
 
-    await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-terminal-middleware",
-      namespace: null,
-      tool: "web_fetch",
-      arguments: { url: "https://private.example" },
-    });
+    await bridge.handleToolCall(createDynamicToolCall("web_fetch", {}, "call-terminal-middleware"));
 
     expect(onToolOutcome).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -4248,14 +4840,9 @@ describe("createCodexDynamicToolBridge", () => {
       },
     });
 
-    await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-terminal-middleware-error",
-      namespace: null,
-      tool: "web_fetch",
-      arguments: { url: "https://private.example" },
-    });
+    await bridge.handleToolCall(
+      createDynamicToolCall("web_fetch", {}, "call-terminal-middleware-error"),
+    );
 
     expect(onToolOutcome).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -4283,16 +4870,11 @@ describe("createCodexDynamicToolBridge", () => {
       hookContext: { runId: "run-error" },
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-err",
-      namespace: null,
-      tool: "exec",
-      arguments: { command: "false" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("exec", { command: "false" }, "call-err"),
+    );
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [{ type: "inputText", text: "tool failed" }],
     });
@@ -4332,14 +4914,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     const result = bridge.handleToolCall(
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-signal",
-        namespace: null,
-        tool: "exec",
-        arguments: { command: "sleep" },
-      },
+      createDynamicToolCall("exec", { command: "sleep" }, "call-signal"),
       { signal: callController.signal },
     );
     await vi.waitFor(() => {
@@ -4355,7 +4930,7 @@ describe("createCodexDynamicToolBridge", () => {
     expect(capturedSignal.aborted).toBe(true);
     resolveTool?.(textToolResult("done"));
 
-    await expect(result).resolves.toEqual(expectInputText("done"));
+    expectInputText(await result, "done");
   });
 
   it("does not double-wrap dynamic tools that already have before_tool_call", async () => {
@@ -4373,14 +4948,7 @@ describe("createCodexDynamicToolBridge", () => {
       hookContext: { runId: "run-wrapped" },
     });
 
-    await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-wrapped",
-      namespace: null,
-      tool: "exec",
-      arguments: { command: "pwd" },
-    });
+    await bridge.handleToolCall(createDynamicToolCall("exec", { command: "pwd" }, "call-wrapped"));
 
     expect(beforeToolCall).toHaveBeenCalledTimes(1);
     expectExecuteCall(execute, {

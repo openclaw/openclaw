@@ -1,11 +1,16 @@
+import type {
+  SessionsDeleteResult,
+  SessionsSetInvolvementParams,
+  SessionsListParams,
+  SessionsPatchManyParams,
+  SessionsPatchManyResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type {
   SessionBranch,
   SessionsBranchesListResult,
   SessionsBranchesSwitchResult,
-  SessionsCompactionBranchResult,
-  SessionsCompactionListResult,
-  SessionsCompactionRestoreResult,
   SessionsForkResult,
   SessionsListResult,
   SessionsPatchResult,
@@ -18,23 +23,53 @@ import type { SessionPatch } from "./patch.ts";
 import type {
   SessionCompactResult,
   SessionDeleteOptions,
-  SessionDeleteResponse,
   SessionListOptions,
   SessionRequestClient,
   SessionResetOptions,
-  SessionSteerResult,
 } from "./session-capability.ts";
 
-/** Gateway rosters omit recency so Chat and Settings agree; the cap bounds list work. */
+/** Personal list choices share one RPC contract across all session menus. */
+export async function requestSessionInvolvement(
+  client: SessionRequestClient,
+  params: SessionsSetInvolvementParams,
+): Promise<void> {
+  await client.request("sessions.setInvolvement", params);
+}
+
+/** Gateway rosters omit recency so Chat and Settings agree, and carry the shared
+ *  sidebar page size: a roster smaller than the store empties whole categories
+ *  whose newest session falls outside the page, so the remainder is reachable
+ *  through the list's Load more control rather than lost. */
 export const DEFAULT_SESSION_LIST_QUERY = {
-  limit: 50,
+  limit: SIDEBAR_SESSION_ROSTER_LIMIT,
 } as const satisfies SessionListOptions;
 
-const SESSION_LIST_PARAMS = {
-  includeGlobal: true,
-  includeUnknown: true,
-  configuredAgentsOnly: true,
-} as const;
+export function dashboardSessionListQuery(agentId?: string | null): SessionListOptions {
+  const normalizedAgentId = agentId?.trim();
+  return {
+    ...DEFAULT_SESSION_LIST_QUERY,
+    hasBoard: true,
+    archivedFilter: "all",
+    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
+  };
+}
+
+/** Progress cards resolve an explicit cross-session target independently of
+ *  dashboard gallery membership: the Gateway filters hasBoard against each
+ *  session's own board inventory, so a running target without its own board
+ *  would disappear from a gallery-filtered roster and render as paused. */
+export function sessionProgressTargetQuery(agentId?: string | null): SessionListOptions {
+  const normalizedAgentId = agentId?.trim();
+  return {
+    ...DEFAULT_SESSION_LIST_QUERY,
+    archivedFilter: "all",
+    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
+  };
+}
+
+/** Starting page size for the Sessions page's explicit, user-editable limit
+ *  field, kept separate from the roster page so tuning one never moves the other. */
+export const SESSIONS_PAGE_DEFAULT_LIMIT = 50;
 
 function buildSessionRequestParams(
   key: string,
@@ -60,27 +95,39 @@ function buildTranscriptMutationParams(
   };
 }
 
-function buildSessionListParams(options: SessionListOptions = {}): Record<string, unknown> {
-  const params: Record<string, unknown> = { ...SESSION_LIST_PARAMS };
+export function buildSessionListParams(options: SessionListOptions = {}): SessionsListParams {
+  const params: SessionsListParams = {
+    includeGlobal: true,
+    includeUnknown: true,
+    configuredAgentsOnly: true,
+  };
   if (options.limit === undefined) {
     params.limit = DEFAULT_SESSION_LIST_QUERY.limit;
   } else if (options.limit > 0) {
     params.limit = Math.floor(options.limit);
   }
-  if (options.includeGlobal !== undefined) {
-    params.includeGlobal = options.includeGlobal;
+  for (const key of [
+    "includeGlobal",
+    "includeUnknown",
+    "configuredAgentsOnly",
+    "excludeSubagents",
+    "excludeCron",
+    "excludeSystem",
+    "hasBoard",
+  ] as const) {
+    if (options[key] !== undefined) {
+      params[key] = options[key];
+    }
   }
-  if (options.includeUnknown !== undefined) {
-    params.includeUnknown = options.includeUnknown;
-  }
-  if (options.configuredAgentsOnly !== undefined) {
-    params.configuredAgentsOnly = options.configuredAgentsOnly;
-  }
-  if (options.includeDerivedTitles === true) {
-    params.includeDerivedTitles = true;
-  }
-  if (options.includeLastMessage === true) {
-    params.includeLastMessage = true;
+  for (const key of [
+    "includeDerivedTitles",
+    "includeLastMessage",
+    "ownerFirst",
+    "involvingMe",
+  ] as const) {
+    if (options[key] === true) {
+      params[key] = true;
+    }
   }
   if (options.archivedFilter === "archived") {
     params.archived = true;
@@ -96,24 +143,14 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   if (activeMinutes > 0) {
     params.activeMinutes = activeMinutes;
   }
-  const agentId = options.agentId?.trim();
-  const spawnedBy = options.spawnedBy?.trim();
-  const search = options.search?.trim();
-  const creatorId = options.creatorId?.trim();
+  for (const key of ["agentId", "spawnedBy", "search", "ownerId"] as const) {
+    const value = options[key]?.trim();
+    if (value) {
+      params[key] = value;
+    }
+  }
   if (options.boardFace) {
     params.boardFace = options.boardFace;
-  }
-  if (agentId) {
-    params.agentId = agentId;
-  }
-  if (spawnedBy) {
-    params.spawnedBy = spawnedBy;
-  }
-  if (search) {
-    params.search = search;
-  }
-  if (creatorId) {
-    params.creatorId = creatorId;
   }
   if (typeof options.offset === "number" && options.offset > 0) {
     params.offset = Math.floor(options.offset);
@@ -121,14 +158,29 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   return params;
 }
 
+export function normalizeManagedSessionListQuery(
+  options: SessionListOptions,
+): Readonly<SessionsListParams & { limit: number }> {
+  const { offset: _offset, append: _append, ...queryOptions } = options;
+  const limit =
+    typeof options.limit === "number" && options.limit > 0
+      ? Math.floor(options.limit)
+      : DEFAULT_SESSION_LIST_QUERY.limit;
+  return Object.freeze({ ...buildSessionListParams({ ...queryOptions, limit }), limit });
+}
+
 export async function requestSessionList(
   client: SessionRequestClient,
   options: SessionListOptions = {},
 ): Promise<SessionsListResult | null> {
-  const result = await client.request<SessionsListResult | undefined>(
-    "sessions.list",
-    buildSessionListParams(options),
-  );
+  return requestSessionListParams(client, buildSessionListParams(options));
+}
+
+export async function requestSessionListParams(
+  client: SessionRequestClient,
+  params: Readonly<SessionsListParams>,
+): Promise<SessionsListResult | null> {
+  const result = await client.request<SessionsListResult | undefined>("sessions.list", params);
   return result ?? null;
 }
 
@@ -136,29 +188,54 @@ export function requestSessionPatch(
   client: SessionRequestClient,
   key: string,
   patch: SessionPatch,
-  options: { agentId?: string | null } = {},
+  options: {
+    agentId?: string | null;
+    expectedSessionId?: string | null;
+    expectedMarkedUnreadAt?: number | null;
+  } = {},
 ): Promise<SessionsPatchResult> {
-  const params = { ...buildSessionRequestParams(key, options.agentId), ...patch };
+  const expectedSessionId = options.expectedSessionId?.trim();
+  const params = {
+    ...buildSessionRequestParams(key, options.agentId),
+    ...(expectedSessionId ? { expectedSessionId } : {}),
+    ...(options.expectedMarkedUnreadAt !== undefined
+      ? { expectedMarkedUnreadAt: options.expectedMarkedUnreadAt }
+      : {}),
+    ...patch,
+  };
   return patch.archived === true
     ? client.request<SessionsPatchResult>("sessions.patch", params, SESSION_ARCHIVE_REQUEST_OPTIONS)
     : client.request<SessionsPatchResult>("sessions.patch", params);
+}
+
+export function requestSessionPatchMany(
+  client: SessionRequestClient,
+  params: SessionsPatchManyParams,
+): Promise<SessionsPatchManyResult> {
+  return params.patch.archived === true
+    ? client.request<SessionsPatchManyResult>(
+        "sessions.patchMany",
+        params,
+        SESSION_ARCHIVE_REQUEST_OPTIONS,
+      )
+    : client.request<SessionsPatchManyResult>("sessions.patchMany", params);
 }
 
 export function requestSessionDelete(
   client: SessionRequestClient,
   key: string,
   options: SessionDeleteOptions = {},
-): Promise<SessionDeleteResponse> {
-  return client.request<SessionDeleteResponse>("sessions.delete", {
-    ...buildSessionRequestParams(key, options.agentId),
-    deleteTranscript: options.deleteTranscript ?? true,
-    ...(options.archivedOnly === true ? { archivedOnly: true } : {}),
-  });
-}
-
-export function confirmsSessionDeletion(response: SessionDeleteResponse): boolean {
-  // A successful RPC may be a lifecycle no-op; only confirmed deletion removes state.
-  return response.deleted;
+): Promise<SessionsDeleteResult> {
+  return client.request<SessionsDeleteResult>(
+    "sessions.delete",
+    {
+      ...buildSessionRequestParams(key, options.agentId),
+      deleteTranscript: options.deleteTranscript ?? true,
+      ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
+      ...(options.archivedOnly === true ? { archivedOnly: true } : {}),
+    },
+    SESSION_ARCHIVE_REQUEST_OPTIONS,
+  );
 }
 
 export function requestSessionReset(
@@ -180,18 +257,6 @@ export function requestSessionCompact(
     "sessions.compact",
     buildSessionRequestParams(key, options.agentId),
   );
-}
-
-export function requestSessionSteer(
-  client: SessionRequestClient,
-  key: string,
-  message: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionSteerResult> {
-  return client.request<SessionSteerResult>("sessions.steer", {
-    ...buildSessionRequestParams(key, options.agentId),
-    message,
-  });
 }
 
 export function requestSessionFilesList(
@@ -233,41 +298,6 @@ export function requestSessionFileSet(
     content,
     expectedHash: options.expectedHash,
     ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
-  });
-}
-
-export function requestSessionCheckpoints(
-  client: SessionRequestClient,
-  key: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsCompactionListResult> {
-  return client.request<SessionsCompactionListResult>(
-    "sessions.compaction.list",
-    buildSessionRequestParams(key, options.agentId),
-  );
-}
-
-export function requestSessionCheckpointBranch(
-  client: SessionRequestClient,
-  key: string,
-  checkpointId: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsCompactionBranchResult> {
-  return client.request<SessionsCompactionBranchResult>("sessions.compaction.branch", {
-    ...buildSessionRequestParams(key, options.agentId),
-    checkpointId,
-  });
-}
-
-export function requestSessionCheckpointRestore(
-  client: SessionRequestClient,
-  key: string,
-  checkpointId: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsCompactionRestoreResult> {
-  return client.request<SessionsCompactionRestoreResult>("sessions.compaction.restore", {
-    ...buildSessionRequestParams(key, options.agentId),
-    checkpointId,
   });
 }
 

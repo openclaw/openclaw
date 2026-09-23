@@ -1,20 +1,25 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  createMeetingNodeBrowserFixture,
+  useMeetingTestState,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import { zoomMeetingsConfig } from "./config.js";
 
 const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
+const testState = useMeetingTestState(createOpenClawTestState);
 
 const realtimeMocks = vi.hoisted(() => ({
   healths: [] as Array<{ bridgeClosed: boolean }>,
   speak: vi.fn(),
-  startAgent: vi.fn(async () => {
+  startAgent: vi.fn(async ({ transport }: { transport: { stop(): Promise<void> } }) => {
     const health = { bridgeClosed: false };
     realtimeMocks.healths.push(health);
     return {
       getHealth: () => health,
       providerId: "test",
       speak: realtimeMocks.speak,
-      stop: vi.fn(async () => {}),
+      stop: vi.fn(() => transport.stop()),
     };
   }),
 }));
@@ -49,73 +54,31 @@ const URL = "https://zoom.us/j/12345678903?pwd=node";
 
 describe("Zoom meetings node realtime recovery", () => {
   it("starts the node bridge after manual admission becomes route-ready", async () => {
-    let routeReady = false;
-    let tabOpen = false;
-    const invoke = vi.fn(async (request: Record<string, unknown>) => {
-      const params = (request.params as Record<string, unknown>) ?? {};
-      if (request.command === "browser.proxy") {
-        if (params.path === "/tabs") {
-          return {
-            payload: {
-              result: {
-                tabs: tabOpen ? [{ targetId: "zoom-tab", title: "Zoom", url: URL }] : [],
+    const harness = createMeetingNodeBrowserFixture({
+      url: URL,
+      tabId: "zoom-tab",
+      title: "Zoom",
+      nodeCommand: "zoommeetings.chrome",
+      status: (state) =>
+        state.inCall
+          ? {
+              audioInputRouted: true,
+              audioOutputRouted: true,
+              inCall: true,
+              micMuted: false,
+              url: state.tabUrl,
+            }
+          : {
+              inCall: false,
+              manualAction: {
+                reason: "zoom-admission-required",
+                message: "Waiting for admission",
               },
+              url: state.tabUrl,
             },
-          };
-        }
-        if (params.path === "/tabs/open") {
-          tabOpen = true;
-          return { payload: { result: { targetId: "zoom-tab", title: "Zoom", url: URL } } };
-        }
-        if (params.path === "/tabs/focus") {
-          return { payload: { result: { ok: true } } };
-        }
-        if (params.path === "/act") {
-          const scriptValue = (params.body as { fn?: unknown } | undefined)?.fn;
-          const script = typeof scriptValue === "string" ? scriptValue : "";
-          if (script.includes("leaveAction")) {
-            return {
-              payload: {
-                result: { result: JSON.stringify({ departed: true, urlMatched: true }) },
-              },
-            };
-          }
-          return {
-            payload: {
-              result: {
-                result: JSON.stringify(
-                  routeReady
-                    ? {
-                        audioInputRouted: true,
-                        audioOutputRouted: true,
-                        inCall: true,
-                        micMuted: false,
-                        url: URL,
-                      }
-                    : {
-                        inCall: false,
-                        manualAction: {
-                          reason: "zoom-admission-required",
-                          message: "Waiting for admission",
-                        },
-                        url: URL,
-                      },
-                ),
-              },
-            },
-          };
-        }
-      }
-      if (params.action === "start") {
-        return {
-          payload: {
-            audioBridge: { type: "node-command-pair" },
-            bridgeId: "bridge-1",
-          },
-        };
-      }
-      return { payload: { ok: true } };
     });
+    harness.state.inCall = false;
+    const logger = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
     const runtime = new ZoomMeetingsRuntime({
       config: resolveZoomMeetingsConfig({
         chrome: { waitForInCallMs: 1 },
@@ -123,23 +86,10 @@ describe("Zoom meetings node realtime recovery", () => {
         realtime: { agentId: "consult" },
       }),
       fullConfig: {},
-      logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
-      runtime: {
-        nodes: {
-          invoke,
-          list: vi.fn(async () => ({
-            nodes: [
-              {
-                caps: ["browser"],
-                commands: ["browser.proxy", "zoommeetings.chrome"],
-                connected: true,
-                nodeId: "node-1",
-              },
-            ],
-          })),
-        },
-      } as unknown as PluginRuntime,
+      logger,
+      runtime: harness.runtime,
     });
+    testState.track(runtime, { readWarnings: () => logger.warn.mock.calls });
 
     const joined = await runtime.join({
       agentId: "support",
@@ -150,7 +100,7 @@ describe("Zoom meetings node realtime recovery", () => {
       url: URL,
     });
     expect(joined.session.chrome?.audioBridge).toBeUndefined();
-    routeReady = true;
+    harness.state.inCall = true;
 
     const spoken = await runtime.speak(joined.session.id, "hello");
 
@@ -168,6 +118,11 @@ describe("Zoom meetings node realtime recovery", () => {
     expect(realtimeMocks.speak).toHaveBeenCalledWith("hello");
     expect(joined.session.chrome?.audioBridge).toMatchObject({ type: "node-command-pair" });
 
+    const firstEngine = await realtimeMocks.startAgent.mock.results[0]?.value;
+    if (!firstEngine) {
+      throw new Error("Expected the initial meeting engine");
+    }
+    await firstEngine.stop();
     realtimeMocks.healths[0]!.bridgeClosed = true;
     await runtime.status(joined.session.id);
     const recovered = await runtime.speak(joined.session.id, "again");
@@ -176,5 +131,8 @@ describe("Zoom meetings node realtime recovery", () => {
     expect(realtimeMocks.startAgent).toHaveBeenCalledTimes(2);
     expect(realtimeMocks.speak).toHaveBeenCalledWith("again");
     expect(joined.session.chrome?.health?.bridgeClosed).toBe(false);
+    expect(harness.state.audioCaptureId).toEqual(expect.any(String));
+    await runtime.leave(joined.session.id);
+    expect(harness.state.audioCaptureId).toBeUndefined();
   });
 });

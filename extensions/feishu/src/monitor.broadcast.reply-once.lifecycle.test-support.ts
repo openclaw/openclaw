@@ -1,13 +1,14 @@
-// Feishu plugin module implements monitor.broadcast.reply once.lifecycle support behavior.
-import "./lifecycle.test-support.js";
-import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
-import { FeishuConfigSchema } from "./config-schema.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
 import {
   getFeishuLifecycleTestMocks,
   resetFeishuLifecycleTestMocks,
 } from "./lifecycle.test-support.js";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import { FeishuConfigSchema } from "./config-schema.js";
+// Feishu plugin module implements monitor.broadcast.reply once.lifecycle support behavior.
 import {
   createFeishuTextMessageEvent,
   createFeishuLifecycleReplyDispatcher,
@@ -17,6 +18,7 @@ import {
   runFeishuLifecycleSequence,
   setFeishuLifecycleStateDir,
   setupFeishuLifecycleHandler,
+  stopFeishuLifecycleMonitors,
 } from "./test-support/lifecycle-test-support.js";
 import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
 
@@ -168,9 +170,13 @@ describe("Feishu broadcast reply-once lifecycle", () => {
     });
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    restoreFeishuLifecycleStateDir(originalStateDir);
+  afterEach(async () => {
+    try {
+      await stopFeishuLifecycleMonitors();
+      restoreFeishuLifecycleStateDir(originalStateDir);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses one active reply path when the same broadcast event reaches two accounts", async () => {

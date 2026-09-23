@@ -2,10 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "../commands/flows.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  completeTaskRunByRunId,
-  createRunningTaskRun as createRunningTaskRunOrNull,
+  completeTaskRunByRunIdCore as completeTaskRunByRunId,
+  createRunningTaskRunCore as createRunningTaskRunOrNull,
 } from "./task-executor.js";
 import { getTaskFlowByIdForOwner, listTaskFlowsForOwner } from "./task-flow-owner-access.js";
 import { listTaskFlowAuditFindings } from "./task-flow-registry.audit.js";
@@ -13,7 +14,7 @@ import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   finishFlow,
   getTaskFlowById,
-  reloadTaskFlowRegistryFromStore,
+  reloadTaskFlowRegistryFromStoreAsync,
   requestFlowCancel,
   resumeFlow,
   setFlowWaiting,
@@ -24,11 +25,11 @@ import {
   runTaskFlowRegistryMaintenance,
 } from "./task-flow-registry.maintenance.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
-import { getTaskById, reloadTaskRegistryFromStore } from "./task-registry.js";
+import { reloadTaskRegistryFromStoreAsync } from "./task-registry-state.js";
+import { getTaskById } from "./task-registry.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "./task-runtime.test-helpers.js";
 
@@ -77,7 +78,6 @@ function requireApplied(result: TaskFlowUpdateResult): TaskFlowRecord {
 }
 
 function resetFlowTestState(): void {
-  resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   resetConfigRuntimeState();
@@ -226,8 +226,8 @@ describe("task-flow registry product boundary", () => {
 
         resetTaskRegistryForTests({ persist: false });
         resetTaskFlowRegistryForTests({ persist: false });
-        reloadTaskRegistryFromStore();
-        reloadTaskFlowRegistryFromStore();
+        await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+        await reloadTaskFlowRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
         expect(
           getTaskFlowByIdForOwner({ flowId: managed.flowId, callerOwnerKey: OWNER_KEY }),

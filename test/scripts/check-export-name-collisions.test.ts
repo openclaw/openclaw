@@ -1,14 +1,20 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   collectModuleExportNames,
   collectRepositoryCollisions,
-  compareExportNameCollisionDebt,
+  findAliasingReExports,
   findExportNameCollisions,
   isExcludedExportCollisionSource,
 } from "../../scripts/check-export-name-collisions.mts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
+
+const guardScriptPath = fileURLToPath(
+  new URL("../../scripts/check-export-name-collisions.mts", import.meta.url),
+);
 
 describe("export name collision guard", () => {
   it.each([
@@ -64,6 +70,111 @@ describe("export name collision guard", () => {
     expect([...result.exportedNames]).toEqual(["importedValue", "remoteValue"]);
   });
 
+  it("exempts only the exact handoff loader substitution", () => {
+    const name = "loadFreeBsdProcessIdentityNative";
+    const paths = [
+      "src/infra/update-managed-service-handoff-native-loader.ts",
+      "src/shared/freebsd-process-identity-native.ts",
+    ];
+    const modules = paths.map((id) => ({ path: id, content: `export function ${name}() {}` }));
+    expect(findExportNameCollisions(modules)).toEqual([]);
+    const extra = { path: "src/extra.ts", content: `export function ${name}() {}` };
+    expect(findExportNameCollisions([...modules, extra])).toEqual([
+      { name, files: [...paths, extra.path].toSorted() },
+    ]);
+    expect(findExportNameCollisions([modules[0]!, extra])).toEqual([
+      { name, files: [paths[0]!, extra.path].toSorted() },
+    ]);
+    expect(
+      findExportNameCollisions(
+        paths.map((id) => ({ path: id, content: "export function otherBehavior() {}" })),
+      ),
+    ).toEqual([{ name: "otherBehavior", files: paths }]);
+  });
+
+  it.each([
+    {
+      name: "openExistingSqliteWorkerBackend",
+      paths: ["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"],
+    },
+    {
+      name: "bindSqliteWorkerBackend",
+      paths: [
+        "src/agents/auth-profiles/inline-usage.worker.ts",
+        "src/boards/sqlite-board-store.worker.ts",
+        "src/agents/sessions/session-manager-metadata.worker.ts",
+        "src/config/sessions/session-sharing-store.worker.ts",
+        "src/infra/heartbeat-outcome-store.worker.ts",
+      ],
+    },
+  ])("limits $name to its approved worker modules", ({ name, paths }) => {
+    const content = `export function ${name}() {}`;
+    const modules = paths.map((modulePath) => ({ path: modulePath, content }));
+    expect(findExportNameCollisions(modules)).toEqual([]);
+    for (const [index, module] of modules.entries()) {
+      for (const sibling of modules.slice(index + 1)) {
+        expect(findExportNameCollisions([module, sibling])).toEqual([]);
+      }
+    }
+
+    const extra = { path: "src/unrelated/extra.worker.ts", content };
+    expect(findExportNameCollisions([...modules, extra])).toEqual([
+      { name, files: [...paths, extra.path].toSorted() },
+    ]);
+    for (const module of modules) {
+      expect(findExportNameCollisions([module, extra])).toEqual([
+        { name, files: [module.path, extra.path].toSorted() },
+      ]);
+    }
+    expect(
+      findExportNameCollisions(
+        paths.map((modulePath) => ({
+          path: modulePath,
+          content: "export function createSqliteWorkerBackend() {}",
+        })),
+      ),
+    ).toEqual([{ name: "createSqliteWorkerBackend", files: paths.toSorted() }]);
+  });
+
+  it("reports direct aliasing re-exports only outside the Plugin SDK", () => {
+    expect(
+      findAliasingReExports([
+        {
+          path: "src/alias.ts",
+          content: `
+            export { original } from "./source.js";
+            export type { OriginalType as RenamedType } from "./source.js";
+            export { original as renamed } from "./source.js";
+          `,
+        },
+        {
+          path: "src/local-alias.ts",
+          content: `
+            import { original } from "./source.js";
+            export { original as locallyRenamed };
+          `,
+        },
+        {
+          path: "src/plugin-sdk/alias.ts",
+          content: 'export { original as sanctioned } from "../source.js";',
+        },
+        {
+          path: "packages/support.ts",
+          content: 'export { original as packageAlias } from "./source.js";',
+          includeDefinitions: false,
+        },
+      ]),
+    ).toEqual([
+      {
+        exportedName: "renamed",
+        importedName: "original",
+        line: 4,
+        moduleSpecifier: "./source.js",
+        path: "src/alias.ts",
+      },
+    ]);
+  });
+
   it("exempts exact function and const same-name forwarders", () => {
     const forwarders = [
       `
@@ -98,11 +209,56 @@ describe("export name collision guard", () => {
           return runtime.runThing(...args);
         }
       `,
+      `
+        import { createLazyRuntimeMethodBinder as createBinder } from "./shared/lazy-runtime.js";
+        const bind = createBinder(loadRuntime);
+        export const runThing = bind((runtime) => runtime.runThing);
+      `,
+      `
+        import { createLazyRuntimeMethod } from "openclaw/plugin-sdk/lazy-runtime";
+        export const runThing = createLazyRuntimeMethod(loadRuntime, (runtime) => runtime.runThing);
+      `,
     ];
     for (const content of forwarders) {
-      expect([...collectModuleExportNames(content).definitions]).toEqual([]);
+      expect([...collectModuleExportNames(content, "src/runtime-facade.ts").definitions]).toEqual(
+        [],
+      );
     }
   });
+
+  it.each([
+    ["different member", "runtime => runtime.otherThing"],
+    ["selector call", "runtime => runtime.runThing()"],
+    ["different receiver", "runtime => other.runThing"],
+    ["selector transformation", "runtime => (...args) => runtime.runThing(...args, fallback)"],
+    ["extra argument", "runtime => runtime.runThing, fallback"],
+    ["defaulted receiver", "(runtime = fallback) => runtime.runThing"],
+    ["rest receiver", "(...runtime) => runtime.runThing"],
+    ["selector block", "runtime => { prepare(); return runtime.runThing; }"],
+  ])("keeps lazy binders with %s as definitions", (_name, selector) => {
+    const content = `
+      import { createLazyRuntimeMethodBinder } from "./shared/lazy-runtime.js";
+      const bind = createLazyRuntimeMethodBinder(loadRuntime);
+      export const runThing = bind(${selector});
+    `;
+    expect([...collectModuleExportNames(content, "src/runtime-facade.ts").definitions]).toEqual([
+      "runThing",
+    ]);
+  });
+
+  it.each(["./unrelated.js", "./shared/lazy-runtime.fake.js"])(
+    "keeps same-named factories from %s as definitions",
+    (specifier) => {
+      const content = `
+        import { createLazyRuntimeMethodBinder } from "${specifier}";
+        const bind = createLazyRuntimeMethodBinder(loadRuntime);
+        export const runThing = bind(runtime => runtime.runThing);
+      `;
+      expect([...collectModuleExportNames(content, "src/runtime-facade.ts").definitions]).toEqual([
+        "runThing",
+      ]);
+    },
+  );
 
   it.each([
     {
@@ -177,61 +333,86 @@ describe("export name collision guard", () => {
     ).toEqual([]);
   });
 
-  it("marks collisions exposed by a Plugin SDK module", () => {
+  it("marks repository collisions exposed through a package-backed Plugin SDK module", async () => {
+    await withTempDir("openclaw-export-collisions-sdk-", async (repoRoot) => {
+      await Promise.all([
+        fs.mkdir(path.join(repoRoot, "src/plugin-sdk"), { recursive: true }),
+        fs.mkdir(path.join(repoRoot, "packages"), { recursive: true }),
+      ]);
+      await Promise.all([
+        fs.writeFile(path.join(repoRoot, "src/one.ts"), "export const publicCollision = 1;\n"),
+        fs.writeFile(path.join(repoRoot, "src/two.ts"), "export function publicCollision() {}\n"),
+        fs.writeFile(
+          path.join(repoRoot, "src/plugin-sdk/public.ts"),
+          'export * from "./public-star.js";\n',
+        ),
+        fs.writeFile(
+          path.join(repoRoot, "src/plugin-sdk/public-star.ts"),
+          'export * from "../../packages/public.js";\n',
+        ),
+        fs.writeFile(
+          path.join(repoRoot, "packages/public.ts"),
+          "export const publicCollision = true;\n",
+        ),
+      ]);
+
+      expect(await collectRepositoryCollisions(repoRoot)).toEqual([
+        {
+          name: "publicCollision",
+          files: ["src/one.ts", "src/two.ts"],
+          sdk: true,
+        },
+      ]);
+    });
+  });
+
+  it("marks only collisions reachable through shared and cyclic SDK barrels", () => {
+    const definitions = "export const cycleOnly = 1, extraOnly = 1, privateOnly = 1;";
     expect(
       findExportNameCollisions([
-        { path: "src/one.ts", content: "export const publicCollision = 1;" },
-        { path: "src/two.ts", content: "export function publicCollision() {}" },
+        { path: "src/one.ts", content: definitions },
+        { path: "src/two.ts", content: definitions },
         {
-          path: "src/plugin-sdk/public.ts",
-          content: 'export * from "./public-star.js";',
+          path: "src/plugin-sdk/first.ts",
+          content:
+            'export * from "../../packages/left.js"; export * from "../../packages/right.js";',
         },
         {
-          path: "src/plugin-sdk/public-star.ts",
-          content: 'export * from "../../packages/public.js";',
+          path: "src/plugin-sdk/second.ts",
+          content:
+            'export * from "../../packages/right.js"; export * from "../../packages/extra.js";',
         },
-        {
-          path: "packages/public.ts",
-          content: "export const publicCollision = true;",
+        ...(
+          [
+            ["packages/left.ts", 'export * from "./shared.js";'],
+            ["packages/right.ts", 'export * from "./shared.js";'],
+            ["packages/shared.ts", 'export * from "./left.js"; export const cycleOnly = 1;'],
+            ["packages/extra.ts", "export const extraOnly = 1;"],
+            ["packages/unreachable.ts", "export const privateOnly = 1;"],
+          ] as const
+        ).map(([modulePath, content]) => ({
+          path: modulePath,
+          content,
           includeDefinitions: false,
-        },
+        })),
       ]),
     ).toEqual([
-      {
-        name: "publicCollision",
-        files: ["src/one.ts", "src/two.ts"],
-        sdk: true,
-      },
+      { name: "cycleOnly", files: ["src/one.ts", "src/two.ts"], sdk: true },
+      { name: "extraOnly", files: ["src/one.ts", "src/two.ts"], sdk: true },
+      { name: "privateOnly", files: ["src/one.ts", "src/two.ts"] },
     ]);
   });
-});
 
-describe("export name collision debt baseline", () => {
-  it("separates new debt from baseline improvements", () => {
-    expect(
-      compareExportNameCollisionDebt(
-        [
-          { name: "added", files: ["src/a.ts", "src/b.ts"] },
-          { name: "expanded", files: ["src/a.ts", "src/b.ts", "src/c.ts"], sdk: true },
-        ],
-        [
-          { name: "expanded", files: ["src/a.ts", "src/b.ts"] },
-          { name: "removed", files: ["src/c.ts", "src/d.ts"] },
-        ],
-      ),
-    ).toEqual({
-      regressions: [
-        { current: { name: "added", files: ["src/a.ts", "src/b.ts"] } },
-        {
-          baseline: { name: "expanded", files: ["src/a.ts", "src/b.ts"] },
-          current: {
-            name: "expanded",
-            files: ["src/a.ts", "src/b.ts", "src/c.ts"],
-            sdk: true,
-          },
-        },
-      ],
-      improvements: [{ baseline: { name: "removed", files: ["src/c.ts", "src/d.ts"] } }],
-    });
+  it("rejects debt-baseline updates with the collision trailer", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", guardScriptPath, "--update-debt-baseline"],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr.trimEnd().split("\n").at(-1)).toBe(
+      "[check-export-name-collisions] FAILED (exit 2)",
+    );
   });
 });

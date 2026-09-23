@@ -1,5 +1,6 @@
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
@@ -8,8 +9,9 @@ import { computeNextRunAtMs } from "../schedule.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import {
-  failureNotificationDeliveryFromJobState,
+  finalizeCronFailureNotifications,
   maybeEmitFailureAlert,
+  maybeEmitFailureRecovery,
   resolveFailureAlert,
 } from "./failure-alerts.js";
 import {
@@ -19,14 +21,16 @@ import {
   isJobEnabled,
   recordScheduleComputeError,
 } from "./jobs-scheduling.js";
-import { type CronServiceState, type DeferredCronNotifications, emit } from "./state.js";
-import { tryFinishCronTaskRun, tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
+import { resolveManualOneShotOccurrenceAtMs } from "./one-shot-schedule.js";
+import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
+import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import {
   type CronJobRunResult,
   type CronTriggerEvalOutcome,
   MIN_REFIRE_GAP_MS,
   type TimedCronRunOutcome,
 } from "./timer-execution-timeout.js";
+import { emitCronOutcomeForJob } from "./timer-outcome-events.js";
 import {
   applyTriggerEvaluationState,
   applyTriggerRunResult,
@@ -42,19 +46,20 @@ type CronScheduleOwnership = "current" | "stale";
 type CronTriggerOwnership = "current" | "stale";
 
 /** Checks both the admitted schedule and edits that may have returned to its original value. */
-export function resolveCronRunScheduleOwnership(params: {
+function resolveCronRunScheduleOwnership(params: {
   admittedJob: CronJob;
   currentJob: CronJob;
   activeJobMarker?: CronActiveJobMarker;
 }): CronScheduleOwnership {
-  return params.activeJobMarker?.scheduleMutated === true ||
+  return typeof params.currentJob.state.runningScheduleChangeId === "string" ||
+    params.activeJobMarker?.scheduleMutated === true ||
     !cronSchedulingInputsEqual(params.admittedJob, params.currentJob)
     ? "stale"
     : "current";
 }
 
 /** Keeps trigger state owned by the exact script/once definition that evaluated it. */
-export function resolveCronRunTriggerOwnership(params: {
+function resolveCronRunTriggerOwnership(params: {
   admittedJob: CronJob;
   currentJob: CronJob;
   activeJobMarker?: CronActiveJobMarker;
@@ -76,21 +81,29 @@ function assignNextRunAtMs(
 
 /** Applies run outcome state, delivery state, backoff/next-run scheduling, and delete-after-run policy. */
 export function applyJobResult(
-  state: CronServiceState,
+  state: CronJobPolicyContext,
   job: CronJob,
   result: CronJobRunResult,
-  opts?: {
+  opts: {
     // Manual force runs update outcome state but are out-of-band for cadence.
     scheduleMode?: "advance" | "preserve";
     // An in-flight edit owns all future schedule and one-shot policy.
     scheduleOwnership?: CronScheduleOwnership;
     // Lane and admission waits must not transfer a pre-deadline manual run's ownership.
     scheduleOwnershipAtMs?: number;
-    // Startup replay restores alert cooldown bookkeeping without redelivery.
-    replayFailureAlertAtMs?: number;
-    deferredNotifications?: DeferredCronNotifications;
+    // Startup recovery restores historical notification facts separately.
+    replay?: boolean;
+    replaySchedule?: { nextRunAtMs?: number };
+    deferredNotifications: DeferredCronNotifications;
   },
 ): boolean {
+  const scheduleNextRun = (candidate: unknown) =>
+    assignNextRunAtMs({
+      state,
+      job,
+      candidate,
+      deferredNotifications: opts.deferredNotifications,
+    });
   const previousScheduleState = {
     enabled: job.enabled,
     nextRunAtMs: job.state.nextRunAtMs,
@@ -99,6 +112,8 @@ export function applyJobResult(
   };
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
+  job.state.runningReceiptId = undefined;
+  delete job.state.runningScheduleChangeId;
   job.state.pacedNextRunAtMs = undefined;
   job.state.forcePreservedNextRunAtMs = undefined;
   job.state.lastRunAtMs = result.startedAt;
@@ -123,53 +138,60 @@ export function applyJobResult(
       "cron: job run returned error status",
     );
   }
-  const deliveryState = resolveDeliveryState({
-    job,
-    runStatus: result.status,
-    delivered: result.delivered,
-    deliveryAttempted: result.deliveryAttempted,
-    // A successful run keeps `error` empty but may carry a dedicated
-    // `deliveryError` when post-run delivery failed (#94058/#95419); prefer it
-    // so `lastDeliveryError` is populated without conflating it with a
-    // run-level failure. Error runs fall back to the run error as before.
-    error: result.deliveryError ?? result.error,
-    globalFailureDestination: state.deps.cronConfig?.failureAlert,
-  });
+  const deliveryState =
+    result.deliveryState ??
+    resolveDeliveryState({
+      job,
+      runStatus: result.status,
+      delivery: result.delivery,
+      delivered: result.delivered,
+      deliveryAttempted: result.deliveryAttempted,
+      error: result.deliveryError ?? result.error,
+      deliverySuppressionReason: result.deliverySuppressionReason,
+    });
   job.state.lastDelivered = deliveryState.delivered;
   job.state.lastDeliveryStatus = deliveryState.status;
-  job.state.lastDeliveryError =
-    deliveryState.status === "not-delivered" && deliveryState.error
-      ? deliveryState.error
-      : undefined;
-  job.state.lastFailureNotificationDelivered = deliveryState.failureNotification.delivered;
-  job.state.lastFailureNotificationDeliveryStatus = deliveryState.failureNotification.status;
-  job.state.lastFailureNotificationDeliveryError = deliveryState.failureNotification.error;
+  job.state.deliverySuppressionReason = deliveryState.deliverySuppressionReason;
+  job.state.lastDeliveryError = deliveryState.error;
+  job.state.lastFailureNotificationDelivered = undefined;
+  job.state.lastFailureNotificationDeliveryStatus = "not-requested";
+  job.state.lastFailureNotificationDeliveryError = undefined;
   job.updatedAtMs = result.endedAt;
+  const completionStatus =
+    result.completionStatus ??
+    resolveAdmittedCronCompletionStatus(
+      job,
+      result.status,
+      deliveryState.status,
+      deliveryState.deliverySuppressionReason,
+    );
 
   // Track consecutive errors for backoff / auto-disable; skipped runs use a
   // separate counter so opt-in skip alerts do not affect retry behavior.
   const previousConsecutiveErrors = job.state.consecutiveErrors ?? 0;
+  const computeNaturalNext = (restartInterval: boolean) => {
+    try {
+      return restartInterval && job.schedule.kind === "every"
+        ? computeNextRunAtMs(job.schedule, result.endedAt)
+        : computeJobNextRunAtMs(job, result.endedAt);
+    } catch (err) {
+      recordScheduleComputeError({
+        state,
+        job,
+        err,
+        deferredNotifications: opts.deferredNotifications,
+      });
+      return undefined;
+    }
+  };
   const alertConfig = resolveFailureAlert(state, job);
   if (result.status === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     job.state.consecutiveSkipped = 0;
-    maybeEmitFailureAlert(state, {
-      job,
-      alertConfig,
-      status: "error",
-      error: result.error,
-      errorReason: job.state.lastErrorReason,
-      runAtMs: result.startedAt,
-      consecutiveCount: job.state.consecutiveErrors,
-      ...(opts?.replayFailureAlertAtMs !== undefined
-        ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
-        : {}),
-      deferredNotifications: opts?.deferredNotifications,
-    });
   } else if (result.status === "skipped") {
     job.state.consecutiveErrors = 0;
     job.state.consecutiveSkipped = (job.state.consecutiveSkipped ?? 0) + 1;
-    if (alertConfig?.includeSkipped) {
+    if (alertConfig?.includeSkipped && !opts.replay) {
       maybeEmitFailureAlert(state, {
         job,
         alertConfig,
@@ -177,37 +199,53 @@ export function applyJobResult(
         error: result.error,
         runAtMs: result.startedAt,
         consecutiveCount: job.state.consecutiveSkipped,
-        ...(opts?.replayFailureAlertAtMs !== undefined
-          ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
-          : {}),
-        deferredNotifications: opts?.deferredNotifications,
+        deferredNotifications: opts.deferredNotifications,
       });
-    } else {
-      job.state.lastFailureAlertAtMs = undefined;
     }
   } else {
     job.state.consecutiveErrors = 0;
     job.state.consecutiveSkipped = 0;
-    job.state.lastFailureAlertAtMs = undefined;
+    if (completionStatus === "succeeded") {
+      job.state.lastFailureAlertAtMs = undefined;
+    }
   }
 
   // An operator force-run borrows a future at-schedule; it cannot consume,
   // disable, or retry that scheduled occurrence. On-exit watchers also use
   // force, but their terminal callback owns and must retire the watched job.
+  const scheduleOwnershipAtMs = opts.scheduleOwnershipAtMs ?? result.startedAt;
+  const oneShotOccurrenceAtMs = resolveManualOneShotOccurrenceAtMs(job, scheduleOwnershipAtMs);
   const preserveOneShotSchedule =
-    opts?.scheduleMode === "preserve" &&
-    job.schedule.kind === "at" &&
-    previousScheduleState.nextRunAtMs !== undefined &&
-    previousScheduleState.nextRunAtMs > (opts.scheduleOwnershipAtMs ?? result.startedAt);
-  const ownsSchedule = opts?.scheduleOwnership !== "stale";
+    opts.scheduleMode === "preserve" && oneShotOccurrenceAtMs !== undefined;
+  const ownsSchedule = opts.scheduleOwnership !== "stale";
   const isOneShotSchedule = job.schedule.kind === "at" || job.schedule.kind === "on-exit";
+  // Authored completion includes intentional silence and the admitted best-effort policy.
   const shouldDelete =
     ownsSchedule &&
     isOneShotSchedule &&
     !preserveOneShotSchedule &&
     job.deleteAfterRun === true &&
-    result.status === "ok";
-  const retryDisabledHeartbeatOneShot = shouldRetryDisabledHeartbeatOneShot(job, result);
+    completionStatus === "succeeded";
+  let autoDisableNotificationOwnsFailure = false;
+  const applyReplaySchedule = () => {
+    const nextRunAtMs = job.state.autoDisabled ? undefined : opts.replaySchedule?.nextRunAtMs;
+    job.state.nextRunAtMs = nextRunAtMs === undefined ? undefined : scheduleNextRun(nextRunAtMs);
+  };
+  const finish = () => {
+    if (opts.replaySchedule && job.schedule.kind !== "at") {
+      applyReplaySchedule();
+    }
+    finalizeCronFailureNotifications(state, {
+      job,
+      alertConfig,
+      result,
+      completionStatus,
+      autoDisableNotificationOwnsFailure,
+      replay: opts.replay,
+      deferredNotifications: opts.deferredNotifications,
+    });
+    return shouldDelete;
+  };
 
   if (!ownsSchedule) {
     // The completed invocation still owns its outcome, but the latest durable
@@ -220,23 +258,18 @@ export function applyJobResult(
     if (preserveOneShotSchedule) {
       job.state.nextRunAtMs = previousScheduleState.nextRunAtMs;
       job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
-      job.state.forcePreservedNextRunAtMs = previousScheduleState.nextRunAtMs;
-    } else if (job.schedule.kind === "at") {
-      if (retryDisabledHeartbeatOneShot) {
+      job.state.forcePreservedNextRunAtMs = oneShotOccurrenceAtMs;
+    } else if (opts.replaySchedule && job.schedule.kind === "at") {
+      applyReplaySchedule();
+      job.enabled = job.state.nextRunAtMs !== undefined;
+    } else if (job.schedule.kind === "at" && isJobEnabled(job)) {
+      if (shouldRetryDisabledHeartbeatOneShot(job, result)) {
         const retryDecision = resolveDisabledHeartbeatOneShotRetryDecision({
           cronConfig: state.deps.cronConfig,
           consecutiveSkipped: job.state.consecutiveSkipped,
         });
         if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
-          job.enabled = true;
-          if (
-            assignNextRunAtMs({
-              state,
-              job,
-              candidate: result.endedAt + retryDecision.backoffMs,
-              deferredNotifications: opts?.deferredNotifications,
-            }) !== undefined
-          ) {
+          if (scheduleNextRun(result.endedAt + retryDecision.backoffMs) !== undefined) {
             state.deps.log.info(
               {
                 jobId: job.id,
@@ -276,14 +309,7 @@ export function applyJobResult(
         });
         if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
           // Schedule retry with backoff (#24355).
-          if (
-            assignNextRunAtMs({
-              state,
-              job,
-              candidate: result.endedAt + retryDecision.backoffMs,
-              deferredNotifications: opts?.deferredNotifications,
-            }) !== undefined
-          ) {
+          if (scheduleNextRun(result.endedAt + retryDecision.backoffMs) !== undefined) {
             state.deps.log.info(
               {
                 jobId: job.id,
@@ -316,9 +342,9 @@ export function applyJobResult(
           );
         }
       }
-    } else if (opts?.scheduleMode === "preserve") {
-      // Forced recurring runs do not consume, replace, or repair a scheduled
-      // slot. Preserve the timestamp and its paced provenance as one unit.
+    } else if (opts.scheduleMode === "preserve") {
+      // Forced recurring or disabled one-shot runs cannot change a scheduled
+      // slot. Preserve its absence, or its timestamp and paced provenance.
       job.state.nextRunAtMs = previousScheduleState.nextRunAtMs;
       job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
       job.state.forcePreservedNextRunAtMs = previousScheduleState.nextRunAtMs;
@@ -326,14 +352,13 @@ export function applyJobResult(
       result.status === "error" &&
       isJobEnabled(job) &&
       maybeAutoDisableCronJobAfterRunFailure({
-        state,
         job,
         atMs: result.endedAt,
-        error: result.error ?? "unknown run failure",
-        deferredNotifications: opts?.deferredNotifications,
+        deferredNotifications: opts.deferredNotifications,
       })
     ) {
-      // Keep this after the ownership and force-preserve gates: those paths
+      autoDisableNotificationOwnsFailure = true;
+      // Keep this after the ownership and immediate-preserve gates: those paths
       // restore schedule state and would otherwise silently undo the disable.
       state.deps.log.error(
         {
@@ -357,23 +382,7 @@ export function applyJobResult(
       let normalNextComputed = false;
       const computeNormalNext = () => {
         if (!normalNextComputed) {
-          try {
-            normalNext =
-              (retryDecision.retryable || previousConsecutiveErrors > 0) &&
-              job.schedule.kind === "every"
-                ? computeNextRunAtMs(job.schedule, result.endedAt)
-                : computeJobNextRunAtMs(job, result.endedAt);
-          } catch (err) {
-            // If the schedule expression/timezone throws (croner edge cases),
-            // record the schedule error (auto-disables after repeated failures)
-            // and fall back to backoff-only schedule so the state update is not lost.
-            recordScheduleComputeError({
-              state,
-              job,
-              err,
-              deferredNotifications: opts?.deferredNotifications,
-            });
-          }
+          normalNext = computeNaturalNext(retryDecision.retryable || previousConsecutiveErrors > 0);
           normalNextComputed = true;
         }
         return normalNext;
@@ -384,14 +393,9 @@ export function applyJobResult(
           // Preserve the unresolved-cron guard (#66019): do not synthesize a
           // retry when the schedule cannot produce a next scheduled slot.
         } else {
-          const retryNextRunAtMs = assignNextRunAtMs({
-            state,
-            job,
-            candidate: result.endedAt + retryDecision.backoffMs,
-            deferredNotifications: opts?.deferredNotifications,
-          });
+          const retryNextRunAtMs = scheduleNextRun(result.endedAt + retryDecision.backoffMs);
           if (retryNextRunAtMs === undefined) {
-            return shouldDelete;
+            return finish();
           }
           if (retryNextRunAtMs < normalNext) {
             state.deps.log.info(
@@ -406,7 +410,7 @@ export function applyJobResult(
               },
               "cron: scheduling recurring retry after transient error",
             );
-            return shouldDelete;
+            return finish();
           }
         }
       }
@@ -417,22 +421,12 @@ export function applyJobResult(
       );
       normalNext = computeNormalNext();
       if (normalNext === undefined && job.schedule.kind === "every") {
-        assignNextRunAtMs({
-          state,
-          job,
-          candidate: undefined,
-          deferredNotifications: opts?.deferredNotifications,
-        });
-        return shouldDelete;
+        scheduleNextRun(undefined);
+        return finish();
       }
-      const backoffNext = assignNextRunAtMs({
-        state,
-        job,
-        candidate: result.endedAt + backoff,
-        deferredNotifications: opts?.deferredNotifications,
-      });
+      const backoffNext = scheduleNextRun(result.endedAt + backoff);
       if (backoffNext === undefined) {
-        return shouldDelete;
+        return finish();
       }
       // Use whichever is later: the natural next run or the backoff delay.
       job.state.nextRunAtMs =
@@ -442,7 +436,7 @@ export function applyJobResult(
               job,
               naturalNext: normalNext,
               lowerBoundMs: backoffNext,
-              deferredNotifications: opts?.deferredNotifications,
+              deferredNotifications: opts.deferredNotifications,
             })
           : normalNext !== undefined
             ? Math.max(normalNext, backoffNext)
@@ -471,36 +465,17 @@ export function applyJobResult(
       });
       // The operator trigger floor is a safety policy and outranks a job-local
       // pacing bound. Non-trigger jobs retain the exact pacing clamp contract.
-      const nextRunAtMs = assignNextRunAtMs({
-        state,
-        job,
-        candidate: job.trigger
+      const nextRunAtMs = scheduleNextRun(
+        job.trigger
           ? Math.max(
               pacedNextRunAtMs ?? Number.NaN,
               result.endedAt + Math.max(MIN_REFIRE_GAP_MS, resolveCronTriggerMinIntervalMs()),
             )
           : pacedNextRunAtMs,
-        deferredNotifications: opts?.deferredNotifications,
-      });
+      );
       job.state.pacedNextRunAtMs = nextRunAtMs;
     } else if (isJobEnabled(job)) {
-      let naturalNext: number | undefined;
-      try {
-        naturalNext =
-          previousConsecutiveErrors > 0 && job.schedule.kind === "every"
-            ? computeNextRunAtMs(job.schedule, result.endedAt)
-            : computeJobNextRunAtMs(job, result.endedAt);
-      } catch (err) {
-        // If the schedule expression/timezone throws (croner edge cases),
-        // record the schedule error (auto-disables after repeated failures)
-        // so a persistent throw doesn't cause a MIN_REFIRE_GAP_MS hot loop.
-        recordScheduleComputeError({
-          state,
-          job,
-          err,
-          deferredNotifications: opts?.deferredNotifications,
-        });
-      }
+      const naturalNext = computeNaturalNext(previousConsecutiveErrors > 0);
       if (job.schedule.kind === "cron") {
         // Safety net: ensure the next fire is at least MIN_REFIRE_GAP_MS
         // after the current run ended.  Prevents spin-loops when the
@@ -516,7 +491,7 @@ export function applyJobResult(
           job,
           naturalNext,
           lowerBoundMs: minNext,
-          deferredNotifications: opts?.deferredNotifications,
+          deferredNotifications: opts.deferredNotifications,
         });
       } else {
         const triggerNext =
@@ -525,12 +500,7 @@ export function applyJobResult(
             : naturalNext;
         job.state.nextRunAtMs = triggerNext;
         if (triggerNext !== undefined || job.schedule.kind === "every") {
-          assignNextRunAtMs({
-            state,
-            job,
-            candidate: triggerNext,
-            deferredNotifications: opts?.deferredNotifications,
-          });
+          scheduleNextRun(triggerNext);
         }
       }
     } else {
@@ -538,7 +508,7 @@ export function applyJobResult(
     }
   }
 
-  return shouldDelete;
+  return finish();
 }
 
 /** Commits payload-script state only after the complete cron run succeeds. */
@@ -560,13 +530,14 @@ export function applyScriptRunResult(
 
 /** Applies a quiet trigger tick without mutating normal run-history state. */
 export function applyTriggerNoFireResult(
-  state: CronServiceState,
+  state: CronJobPolicyContext,
   job: CronJob,
   result: { startedAt: number; endedAt: number; triggerEval: CronTriggerEvalOutcome },
-  opts?: {
-    scheduleMode?: "advance" | "force-preserve" | "stale-preserve";
+  opts: {
+    scheduleMode?: "advance" | "immediate-preserve" | "stale-preserve";
     triggerOwnership?: CronTriggerOwnership;
-    deferredNotifications?: DeferredCronNotifications;
+    replay?: boolean;
+    deferredNotifications: DeferredCronNotifications;
   },
 ): void {
   const previousNextRunAtMs = job.state.nextRunAtMs;
@@ -574,22 +545,30 @@ export function applyTriggerNoFireResult(
   const previousForcePreservedNextRunAtMs = job.state.forcePreservedNextRunAtMs;
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
+  job.state.runningReceiptId = undefined;
+  delete job.state.runningScheduleChangeId;
   job.updatedAtMs = result.endedAt;
-  if (!result.triggerEval.busy && opts?.triggerOwnership !== "stale") {
+  if (!result.triggerEval.busy && opts.triggerOwnership !== "stale") {
     // A non-firing evaluation is successful scheduler work, not a payload run;
-    // reset error machinery while leaving lastRun/delivery history untouched.
+    // reset error streaks, but preserve delivery history and its alert cooldown.
     job.state.consecutiveErrors = 0;
     job.state.scheduleErrorCount = 0;
-    job.state.lastFailureAlertAtMs = undefined;
     applyTriggerEvaluationState(job, result.triggerEval, result.endedAt);
+    maybeEmitFailureRecovery({
+      job,
+      alertConfig: resolveFailureAlert(state, job),
+      triggerOnly: true,
+      replay: opts.replay,
+      deferredNotifications: opts.deferredNotifications,
+    });
   }
-  if (opts?.scheduleMode === "force-preserve" || opts?.scheduleMode === "stale-preserve") {
+  if (opts.scheduleMode === "immediate-preserve" || opts.scheduleMode === "stale-preserve") {
     job.state.nextRunAtMs = previousNextRunAtMs;
     job.state.pacedNextRunAtMs = previousPacedNextRunAtMs;
     // A stale wake preserves the operator's complete schedule; only an actual
     // force run may create the marker that exempts its slot from repair.
     job.state.forcePreservedNextRunAtMs =
-      opts.scheduleMode === "force-preserve"
+      opts.scheduleMode === "immediate-preserve"
         ? previousNextRunAtMs
         : previousForcePreservedNextRunAtMs;
     return;
@@ -610,7 +589,7 @@ export function applyTriggerNoFireResult(
         job,
         candidate:
           naturalNext === undefined ? undefined : Math.max(naturalNext, result.endedAt + floorMs),
-        deferredNotifications: opts?.deferredNotifications,
+        deferredNotifications: opts.deferredNotifications,
       });
     }
   } catch (err) {
@@ -618,7 +597,7 @@ export function applyTriggerNoFireResult(
       state,
       job,
       err,
-      deferredNotifications: opts?.deferredNotifications,
+      deferredNotifications: opts.deferredNotifications,
     });
   }
 }
@@ -626,7 +605,7 @@ export function applyTriggerNoFireResult(
 export function applyOutcomeToStoredJob(
   state: CronServiceState,
   result: TimedCronRunOutcome,
-  opts?: { deferredNotifications?: DeferredCronNotifications },
+  opts: { deferredNotifications: DeferredCronNotifications },
 ): CronJob | undefined {
   const store = state.store;
   if (!store) {
@@ -644,9 +623,9 @@ export function applyOutcomeToStoredJob(
     // snapshot so operator history survives without reviving the stored job.
     applyJobResult(state, result.job, result, {
       scheduleOwnership: "stale",
-      deferredNotifications: opts?.deferredNotifications,
+      deferredNotifications: opts.deferredNotifications,
     });
-    emitJobFinished(state, result.job, result, result.startedAt);
+    emitCronOutcomeForJob(state, result.job, result);
     state.deps.log.info(
       { jobId: result.jobId, status: result.status },
       "cron: finalized run after job was removed during execution",
@@ -654,16 +633,38 @@ export function applyOutcomeToStoredJob(
     return undefined;
   }
 
+  if (applyOutcomeToAuthoritativeJob(state, job, result, opts)) {
+    store.jobs = jobs.filter((entry) => entry.id !== job.id);
+    return job;
+  }
+  return undefined;
+}
+
+/** Applies one outcome to a row already re-read under the runtime write transaction. */
+export function applyOutcomeToAuthoritativeJob(
+  state: CronServiceState,
+  job: CronJob,
+  result: TimedCronRunOutcome,
+  opts: {
+    deferredNotifications: DeferredCronNotifications;
+    emit?: boolean;
+    triggerStateRetired?: boolean;
+    // A requested run retains startup bookkeeping even when it advances ordinary cadence.
+    request?: { preserveCadence: boolean; scheduleOwnershipAtMs: number };
+  },
+): boolean {
   const scheduleOwnership = resolveCronRunScheduleOwnership({
     admittedJob: result.job,
     currentJob: job,
     activeJobMarker: result.activeJobMarker,
   });
-  const triggerOwnership = resolveCronRunTriggerOwnership({
-    admittedJob: result.job,
-    currentJob: job,
-    activeJobMarker: result.activeJobMarker,
-  });
+  const triggerOwnership = opts.triggerStateRetired
+    ? "stale"
+    : resolveCronRunTriggerOwnership({
+        admittedJob: result.job,
+        currentJob: job,
+        activeJobMarker: result.activeJobMarker,
+      });
 
   if (result.status === "ok" && result.triggerEval && !result.triggerEval.fired) {
     // Quiet trigger ticks intentionally emit no finished event: run history,
@@ -677,73 +678,47 @@ export function applyOutcomeToStoredJob(
         triggerEval: result.triggerEval,
       },
       {
-        scheduleMode: scheduleOwnership === "stale" ? "stale-preserve" : "advance",
+        scheduleMode:
+          scheduleOwnership === "stale"
+            ? "stale-preserve"
+            : opts.request?.preserveCadence
+              ? "immediate-preserve"
+              : "advance",
         triggerOwnership,
-        deferredNotifications: opts?.deferredNotifications,
+        deferredNotifications: opts.deferredNotifications,
       },
     );
-    job.state.startupCatchupAtMs = undefined;
-    if (scheduleOwnership === "current") {
+    if (!opts.request) {
+      job.state.startupCatchupAtMs = undefined;
+    }
+    if (!opts.request && scheduleOwnership === "current") {
       // Quiet ticks consume their old pacing slot. Only an in-flight schedule
       // edit owns a replacement override that must survive finalization.
       job.state.pacedNextRunAtMs = undefined;
     }
-    return undefined;
+    return false;
   }
 
   const shouldDelete = applyJobResult(state, job, result, {
+    scheduleMode:
+      opts.request?.preserveCadence && scheduleOwnership === "current" ? "preserve" : "advance",
     scheduleOwnership,
-    deferredNotifications: opts?.deferredNotifications,
+    scheduleOwnershipAtMs: opts.request?.scheduleOwnershipAtMs,
+    deferredNotifications: opts.deferredNotifications,
   });
   applyTriggerRunResult(job, result, { scheduleOwnership, triggerOwnership });
   applyScriptRunResult(job, result, { triggerOwnership });
-  job.state.startupCatchupAtMs = undefined;
-
-  emitJobFinished(state, job, result, result.startedAt);
-
-  if (shouldDelete) {
-    store.jobs = jobs.filter((entry) => entry.id !== job.id);
-    return job;
+  if (opts.request) {
+    if (job.schedule.kind === "stream") {
+      job.state.nextRunAtMs = undefined;
+    }
+  } else {
+    job.state.startupCatchupAtMs = undefined;
   }
-  return undefined;
-}
 
-function emitJobFinished(
-  state: CronServiceState,
-  job: CronJob,
-  result: TimedCronRunOutcome,
-  runAtMs: number,
-) {
-  const event = {
-    jobId: job.id,
-    action: "finished",
-    job,
-    status: result.status,
-    error: result.error,
-    summary: result.summary,
-    diagnostics: result.diagnostics,
-    delivered: job.state.lastDelivered,
-    deliveryStatus: job.state.lastDeliveryStatus,
-    deliveryError: job.state.lastDeliveryError,
-    failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
-    delivery: result.delivery,
-    sessionId: result.sessionId,
-    sessionKey: result.sessionKey,
-    runAtMs,
-    durationMs: job.state.lastDurationMs,
-    nextRunAtMs: job.state.nextRunAtMs,
-    ...(result.triggerEval?.fired ? { triggerFired: true } : {}),
-    model: result.model,
-    provider: result.provider,
-    usage: result.usage,
-  } as const;
-  tryFinishCronTaskRun(state, {
-    taskRunId: result.taskRunId,
-    job,
-    event,
-    errorClassification: result.errorClassification,
-    ...(result.scriptStateChanged === true ? { scriptResult: result } : {}),
-    ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
-  });
-  emit(state, event);
+  if (opts.emit !== false) {
+    emitCronOutcomeForJob(state, job, result);
+  }
+
+  return shouldDelete;
 }

@@ -1,35 +1,27 @@
 // Schedule error isolation tests cover one bad job not blocking other cron jobs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CronJob, CronStoreFile } from "../types.js";
-import { recomputeNextRuns } from "./jobs-scheduling.js";
-import type { CronServiceState } from "./state.js";
+import type { CronJob } from "../types.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
+import {
+  createCronServiceState,
+  type CronServiceState,
+  type DeferredCronNotifications,
+} from "./state.js";
+import { runPostPersistCronNotifications } from "./store.js";
 
 function createMockState(jobs: CronJob[]): CronServiceState {
-  const store: CronStoreFile = { version: 1, jobs };
-  return {
-    deps: {
-      cronEnabled: true,
-      nowMs: () => Date.now(),
-      log: {
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      },
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runHeartbeatOnce: vi.fn(),
-      runIsolatedAgentJob: vi.fn(),
-      onEvent: vi.fn(),
-      persistence: {
-        read: vi.fn(),
-        write: vi.fn(),
-      },
-    },
-    store,
-    timer: null,
-    running: false,
-  } as unknown as CronServiceState;
+  const state = createCronServiceState({
+    storePath: "/tmp/cron-schedule-error-isolation.json",
+    cronEnabled: true,
+    nowMs: () => Date.now(),
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: vi.fn(),
+    onEvent: vi.fn(),
+  });
+  state.store = { version: 1, jobs };
+  return state;
 }
 
 function createJob(overrides: Partial<CronJob> = {}): CronJob {
@@ -83,7 +75,10 @@ describe("cron schedule error isolation", () => {
 
     const state = createMockState([goodJob1, badJob, goodJob2]);
 
-    const changed = recomputeNextRuns(state);
+    const changed = recomputeNextRunsForMaintenance(state, {
+      recomputeExpired: true,
+      deferredNotifications: [],
+    });
 
     expect(changed).toBe(true);
     // Good jobs should have their nextRunAtMs computed
@@ -109,14 +104,14 @@ describe("cron schedule error isolation", () => {
     });
     const state = createMockState([badJob]);
 
-    recomputeNextRuns(state);
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true, deferredNotifications: [] });
 
     expect(state.deps.log.warn).toHaveBeenCalledWith(
       {
         jobId: "bad-job",
         name: "Bad Job",
         errorCount: 1,
-        err: "TypeError: CronPattern: invalid configuration format ('not valid'), exactly five, six, or seven space separated parts are required.",
+        err: "CronPattern: invalid configuration format ('not valid'), exactly five, six, or seven space separated parts are required.",
       },
       "cron: failed to compute next run for job (skipping)",
     );
@@ -131,7 +126,10 @@ describe("cron schedule error isolation", () => {
     });
     const state = createMockState([badJob]);
 
-    recomputeNextRuns(state);
+    const deferredNotifications: DeferredCronNotifications = [];
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true, deferredNotifications });
+    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
 
     // After 3rd error, job should be disabled
     expect(badJob.enabled).toBe(false);
@@ -146,7 +144,7 @@ describe("cron schedule error isolation", () => {
         jobId: "bad-job",
         name: "Bad Job",
         errorCount: 3,
-        err: "TypeError: CronPattern: invalid configuration format ('garbage'), exactly five, six, or seven space separated parts are required.",
+        err: "CronPattern: invalid configuration format ('garbage'), exactly five, six, or seven space separated parts are required.",
       },
       "cron: auto-disabled job after repeated schedule errors",
     );
@@ -154,6 +152,9 @@ describe("cron schedule error isolation", () => {
       expect.stringContaining("openclaw automations enable bad-job"),
       expect.objectContaining({ contextKey: "cron:bad-job:auto-disabled" }),
     );
+    const notification = vi.mocked(state.deps.enqueueSystemEvent).mock.calls[0]?.[0];
+    expect(notification).toContain("Check automation history for details.");
+    expect(notification).not.toContain("invalid configuration format");
   });
 
   it("clears scheduleErrorCount when schedule computation succeeds", () => {
@@ -165,7 +166,10 @@ describe("cron schedule error isolation", () => {
     });
     const state = createMockState([job]);
 
-    const changed = recomputeNextRuns(state);
+    const changed = recomputeNextRunsForMaintenance(state, {
+      recomputeExpired: true,
+      deferredNotifications: [],
+    });
 
     expect(changed).toBe(true);
     expect(requireTimestamp(job.state.nextRunAtMs, "recovering next run")).toBeGreaterThan(
@@ -183,7 +187,7 @@ describe("cron schedule error isolation", () => {
     });
     const state = createMockState([disabledBadJob]);
 
-    recomputeNextRuns(state);
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true, deferredNotifications: [] });
 
     // Should not attempt to compute schedule for disabled jobs
     expect(disabledBadJob.state.scheduleErrorCount).toBeUndefined();
@@ -199,7 +203,7 @@ describe("cron schedule error isolation", () => {
     });
     const state = createMockState([badJob]);
 
-    recomputeNextRuns(state);
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true, deferredNotifications: [] });
 
     expect(badJob.state.scheduleErrorCount).toBe(2);
     expect(badJob.enabled).toBe(true); // Not yet at threshold
@@ -213,7 +217,7 @@ describe("cron schedule error isolation", () => {
     });
     const state = createMockState([badJob]);
 
-    recomputeNextRuns(state);
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true, deferredNotifications: [] });
 
     expect(badJob.state.lastError).toMatch(/^schedule error:/);
     expect(requireString(badJob.state.lastError, "schedule error")).toContain("schedule error:");
@@ -227,7 +231,7 @@ describe("cron schedule error isolation", () => {
     });
     const state = createMockState([badJob]);
 
-    recomputeNextRuns(state);
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true, deferredNotifications: [] });
 
     expect(badJob.state.lastError).toContain("invalid cron schedule: expr is required");
     expect(badJob.state.lastError).not.toContain("Cannot read properties of undefined");

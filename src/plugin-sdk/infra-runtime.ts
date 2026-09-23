@@ -4,12 +4,112 @@
  * Prefer injected runtime APIs or documented typed-public subpaths instead.
  */
 
+import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 export * from "./delivery-queue-runtime.js";
 
 export * from "../infra/backoff.js";
 export * from "../infra/channel-activity.js";
 export * from "../infra/dedupe.js";
-export type * from "../infra/diagnostic-events.js";
+// Preserve the deprecated type-query surface without exposing new diagnostics helpers.
+export type {
+  DiagnosticAsyncQueueDroppedEvent,
+  DiagnosticContextAssembledEvent,
+  DiagnosticEventInput,
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+  DiagnosticEventPrivateData,
+  DiagnosticExecApprovalFollowupSuppressedEvent,
+  DiagnosticExecProcessCompletedEvent,
+  DiagnosticFailoverEvent,
+  DiagnosticHarnessRunCompletedEvent,
+  DiagnosticHarnessRunErrorEvent,
+  DiagnosticHarnessRunOutcome,
+  DiagnosticHarnessRunPhase,
+  DiagnosticHarnessRunStartedEvent,
+  DiagnosticHeartbeatEvent,
+  DiagnosticLaneDequeueEvent,
+  DiagnosticLaneEnqueueEvent,
+  DiagnosticLivenessWarningEvent,
+  DiagnosticLivenessWarningReason,
+  DiagnosticLogRecordEvent,
+  DiagnosticMemoryPressureEvent,
+  DiagnosticMemorySampleEvent,
+  DiagnosticMemoryUsage,
+  DiagnosticMessageDeliveryCompletedEvent,
+  DiagnosticMessageDeliveryErrorEvent,
+  DiagnosticMessageDeliveryKind,
+  DiagnosticMessageDeliveryStartedEvent,
+  DiagnosticMessageDispatchCompletedEvent,
+  DiagnosticMessageDispatchStartedEvent,
+  DiagnosticMessageProcessedEvent,
+  DiagnosticMessageQueuedEvent,
+  DiagnosticMessageReceivedEvent,
+  DiagnosticModelCallCompletedEvent,
+  DiagnosticModelCallContent,
+  DiagnosticModelCallErrorEvent,
+  DiagnosticModelCallStartedEvent,
+  DiagnosticPayloadLargeEvent,
+  DiagnosticPhaseCompletedEvent,
+  DiagnosticPhaseDetails,
+  DiagnosticPhaseSnapshot,
+  DiagnosticRunAttemptEvent,
+  DiagnosticRunCompletedEvent,
+  DiagnosticRunProgressEvent,
+  DiagnosticRunStartedEvent,
+  DiagnosticSecurityEvent,
+  DiagnosticSecurityEventActor,
+  DiagnosticSecurityEventControl,
+  DiagnosticSecurityEventInput,
+  DiagnosticSecurityEventPolicy,
+  DiagnosticSecurityEventTarget,
+  DiagnosticSessionActiveWorkKind,
+  DiagnosticSessionAttentionClassification,
+  DiagnosticSessionLongRunningEvent,
+  DiagnosticSessionRecoveryCompletedEvent,
+  DiagnosticSessionRecoveryRequestedEvent,
+  DiagnosticSessionRecoveryStatus,
+  DiagnosticSessionStalledEvent,
+  DiagnosticSessionState,
+  DiagnosticSessionStateEvent,
+  DiagnosticSessionStuckEvent,
+  DiagnosticSessionTurnCreatedEvent,
+  DiagnosticSkillActivation,
+  DiagnosticSkillTelemetrySource,
+  DiagnosticSkillUsagePrivateData,
+  DiagnosticSkillUsedEvent,
+  DiagnosticTalkEvent,
+  DiagnosticTelemetryExporterEvent,
+  DiagnosticToolCallContent,
+  DiagnosticToolExecutionBlockedEvent,
+  DiagnosticToolExecutionCompletedEvent,
+  DiagnosticToolExecutionErrorEvent,
+  DiagnosticToolExecutionStartedEvent,
+  DiagnosticToolLoopEvent,
+  DiagnosticToolParamsSummary,
+  DiagnosticToolSource,
+  DiagnosticToolTerminalReason,
+  DiagnosticUsageEvent,
+  DiagnosticWebhookErrorEvent,
+  DiagnosticWebhookProcessedEvent,
+  DiagnosticWebhookReceivedEvent,
+  TrustedToolExecutionEvent,
+  emitDiagnosticEventWithTrustedTraceContext,
+  emitFailoverEvent,
+  emitInternalDiagnosticEvent,
+  emitTrustedDiagnosticEvent,
+  emitTrustedDiagnosticEventWithPrivateData,
+  emitTrustedSecurityEvent,
+  emitTrustedSkillUsedDiagnosticEvent,
+  getInternalDiagnosticEventSequence,
+  hasPendingInternalDiagnosticEvent,
+  isInternalDiagnosticEventMetadata,
+  onInternalDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
+  onTrustedToolExecutionEvent,
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 export {
   areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
@@ -29,7 +129,6 @@ export {
   stringifyNonErrorCause,
   toErrorObject,
 } from "../infra/errors.js";
-import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 
 /** @deprecated Shipped compat only (removed from core in #104546); no core caller. Removal with the next plugin-SDK major. */
 export type ErrorKind = "refusal" | "timeout" | "rate_limit" | "context_length" | "unknown";
@@ -105,9 +204,7 @@ export {
   isWindowsPlatform,
   loadExecApprovals,
   matchAllowlist,
-  maxAsk,
   mergeExecApprovalsSocketDefaults,
-  minSecurity,
   normalizeExecApprovals,
   normalizeExecApprovalUnavailableDecisions,
   normalizeExecAsk,
@@ -144,9 +241,6 @@ export {
   resolveExecApprovalsSocketPath,
   resolveExecApprovalsTranscriptPath,
   resolveExecApprovalUnavailableDecisions,
-  resolveExecModeFromPolicy,
-  resolveExecModePolicy,
-  resolveExecPolicyForMode,
   resolveExecutableTrustPath,
   resolveExecutionTargetCandidatePath,
   resolveExecutionTargetResolution,
@@ -250,7 +344,22 @@ export * from "../infra/net/undici-global-dispatcher.js";
 export * from "../infra/net/ssrf.js";
 export * from "../infra/outbound/identity.js";
 export * from "../infra/outbound/sanitize-text.js";
-export * from "../infra/parse-finite-number.js";
+export {
+  clampTimerTimeoutMs,
+  finiteSecondsToTimerSafeMilliseconds,
+  MAX_TIMER_TIMEOUT_MS,
+  MAX_TIMER_TIMEOUT_SECONDS,
+  nonNegativeSecondsToSafeMilliseconds,
+  parseFiniteNumber,
+  parseStrictFiniteNumber,
+  parseStrictInteger,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+  positiveSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromDurationOrEpoch,
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveExpiresAtMsFromEpochSeconds,
+} from "@openclaw/normalization-core/number-coercion";
 export * from "../infra/outbound/send-deps.js";
 export * from "../infra/retry.js";
 export * from "../infra/retry-policy.js";
@@ -268,20 +377,20 @@ export {
 } from "../infra/secret-file.js";
 export * from "../infra/secure-random.js";
 export {
-  consumeSelectedSystemEventEntries,
-  consumeSystemEventEntries,
-  drainSystemEventEntries,
-  drainSystemEvents,
-  enqueueSystemEvent,
-  enqueueSystemEventEntry,
-  hasSystemEvents,
-  isSystemEventContextChanged,
-  peekSystemEventEntries,
-  peekSystemEvents,
+  consumeSelectedSystemEventEntriesFromSdk as consumeSelectedSystemEventEntries,
+  consumeSelectedSystemEventEntriesFromSdk as consumeSystemEventEntries,
+  drainSystemEventEntriesFromSdk as drainSystemEventEntries,
+  drainSystemEventsFromSdk as drainSystemEvents,
+  enqueueSystemEventFromSdk as enqueueSystemEvent,
+  enqueueSystemEventEntryFromSdk as enqueueSystemEventEntry,
+  hasSystemEventsFromSdk as hasSystemEvents,
+  isSystemEventContextChangedFromSdk as isSystemEventContextChanged,
+  peekSystemEventEntriesFromSdk as peekSystemEventEntries,
+  peekSystemEventsFromSdk as peekSystemEvents,
   resetSystemEventsForTest,
   resolveSystemEventDeliveryContext,
   type SystemEvent,
-} from "../infra/system-events.js";
+} from "../plugins/runtime/system-events.js";
 export * from "../infra/system-message.ts";
 export * from "../infra/tmp-openclaw-dir.js";
 export * from "../infra/transport-ready.js";

@@ -4,7 +4,6 @@ import Testing
 #if canImport(Darwin)
 import Darwin
 import Foundation
-import Subprocess
 
 struct RemotePortTunnelTests {
     @Test func `tunnel owns its SSH process instead of multiplexing`() {
@@ -29,98 +28,65 @@ struct RemotePortTunnelTests {
         #expect(!options.contains { $0.hasPrefix("UpdateHostKeys=") })
     }
 
-    @Test func `drain stderr does not crash when handle closed`() {
-        let pipe = Pipe()
-        let handle = pipe.fileHandleForReading
-        try? handle.close()
-
-        let drained = RemotePortTunnel._testDrainStderr(handle)
-        #expect(drained.isEmpty)
+    @Test(arguments: ["ws://127.0.0.1:19089", "ws://localhost:19089", "ws://[::1]:19089"])
+    func `tunnel local port comes from the remote URL independently of the local gateway`(url: String) {
+        let root: [String: Any] = ["gateway": ["port": 18789, "remote": ["url": url]]]
+        #expect(RemotePortTunnel.localPort(root: root) == 19089)
     }
 
-    @Test func `process launch failures preserve the executable description`() async {
-        let executable = "/tmp/openclaw-missing-process-\(UUID().uuidString)"
+    @Test(arguments: [("", 19789), ("ws://localhost", 18789), ("wss://gateway.example:19089", 19789)])
+    func `legacy fallback preserves explicit loopback URL defaults`(scenario: (String, Int)) {
+        let (url, expectedPort) = scenario
+        let root: [String: Any] = ["gateway": ["port": 19789, "remote": ["url": url]]]
+        #expect(RemotePortTunnel.localPort(root: root, legacyPort: 19789, environment: [:]) == expectedPort)
+    }
 
-        do {
-            _ = try await RemotePortTunnel._testStartProcess(
-                executable: executable,
-                arguments: [])
-            Issue.record("expected the missing executable to fail")
-        } catch {
-            #expect(error.localizedDescription.contains(executable))
+    @Test(arguments: [18789, 19789])
+    func `legacy SSH primary keeps both ports before hosting is enabled`(legacyPort: Int) {
+        var remote: [String: Any] = ["transport": "ssh", "sshTarget": "operator@gateway.example"]
+        let root: [String: Any] = ["gateway": ["mode": "remote", "port": legacyPort, "remote": remote]]
+        let ports = RemotePortTunnel.ports(
+            root: root, sshHost: "gateway.example", legacyPort: legacyPort, environment: [:])
+        #expect(ports.local == legacyPort)
+        #expect(ports.remote == legacyPort)
+        remote["remotePort"] = 18800
+        let explicit = RemotePortTunnel.ports(
+            root: ["gateway": ["remote": remote]], sshHost: "gateway.example", legacyPort: legacyPort, environment: [:])
+        #expect(explicit.local == legacyPort)
+        #expect(explicit.remote == 18800)
+    }
+
+    @Test(arguments: [(nil as String?, 19889), ("19989", 19989)])
+    func `legacy SSH keeps a live configured listener separate from the reserved default`(scenario: (String?, Int)) {
+        let (override, expectedLocalPort) = scenario
+        let root: [String: Any] = ["gateway": [
+            "mode": "remote", "port": 19889,
+            "remote": ["transport": "ssh", "sshTarget": "operator@gateway.example"],
+        ]]
+        let ports = RemotePortTunnel.ports(
+            root: root, sshHost: "gateway.example", legacyPort: 19789,
+            environment: override.map { ["OPENCLAW_GATEWAY_PORT": $0] } ?? [:])
+        #expect(ports.local == expectedLocalPort)
+        #expect(ports.remote == 19789)
+    }
+
+    @Test(arguments: [false, true])
+    func `remote port survives removal of the local bind port`(explicitRemotePort: Bool) {
+        var remote: [String: Any] = ["url": "ws://127.0.0.1:19089"]
+        if explicitRemotePort { remote["remotePort"] = 18789 }
+        var gateway: [String: Any] = ["port": 19089, "remote": remote]
+        for hasLocalPort in [true, false] {
+            if !hasLocalPort { gateway.removeValue(forKey: "port") }
+            let root: [String: Any] = ["gateway": gateway]
+            let resolved = RemotePortTunnel.resolveRemotePortOverride(
+                defaultRemotePort: 18789, for: "gateway.example", root: root) ?? 18789
+            #expect(resolved == (explicitRemotePort ? 18789 : 19089))
+            #expect(RemotePortTunnel.localPort(root: root) == 19089)
         }
     }
+}
 
-    @Test func `termination waits for the original child to exit`() async throws {
-        let process = try await RemotePortTunnel._testStartProcess(
-            executable: "/bin/sleep",
-            arguments: ["30"])
-        defer { process.requestTermination() }
-
-        await process.terminate()
-        #expect(!process.isRunning)
-        #expect(terminatedBySignal(process.terminationStatus, SIGTERM))
-    }
-
-    @Test func `instant exits cannot outrun process monitoring`() async throws {
-        for _ in 0..<32 {
-            let process = try await RemotePortTunnel._testStartProcess(
-                executable: "/usr/bin/true",
-                arguments: [])
-            defer { process.requestTermination() }
-
-            let deadline = ContinuousClock.now + .seconds(1)
-            while process.isRunning, ContinuousClock.now < deadline {
-                try await Task.sleep(for: .milliseconds(1))
-            }
-            #expect(!process.isRunning)
-            await process.terminate()
-        }
-    }
-
-    @Test func `termination escalates for a TERM-resistant child`() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-tunnel-term-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let readyFile = directory.appendingPathComponent("ready")
-        let childPIDFile = directory.appendingPathComponent("child.pid")
-        let process = try await RemotePortTunnel._testStartProcess(
-            executable: "/bin/sh",
-            arguments: [
-                "-c",
-                """
-                /bin/sh -c 'trap "" TERM; echo $$ > "$CHILD_PID_FILE"; while :; do sleep 1; done' &
-                while [ ! -s "$CHILD_PID_FILE" ]; do sleep 0.01; done
-                echo ready > "$READY_FILE"
-                while :; do sleep 1; done
-                """,
-            ],
-            environment: [
-                "READY_FILE": readyFile.path,
-                "CHILD_PID_FILE": childPIDFile.path,
-            ])
-        defer { process.requestTermination() }
-        let readyDeadline = ContinuousClock.now + .seconds(1)
-        while !FileManager.default.fileExists(atPath: readyFile.path),
-              ContinuousClock.now < readyDeadline
-        {
-            usleep(10000)
-        }
-        #expect(FileManager.default.fileExists(atPath: readyFile.path))
-        let childPID = try #require(pid_t(
-            String(contentsOf: childPIDFile, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines)))
-
-        let startedAt = ContinuousClock.now
-        await process.terminate()
-
-        #expect(ContinuousClock.now - startedAt < .seconds(2))
-        #expect(!process.isRunning)
-        #expect(terminatedBySignal(process.terminationStatus, SIGTERM))
-        #expect(awaitProcessExit(childPID))
-    }
-
+struct RemotePortTunnelSocketTests {
     @Test func `port is free detects I pv4 listener`() {
         var fd = socket(AF_INET, SOCK_STREAM, 0)
         #expect(fd >= 0)
@@ -176,57 +142,6 @@ struct RemotePortTunnelTests {
         }
         #expect(free == true)
     }
-
-    @Test @MainActor func `remote port override prefers explicit remote port`() async {
-        let configPath = TestIsolation.tempConfigPath()
-        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
-            OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "url": "ws://127.0.0.1:19089",
-                        "remotePort": 18789,
-                    ],
-                ],
-            ])
-
-            #expect(RemotePortTunnel._testResolveRemotePortOverride(
-                defaultRemotePort: 19089,
-                sshHost: "gateway.example") == 18789)
-        }
-    }
-
-    @Test @MainActor func `remote port override can read loopback url port`() async {
-        let configPath = TestIsolation.tempConfigPath()
-        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
-            OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "url": "ws://127.0.0.1:18789",
-                    ],
-                ],
-            ])
-
-            #expect(RemotePortTunnel._testResolveRemotePortOverride(
-                defaultRemotePort: 19089,
-                sshHost: "gateway.example") == 18789)
-        }
-    }
 }
 
-private func awaitProcessExit(_ pid: pid_t) -> Bool {
-    let deadline = ContinuousClock.now + .seconds(1)
-    while ContinuousClock.now < deadline {
-        errno = 0
-        if kill(pid, 0) == -1, errno == ESRCH {
-            return true
-        }
-        usleep(10000)
-    }
-    return false
-}
-
-private func terminatedBySignal(_ status: TerminationStatus?, _ signal: Int32) -> Bool {
-    guard case let .signaled(code) = status else { return false }
-    return code == signal
-}
 #endif

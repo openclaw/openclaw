@@ -1,6 +1,7 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 // Tests infra runtime loading and platform-dependent helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot } from "../config/config.js";
 import {
   beginGatewayRestartSignalAdmission,
@@ -8,17 +9,24 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import * as errorFormatting from "./errors.js";
 type RestartModule = typeof import("./restart.js");
+const managedSuccessorOwner = {
+  kind: "managed-update-handoff",
+  handoffId: "managed-handoff",
+  installRoot: "/canonical/install",
+} as const;
 
-let consumeGatewaySigusr1RestartAuthorization: RestartModule["consumeGatewaySigusr1RestartAuthorization"];
+let consumeGatewayRestartAuthorization: RestartModule["consumeGatewayRestartAuthorization"];
+let consumeGatewayRestartIntent: RestartModule["consumeGatewayRestartIntent"];
 let deferGatewayRestartUntilIdle: RestartModule["deferGatewayRestartUntilIdle"];
-let isGatewaySigusr1RestartExternallyAllowed: RestartModule["isGatewaySigusr1RestartExternallyAllowed"];
-let markGatewaySigusr1RestartHandled: RestartModule["markGatewaySigusr1RestartHandled"];
-let peekGatewaySigusr1RestartReason: RestartModule["peekGatewaySigusr1RestartReason"];
+let isGatewayRestartExternallyAllowed: RestartModule["isGatewayRestartExternallyAllowed"];
+let markGatewayRestartHandled: RestartModule["markGatewayRestartHandled"];
+let peekGatewayRestartReason: RestartModule["peekGatewayRestartReason"];
 let requestGatewayRestartWithSignalAdmission: RestartModule["requestGatewayRestartWithSignalAdmission"];
 let rollbackGatewayRestartSignalAdmission: RestartModule["rollbackGatewayRestartSignalAdmission"];
-let scheduleGatewaySigusr1Restart: RestartModule["scheduleGatewaySigusr1Restart"];
-let setGatewaySigusr1RestartPolicy: RestartModule["setGatewaySigusr1RestartPolicy"];
+let scheduleGatewayRestart: RestartModule["scheduleGatewayRestart"];
+let setGatewayRestartPolicy: RestartModule["setGatewayRestartPolicy"];
 let setPreRestartDeferralCheck: RestartModule["setPreRestartDeferralCheck"];
 let freshRestartModuleId = 0;
 
@@ -60,15 +68,15 @@ function setPlatform(platform: NodeJS.Platform): void {
   });
 }
 
-function withoutSigusr1Listeners(fn: () => void): void {
-  const listeners = process.listeners("SIGUSR1");
-  process.removeAllListeners("SIGUSR1");
+function withoutRestartSignalListeners(fn: () => void): void {
+  const listeners = process.listeners("SIGUSR2");
+  process.removeAllListeners("SIGUSR2");
   try {
     fn();
   } finally {
-    process.removeAllListeners("SIGUSR1");
+    process.removeAllListeners("SIGUSR2");
     for (const listener of listeners) {
-      process.on("SIGUSR1", listener);
+      process.on("SIGUSR2", listener);
     }
   }
 }
@@ -94,10 +102,10 @@ function withRestartSupervisorEnabled(fn: () => void): void {
   }
 }
 
-function countSigusr1Emits(calls: readonly unknown[][]): number {
+function countRestartSignalEmits(calls: readonly unknown[][]): number {
   let count = 0;
   for (const args of calls) {
-    if (args[0] === "SIGUSR1") {
+    if (args[0] === "SIGUSR2") {
       count += 1;
     }
   }
@@ -113,15 +121,16 @@ describe("infra runtime", () => {
         `./restart.js?infra-runtime=${freshRestartModuleId++}`,
       );
       ({
-        consumeGatewaySigusr1RestartAuthorization,
+        consumeGatewayRestartAuthorization,
+        consumeGatewayRestartIntent,
         deferGatewayRestartUntilIdle,
-        isGatewaySigusr1RestartExternallyAllowed,
-        markGatewaySigusr1RestartHandled,
-        peekGatewaySigusr1RestartReason,
+        isGatewayRestartExternallyAllowed,
+        markGatewayRestartHandled,
+        peekGatewayRestartReason,
         requestGatewayRestartWithSignalAdmission,
         rollbackGatewayRestartSignalAdmission,
-        scheduleGatewaySigusr1Restart,
-        setGatewaySigusr1RestartPolicy,
+        scheduleGatewayRestart,
+        setGatewayRestartPolicy,
         setPreRestartDeferralCheck,
       } = restart);
       relaunchGatewayScheduledTaskMock.mockReset();
@@ -130,14 +139,14 @@ describe("infra runtime", () => {
       cleanStaleGatewayProcessesSyncMock.mockReturnValue([]);
       findGatewayPidsOnPortSyncMock.mockReset();
       findGatewayPidsOnPortSyncMock.mockReturnValue([]);
-      setGatewaySigusr1RestartPolicy({ allowExternal: false });
+      setGatewayRestartPolicy({ allowExternal: false });
       vi.useFakeTimers();
       vi.spyOn(process, "kill").mockImplementation(() => true);
     });
 
     afterEach(() => {
       vi.clearAllTimers();
-      markGatewaySigusr1RestartHandled();
+      markGatewayRestartHandled();
       resetGatewayWorkAdmission();
       clearRuntimeConfigSnapshot();
       vi.useRealTimers();
@@ -152,37 +161,36 @@ describe("infra runtime", () => {
     setupRestartSignalSuite();
 
     it("authorizes exactly once when scheduled restart emits", async () => {
-      expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
+      process.once("SIGUSR2", () => {});
+      expect(consumeGatewayRestartAuthorization()).toBe(false);
 
-      scheduleGatewaySigusr1Restart({ delayMs: 0 });
+      scheduleGatewayRestart({ delayMs: 0 });
 
       // No pre-authorization before the scheduled emission fires.
-      expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
+      expect(consumeGatewayRestartAuthorization()).toBe(false);
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(consumeGatewaySigusr1RestartAuthorization()).toBe(true);
-      expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
-
-      await vi.runAllTimersAsync();
+      expect(consumeGatewayRestartAuthorization()).toBe(true);
+      expect(consumeGatewayRestartAuthorization()).toBe(false);
     });
 
     it("holds root admission from scheduled emission until the signal is handled", async () => {
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        scheduleGatewaySigusr1Restart({ delayMs: 0 });
+        scheduleGatewayRestart({ delayMs: 0 });
         await vi.advanceTimersByTimeAsync(0);
 
         expect(isGatewayWorkAdmissionClosed()).toBe(true);
         expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
 
-        markGatewaySigusr1RestartHandled();
+        markGatewayRestartHandled();
         expect(isGatewayWorkAdmissionClosed()).toBe(false);
         const root = tryBeginGatewayRootWorkAdmission();
         expect(root).not.toBeNull();
         root?.release();
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -203,10 +211,7 @@ describe("infra runtime", () => {
     });
 
     it("does not leave admission closed when a deferred emission is cancelled mid-prepare", async () => {
-      let releasePrepare: (() => void) | undefined;
-      const prepareGate = new Promise<void>((resolve) => {
-        releasePrepare = resolve;
-      });
+      const { promise: prepareGate, resolve: releasePrepare } = createDeferred();
       const handle = deferGatewayRestartUntilIdle({
         getPendingCount: () => 0,
         reason: "config.reload.cancelled",
@@ -233,10 +238,7 @@ describe("infra runtime", () => {
 
     it("keeps admission open when a deferred restart emission races config supersession", async () => {
       let pending = 1;
-      let releasePrepare: (() => void) | undefined;
-      const prepareGate = new Promise<void>((resolve) => {
-        releasePrepare = resolve;
-      });
+      const { promise: prepareGate, resolve: releasePrepare } = createDeferred();
       const handle = deferGatewayRestartUntilIdle({
         getPendingCount: () => pending,
         reason: "config.reload.superseded",
@@ -263,13 +265,10 @@ describe("infra runtime", () => {
       expect(isGatewayWorkAdmissionClosed()).toBe(false);
     });
 
-    it("keeps the signal fence closed when cancel races a concurrent emitted SIGUSR1", async () => {
-      let releasePrepare: (() => void) | undefined;
-      const prepareGate = new Promise<void>((resolve) => {
-        releasePrepare = resolve;
-      });
+    it("keeps the signal fence closed when cancel races a concurrent emitted SIGUSR2", async () => {
+      const { promise: prepareGate, resolve: releasePrepare } = createDeferred();
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
         const handle = deferGatewayRestartUntilIdle({
           getPendingCount: () => 0,
@@ -283,7 +282,7 @@ describe("infra runtime", () => {
         await Promise.resolve();
         expect(isGatewayWorkAdmissionClosed()).toBe(true);
 
-        // Concurrent path reuses the deferred prepare lease and queues SIGUSR1.
+        // Concurrent path reuses the deferred prepare lease and queues SIGUSR2.
         expect(requestGatewayRestartWithSignalAdmission("concurrent.emit")).toEqual({
           status: "emitted",
         });
@@ -301,15 +300,15 @@ describe("infra runtime", () => {
         expect(isGatewayWorkAdmissionClosed()).toBe(true);
         expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
 
-        markGatewaySigusr1RestartHandled();
+        markGatewayRestartHandled();
         expect(isGatewayWorkAdmissionClosed()).toBe(false);
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
     it("backs off before an emoji that crosses the restart reason limit", () => {
-      const restart = scheduleGatewaySigusr1Restart({
+      const restart = scheduleGatewayRestart({
         delayMs: 0,
         reason: "x".repeat(199) + "🧠tail",
       });
@@ -318,46 +317,46 @@ describe("infra runtime", () => {
     });
 
     it("tracks external restart policy", () => {
-      expect(isGatewaySigusr1RestartExternallyAllowed()).toBe(false);
-      setGatewaySigusr1RestartPolicy({ allowExternal: true });
-      expect(isGatewaySigusr1RestartExternallyAllowed()).toBe(true);
+      expect(isGatewayRestartExternallyAllowed()).toBe(false);
+      setGatewayRestartPolicy({ allowExternal: true });
+      expect(isGatewayRestartExternallyAllowed()).toBe(true);
     });
 
     it("suppresses duplicate emit until the restart cycle is marked handled", () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
         expect(requestGatewayRestartWithSignalAdmission()).toEqual({ status: "emitted" });
         expect(requestGatewayRestartWithSignalAdmission()).toEqual({ status: "coalesced" });
-        expect(consumeGatewaySigusr1RestartAuthorization()).toBe(true);
+        expect(consumeGatewayRestartAuthorization()).toBe(true);
 
-        markGatewaySigusr1RestartHandled();
+        markGatewayRestartHandled();
 
         expect(requestGatewayRestartWithSignalAdmission()).toEqual({ status: "emitted" });
-        expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(2);
+        expect(countRestartSignalEmits(emitSpy.mock.calls)).toBe(2);
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
-    it("uses the SIGUSR1 listener path on Windows when the run loop is active", () => {
+    it("uses the SIGUSR2 listener path on Windows when the run loop is active", () => {
       setPlatform("win32");
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
         expect(requestGatewayRestartWithSignalAdmission()).toEqual({ status: "emitted" });
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
         expect(relaunchGatewayScheduledTaskMock).not.toHaveBeenCalled();
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
     it("uses the Windows supervisor fallback without leaving a restart cycle in flight", () => {
       setPlatform("win32");
-      withoutSigusr1Listeners(() => {
+      withoutRestartSignalListeners(() => {
         withRestartSupervisorEnabled(() => {
           relaunchGatewayScheduledTaskMock.mockReturnValueOnce({ ok: true, method: "schtasks" });
 
@@ -366,8 +365,8 @@ describe("infra runtime", () => {
           });
 
           expect(relaunchGatewayScheduledTaskMock).toHaveBeenCalledTimes(1);
-          expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
-          const next = scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "next" });
+          expect(consumeGatewayRestartAuthorization()).toBe(false);
+          const next = scheduleGatewayRestart({ delayMs: 0, reason: "next" });
           expect(next.coalesced).toBe(false);
           expect(next.mode).toBe("supervisor");
         });
@@ -376,7 +375,7 @@ describe("infra runtime", () => {
 
     it("rolls back the Windows supervisor fallback when scheduling fails", () => {
       setPlatform("win32");
-      withoutSigusr1Listeners(() => {
+      withoutRestartSignalListeners(() => {
         withRestartSupervisorEnabled(() => {
           relaunchGatewayScheduledTaskMock
             .mockReturnValueOnce({ ok: false, method: "schtasks", detail: "denied" })
@@ -385,7 +384,7 @@ describe("infra runtime", () => {
           expect(requestGatewayRestartWithSignalAdmission("windows-fallback")).toEqual({
             status: "failed",
           });
-          expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
+          expect(consumeGatewayRestartAuthorization()).toBe(false);
           expect(requestGatewayRestartWithSignalAdmission("windows-retry")).toEqual({
             status: "emitted",
           });
@@ -397,22 +396,22 @@ describe("infra runtime", () => {
     it("coalesces duplicate scheduled restarts into a single pending timer", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        const first = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "first" });
-        const second = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "second" });
+        const first = scheduleGatewayRestart({ delayMs: 1_000, reason: "first" });
+        const second = scheduleGatewayRestart({ delayMs: 1_000, reason: "second" });
 
         expect(first.coalesced).toBe(false);
         expect(second.coalesced).toBe(true);
 
         await vi.advanceTimersByTimeAsync(999);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR2");
 
         await vi.advanceTimersByTimeAsync(1);
-        const sigusr1Emits = emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1");
-        expect(sigusr1Emits.length).toBe(1);
+        const restartSignalEmits = emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR2");
+        expect(restartSignalEmits.length).toBe(1);
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -420,60 +419,113 @@ describe("infra runtime", () => {
       "preserves %s restart reason when a scheduled restart coalesces",
       async (reason) => {
         const handler = () => {};
-        process.on("SIGUSR1", handler);
+        process.on("SIGUSR2", handler);
         try {
-          const first = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "config.patch" });
-          const second = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason });
+          const first = scheduleGatewayRestart({ delayMs: 1_000, reason: "config.patch" });
+          const second = scheduleGatewayRestart({ delayMs: 1_000, reason });
 
           expect(first.coalesced).toBe(false);
           expect(second.coalesced).toBe(true);
 
           await vi.advanceTimersByTimeAsync(1_000);
 
-          expect(peekGatewaySigusr1RestartReason()).toBe(reason);
+          expect(peekGatewayRestartReason()).toBe(reason);
         } finally {
-          process.removeListener("SIGUSR1", handler);
+          process.removeListener("SIGUSR2", handler);
         }
       },
     );
 
     it("promotes update.auto while restart preparation is in flight", async () => {
-      let releasePreparation: () => void = () => {};
-      const preparationBlocked = new Promise<void>((resolve) => {
-        releasePreparation = resolve;
-      });
+      const { promise: preparationBlocked, resolve: releasePreparation } = createDeferred();
       const beforeEmit = vi.fn(async () => {
         await preparationBlocked;
       });
-      let resolveSignal: () => void = () => {};
-      const signalEmitted = new Promise<void>((resolve) => {
-        resolveSignal = resolve;
-      });
-      const handler = () => resolveSignal();
-      process.on("SIGUSR1", handler);
+      const staleEmitRestart = vi.fn(() => ({ status: "failed" as const }));
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR2", handler);
       try {
-        scheduleGatewaySigusr1Restart({
+        scheduleGatewayRestart({
           delayMs: 0,
           reason: "config.patch",
-          emitHooks: { beforeEmit },
+          sessionKey: "agent:main:session-A",
+          emitHooks: { beforeEmit, emitRestart: staleEmitRestart },
         });
         await vi.advanceTimersByTimeAsync(0);
         await Promise.resolve();
         expect(beforeEmit).toHaveBeenCalledTimes(1);
 
-        const update = scheduleGatewaySigusr1Restart({
+        const update = scheduleGatewayRestart({
           delayMs: 0,
           reason: "update.auto",
+          successorOwner: managedSuccessorOwner,
           skipDeferral: true,
         });
         expect(update.coalesced).toBe(true);
 
         releasePreparation();
-        await signalEmitted;
+        await vi.advanceTimersByTimeAsync(0);
 
-        expect(peekGatewaySigusr1RestartReason()).toBe("update.auto");
+        expect(staleEmitRestart).not.toHaveBeenCalled();
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
+        expect(peekGatewayRestartReason()).toBe("update.auto");
+        expect(consumeGatewayRestartIntent()).toEqual({
+          reason: "update.auto",
+          successorOwner: managedSuccessorOwner,
+        });
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
+      }
+    });
+
+    it("retains managed successor ownership when an ordinary restart pulls the timer earlier", async () => {
+      const handler = () => {};
+      process.on("SIGUSR2", handler);
+      try {
+        scheduleGatewayRestart({
+          delayMs: 1_000,
+          reason: "update.auto",
+          successorOwner: managedSuccessorOwner,
+        });
+        scheduleGatewayRestart({ delayMs: 0, reason: "config.patch" });
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(peekGatewayRestartReason()).toBe("update.auto");
+        expect(consumeGatewayRestartIntent()).toEqual({
+          reason: "update.auto",
+          successorOwner: managedSuccessorOwner,
+        });
+      } finally {
+        process.removeListener("SIGUSR2", handler);
+      }
+    });
+
+    it("replaces stale managed successor ownership when its replacement coalesces", async () => {
+      const replacementOwner = { ...managedSuccessorOwner, handoffId: "replacement-handoff" };
+      const handler = () => {};
+      process.on("SIGUSR2", handler);
+      try {
+        scheduleGatewayRestart({
+          delayMs: 1_000,
+          reason: "update.auto",
+          successorOwner: managedSuccessorOwner,
+        });
+        const replacement = scheduleGatewayRestart({
+          delayMs: 1_000,
+          reason: "update.auto",
+          successorOwner: replacementOwner,
+        });
+
+        expect(replacement.coalesced).toBe(true);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(consumeGatewayRestartIntent()).toEqual({
+          reason: "update.auto",
+          successorOwner: replacementOwner,
+        });
+      } finally {
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -481,9 +533,9 @@ describe("infra runtime", () => {
       const beforeEmit = vi.fn(async () => {});
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        scheduleGatewaySigusr1Restart({
+        scheduleGatewayRestart({
           delayMs: 1_000,
           emitHooks: { beforeEmit },
         });
@@ -493,9 +545,9 @@ describe("infra runtime", () => {
 
         await vi.advanceTimersByTimeAsync(1);
         expect(beforeEmit).toHaveBeenCalledTimes(1);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -504,14 +556,14 @@ describe("infra runtime", () => {
       const latestBeforeEmit = vi.fn(async () => {});
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        const first = scheduleGatewaySigusr1Restart({
+        const first = scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "first",
           emitHooks: { beforeEmit: firstBeforeEmit },
         });
-        const second = scheduleGatewaySigusr1Restart({
+        const second = scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "second",
           emitHooks: { beforeEmit: latestBeforeEmit },
@@ -524,15 +576,15 @@ describe("infra runtime", () => {
 
         expect(firstBeforeEmit).not.toHaveBeenCalled();
         expect(latestBeforeEmit).toHaveBeenCalledTimes(1);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
     it("reports emitHooksQueued=false for hookless coalesced restart requests", () => {
-      const first = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "first" });
-      const second = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "second" });
+      const first = scheduleGatewayRestart({ delayMs: 1_000, reason: "first" });
+      const second = scheduleGatewayRestart({ delayMs: 1_000, reason: "second" });
 
       expect(first.coalesced).toBe(false);
       expect(first.emitHooksQueued).toBe(false);
@@ -545,15 +597,15 @@ describe("infra runtime", () => {
       const sessionBHooks = vi.fn(async () => {});
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        const first = scheduleGatewaySigusr1Restart({
+        const first = scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "session-A",
           sessionKey: "agent:main:session-A",
           emitHooks: { beforeEmit: sessionAHooks },
         });
-        const second = scheduleGatewaySigusr1Restart({
+        const second = scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "session-B",
           sessionKey: "agent:main:session-B",
@@ -571,9 +623,9 @@ describe("infra runtime", () => {
         // which the caller already observed via emitHooksQueued=false.
         expect(sessionAHooks).toHaveBeenCalledTimes(1);
         expect(sessionBHooks).not.toHaveBeenCalled();
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -582,15 +634,15 @@ describe("infra runtime", () => {
       const latestHooks = vi.fn(async () => {});
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        const first = scheduleGatewaySigusr1Restart({
+        const first = scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "first",
           sessionKey: "agent:main:session-A",
           emitHooks: { beforeEmit: firstHooks },
         });
-        const second = scheduleGatewaySigusr1Restart({
+        const second = scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "second",
           sessionKey: "agent:main:session-A",
@@ -606,9 +658,9 @@ describe("infra runtime", () => {
         // Same session: latest hooks take ownership (existing debounce semantics).
         expect(firstHooks).not.toHaveBeenCalled();
         expect(latestHooks).toHaveBeenCalledTimes(1);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -617,15 +669,15 @@ describe("infra runtime", () => {
       const sessionBHooks = vi.fn(async () => {});
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        const first = scheduleGatewaySigusr1Restart({
+        const first = scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "session-A",
           sessionKey: "agent:main:session-A",
           emitHooks: { beforeEmit: sessionAHooks },
         });
-        const second = scheduleGatewaySigusr1Restart({
+        const second = scheduleGatewayRestart({
           delayMs: 0,
           reason: "session-B",
           sessionKey: "agent:main:session-B",
@@ -642,30 +694,27 @@ describe("infra runtime", () => {
 
         expect(sessionAHooks).toHaveBeenCalledTimes(1);
         expect(sessionBHooks).not.toHaveBeenCalled();
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
     it("rejects coalesced emit hooks from a different session while preparation is in flight (#86742)", async () => {
       // Pins the CWE-200 in-flight preparation race: pendingRestartSessionKey
       // must stay alive through await beforeEmit(), otherwise a coalesced
-      // different-session caller slips past updatePendingRestartEmitHooks
+      // different-session caller slips past canReplacePendingRestartEmitHooks
       // and chains its own hooks while preparation runs.
-      let releaseSessionAPrep: () => void = () => {};
-      const sessionAPrepBlocked = new Promise<void>((resolve) => {
-        releaseSessionAPrep = resolve;
-      });
+      const { promise: sessionAPrepBlocked, resolve: releaseSessionAPrep } = createDeferred();
       const sessionAHooks = vi.fn(async () => {
         await sessionAPrepBlocked;
       });
       const sessionBHooks = vi.fn(async () => {});
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        const first = scheduleGatewaySigusr1Restart({
+        const first = scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "session-A",
           sessionKey: "agent:main:session-A",
@@ -679,7 +728,7 @@ describe("infra runtime", () => {
         expect(sessionAHooks).toHaveBeenCalledTimes(1);
 
         // Session B coalesces *during* session A's beforeEmit await window.
-        const second = scheduleGatewaySigusr1Restart({
+        const second = scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "session-B",
           sessionKey: "agent:main:session-B",
@@ -697,9 +746,9 @@ describe("infra runtime", () => {
         // Session B's hook must NOT run — the guard kept session A as owner
         // through the in-flight preparation window.
         expect(sessionBHooks).not.toHaveBeenCalled();
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -707,13 +756,13 @@ describe("infra runtime", () => {
       const beforeEmit = vi.fn(async () => {});
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        scheduleGatewaySigusr1Restart({
+        scheduleGatewayRestart({
           delayMs: 1_000,
           emitHooks: { beforeEmit },
         });
-        const second = scheduleGatewaySigusr1Restart({
+        const second = scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "hookless",
         });
@@ -723,9 +772,9 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(1_000);
 
         expect(beforeEmit).toHaveBeenCalledTimes(1);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -741,9 +790,9 @@ describe("infra runtime", () => {
       const latestBeforeEmit = vi.fn(async () => {});
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        scheduleGatewaySigusr1Restart({
+        scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "first",
           emitHooks: {
@@ -754,9 +803,9 @@ describe("infra runtime", () => {
 
         await vi.advanceTimersByTimeAsync(1_000);
         expect(firstBeforeEmit).toHaveBeenCalledTimes(1);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR2");
 
-        const second = scheduleGatewaySigusr1Restart({
+        const second = scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "second",
           emitHooks: { beforeEmit: latestBeforeEmit },
@@ -768,46 +817,68 @@ describe("infra runtime", () => {
 
         expect(firstRollback).toHaveBeenCalledTimes(1);
         expect(latestBeforeEmit).toHaveBeenCalledTimes(1);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
-    it("rolls back prepared restart state when emission is rejected", async () => {
-      const beforeEmit = vi.fn(async () => {});
-      const unformattableFailure = new Error();
-      Object.defineProperty(unformattableFailure, "message", {
-        get() {
-          throw new Error("message read failed");
-        },
-      });
-      const afterEmitRejected = vi.fn(async () => {
-        throw unformattableFailure;
-      });
-      const afterEmitFailed = vi.fn(async () => {});
-      vi.spyOn(process, "kill").mockImplementation(() => {
-        throw new Error("no signal");
-      });
+    it.each([
+      { failure: "message getter", expectedError: "Error" },
+      { failure: "formatter", expectedError: "Unknown error" },
+      { failure: "logger", expectedError: "Error" },
+    ])(
+      "rolls back prepared restart state when emission is rejected despite $failure failure",
+      async ({ failure, expectedError }) => {
+        const beforeEmit = vi.fn(async () => {});
+        const hookFailure = new Error();
+        Object.defineProperty(hookFailure, "message", {
+          get() {
+            throw new Error("message read failed");
+          },
+        });
+        const formatter = vi.spyOn(errorFormatting, "formatErrorMessage");
+        if (failure === "formatter") {
+          formatter.mockImplementationOnce(() => {
+            throw new Error("formatting failed");
+          });
+        }
+        if (failure === "logger") {
+          restartLogWarnMock.mockImplementationOnce(() => {
+            throw new Error("logging failed");
+          });
+        }
+        const afterEmitRejected = vi.fn(async () => {
+          throw hookFailure;
+        });
+        const afterEmitFailed = vi.fn(async () => {});
+        process.once("SIGUSR2", () => {
+          throw new Error("no signal");
+        });
 
-      scheduleGatewaySigusr1Restart({
-        delayMs: 0,
-        emitHooks: { beforeEmit, afterEmitRejected, afterEmitFailed },
-      });
-      await vi.advanceTimersByTimeAsync(0);
+        scheduleGatewayRestart({
+          delayMs: 0,
+          emitHooks: { beforeEmit, afterEmitRejected, afterEmitFailed },
+        });
+        await vi.advanceTimersByTimeAsync(0);
 
-      expect(beforeEmit).toHaveBeenCalledTimes(1);
-      expect(afterEmitRejected).toHaveBeenCalledTimes(1);
-      expect(afterEmitFailed).toHaveBeenCalledTimes(1);
-      expect(restartLogWarnMock).toHaveBeenCalledWith(
-        "restart hook callback failed; restart will continue",
-        {
-          hook: "afterEmitRejected",
-          error: "Unknown error",
-        },
-      );
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    });
+        expect(beforeEmit).toHaveBeenCalledTimes(1);
+        expect(afterEmitRejected).toHaveBeenCalledTimes(1);
+        expect(afterEmitFailed).toHaveBeenCalledTimes(1);
+        expect(formatter).toHaveBeenCalledExactlyOnceWith(hookFailure);
+        expect(restartLogWarnMock).toHaveBeenCalledExactlyOnceWith(
+          "restart hook callback failed; restart will continue",
+          {
+            hook: "afterEmitRejected",
+            error: expectedError,
+          },
+        );
+        expect(isGatewayWorkAdmissionClosed()).toBe(false);
+        const root = tryBeginGatewayRootWorkAdmission();
+        expect(root).not.toBeNull();
+        root?.release();
+      },
+    );
 
     it("drains parked emit hooks when a hooked deferral wins the emission race", async () => {
       // Gateway-tool parks sentinel/continuation hooks; config-reload deferral
@@ -817,9 +888,9 @@ describe("infra runtime", () => {
       const callerBeforeEmit = vi.fn(async () => {});
       const callerEmitRestart = vi.fn(() => ({ status: "emitted" as const }));
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        const scheduled = scheduleGatewaySigusr1Restart({
+        const scheduled = scheduleGatewayRestart({
           delayMs: 60_000,
           reason: "gateway.tool.restart",
           sessionKey: "agent:main:session-A",
@@ -849,7 +920,7 @@ describe("infra runtime", () => {
           callerEmitRestart.mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY,
         );
 
-        const followUp = scheduleGatewaySigusr1Restart({
+        const followUp = scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "session-B",
           sessionKey: "agent:main:session-B",
@@ -857,7 +928,7 @@ describe("infra runtime", () => {
         });
         expect(followUp.emitHooksQueued).toBe(true);
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -868,9 +939,9 @@ describe("infra runtime", () => {
       const callerAfterEmitRejected = vi.fn(async () => {});
       const callerEmitRestart = vi.fn(() => ({ status: "coalesced" as const }));
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        scheduleGatewaySigusr1Restart({
+        scheduleGatewayRestart({
           delayMs: 60_000,
           reason: "gateway.tool.restart",
           sessionKey: "agent:main:session-A",
@@ -897,12 +968,12 @@ describe("infra runtime", () => {
         expect(parkedAfterEmitRejected).toHaveBeenCalledTimes(1);
         expect(callerAfterEmitRejected).toHaveBeenCalledTimes(1);
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
     it("re-drains hooks accepted while caller preparation awaits", async () => {
-      // scheduleGatewaySigusr1Restart is not fence-gated: a session can park
+      // scheduleGatewayRestart is not fence-gated: a session can park
       // hooks (emitHooksQueued: true) while the emitting caller's beforeEmit
       // awaits. Those hooks must ride this restart, not be silently dropped.
       const lateBeforeEmit = vi.fn(async () => {});
@@ -910,7 +981,7 @@ describe("infra runtime", () => {
       let lateQueued: boolean | undefined;
       const callerBeforeEmit = vi.fn(async () => {
         if (lateQueued === undefined) {
-          lateQueued = scheduleGatewaySigusr1Restart({
+          lateQueued = scheduleGatewayRestart({
             delayMs: 60_000,
             reason: "late.session",
             sessionKey: "agent:main:session-late",
@@ -919,7 +990,7 @@ describe("infra runtime", () => {
         }
       });
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
         deferGatewayRestartUntilIdle({
           getPendingCount: () => 0,
@@ -938,7 +1009,7 @@ describe("infra runtime", () => {
           callerEmitRestart.mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY,
         );
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -948,9 +1019,9 @@ describe("infra runtime", () => {
       });
       const callerAfterEmitFailed = vi.fn(async () => {});
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        scheduleGatewaySigusr1Restart({
+        scheduleGatewayRestart({
           delayMs: 60_000,
           reason: "gateway.tool.restart",
           sessionKey: "agent:main:session-A",
@@ -981,7 +1052,7 @@ describe("infra runtime", () => {
           },
         );
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -991,60 +1062,60 @@ describe("infra runtime", () => {
       });
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        scheduleGatewaySigusr1Restart({
+        scheduleGatewayRestart({
           delayMs: 0,
           emitHooks: { beforeEmit },
         });
         await vi.advanceTimersByTimeAsync(0);
 
         expect(beforeEmit).toHaveBeenCalledTimes(1);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
     it("applies restart cooldown between emitted restart cycles", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        const first = scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "first" });
+        const first = scheduleGatewayRestart({ delayMs: 0, reason: "first" });
         expect(first.coalesced).toBe(false);
         expect(first.delayMs).toBe(0);
 
         await vi.advanceTimersByTimeAsync(0);
-        expect(consumeGatewaySigusr1RestartAuthorization()).toBe(true);
-        markGatewaySigusr1RestartHandled();
+        expect(consumeGatewayRestartAuthorization()).toBe(true);
+        markGatewayRestartHandled();
 
-        const second = scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "second" });
+        const second = scheduleGatewayRestart({ delayMs: 0, reason: "second" });
         expect(second.coalesced).toBe(false);
         expect(second.delayMs).toBe(30_000);
         expect(second.cooldownMsApplied).toBe(30_000);
 
         await vi.advanceTimersByTimeAsync(29_999);
-        expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(1);
+        expect(countRestartSignalEmits(emitSpy.mock.calls)).toBe(1);
 
         await vi.advanceTimersByTimeAsync(1);
-        expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(2);
+        expect(countRestartSignalEmits(emitSpy.mock.calls)).toBe(2);
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
     it("bypasses restart cooldown when requested", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "first" });
+        scheduleGatewayRestart({ delayMs: 0, reason: "first" });
         await vi.advanceTimersByTimeAsync(0);
-        expect(consumeGatewaySigusr1RestartAuthorization()).toBe(true);
-        markGatewaySigusr1RestartHandled();
+        expect(consumeGatewayRestartAuthorization()).toBe(true);
+        markGatewayRestartHandled();
 
-        const forced = scheduleGatewaySigusr1Restart({
+        const forced = scheduleGatewayRestart({
           delayMs: 0,
           reason: "update.run",
           skipCooldown: true,
@@ -1055,10 +1126,10 @@ describe("infra runtime", () => {
         expect(forced.cooldownMsApplied).toBe(0);
 
         await vi.advanceTimersByTimeAsync(0);
-        expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(2);
-        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+        expect(countRestartSignalEmits(emitSpy.mock.calls)).toBe(2);
+        expect(peekGatewayRestartReason()).toBe("update.run");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
   });
@@ -1066,56 +1137,56 @@ describe("infra runtime", () => {
   describe("pre-restart deferral check", () => {
     setupRestartSignalSuite();
 
-    it("emits SIGUSR1 immediately when no deferral check is registered", async () => {
+    it("emits SIGUSR2 immediately when no deferral check is registered", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        scheduleGatewaySigusr1Restart({ delayMs: 0 });
+        scheduleGatewayRestart({ delayMs: 0 });
         await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
-    it("emits SIGUSR1 immediately when deferral check returns 0", async () => {
+    it("emits SIGUSR2 immediately when deferral check returns 0", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
         setPreRestartDeferralCheck(() => 0);
-        scheduleGatewaySigusr1Restart({ delayMs: 0 });
+        scheduleGatewayRestart({ delayMs: 0 });
         await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
-    it("defers SIGUSR1 until deferral check returns 0", async () => {
+    it("defers SIGUSR2 until deferral check returns 0", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
         let pending = 2;
         setPreRestartDeferralCheck(() => pending);
-        scheduleGatewaySigusr1Restart({ delayMs: 0 });
+        scheduleGatewayRestart({ delayMs: 0 });
 
         // After initial delay fires, deferral check returns 2 — should NOT emit yet
         await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR2");
 
         // After one poll (500ms), still pending
         await vi.advanceTimersByTimeAsync(500);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR2");
 
         // Drain pending work
         pending = 0;
         await vi.advanceTimersByTimeAsync(500);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -1123,10 +1194,10 @@ describe("infra runtime", () => {
       const emitSpy = vi.spyOn(process, "emit");
       const pendingCheck = vi.fn(() => 5);
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
         setPreRestartDeferralCheck(pendingCheck);
-        scheduleGatewaySigusr1Restart({
+        scheduleGatewayRestart({
           delayMs: 0,
           reason: "update.run",
           skipDeferral: true,
@@ -1135,10 +1206,10 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(0);
 
         expect(pendingCheck).not.toHaveBeenCalled();
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
-        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
+        expect(peekGatewayRestartReason()).toBe("update.run");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -1146,11 +1217,11 @@ describe("infra runtime", () => {
       const emitSpy = vi.spyOn(process, "emit");
       const pendingCheck = vi.fn(() => 5);
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
         setPreRestartDeferralCheck(pendingCheck);
-        scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "config.patch" });
-        const forced = scheduleGatewaySigusr1Restart({
+        scheduleGatewayRestart({ delayMs: 1_000, reason: "config.patch" });
+        const forced = scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "update.run",
           skipDeferral: true,
@@ -1161,10 +1232,10 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(1_000);
 
         expect(pendingCheck).not.toHaveBeenCalled();
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
-        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
+        expect(peekGatewayRestartReason()).toBe("update.run");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -1172,15 +1243,15 @@ describe("infra runtime", () => {
       const emitSpy = vi.spyOn(process, "emit");
       const beforeEmit = vi.fn(async () => {});
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
-        const pending = scheduleGatewaySigusr1Restart({
+        const pending = scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "session-A",
           sessionKey: "agent:main:session-A",
           emitHooks: { beforeEmit },
         });
-        const forced = scheduleGatewaySigusr1Restart({
+        const forced = scheduleGatewayRestart({
           delayMs: 1_000,
           preservePendingEmitHooksOnDeferralBypass: true,
           reason: "gateway.restart.safe",
@@ -1194,10 +1265,10 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(1_000);
 
         expect(beforeEmit).toHaveBeenCalledTimes(1);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
-        expect(peekGatewaySigusr1RestartReason()).toBe("gateway.restart.safe");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
+        expect(peekGatewayRestartReason()).toBe("gateway.restart.safe");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -1205,29 +1276,34 @@ describe("infra runtime", () => {
       const emitSpy = vi.spyOn(process, "emit");
       const staleBeforeEmit = vi.fn(async () => {});
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
         setPreRestartDeferralCheck(() => 5);
-        scheduleGatewaySigusr1Restart({
+        scheduleGatewayRestart({
           delayMs: 0,
           reason: "config.patch",
           emitHooks: { beforeEmit: staleBeforeEmit },
         });
         await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR2");
 
-        const forced = scheduleGatewaySigusr1Restart({
+        const forced = scheduleGatewayRestart({
           delayMs: 0,
           reason: "update.run",
+          successorOwner: managedSuccessorOwner,
           skipDeferral: true,
         });
 
         expect(forced.coalesced).toBe(false);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
         expect(staleBeforeEmit).not.toHaveBeenCalled();
-        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+        expect(peekGatewayRestartReason()).toBe("update.run");
+        expect(consumeGatewayRestartIntent()).toEqual({
+          reason: "update.run",
+          successorOwner: managedSuccessorOwner,
+        });
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -1235,19 +1311,19 @@ describe("infra runtime", () => {
       const emitSpy = vi.spyOn(process, "emit");
       const beforeEmit = vi.fn(async () => {});
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
         setPreRestartDeferralCheck(() => 5);
-        scheduleGatewaySigusr1Restart({
+        scheduleGatewayRestart({
           delayMs: 0,
           reason: "session-A",
           sessionKey: "agent:main:session-A",
           emitHooks: { beforeEmit },
         });
         await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR2");
 
-        const forced = scheduleGatewaySigusr1Restart({
+        const forced = scheduleGatewayRestart({
           delayMs: 0,
           reason: "update.run",
           skipDeferral: true,
@@ -1258,10 +1334,10 @@ describe("infra runtime", () => {
         expect(beforeEmit).not.toHaveBeenCalled();
         await Promise.resolve();
         await Promise.resolve();
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
-        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
+        expect(peekGatewayRestartReason()).toBe("update.run");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
@@ -1269,19 +1345,19 @@ describe("infra runtime", () => {
       const emitSpy = vi.spyOn(process, "emit");
       const beforeEmit = vi.fn(async () => {});
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
         setPreRestartDeferralCheck(() => 5);
-        const pending = scheduleGatewaySigusr1Restart({
+        const pending = scheduleGatewayRestart({
           delayMs: 0,
           reason: "session-A",
           sessionKey: "agent:main:session-A",
           emitHooks: { beforeEmit },
         });
         await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR2");
 
-        const forced = scheduleGatewaySigusr1Restart({
+        const forced = scheduleGatewayRestart({
           delayMs: 0,
           preservePendingEmitHooksOnDeferralBypass: true,
           reason: "gateway.restart.safe",
@@ -1294,45 +1370,29 @@ describe("infra runtime", () => {
         expect(beforeEmit).toHaveBeenCalledTimes(1);
         await Promise.resolve();
         await Promise.resolve();
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
-        expect(peekGatewaySigusr1RestartReason()).toBe("gateway.restart.safe");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
+        expect(peekGatewayRestartReason()).toBe("gateway.restart.safe");
       } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
 
-    it("emits SIGUSR1 after the default deferral timeout while work is still pending", async () => {
+    it("emits SIGUSR2 after the default deferral timeout while work is still pending", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
-      process.on("SIGUSR1", handler);
+      process.on("SIGUSR2", handler);
       try {
         setPreRestartDeferralCheck(() => 5); // always pending
-        scheduleGatewaySigusr1Restart({ delayMs: 0 });
+        scheduleGatewayRestart({ delayMs: 0 });
 
         // Fire initial timeout
         await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR2");
 
         await vi.advanceTimersByTimeAsync(300_000);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
       } finally {
-        process.removeListener("SIGUSR1", handler);
-      }
-    });
-
-    it("emits SIGUSR1 if deferral check throws", async () => {
-      const emitSpy = vi.spyOn(process, "emit");
-      const handler = () => {};
-      process.on("SIGUSR1", handler);
-      try {
-        setPreRestartDeferralCheck(() => {
-          throw new Error("boom");
-        });
-        scheduleGatewaySigusr1Restart({ delayMs: 0 });
-        await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
-      } finally {
-        process.removeListener("SIGUSR1", handler);
+        process.removeListener("SIGUSR2", handler);
       }
     });
   });

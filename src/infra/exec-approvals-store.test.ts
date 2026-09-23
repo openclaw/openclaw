@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import * as stateDatabase from "../state/openclaw-state-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -24,6 +26,8 @@ import {
 import {
   ensureExecApprovals,
   loadExecApprovals,
+  loadExecApprovalsReadOnly,
+  loadExecApprovalsReadOnlyAsync,
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshot,
   restoreExecApprovalsSnapshotLocked,
@@ -103,7 +107,76 @@ afterEach(() => {
   }
 });
 
+const readOnlyLoaders = [
+  { name: "synchronous", load: loadExecApprovalsReadOnly },
+  { name: "asynchronous", load: loadExecApprovalsReadOnlyAsync },
+];
+
 describe("exec approvals SQLite store", () => {
+  it.each(readOnlyLoaders)(
+    "does not create shared state for a $name read-only load",
+    async ({ load }) => {
+      const statePath = resolveOpenClawStateSqlitePath();
+      expect(fs.existsSync(statePath)).toBe(false);
+
+      expect(await load()).toMatchObject({
+        version: 1,
+        agents: {},
+      });
+      expect(fs.existsSync(statePath)).toBe(false);
+    },
+  );
+
+  it.each(readOnlyLoaders)(
+    "does not migrate older shared state for a $name read-only load",
+    async ({ load }) => {
+      saveExecApprovals({
+        version: 1,
+        defaults: { security: "allowlist" },
+        agents: {},
+      });
+      const statePath = resolveOpenClawStateSqlitePath();
+      closeOpenClawStateDatabaseForTest();
+      const older = new DatabaseSync(statePath);
+      older.exec(`
+      PRAGMA user_version = 7;
+      UPDATE schema_meta SET schema_version = 7 WHERE meta_key = 'primary';
+    `);
+      older.close();
+
+      expect((await load()).defaults?.security).toBe("allowlist");
+
+      const after = new DatabaseSync(statePath, { readOnly: true });
+      expect(after.prepare("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      after.close();
+    },
+  );
+
+  it.each(readOnlyLoaders)(
+    "fails closed for an unavailable $name read-only owner",
+    async ({ load }) => {
+      makeStateDatabaseUnavailable();
+      expect((await load()).defaults).toMatchObject({ security: "deny", ask: "off" });
+      expect(loggerWarn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("keeps the captured legacy gate and repair directory when an async read resumes elsewhere", async () => {
+    const original = process.env.OPENCLAW_STATE_DIR;
+    if (!original) {
+      throw new Error("missing test state dir");
+    }
+    fs.writeFileSync(path.join(original, "exec-approvals.json"), "{}");
+    const loaded = loadExecApprovalsReadOnlyAsync();
+    const foreign = createStateDir();
+    await expect(loaded).rejects.toMatchObject({
+      name: "ExecApprovalsMigrationRequiredError",
+      message: expect.stringContaining(`OPENCLAW_STATE_DIR set to ${original}`),
+    });
+    expect(fs.existsSync(path.join(original, "state", "openclaw.sqlite"))).toBe(false);
+    expect(fs.existsSync(path.join(foreign, "state", "openclaw.sqlite"))).toBe(false);
+  });
+
   it("uses a permissive missing-row default without creating the row", () => {
     expect(loadExecApprovals()).toEqual({
       version: 1,
@@ -182,18 +255,27 @@ describe("exec approvals SQLite store", () => {
 
   it("mints one socket token and reuses it on later initialization", () => {
     const first = ensureExecApprovals();
+    const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
     const second = ensureExecApprovals();
+    expect(writes).not.toHaveBeenCalled();
+    writes.mockRestore();
     expect(first.socket?.token).toMatch(/^[A-Za-z0-9_-]+$/u);
     expect(first.socket?.token).toBe(second.socket?.token);
     expect(first.socket?.path).toBe(second.socket?.path);
     expect(row()).toMatchObject({ has_socket_token: 1, socket_path: first.socket?.path });
   });
 
-  it("fails closed and warns once for malformed raw_json", () => {
+  it.each([
+    { name: "invalid JSON", raw: "{not-json" },
+    {
+      name: "an invalid own prototype-key policy",
+      raw: '{"version":1,"agents":{"__proto__":{"security":42}}}',
+    },
+  ])("fails closed and warns once for $name", ({ raw }) => {
     const { db } = openOpenClawStateDatabase();
     db.prepare(
       "INSERT INTO exec_approvals_config (config_key, raw_json, socket_path, has_socket_token, default_security, default_ask, default_ask_fallback, auto_allow_skills, agent_count, allowlist_count, updated_at_ms) VALUES (?, ?, NULL, 0, NULL, NULL, NULL, NULL, 0, 0, 1)",
-    ).run("current", "{not-json");
+    ).run("current", raw);
 
     expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
     expect(loadExecApprovals().defaults?.security).toBe("deny");
@@ -221,18 +303,20 @@ describe("exec approvals SQLite store", () => {
     expect(commit).not.toHaveBeenCalled();
   });
 
-  it("removes one agent and preserves unrelated policy", async () => {
+  it("removes one agent and preserves wildcard and unrelated policy", async () => {
     saveExecApprovals({
       version: 1,
       agents: {
-        removed: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/old" }] },
+        "*": { security: "deny" },
+        main: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/old" }] },
         kept: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/keep" }] },
       },
     });
-    seedAgentDeletionJournal("removed");
+    seedAgentDeletionJournal("main");
 
-    await expect(withAgentExecApprovalsRemoved("removed", async () => "ok")).resolves.toBe("ok");
+    await expect(withAgentExecApprovalsRemoved("main", async () => "ok")).resolves.toBe("ok");
     expect(loadExecApprovals().agents).toEqual({
+      "*": { security: "deny" },
       kept: expect.objectContaining({
         allowlist: [expect.objectContaining({ pattern: "/usr/bin/keep" })],
       }),
@@ -248,14 +332,8 @@ describe("exec approvals SQLite store", () => {
       },
     });
     seedAgentDeletionJournal("removed");
-    let notifyCommitStarted!: () => void;
-    const commitStarted = new Promise<void>((resolve) => {
-      notifyCommitStarted = resolve;
-    });
-    let finishCommit!: () => void;
-    const commitGate = new Promise<void>((resolve) => {
-      finishCommit = resolve;
-    });
+    const { promise: commitStarted, resolve: notifyCommitStarted } = createDeferred();
+    const { promise: commitGate, resolve: finishCommit } = createDeferred();
     const deletion = withAgentExecApprovalsRemoved("removed", async () => {
       notifyCommitStarted();
       await commitGate;
@@ -283,14 +361,8 @@ describe("exec approvals SQLite store", () => {
   it("allows unrelated writers while deleting an agent with no approval policy", async () => {
     saveExecApprovals({ version: 1, agents: { kept: { security: "deny" } } });
     seedAgentDeletionJournal("missing");
-    let notifyCommitStarted!: () => void;
-    const commitStarted = new Promise<void>((resolve) => {
-      notifyCommitStarted = resolve;
-    });
-    let finishCommit!: () => void;
-    const commitGate = new Promise<void>((resolve) => {
-      finishCommit = resolve;
-    });
+    const { promise: commitStarted, resolve: notifyCommitStarted } = createDeferred();
+    const { promise: commitGate, resolve: finishCommit } = createDeferred();
     const deletion = withAgentExecApprovalsRemoved("missing", async () => {
       notifyCommitStarted();
       await commitGate;

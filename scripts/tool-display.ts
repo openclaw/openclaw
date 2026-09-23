@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TOOL_DISPLAY_CONFIG } from "../src/agents/tool-display-config.js";
+import { isTestOnlyPath } from "./lib/changed-path-facts.mjs";
 
 type ToolDisplayConfig = typeof TOOL_DISPLAY_CONFIG;
 
@@ -68,7 +69,7 @@ function ensureCoreToolCoverage() {
     collectToolNamesFromFile(sourcePath, toolNames);
   }
   for (const entry of fs.readdirSync(path.join(repoRoot, "src/agents/tools"))) {
-    if (!entry.endsWith(".ts") || entry.endsWith(".test.ts")) {
+    if (!entry.endsWith(".ts") || isTestOnlyPath(entry)) {
       continue;
     }
     collectToolNamesFromFile(path.join(repoRoot, "src/agents/tools", entry), toolNames);
@@ -93,5 +94,18 @@ function collectToolNamesFromFile(sourcePath: string, names: Set<string>) {
 }
 
 function serializeToolDisplayConfig(config: ToolDisplayConfig = TOOL_DISPLAY_CONFIG): string {
-  return `${JSON.stringify(config, null, 2)}\n`;
+  const tools = Object.entries(config.tools);
+  return [
+    "{",
+    `  "version": ${JSON.stringify(config.version)},`,
+    `  "fallback": ${JSON.stringify(config.fallback)},`,
+    '  "tools": {',
+    ...tools.map(
+      ([name, spec], index) =>
+        `    ${JSON.stringify(name)}: ${JSON.stringify(spec)}${index === tools.length - 1 ? "" : ","}`,
+    ),
+    "  }",
+    "}",
+    "",
+  ].join("\n");
 }

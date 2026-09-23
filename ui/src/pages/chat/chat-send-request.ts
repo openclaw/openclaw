@@ -1,49 +1,64 @@
-import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
+import type {
+  ChatSendIntent,
+  QueueMode,
+} from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { t } from "../../i18n/index.ts";
+import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
-import type { ChatState } from "./chat-history.ts";
+import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { normalizeChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 
 export async function requestChatSend(
   state: ChatState,
   params: {
     message: string;
+    workContext?: ChatWorkContext;
+    mentions?: readonly HumanMention[];
     attachments?: ChatAttachment[];
     runId: string;
     sessionKey?: string;
     agentId?: string;
     queueMode?: QueueMode;
+    intent?: ChatSendIntent;
+    sessionId?: string;
     replyToId?: string;
     expectedLeafEntryId?: string | null;
-    expectedRunId?: string;
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
+  if (chatProviderReviewRow(state, routing.sessionKey, routing.selectedAgentId)?.providerReview) {
+    throw new Error(t("chat.providerReview.pausedBody"));
+  }
+  const sessionId = params.sessionId ?? (params.intent ? undefined : routing.sessionId);
   const controlUiReconnectResume = Boolean(
-    routing.sessionId && state.reconnectResumeSessionId === routing.sessionId,
+    !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
   );
   const payload = await state.client!.request("chat.send", {
     sessionKey: routing.sessionKey,
     ...(isUiGlobalSessionKey(routing.sessionKey) && routing.selectedAgentId
       ? { agentId: routing.selectedAgentId }
       : {}),
-    ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
+    ...(sessionId ? { sessionId } : {}),
     ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
     message: params.message,
+    ...(params.workContext ? { workContext: params.workContext } : {}),
+    ...(params.mentions?.length ? { mentions: params.mentions } : {}),
+    ...(params.intent ? { intent: params.intent } : {}),
     deliver: false,
     ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     ...(params.queueMode ? { queueMode: params.queueMode } : {}),
     ...(params.expectedLeafEntryId !== undefined
       ? { expectedLeafEntryId: params.expectedLeafEntryId }
       : {}),
-    ...(params.expectedRunId ? { expectedRunId: params.expectedRunId } : {}),
     idempotencyKey: params.runId,
     attachments: buildChatApiAttachments(params.attachments),
   });
@@ -53,9 +68,10 @@ export async function requestChatSend(
   return normalizeChatSendAck(payload, params.runId);
 }
 
-export function resolveDisplayedLeafEntryId(
-  state: Pick<ChatState, "chatDisplayedLeafEntryId">,
-): string | null | undefined {
+export function resolveDisplayedLeafEntryId(state: ChatState): string | null | undefined {
+  if (state.chatLoading || isInitialChatHistoryUnavailable(state)) {
+    return undefined;
+  }
   if (state.chatDisplayedLeafEntryId === null) {
     return null;
   }
@@ -104,44 +120,4 @@ function resolveChatSendRouting(
     ...(selectedAgentId ? { selectedAgentId } : {}),
     ...(sessionId ? { sessionId } : {}),
   };
-}
-
-export async function requestSkillWorkshopRevisionChatSend(
-  state: ChatState,
-  params: {
-    proposalId: string;
-    instructions: string;
-    runId: string;
-    sessionKey?: string;
-    agentId?: string;
-    targetAgentId?: string;
-  },
-): Promise<ChatSendAck> {
-  if (
-    !canCallGatewayMethod(
-      {
-        client: state.client,
-        hello: state.hello,
-        phase: state.connected ? "connected" : "offline",
-      },
-      "skills.proposals.requestRevision",
-      "operator.admin",
-    )
-  ) {
-    throw new Error("Skill Workshop revision requests require operator.admin access.");
-  }
-  const routing = resolveChatSendRouting(state, {
-    sessionKey: params.sessionKey,
-    agentId: params.targetAgentId,
-  });
-  const payload = await state.client!.request("skills.proposals.requestRevision", {
-    ...(params.agentId ? { agentId: normalizeAgentId(params.agentId) } : {}),
-    ...(routing.selectedAgentId ? { targetAgentId: routing.selectedAgentId } : {}),
-    proposalId: params.proposalId,
-    instructions: params.instructions,
-    sessionKey: routing.sessionKey,
-    ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
-    idempotencyKey: params.runId,
-  });
-  return normalizeChatSendAck(payload, params.runId);
 }

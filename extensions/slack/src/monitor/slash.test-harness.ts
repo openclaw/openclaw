@@ -1,5 +1,6 @@
 // Slack plugin module implements slash harness behavior.
 import { vi } from "vitest";
+import { installSlackTestRuntime } from "../test-runtime.test-support.js";
 
 type AsyncMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
 
@@ -24,13 +25,15 @@ const mocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./slash-dispatch.runtime.js", () => {
+vi.mock("./slash-dispatch.runtime.js", async (importOriginal) => {
   return {
+    ...(await importOriginal<typeof import("./slash-dispatch.runtime.js")>()),
     deliverSlackSlashReplies: (params: unknown) => mocks.deliverSlackSlashRepliesMock(params),
     dispatchChannelInboundTurn: async (plan: {
       cfg: unknown;
       ctxPayload: unknown;
       route: { sessionKey: string };
+      dispatchReplyFromConfig?: unknown;
       dispatcherOptions?: { onSettled?: () => unknown };
       delivery: { deliver?: unknown; onError?: unknown };
       replyOptions?: unknown;
@@ -90,7 +93,7 @@ vi.mock("./slash-dispatch.runtime.js", () => {
 });
 
 type SlashHarnessMocks = {
-  dispatchMock: ReturnType<typeof vi.fn>;
+  dispatchMock: typeof mocks.dispatchMock;
   turnPlanMock: ReturnType<typeof vi.fn>;
   readAllowFromStoreMock: ReturnType<typeof vi.fn>;
   upsertPairingRequestMock: ReturnType<typeof vi.fn>;
@@ -107,6 +110,7 @@ export function getSlackSlashMocks(): SlashHarnessMocks {
 }
 
 export function resetSlackSlashMocks() {
+  installSlackTestRuntime();
   mocks.dispatchMock.mockReset().mockResolvedValue({ counts: { final: 1, tool: 0, block: 0 } });
   mocks.turnPlanMock.mockReset();
   mocks.readAllowFromStoreMock.mockReset().mockResolvedValue([]);

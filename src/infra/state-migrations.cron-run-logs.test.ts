@@ -7,6 +7,8 @@ import { readCronTaskRunHistoryPage } from "../cron/task-run-history.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  repairOpenClawStateDatabaseSchema,
+  repairOpenClawStateDatabaseSchemaIfNeeded,
 } from "../state/openclaw-state-db.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -14,7 +16,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 const CRON_RUN_LOG_TASK_IMPORT_MIGRATION_ID = "state:cron-run-logs-to-task-runs:v1";
 
 describe("cron run-log task import", () => {
-  it("imports legacy cron history into task runs once at state database open", async () => {
+  it("preserves legacy cron history on runtime refusal, then Doctor imports it once", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-run-log-import-" },
       async (state) => {
@@ -158,6 +160,23 @@ describe("cron run-log task import", () => {
           fixture.close();
         }
 
+        expect(repairOpenClawStateDatabaseSchemaIfNeeded()).toEqual({
+          changes: [],
+          warnings: [expect.stringMatching(/legacy-cron-run-logs.*doctor --fix/u)],
+        });
+        expect(() => openOpenClawStateDatabase()).toThrow(/legacy-cron-run-logs.*doctor --fix/u);
+        const preserved = new DatabaseSync(databasePath, { readOnly: true });
+        try {
+          expect(preserved.prepare("SELECT COUNT(*) AS count FROM cron_run_logs").get()).toEqual({
+            count: 8,
+          });
+          expect(preserved.prepare("SELECT COUNT(*) AS count FROM task_runs").get()).toEqual({
+            count: 2,
+          });
+        } finally {
+          preserved.close();
+        }
+        expect(repairOpenClawStateDatabaseSchema().warnings).toEqual([]);
         const reopened = openOpenClawStateDatabase();
         const report = reopened.db
           .prepare("SELECT report_json FROM migration_runs WHERE id = ?")
@@ -201,7 +220,6 @@ describe("cron run-log task import", () => {
             "SELECT task_id, cleanup_after FROM task_runs WHERE task_id LIKE 'cron-runlog-import:%' ORDER BY task_id",
           )
           .all() as Array<{ task_id: string; cleanup_after: number | null }>;
-        expect(imported).toHaveLength(4);
         expect(imported.map((row) => row.task_id)).toEqual([
           "cron-runlog-import:legacy-history-job:1100:1",
           "cron-runlog-import:legacy-history-job:2100:1",

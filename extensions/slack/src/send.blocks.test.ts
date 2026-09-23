@@ -67,9 +67,7 @@ function interleavedNativeDataBlocks(): Array<Record<string, unknown>> {
           type: "static_select",
           action_id: "private-select",
           placeholder: { type: "plain_text", text: "Choose owner" },
-          options: [
-            { text: { type: "plain_text", text: "Secret option" }, value: "private-option" },
-          ],
+          options: [{ text: { type: "plain_text", text: "Operations" }, value: "private-option" }],
         },
       ],
     },
@@ -81,7 +79,7 @@ const INTERLEAVED_NATIVE_DATA_ACCESSIBILITY = [
   "Before",
   "Pipeline report (table)\nAccount\tARR\nAcme\t$125k",
   "After",
-  "Approve\nChoose owner",
+  "Approve\nChoose owner\nOperations",
 ].join("\n\n");
 
 function slackDnsRequestError(): Error {
@@ -95,50 +93,16 @@ function slackDnsRequestError(): Error {
   });
 }
 
-describe("sendMessageSlack NO_REPLY guard", () => {
-  it("suppresses NO_REPLY text before any Slack API call", async () => {
+describe("sendMessageSlack NO_REPLY literal", () => {
+  // Silent-reply stripping is owned by core auto-reply normalization before
+  // payloads reach outbound; a literal NO_REPLY sent through the message tool
+  // must deliver on Slack exactly like every sibling channel.
+  it("delivers a literal NO_REPLY text like sibling channels", async () => {
     const client = createSlackSendTestClient();
     const result = await sendMessageSlack("channel:C123", "NO_REPLY", {
       token: "xoxb-test",
       cfg: SLACK_TEST_CFG,
       client,
-    });
-
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
-    expect(result.messageId).toBe("suppressed");
-    expect(result.receipt.platformMessageIds).toStrictEqual([]);
-  });
-
-  it("suppresses NO_REPLY with surrounding whitespace", async () => {
-    const client = createSlackSendTestClient();
-    const result = await sendMessageSlack("channel:C123", "  NO_REPLY  ", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-    });
-
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
-    expect(result.messageId).toBe("suppressed");
-  });
-
-  it("does not suppress substantive text containing NO_REPLY", async () => {
-    const client = createSlackSendTestClient();
-    await sendMessageSlack("channel:C123", "This is not a NO_REPLY situation", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-    });
-
-    expect(client.chat.postMessage).toHaveBeenCalled();
-  });
-
-  it("does not suppress NO_REPLY when blocks are attached", async () => {
-    const client = createSlackSendTestClient();
-    const result = await sendMessageSlack("channel:C123", "NO_REPLY", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      blocks: [{ type: "section", text: { type: "mrkdwn", text: "content" } }],
     });
 
     expect(client.chat.postMessage).toHaveBeenCalled();
@@ -248,26 +212,25 @@ describe("sendMessageSlack chunking", () => {
     expect(postedMessage(client).text).toBe(message);
   });
 
-  it("splits oversized fallback text through the normal Slack sender", async () => {
-    const client = createSlackSendTestClient();
-    const message = "a".repeat(8500);
+  it.each([false, true])(
+    "keeps emoji whole when plain text mode is %s",
+    async (textIsSlackPlainText) => {
+      const client = createSlackSendTestClient();
+      const prefix = "a".repeat(SLACK_TEXT_LIMIT - 2);
+      const family = "👨‍👩‍👧‍👦";
 
-    await sendMessageSlack("channel:C123", message, {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-    });
+      await sendMessageSlack("channel:C123", `${prefix}${family}Z`, {
+        cfg: SLACK_TEST_CFG,
+        client,
+        textIsSlackPlainText,
+      });
 
-    const postedTexts = client.chat.postMessage.mock.calls.map((call) => call[0].text);
-
-    expect(postedTexts).toHaveLength(2);
-    expect(
-      postedTexts
-        .map((text, index) => ({ index, length: typeof text === "string" ? text.length : null }))
-        .filter((text) => text.length === null || text.length > 8000),
-    ).toStrictEqual([]);
-    expect(postedTexts.join("")).toBe(message);
-  });
+      expect(client.chat.postMessage.mock.calls.map((call) => call[0].text)).toEqual([
+        prefix,
+        `${family}Z`,
+      ]);
+    },
+  );
 
   it("keeps Slack mrkdwn code spans closed around protected tokens when chunking", async () => {
     const client = createSlackSendTestClient();
@@ -307,6 +270,19 @@ describe("sendMessageSlack chunking", () => {
     ).rejects.toThrow("second chunk failed");
 
     expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["m1"]);
+  });
+
+  it("rejects a successful Slack post that returns no message timestamp", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockResolvedValueOnce({ ok: true, channel: "C123" });
+
+    await expect(
+      sendMessageSlack("channel:C123", "hello", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+      }),
+    ).rejects.toThrow("Slack chat.postMessage returned no message timestamp");
   });
 
   it("preserves the first canonical response thread across chunked sends", async () => {
@@ -450,6 +426,19 @@ describe("sendMessageSlack blocks", () => {
     expect(
       delivered.some((result) => result.receipt.parts[0]?.kind === "card" && !result.meta),
     ).toBe(true);
+    expect(
+      aggregateResult.receipt.parts.map(({ platformMessageId, kind, index }) => ({
+        platformMessageId,
+        kind,
+        index,
+      })),
+    ).toEqual(
+      delivered.map((result, index) => ({
+        platformMessageId: result.messageId,
+        kind: result.receipt.parts[0]?.kind,
+        index,
+      })),
+    );
     const questionDelivery = delivered.find((delivery) => delivery.meta);
     expect(questionDelivery?.messageId).not.toBe(aggregateResult.messageId);
     expect(JSON.stringify(aggregateResult.meta)).toBe(
@@ -512,7 +501,7 @@ describe("sendMessageSlack blocks", () => {
       mrkdwn: false,
       text: INTERLEAVED_NATIVE_DATA_ACCESSIBILITY,
     });
-    expect(postedMessage(client).text).not.toMatch(/private|Secret option/u);
+    expect(postedMessage(client).text).not.toMatch(/private/u);
   });
 
   it("keeps interleaved native data and raw controls ordered after invalid_blocks", async () => {
@@ -548,7 +537,7 @@ describe("sendMessageSlack blocks", () => {
       text: INTERLEAVED_NATIVE_DATA_ACCESSIBILITY,
     });
     for (const index of [0, 1]) {
-      expect(postedMessage(client, index).text).not.toMatch(/private|Secret option/u);
+      expect(postedMessage(client, index).text).not.toMatch(/private/u);
     }
   });
 

@@ -1,17 +1,19 @@
+import { isUtf8 } from "node:buffer";
 import path from "node:path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { pathExists, root, walkDirectory } from "../../infra/fs-safe.js";
+import { hasErrnoCode } from "../../infra/errno.js";
+import { pathExists, root, walkDirectory, type WalkDirectoryEntry } from "../../infra/fs-safe.js";
 import type {
   PluginHookSkillBundleFile,
   PluginHookSkillBundleSnapshot,
 } from "../../plugins/hook-types.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
-import type { PreparedSkillProposalSupportFile } from "./store.js";
-import type { SkillProposalReadResult } from "./types.js";
+import type { PreparedSkillProposalSupportFile, SkillProposalReadResult } from "./types.js";
 
 const MAX_EVALUATION_FILES = 256;
 const MAX_EVALUATION_FILE_BYTES = 1024 * 1024;
 const MAX_EVALUATION_BUNDLE_BYTES = 8 * 1024 * 1024;
+const MAX_EVALUATION_PATH_DEPTH = 16;
 const EXCLUDED_ROOT_DIRS = new Set([".clawhub", ".clawdhub", ".openclaw"]);
 
 export async function buildSkillProposalEvaluationBundles(params: {
@@ -68,21 +70,40 @@ export async function buildSkillProposalEvaluationBundles(params: {
   };
 }
 
-export async function readSkillProposalTargetTreeSha256(skillDir: string): Promise<string> {
-  return hashSkillTree(await readSkillTreeFiles(skillDir));
+export async function readSkillProposalTargetTreeSha256(
+  skillDir: string,
+  options: { includeRootMetadata?: boolean } = {},
+): Promise<string> {
+  return hashSkillTree(await readSkillTreeFiles(skillDir, options.includeRootMetadata));
 }
 
-async function readSkillTreeFiles(skillDir: string): Promise<PluginHookSkillBundleFile[]> {
-  if (!(await pathExists(skillDir))) {
-    return [];
-  }
+async function readSkillTreeFiles(
+  skillDir: string,
+  includeRootMetadata = false,
+): Promise<PluginHookSkillBundleFile[]> {
+  const include = (entry: WalkDirectoryEntry) =>
+    includeRootMetadata || entry.depth > 1 || !EXCLUDED_ROOT_DIRS.has(entry.name);
   const scanned = await walkDirectory(skillDir, {
-    maxDepth: 16,
+    // Inspect one extra level so deeper content cannot silently disappear from the hash.
+    maxDepth: MAX_EVALUATION_PATH_DEPTH + 1,
     maxEntries: MAX_EVALUATION_FILES * 2,
     symlinks: "include",
+    include,
+    descend: include,
   });
-  if (scanned.truncated) {
-    throw new Error(`Skill evaluation bundle exceeds ${MAX_EVALUATION_FILES} files.`);
+  if (
+    scanned.truncated ||
+    scanned.entries.some((entry) => entry.depth > MAX_EVALUATION_PATH_DEPTH)
+  ) {
+    throw new Error("Skill evaluation bundle exceeds traversal limits.");
+  }
+  const failed = scanned.failedDirs[0];
+  if (failed) {
+    // Only an absent create target is empty; inaccessible or partly read trees are not.
+    if (!failed.relativePath && hasErrnoCode(failed.error, "ENOENT")) {
+      return [];
+    }
+    throw failed.error;
   }
   const skillRoot = await root(skillDir);
   const files: PluginHookSkillBundleFile[] = [];
@@ -90,14 +111,10 @@ async function readSkillTreeFiles(skillDir: string): Promise<PluginHookSkillBund
   for (const entry of scanned.entries.toSorted((a, b) =>
     a.relativePath.localeCompare(b.relativePath),
   )) {
-    const portablePath = entry.relativePath.split(path.sep).join("/");
-    if (
-      !portablePath ||
-      EXCLUDED_ROOT_DIRS.has(portablePath.split("/")[0] ?? "") ||
-      entry.kind === "directory"
-    ) {
+    if (entry.kind === "directory") {
       continue;
     }
+    const portablePath = entry.relativePath.split(path.sep).join("/");
     if (entry.kind !== "file") {
       throw new Error(`Skill evaluation bundle contains unsupported entry: ${portablePath}`);
     }
@@ -118,12 +135,11 @@ async function readSkillTreeFiles(skillDir: string): Promise<PluginHookSkillBund
 }
 
 function fileFromBuffer(relativePath: string, content: Buffer): PluginHookSkillBundleFile {
-  const utf8 = content.toString("utf8");
-  const isUtf8 = !utf8.includes("\0") && Buffer.from(utf8, "utf8").equals(content);
+  const encoding = !content.includes(0) && isUtf8(content) ? "utf8" : "base64";
   return {
     path: relativePath,
-    content: isUtf8 ? utf8 : content.toString("base64"),
-    encoding: isUtf8 ? "utf8" : "base64",
+    content: content.toString(encoding),
+    encoding,
     sha256: sha256Hex(content),
     sizeBytes: content.byteLength,
   };

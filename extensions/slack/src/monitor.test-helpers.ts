@@ -1,16 +1,24 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-// Slack helper module supports monitor helpers behavior.
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+// Slack helper module supports monitor helpers behavior.
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
+import type { sendMessageSlack } from "./monitor/send.runtime.js";
 import { setSlackRuntime } from "./runtime.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;
@@ -63,8 +71,9 @@ type SlackTestState = {
   appConstructorArgs?: Record<string, unknown>;
   appStartMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   appStopMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  httpRequestListenerMock: Mock<(...args: unknown[]) => unknown>;
   interactionRegistrations: string[];
-  sendMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  sendMock: Mock<typeof sendMessageSlack>;
   replyMock: Mock<(...args: unknown[]) => unknown>;
   updateLastRouteMock: Mock<(...args: unknown[]) => unknown>;
   reactMock: Mock<(...args: unknown[]) => unknown>;
@@ -77,45 +86,48 @@ type SlackTestState = {
   >;
   socketModeLogger?: { error: (...args: unknown[]) => void };
   createSlackStartupAuthClientMock: Mock<SlackStartupAuthClientFactory>;
-  createSlackStartupAuthClientActual?: SlackStartupAuthClientFactory;
 };
 
-// globalThis-backed singleton: with isolate=false, a vi.resetModules() in any
-// sibling file recreates this module while the cached __slackClient on
-// globalThis keeps routing reactions to the OLD instance's mocks — tests then
-// assert on fresh mocks that never receive calls. One shared state object
-// keeps every module incarnation and the cached client converged.
-const slackTestState: SlackTestState = vi.hoisted(() => {
-  const globalState = globalThis as { __slackTestState?: SlackTestState };
-  globalState["__slackTestState"] ??= {
-    config: {} as Record<string, unknown>,
-    appConstructorArgs: undefined,
-    appStartMock: vi.fn(),
-    appStopMock: vi.fn(),
-    interactionRegistrations: [],
-    sendMock: vi.fn(),
-    replyMock: vi.fn(),
-    updateLastRouteMock: vi.fn(),
-    reactMock: vi.fn(),
-    reactionAddMock: vi.fn(),
-    reactionRemoveMock: vi.fn(),
-    readAllowFromStoreMock: vi.fn(),
-    upsertPairingRequestMock: vi.fn(),
-    resolveSlackUserAllowlistMock: vi.fn(),
-    socketModeLogger: undefined,
-    createSlackStartupAuthClientMock: vi.fn(),
-  } as SlackTestState;
-  return globalState["__slackTestState"];
-});
+// The runner resets this module between files, retiring Bolt clients and their mocks together.
+const { state: slackTestState, transport: slackTestTransport } = vi.hoisted(
+  (): {
+    state: SlackTestState;
+    transport: { handlers?: Map<string, SlackHandler>; client?: SlackClient };
+  } => ({
+    state: {
+      config: {},
+      appConstructorArgs: undefined,
+      appStartMock: vi.fn(),
+      appStopMock: vi.fn(),
+      httpRequestListenerMock: vi.fn(),
+      interactionRegistrations: [],
+      sendMock: vi.fn(),
+      replyMock: vi.fn(),
+      updateLastRouteMock: vi.fn(),
+      reactMock: vi.fn(),
+      reactionAddMock: vi.fn(),
+      reactionRemoveMock: vi.fn(),
+      readAllowFromStoreMock: vi.fn(),
+      upsertPairingRequestMock: vi.fn(),
+      resolveSlackUserAllowlistMock: vi.fn(),
+      socketModeLogger: undefined,
+      createSlackStartupAuthClientMock: vi.fn(),
+    },
+    transport: {},
+  }),
+);
 
 export const getSlackTestState = (): SlackTestState => slackTestState;
 
-export function useRealSlackStartupAuthClientOnce(): void {
-  const actual = slackTestState.createSlackStartupAuthClientActual;
-  if (!actual) {
-    throw new Error("real Slack WebClient factory is unavailable");
-  }
-  slackTestState.createSlackStartupAuthClientMock.mockImplementationOnce(actual);
+export function useSlackStartupAuthClientOnce(factory: SlackStartupAuthClientFactory): void {
+  slackTestState.createSlackStartupAuthClientMock.mockImplementationOnce(factory);
+}
+
+export async function runSlackHandlerWithDispatch(
+  handler: SlackHandler,
+  args: unknown,
+): Promise<void> {
+  await handler(withSlackDispatchLifecycle(args));
 }
 
 type SlackClient = {
@@ -128,11 +140,7 @@ type SlackClient = {
   users: {
     info: Mock<(...args: unknown[]) => Promise<{ user: { profile: { display_name: string } } }>>;
   };
-  assistant: {
-    threads: {
-      setStatus: Mock<(...args: unknown[]) => Promise<{ ok: boolean }>>;
-    };
-  };
+  apiCall: Mock<(...args: unknown[]) => Promise<{ ok: boolean }>>;
   reactions: {
     add: (...args: unknown[]) => unknown;
     remove: (...args: unknown[]) => unknown;
@@ -144,27 +152,19 @@ export const getSlackHandlers = () => ensureSlackTestRuntime().handlers;
 export const getSlackClient = () => ensureSlackTestRuntime().client;
 
 export function disposeSlackTestRuntime(): void {
-  const globalState = globalThis as {
-    __slackHandlers?: Map<string, SlackHandler>;
-    __slackClient?: SlackClient;
-  };
-  Reflect.deleteProperty(globalState, "__slackHandlers");
-  Reflect.deleteProperty(globalState, "__slackClient");
+  delete slackTestTransport.handlers;
+  delete slackTestTransport.client;
 }
 
 function ensureSlackTestRuntime(): {
   handlers: Map<string, SlackHandler>;
   client: SlackClient;
 } {
-  const globalState = globalThis as {
-    __slackHandlers?: Map<string, SlackHandler>;
-    __slackClient?: SlackClient;
-  };
-  if (!globalState["__slackHandlers"]) {
-    globalState["__slackHandlers"] = new Map<string, SlackHandler>();
+  if (!slackTestTransport.handlers) {
+    slackTestTransport.handlers = new Map<string, SlackHandler>();
   }
-  if (!globalState["__slackClient"]) {
-    globalState["__slackClient"] = {
+  if (!slackTestTransport.client) {
+    slackTestTransport.client = {
       auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user", bot_id: "bot-id" }) },
       conversations: {
         info: vi.fn().mockResolvedValue({
@@ -178,33 +178,22 @@ function ensureSlackTestRuntime(): {
           user: { profile: { display_name: "Ada" } },
         }),
       },
-      assistant: {
-        threads: {
-          setStatus: vi.fn().mockResolvedValue({ ok: true }),
-        },
-      },
+      apiCall: vi.fn().mockResolvedValue({ ok: true }),
       reactions: {
-        add: () => undefined,
-        remove: () => undefined,
+        add: (...args: unknown[]) => {
+          slackTestState.reactionAddMock(...args);
+          return slackTestState.reactMock(...args);
+        },
+        remove: (...args: unknown[]) => {
+          slackTestState.reactionRemoveMock(...args);
+          return slackTestState.reactMock(...args);
+        },
       },
     };
   }
-  const client = globalState["__slackClient"];
-  // The non-isolated Slack lane keeps this global client across file-level module resets.
-  // Rebind delegates so reaction assertions always target the current file's hoisted mocks.
-  client.reactions = {
-    add: (...args: unknown[]) => {
-      slackTestState.reactionAddMock(...args);
-      return slackTestState.reactMock(...args);
-    },
-    remove: (...args: unknown[]) => {
-      slackTestState.reactionRemoveMock(...args);
-      return slackTestState.reactMock(...args);
-    },
-  };
   return {
-    handlers: globalState["__slackHandlers"],
-    client,
+    handlers: slackTestTransport.handlers,
+    client: slackTestTransport.client,
   };
 }
 
@@ -263,7 +252,7 @@ export async function stopSlackMonitor(params: {
   await params.run;
   // A stopped provider's handlers must not satisfy the next start's
   // waitForSlackEvent — see the reset-time clear above.
-  (globalThis as { __slackHandlers?: Map<string, SlackHandler> })["__slackHandlers"]?.clear();
+  slackTestTransport.handlers?.clear();
 }
 
 async function runSlackEventOnce(
@@ -276,9 +265,12 @@ async function runSlackEventOnce(
   const handler = await getSlackHandlerOrThrow(name);
   // Normal Bolt handlers return after queue admission. Terminal-state tests use the
   // durable-ingress lifecycle so this helper can await the actual dispatch boundary.
-  const handlerArgs = opts?.awaitDispatch ? withSlackDispatchLifecycle(args) : args;
   try {
-    await handler(handlerArgs);
+    if (opts?.awaitDispatch) {
+      await runSlackHandlerWithDispatch(handler, args);
+    } else {
+      await handler(args);
+    }
   } finally {
     await stopSlackMonitor({ controller, run });
   }
@@ -310,17 +302,18 @@ export const defaultSlackTestConfig = () => ({
 
 let lastSlackTestStateDir: string | undefined;
 
-export function resetSlackTestState(config: Record<string, unknown> = defaultSlackTestConfig()) {
+export async function resetSlackTestState(
+  config: Record<string, unknown> = defaultSlackTestConfig(),
+) {
   // Fresh persistent state per test: the dispatch-dedupe guard writes logical
   // message keys to the state DB, and fixture ts values repeat across tests,
   // so a carried-over DB would dedupe unrelated test messages. realpath keeps
   // macOS /var vs /private/var symlinks out of resolver assertions.
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
-  // Clear worker-global Bolt handler registrations from previous test files:
-  // with isolate=false a stale "message" handler makes waitForSlackEvent
-  // return before THIS test's provider registers, dispatching through the old
-  // provider's closure config (reactions silently suppressed, replies fine).
-  (globalThis as { __slackHandlers?: Map<string, SlackHandler> })["__slackHandlers"]?.clear();
+  // Retire the previous monitor's handlers before another start can observe them.
+  slackTestTransport.handlers?.clear();
   if (lastSlackTestStateDir) {
     fs.rmSync(lastSlackTestStateDir, { recursive: true, force: true });
   }
@@ -330,6 +323,7 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   lastSlackTestStateDir = stateDir;
   process.env.OPENCLAW_STATE_DIR = stateDir;
   setSlackRuntime({
+    channel: createPluginRuntimeMock().channel,
     state: {
       openChannelIngressQueue: (
         options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
@@ -347,8 +341,23 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   slackTestState.socketModeLogger = undefined;
   slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
   slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
+  slackTestState.httpRequestListenerMock.mockReset();
   slackTestState.interactionRegistrations.length = 0;
-  slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
+  slackTestState.sendMock.mockReset().mockImplementation(async (target, _text, options) => {
+    const channelId = target.replace(/^channel:/, "");
+    const messageId = `2000000000.${String(slackTestState.sendMock.mock.calls.length).padStart(6, "0")}`;
+    const result = {
+      channelId,
+      messageId,
+      threadTs: options.threadTs,
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "slack", channelId, messageId }],
+        threadId: options.threadTs,
+      }),
+    };
+    await options.onDeliveryResult?.(result);
+    return result;
+  });
   slackTestState.replyMock.mockReset();
   slackTestState.updateLastRouteMock.mockReset();
   slackTestState.reactMock.mockReset();
@@ -383,7 +392,7 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   client.users.info.mockReset().mockResolvedValue({
     user: { profile: { display_name: "Ada" } },
   });
-  client.assistant.threads.setStatus.mockReset().mockResolvedValue({ ok: true });
+  client.apiCall.mockReset().mockResolvedValue({ ok: true });
   getSlackHandlers()?.clear();
 }
 
@@ -395,6 +404,7 @@ vi.mock("./monitor/config.runtime.js", async () => {
     ...actual,
     loadConfig: () => slackTestState.config,
     readSessionUpdatedAt: vi.fn(() => undefined),
+    getSessionEntry: vi.fn(() => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
     resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
     updateLastRoute: (...args: unknown[]) => slackTestState.updateLastRouteMock(...args),
@@ -426,7 +436,6 @@ vi.mock("./resolve-users.js", () => ({
 
 vi.mock("./client.js", async () => {
   const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
-  slackTestState.createSlackStartupAuthClientActual = actual.createSlackStartupAuthClient;
   return {
     ...actual,
     createSlackStartupAuthClient: (...args: Parameters<SlackStartupAuthClientFactory>) =>
@@ -436,7 +445,8 @@ vi.mock("./client.js", async () => {
 
 vi.mock("./monitor/send.runtime.js", () => {
   return {
-    sendMessageSlack: (...args: unknown[]) => slackTestState.sendMock(...args),
+    sendMessageSlack: (...args: Parameters<typeof sendMessageSlack>) =>
+      slackTestState.sendMock(...args),
   };
 });
 
@@ -503,14 +513,12 @@ vi.mock("@slack/bolt", () => {
     stop = (...args: unknown[]) => slackTestState.appStopMock(...args);
   }
   class HTTPReceiver {
-    requestListener = vi.fn();
+    requestListener = (...args: unknown[]) => slackTestState.httpRequestListenerMock(...args);
   }
   class SocketModeReceiver {
-    client = {
-      ...slackClient,
-      on: vi.fn(),
-      off: vi.fn(),
-    };
+    client = Object.assign(new EventEmitter(), slackClient, {
+      send: vi.fn<(envelopeId: string) => Promise<void>>().mockResolvedValue(undefined),
+    });
 
     constructor(args: { logger?: { error: (...args: unknown[]) => void } }) {
       slackTestState.socketModeLogger = args.logger;

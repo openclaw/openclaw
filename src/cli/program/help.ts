@@ -7,15 +7,16 @@ import { formatConsoleDiagnosticBlock } from "../../logging/json-console-line.js
 import { escapeRegExp } from "../../utils.js";
 import { isRootVersionInvocation } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
-import { replaceCliName, resolveCliName } from "../cli-name.js";
+import { CLI_NAME } from "../cli-name.js";
 import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
-import { getCommanderErrorCommandPath } from "./commander-parse-facts.js";
-import type { ProgramContext } from "./context.js";
+import {
+  getCommanderErrorCommandNames,
+  getCommanderErrorCommandPath,
+} from "./commander-parse-facts.js";
 import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
 import { formatCliParseErrorOutput } from "./error-output.js";
 import { getSubCliCommandsWithSubcommands } from "./subcli-descriptors.js";
 
-const CLI_NAME = resolveCliName();
 const CLI_NAME_PATTERN = escapeRegExp(CLI_NAME);
 const ROOT_COMMANDS_WITH_SUBCOMMANDS = new Set([
   ...getCoreCliCommandsWithSubcommands(),
@@ -65,7 +66,7 @@ export function formatProgramHelpOutput(str: string): string {
 
 export function configureProgramHelp(
   program: Command,
-  ctx: ProgramContext,
+  ctx: { programVersion: string },
   options?: { commandsWithSubcommands?: ReadonlySet<string> },
 ) {
   const commandsWithSubcommands = new Set([
@@ -119,13 +120,15 @@ export function configureProgramHelp(
       const message = formatProgramHelpOutput(str);
       process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message }));
     },
-    outputError: (str, write) =>
+    outputError: (str, write) => {
       write(
         formatCliParseErrorOutput(str, {
           argv: process.argv,
           commandPath: getCommanderErrorCommandPath(program),
+          commandNames: getCommanderErrorCommandNames(program),
         }),
-      ),
+      );
+    },
   });
 
   if (isRootVersionInvocation(process.argv)) {
@@ -146,7 +149,7 @@ export function configureProgramHelp(
   });
 
   const fmtExamples = EXAMPLES.map(
-    ([cmd, desc]) => `  ${theme.command(replaceCliName(cmd, CLI_NAME))}\n    ${theme.muted(desc)}`,
+    ([cmd, desc]) => `  ${theme.command(cmd)}\n    ${theme.muted(desc)}`,
   ).join("\n");
 
   program.addHelpText("afterAll", ({ command }) => {

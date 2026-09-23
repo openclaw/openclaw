@@ -33,16 +33,24 @@ actor TestIsolationLock {
 @MainActor
 enum TestIsolation {
     static func withIsolatedState<T>(
+        launchAgentHomeDirectory: URL? = nil,
         env: [String: String?] = [:],
         defaults: [String: Any?] = [:],
         _ body: () async throws -> T) async rethrows -> T
     {
-        func restoreUserDefaults(_ values: [String: Any?], userDefaults: UserDefaults) {
+        precondition(!env.keys.contains("OPENCLAW_PROFILE"), "Select the app profile before launching the test process")
+        // Foundation and WebKit cache user paths for the process lifetime. A
+        // per-test HOME can strand those caches in a deleted fixture directory.
+        precondition(
+            !env.keys.contains("HOME") && !env.keys.contains("CFFIXED_USER_HOME"),
+            "Keep the process home fixed; use launchAgentHomeDirectory for service fixtures")
+
+        func restoreUserDefaults(_ values: [String: Any?]) {
             for (key, value) in values {
                 if let value {
-                    userDefaults.set(value, forKey: key)
+                    AppDefaults.standard.set(value, forKey: key)
                 } else {
-                    userDefaults.removeObject(forKey: key)
+                    AppDefaults.standard.removeObject(forKey: key)
                 }
             }
         }
@@ -58,9 +66,33 @@ enum TestIsolation {
         }
 
         await TestIsolationLock.shared.acquire()
+        let previousLaunchAgentHome = LaunchAgentPlist.testingHomeDirectoryURL
+        LaunchAgentPlist.testingHomeDirectoryURL = launchAgentHomeDirectory
+        var env = env
+        // Config reads and writes also persist health/audit state. A config-only
+        // fixture must not send those writes to the process-wide state directory.
+        let ownedStateDirectory: URL? = if let configPath = env["OPENCLAW_CONFIG_PATH"] ?? nil,
+                                           !configPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                                           !env.keys.contains("OPENCLAW_STATE_DIR")
+        {
+            FileManager().temporaryDirectory
+                .appendingPathComponent("openclaw-config-state-\(UUID().uuidString)", isDirectory: true)
+        } else {
+            nil
+        }
+        if let ownedStateDirectory {
+            env["OPENCLAW_STATE_DIR"] = ownedStateDirectory.path
+        }
+        defer {
+            if let ownedStateDirectory {
+                try? FileManager().removeItem(at: ownedStateDirectory)
+            }
+        }
         var previousEnv: [String: String?] = [:]
         for (key, value) in env {
-            previousEnv[key] = getenv(key).map { String(cString: $0) }
+            // Absence is captured state: subscript assignment lets map infer String??,
+            // dropping absent keys instead of preserving them for restoration.
+            previousEnv.updateValue(getenv(key).map { String(cString: $0) }, forKey: key)
             if let value {
                 setenv(key, value, 1)
             } else {
@@ -68,25 +100,26 @@ enum TestIsolation {
             }
         }
 
-        let userDefaults = AppDefaults.standard
         var previousDefaults: [String: Any?] = [:]
         for (key, value) in defaults {
-            previousDefaults[key] = userDefaults.object(forKey: key)
+            previousDefaults.updateValue(AppDefaults.standard.object(forKey: key), forKey: key)
             if let value {
-                userDefaults.set(value, forKey: key)
+                AppDefaults.standard.set(value, forKey: key)
             } else {
-                userDefaults.removeObject(forKey: key)
+                AppDefaults.standard.removeObject(forKey: key)
             }
         }
 
         do {
             let result = try await body()
-            restoreUserDefaults(previousDefaults, userDefaults: userDefaults)
+            LaunchAgentPlist.testingHomeDirectoryURL = previousLaunchAgentHome
+            restoreUserDefaults(previousDefaults)
             restoreEnv(previousEnv)
             await TestIsolationLock.shared.release()
             return result
         } catch {
-            restoreUserDefaults(previousDefaults, userDefaults: userDefaults)
+            LaunchAgentPlist.testingHomeDirectoryURL = previousLaunchAgentHome
+            restoreUserDefaults(previousDefaults)
             restoreEnv(previousEnv)
             await TestIsolationLock.shared.release()
             throw error

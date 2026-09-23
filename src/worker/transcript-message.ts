@@ -1,3 +1,5 @@
+import { asOptionalRecord } from "@openclaw/normalization-core";
+import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type {
   WorkerTranscriptCommitRequestFrame,
   WorkerTranscriptMessage,
@@ -7,8 +9,13 @@ import {
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type { AgentMessage } from "../agents/runtime/index.js";
+import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
+import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js";
 import type { AssistantMessage, ProviderReplayState } from "../llm/types.js";
+import {
+  projectWorkerAssistantContent,
+  projectWorkerTokenUsage,
+} from "./assistant-message-projection.js";
 
 const SIZE_FRAME_ID = "00000000-0000-4000-8000-000000000000";
 type WorkerTranscriptAssistantMessage = Extract<WorkerTranscriptMessage, { role: "assistant" }>;
@@ -63,8 +70,35 @@ function cloneProviderReplay(state: ProviderReplayState): ProviderReplayState {
   };
 }
 
-function workerTranscriptMessageFrameBytes(message: WorkerTranscriptMessage): number | undefined {
-  const frame: WorkerTranscriptCommitRequestFrame = {
+function redactWorkerDiagnosticText(value: string): string {
+  const redacted = redactAgentDiagnosticPayload(value);
+  return typeof redacted === "string" ? redacted : "[unreadable diagnostic text]";
+}
+
+function projectWorkerDiagnostic(diagnostic: NonNullable<AssistantMessage["diagnostics"]>[number]) {
+  const details = asOptionalRecord(redactAgentDiagnosticPayload(diagnostic.details));
+  const error = diagnostic.error;
+  return {
+    type: diagnostic.type,
+    timestamp: diagnostic.timestamp,
+    ...(error
+      ? {
+          error: {
+            message: redactWorkerDiagnosticText(error.message),
+            ...(error.name ? { name: redactWorkerDiagnosticText(error.name) } : {}),
+            ...(error.stack ? { stack: redactWorkerDiagnosticText(error.stack) } : {}),
+            ...(error.code === undefined ? {} : { code: error.code }),
+          },
+        }
+      : {}),
+    ...(details ? { details } : {}),
+  };
+}
+
+function workerTranscriptMessageFrame(
+  message: WorkerTranscriptMessage,
+): WorkerTranscriptCommitRequestFrame {
+  return {
     type: "req",
     id: SIZE_FRAME_ID,
     method: "worker.transcript.commit",
@@ -75,8 +109,11 @@ function workerTranscriptMessageFrameBytes(message: WorkerTranscriptMessage): nu
       messages: [message],
     },
   };
+}
+
+function workerTranscriptMessageFrameBytes(message: WorkerTranscriptMessage): number | undefined {
   try {
-    return Buffer.byteLength(JSON.stringify(frame), "utf8");
+    return Buffer.byteLength(JSON.stringify(workerTranscriptMessageFrame(message)), "utf8");
   } catch {
     return undefined;
   }
@@ -121,74 +158,28 @@ export function projectWorkerProviderReplay<
 function toWorkerAssistantMessage(message: AssistantMessage): WorkerTranscriptAssistantMessage {
   return {
     role: "assistant",
-    content: message.content.map((part) => {
-      if (part.type === "text") {
-        return cloneTextContent(part);
-      }
-      if (part.type === "thinking") {
-        return {
-          type: "thinking" as const,
-          thinking: part.thinking,
-          ...(part.thinkingSignature ? { thinkingSignature: part.thinkingSignature } : {}),
-          ...(part.redacted === undefined ? {} : { redacted: part.redacted }),
-        };
-      }
-      return {
-        type: "toolCall" as const,
-        id: part.id,
-        name: part.name,
-        arguments: structuredClone(part.arguments),
-        ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
-        ...(part.executionMode ? { executionMode: part.executionMode } : {}),
-      };
-    }),
+    content: message.content.map(projectWorkerAssistantContent),
     api: message.api,
     provider: message.provider,
     model: message.model,
     ...(message.responseModel ? { responseModel: message.responseModel } : {}),
     ...(message.responseId ? { responseId: message.responseId } : {}),
     ...(message.diagnostics
-      ? {
-          diagnostics: message.diagnostics.map((diagnostic) => ({
-            type: diagnostic.type,
-            timestamp: diagnostic.timestamp,
-            ...(diagnostic.error
-              ? {
-                  error: {
-                    ...(diagnostic.error.name ? { name: diagnostic.error.name } : {}),
-                    message: diagnostic.error.message,
-                    ...(diagnostic.error.stack ? { stack: diagnostic.error.stack } : {}),
-                    ...(diagnostic.error.code === undefined ? {} : { code: diagnostic.error.code }),
-                  },
-                }
-              : {}),
-            ...(diagnostic.details ? { details: structuredClone(diagnostic.details) } : {}),
-          })),
-        }
+      ? { diagnostics: message.diagnostics.map(projectWorkerDiagnostic) }
       : {}),
     usage: {
-      input: message.usage.input,
-      output: message.usage.output,
-      cacheRead: message.usage.cacheRead,
-      cacheWrite: message.usage.cacheWrite,
+      ...projectWorkerTokenUsage(message.usage),
       ...(message.usage.contextUsage
         ? { contextUsage: structuredClone(message.usage.contextUsage) }
         : {}),
-      totalTokens: message.usage.totalTokens,
-      cost: {
-        input: message.usage.cost.input,
-        output: message.usage.cost.output,
-        cacheRead: message.usage.cost.cacheRead,
-        cacheWrite: message.usage.cost.cacheWrite,
-        total: message.usage.cost.total,
-        ...(message.usage.cost.totalOrigin ? { totalOrigin: message.usage.cost.totalOrigin } : {}),
-      },
     },
     stopReason: message.stopReason,
-    ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}),
+    ...(message.errorMessage
+      ? { errorMessage: redactWorkerDiagnosticText(message.errorMessage) }
+      : {}),
     ...(message.errorCode ? { errorCode: message.errorCode } : {}),
     ...(message.errorType ? { errorType: message.errorType } : {}),
-    ...(message.errorBody ? { errorBody: message.errorBody } : {}),
+    ...(message.errorBody ? { errorBody: redactWorkerDiagnosticText(message.errorBody) } : {}),
     timestamp: message.timestamp,
   };
 }
@@ -223,7 +214,9 @@ export function toWorkerTranscriptMessage(
         content: message.content.map((part) =>
           part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
         ),
-        ...(message.details === undefined ? {} : { details: structuredClone(message.details) }),
+        ...(message.details === undefined
+          ? {}
+          : { details: redactAgentDiagnosticPayload(message.details) }),
         isError: message.isError,
         timestamp: message.timestamp,
       },
@@ -233,6 +226,5 @@ export function toWorkerTranscriptMessage(
 }
 
 export function isWorkerTranscriptMessageFrameSafe(message: WorkerTranscriptMessage): boolean {
-  const frameBytes = workerTranscriptMessageFrameBytes(message);
-  return frameBytes !== undefined && frameBytes <= WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
+  return isWorkerTranscriptFrameWithinBudget(workerTranscriptMessageFrame(message));
 }

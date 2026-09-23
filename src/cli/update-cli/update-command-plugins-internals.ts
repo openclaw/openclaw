@@ -1,120 +1,206 @@
-import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import { pathExists } from "../../infra/fs-safe.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
-  resolveTrustedSourceLinkedOfficialClawHubSpec,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
-} from "../../plugins/official-external-install-records.js";
-import { resolveUserPath } from "../../utils.js";
-import {
-  hasNativePackageInstallPayload,
-  resolveBundleInstallRecordPayload,
-  validateBundleInstallRecordPayload,
-} from "./plugin-payload-validation.js";
+  normalizeUpdateFailureFacts,
+  type UpdateFailureFact,
+} from "../../infra/update-failure-facts.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { PluginPayloadSmokeFailure } from "../../plugins/payload-verification.js";
+import type { PluginUpdateOutcome } from "../../plugins/update.js";
+import { formatCliCommand } from "../command-format.js";
 
 export type PostCorePluginUpdateResult = NonNullable<
   NonNullable<UpdateRunResult["postUpdate"]>["plugins"]
 >;
 
-export type MissingPluginInstallPayload = {
-  pluginId: string;
-  installPath?: string;
-  reason: "missing-install-path" | "missing-package-dir" | "missing-package-json";
+/** Producer-classified notices shared by current and published updater handoffs. */
+export function collectPostCorePluginAdvisories(
+  result: PostCorePluginUpdateResult | undefined,
+): string[] {
+  return [
+    ...(result?.warnings ?? [])
+      .filter(
+        (warning) =>
+          warning.reason === "plugin-target-unavailable" ||
+          warning.reason === "plugin-operator-managed" ||
+          warning.reason === "doctor-advisory",
+      )
+      .map((warning) => warning.message),
+    ...(result?.npm?.outcomes ?? [])
+      .filter((outcome) => outcome.code === "source-bundled-plugin")
+      .map((outcome) => outcome.message),
+  ];
+}
+
+export function collectPostCorePluginFailureFacts(
+  result: PostCorePluginUpdateResult,
+  env: NodeJS.ProcessEnv = process.env,
+): UpdateFailureFact[] {
+  if (result.status !== "error") {
+    return [];
+  }
+  if (result.failureFacts?.length) {
+    return normalizeUpdateFailureFacts(result.failureFacts, env);
+  }
+  const failures: UpdateFailureFact[] = result.npm.outcomes
+    .filter((outcome) => outcome.status === "error")
+    .map((outcome) => ({
+      check: "plugin-update",
+      code: outcome.code ?? "plugin-update-failed",
+      pluginId: outcome.pluginId,
+      message: outcome.message,
+    }));
+  if (!failures.length) {
+    failures.push(
+      ...result.sync.errors.map((message) => ({
+        check: "plugin-sync",
+        code: "plugin-sync-failed",
+        message,
+      })),
+    );
+  }
+  if (!failures.length) {
+    failures.push({
+      check: "plugin-convergence",
+      code: result.reason ?? "post-update-plugins",
+      message: result.warnings?.[0]?.message,
+    });
+  }
+  return normalizeUpdateFailureFacts(failures, env);
+}
+
+// Producer evidence only. This does not assert activation, final config validity,
+// or authority to execute a repair. Unknown installation requirements stay unsafe.
+// Legacy status/reason remain independent until callers qualify their policy cutover.
+export type PluginUpdateAssessment =
+  | { kind: "no-payload-repair" }
+  | { kind: "optional-repair-needed"; failures: PluginPayloadSmokeFailure[] }
+  | { kind: "core-critical"; reason: "invalid-config" }
+  | {
+      kind: "unsafe";
+      reason:
+        | "capability-consent-required"
+        | "integrity-drift"
+        | "unowned-plugin-payload"
+        | "required-plugin-unavailable"
+        | "plugin-requirement-unknown"
+        | "convergence-failed"
+        | "plugin-disabled-after-update";
+    };
+
+export type ProducedPluginUpdateResult = PostCorePluginUpdateResult & {
+  assessment: PluginUpdateAssessment;
 };
 
-export function resolvePostSyncPluginUpdateSkipIds(params: {
-  switchedToClawHub: readonly string[];
-  switchedToNpm: readonly string[];
-  repairedMissingPayloadIds: ReadonlySet<string>;
-}): Set<string> {
-  return new Set([
-    ...params.switchedToClawHub,
-    ...params.switchedToNpm,
-    ...params.repairedMissingPayloadIds,
-  ]);
+export function assessPluginUpdate(params: {
+  smokeFailures: PluginPayloadSmokeFailure[];
+  disabledPluginIds: readonly string[];
+  errored: boolean;
+  outcomes: PluginUpdateOutcome[];
+  integrityDrift: boolean;
+  requirements: Readonly<Record<string, "optional" | "required">>;
+}): PluginUpdateAssessment {
+  if (
+    params.outcomes.some(
+      (outcome) =>
+        outcome.status === "error" && outcome.code === PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+    )
+  ) {
+    return { kind: "unsafe", reason: "capability-consent-required" };
+  }
+  if (params.integrityDrift) {
+    return { kind: "unsafe", reason: "integrity-drift" };
+  }
+  const failures = params.smokeFailures;
+  if (failures.some((failure) => !failure.installPath)) {
+    return { kind: "unsafe", reason: "unowned-plugin-payload" };
+  }
+  const unavailablePluginIds = [
+    ...failures.map((failure) => failure.pluginId),
+    ...params.disabledPluginIds,
+  ];
+  if (unavailablePluginIds.some((pluginId) => params.requirements[pluginId] === "required")) {
+    return { kind: "unsafe", reason: "required-plugin-unavailable" };
+  }
+  if (unavailablePluginIds.some((pluginId) => params.requirements[pluginId] !== "optional")) {
+    return { kind: "unsafe", reason: "plugin-requirement-unknown" };
+  }
+  if (params.disabledPluginIds.length > 0) {
+    // The disable outcome loses its failure code. Optionality cannot establish
+    // that a consent/integrity refusal is safe to turn into repairable degradation.
+    return { kind: "unsafe", reason: "plugin-disabled-after-update" };
+  }
+  if (failures.length > 0) {
+    // Outcomes retain earlier failed repair attempts, including repaired payloads.
+    // Active payload failures come from final verification, not that history.
+    return { kind: "optional-repair-needed", failures };
+  }
+  return params.errored
+    ? { kind: "unsafe", reason: "convergence-failed" }
+    : { kind: "no-payload-repair" };
 }
 
-function isTrackedPackageInstallRecord(record: PluginInstallRecord): boolean {
-  return (
-    record.source === "npm" ||
-    record.source === "clawhub" ||
-    record.source === "git" ||
-    record.source === "marketplace"
-  );
-}
+export type PluginUpdateWarning = NonNullable<PostCorePluginUpdateResult["warnings"]>[number];
 
-export async function collectMissingPluginInstallPayloads(params: {
-  records: Record<string, PluginInstallRecord>;
-  config?: OpenClawConfig;
-  skipDisabledPlugins?: boolean;
-  syncOfficialPluginInstalls?: boolean;
+export function createPluginUpdateWarning(params: {
+  pluginId?: string;
+  reason: string;
+  kind?: "update" | "load";
   env?: NodeJS.ProcessEnv;
-}): Promise<MissingPluginInstallPayload[]> {
-  const env = params.env ?? process.env;
-  const normalizedPluginConfig =
-    params.skipDisabledPlugins && params.config
-      ? normalizePluginsConfig(params.config.plugins)
-      : undefined;
-  const missing: MissingPluginInstallPayload[] = [];
-  for (const [pluginId, record] of Object.entries(params.records).toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    if (!isTrackedPackageInstallRecord(record)) {
-      continue;
-    }
-    const officialNpmSpec = params.syncOfficialPluginInstalls
-      ? resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record })
-      : undefined;
-    const officialClawHubSpec = params.syncOfficialPluginInstalls
-      ? resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record })
-      : undefined;
-    if (normalizedPluginConfig && params.config) {
-      const enableState = resolveEffectiveEnableState({
-        id: pluginId,
-        origin: "global",
-        config: normalizedPluginConfig,
-        rootConfig: params.config,
-      });
-      if (!enableState.enabled && !officialNpmSpec && !officialClawHubSpec) {
-        continue;
-      }
-    }
-    const rawInstallPath = normalizeOptionalString(record.installPath);
-    if (!rawInstallPath) {
-      missing.push({ pluginId, reason: "missing-install-path" });
-      continue;
-    }
-    const installPath = resolveUserPath(rawInstallPath, env);
-    if (!(await pathExists(installPath))) {
-      missing.push({ pluginId, installPath, reason: "missing-package-dir" });
-      continue;
-    }
-    const bundlePayload = resolveBundleInstallRecordPayload({ record, installPath });
-    if (bundlePayload.isBundlePayload) {
-      if (await hasNativePackageInstallPayload(installPath)) {
-        continue;
-      }
-      const bundleFailure = validateBundleInstallRecordPayload({
-        pluginId,
-        installPath,
-        record,
-        bundleFormat: bundlePayload.bundleFormat,
-      });
-      if (bundleFailure) {
-        missing.push({ pluginId, installPath, reason: "missing-package-json" });
-      }
-      continue;
-    }
-    const packageJsonPath = path.join(installPath, "package.json");
-    if (!(await pathExists(packageJsonPath))) {
-      missing.push({ pluginId, installPath, reason: "missing-package-json" });
+}): PluginUpdateWarning {
+  const command = formatCliCommand(
+    params.kind === "load"
+      ? "openclaw doctor --fix"
+      : params.pluginId
+        ? `openclaw plugins update ${params.pluginId}`
+        : "openclaw update repair",
+    params.env,
+  );
+  const nextAction = `Run \`${command}\` to ${params.kind === "load" ? "check and repair the load problem" : "retry"}.`;
+  return {
+    ...(params.pluginId ? { pluginId: params.pluginId } : {}),
+    reason: params.reason,
+    message: params.pluginId
+      ? `Plugin "${params.pluginId}" could not be ${params.kind === "load" ? "loaded" : "updated"}. ${nextAction}`
+      : `Plugin updates could not complete. ${nextAction}`,
+    guidance: [command],
+  };
+}
+
+export function appendPluginUpdateWarnings(
+  result: UpdateRunResult,
+  warnings: readonly PluginUpdateWarning[],
+): UpdateRunResult {
+  if (warnings.length === 0) {
+    return result;
+  }
+  const plugins: PostCorePluginUpdateResult = result.postUpdate?.plugins ?? {
+    status: "warning",
+    changed: false,
+    sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
+    npm: { changed: false, outcomes: [] },
+    integrityDrifts: [],
+  };
+  const combined = [...(plugins.warnings ?? [])];
+  for (const warning of warnings) {
+    if (
+      !combined.some(
+        (entry) => entry.pluginId === warning.pluginId && entry.reason === warning.reason,
+      )
+    ) {
+      combined.push(warning);
     }
   }
-  return missing;
+  return {
+    ...result,
+    postUpdate: {
+      ...result.postUpdate,
+      plugins: {
+        ...plugins,
+        status: plugins.status === "error" ? "error" : "warning",
+        warnings: combined,
+      },
+    },
+  };
 }
 
 /**

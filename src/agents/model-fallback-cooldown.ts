@@ -1,4 +1,3 @@
-/** Decides when cooldowned model candidates may be skipped, probed, or suspended. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isActiveUnusableWindow } from "./auth-profiles/usage-state.js";
@@ -7,8 +6,13 @@ import type { FailoverReason } from "./failover/signal.js";
 import type { ModelFallbackAuthRuntime } from "./model-fallback-attempt.js";
 import type { ModelCandidate } from "./model-fallback.types.js";
 
+type CooldownAuthRuntime = Pick<
+  ModelFallbackAuthRuntime,
+  "getSoonestCooldownExpiry" | "resolveProfilesUnavailableReason"
+>;
+
 const lastProbeAttempt = new Map<string, number>();
-const MIN_PROBE_INTERVAL_MS = 30_000; // 30 seconds between probes per key
+const MIN_PROBE_INTERVAL_MS = 30_000;
 const PROBE_MARGIN_MS = 2 * 60 * 1000;
 const PROBE_SCOPE_DELIMITER = "::";
 const PROBE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -80,7 +84,7 @@ function shouldProbePrimaryDuringCooldown(params: {
   reason: FailoverReason | null | undefined;
   now: number;
   throttleKey: string;
-  authRuntime: ModelFallbackAuthRuntime;
+  authRuntime: CooldownAuthRuntime;
   authStore: AuthProfileStore;
   profileIds: string[];
   model: string;
@@ -89,12 +93,8 @@ function shouldProbePrimaryDuringCooldown(params: {
     return false;
   }
 
-  // A single-provider primary has no fallback chain to prefer, so every open
-  // throttle slot is a recovery probe: "is the primary callable yet?" is a
-  // recovery question independent of fallback configuration. Without this, a
-  // fallbacks:[] setup that hits a rate/subscription cap stays suspended until
-  // the provider-reported reset (which can be days out) even though the rolling
-  // cap usually recovers earlier. See #90702.
+  // Without fallbacks, probe on every open throttle slot: rolling caps can
+  // recover before the provider's reported reset, which may be days away (#90702).
   if (!params.hasFallbackCandidates) {
     return true;
   }
@@ -119,7 +119,6 @@ function shouldProbePrimaryDuringCooldown(params: {
   if (soonest === null || !Number.isFinite(soonest)) {
     return true;
   }
-  // Probe when cooldown already expired or within the configured margin.
   return params.now >= soonest - PROBE_MARGIN_MS;
 }
 
@@ -139,7 +138,7 @@ export const probeThrottleInternals = {
 type CooldownDecision =
   | { type: "skip"; reason: FailoverReason; error: string }
   | { type: "attempt"; reason: FailoverReason; markProbe: boolean }
-  | { type: "suspend_lanes"; reason: FailoverReason; leaderCandidate?: ModelCandidate };
+  | { type: "suspend_session"; reason: FailoverReason };
 
 export function resolveCooldownDecision(params: {
   candidate: ModelCandidate;
@@ -148,7 +147,7 @@ export function resolveCooldownDecision(params: {
   hasFallbackCandidates: boolean;
   now: number;
   probeThrottleKey: string;
-  authRuntime: ModelFallbackAuthRuntime;
+  authRuntime: CooldownAuthRuntime;
   authStore: AuthProfileStore;
   profileIds: string[];
 }): CooldownDecision {
@@ -179,18 +178,15 @@ export function resolveCooldownDecision(params: {
     };
   }
 
-  // Billing is semi-persistent: the user may fix their balance, or a transient
-  // 402 might have been misclassified. shouldProbe already re-probes
-  // single-provider setups on the throttle (no fallback chain to prefer) and
-  // multi-fallback setups near cooldown expiry, so both recover without a restart.
+  // Billing can recover after a balance change; permit primary probes while
+  // preserving the throttle and preference for available fallback candidates.
   if (inferredReason === "billing") {
     if (params.isPrimary && shouldProbe) {
       return { type: "attempt", reason: inferredReason, markProbe: true };
     }
     return {
-      type: "suspend_lanes",
+      type: "suspend_session",
       reason: inferredReason,
-      leaderCandidate: params.candidate,
     };
   }
 
@@ -199,9 +195,8 @@ export function resolveCooldownDecision(params: {
     (!params.isPrimary && shouldUseTransientCooldownProbeSlot(inferredReason));
   if (!shouldAttemptDespiteCooldown) {
     return {
-      type: "suspend_lanes",
+      type: "suspend_session",
       reason: inferredReason,
-      leaderCandidate: params.candidate,
     };
   }
   return {

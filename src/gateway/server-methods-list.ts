@@ -1,19 +1,18 @@
 // Gateway method/event catalog.
 // Lists advertised core, auxiliary, channel plugin methods, and websocket events.
 import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
-import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
-import { listCoreAdvertisedGatewayMethodNames } from "./methods/core-descriptors.js";
-import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
+import {
+  GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
+  GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+  GATEWAY_EVENT_UPDATE_AVAILABLE,
+  GATEWAY_EVENT_UPDATE_RUN_CHANGED,
+} from "./events.js";
+import { listCoreAdvertisedGatewayMethodNames } from "./methods/core-method-policy.js";
 
 type GatewayMethodChannelPlugin = {
   gatewayMethods?: readonly string[];
   gatewayMethodDescriptors?: readonly { name: string }[];
 };
-
-/** Lists core methods intentionally advertised to gateway clients. */
-function listCoreGatewayMethods(): string[] {
-  return listCoreAdvertisedGatewayMethodNames();
-}
 
 function listChannelGatewayMethods(): string[] {
   const methods: string[] = [];
@@ -31,7 +30,7 @@ function listChannelGatewayMethods(): string[] {
 /** Returns the de-duplicated gateway method catalog advertised through method-list APIs. */
 export function listGatewayMethods(): string[] {
   return Array.from(
-    new Set([...listCoreGatewayMethods(), ...GATEWAY_AUX_METHODS, ...listChannelGatewayMethods()]),
+    new Set([...listCoreAdvertisedGatewayMethodNames(), ...listChannelGatewayMethods()]),
   );
 }
 
@@ -40,22 +39,28 @@ export const GATEWAY_EVENTS = [
   "connect.challenge",
   "agent",
   "chat",
+  "chat.metadata.changed",
+  "models.snapshot",
   "ui.command",
   "session.approval",
   "session.message",
   "session.observer",
   "session.operation",
   "session.sharing",
+  "session.sharing.evidence",
   "session.suggestion",
   "session.typing",
   "session.tool",
   "sessions.changed",
   "controlUi.sessionPullRequests.changed",
+  "plugins.controlUi.changed",
   "presence",
   "tick",
   "talk.mode",
   "talk.event",
+  "talk.voice.change",
   "shutdown",
+  "gateway.suspension",
   "health",
   "heartbeat",
   "cron",
@@ -64,12 +69,20 @@ export const GATEWAY_EVENTS = [
   "node.pair.requested",
   "node.pair.resolved",
   "node.presence",
+  "node.hostStats",
+  GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
   "node.invoke.cancel",
   "node.invoke.input",
   "node.invoke.request",
+  GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
   "device.pair.requested",
   "device.pair.resolved",
+  "device.pair.setup.completed",
+  "device.pair.setup.deliveryUncertain",
+  "users.prefs.changed",
   "skills.changed",
+  "plugins.changed",
+  "plugins.install.progress",
   "voicewake.changed",
   "voicewake.routing.changed",
   "exec.approval.requested",
@@ -83,4 +96,8 @@ export const GATEWAY_EVENTS = [
   "terminal.data",
   "terminal.exit",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  GATEWAY_EVENT_UPDATE_RUN_CHANGED,
+  "portal.changed",
+  "progressCard.changed",
+  "mentions.changed",
 ];

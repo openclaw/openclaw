@@ -1,7 +1,5 @@
-import { render } from "lit";
 import { describe, expect, it } from "vitest";
-import { renderArray } from "./config-form.node.collection.ts";
-import { renderNode } from "./config-form.ts";
+import { renderArrayFixture } from "../test-helpers/config-form-fixtures.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -16,33 +14,24 @@ describe("config form nested array integrity", () => {
     const container = document.createElement("div");
     let currentValue: unknown[] = [{ name: "before", payload: { enabled: true } }];
     const renderValue = () => {
-      render(
-        renderArray(
-          {
-            schema: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  name: { type: "string" },
-                  payload: {},
-                },
-              },
-            },
-            value: currentValue,
-            path: ["entries"],
-            hints: {},
-            unsupported: new Set(),
-            disabled: false,
-            onPatch: (_path, nextValue) => {
-              currentValue = nextValue as unknown[];
-              renderValue();
+      renderArrayFixture(container, {
+        schema: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              payload: {},
             },
           },
-          renderNode,
-        ),
-        container,
-      );
+        },
+        value: currentValue,
+        path: ["entries"],
+        onPatch: (_path, nextValue) => {
+          currentValue = nextValue as unknown[];
+          renderValue();
+        },
+      });
     };
 
     renderValue();

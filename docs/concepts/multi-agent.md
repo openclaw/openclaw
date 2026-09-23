@@ -18,9 +18,9 @@ Each agent has its own:
 
 - **Workspace**: files, `AGENTS.md`/`SOUL.md`/`USER.md`, local notes, persona rules.
 - **State directory** (`agentDir`): auth profiles, model registry, per-agent config.
-- **Session store**: chat history and routing state in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
+- **Session store**: chat history and routing state in `<agentDir>/openclaw-agent.sqlite`.
 
-Auth profiles are per-agent, read from:
+Auth profiles are per-agent, read from `<agentDir>/openclaw-agent.sqlite`. With the default layout, that resolves to:
 
 ```text
 ~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite
@@ -51,10 +51,10 @@ when personas must not share compiled wiki knowledge.
 | -------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | Config                           | `~/.openclaw/openclaw.json`                                                            | `OPENCLAW_CONFIG_PATH`                                                                      |
 | State dir                        | `~/.openclaw`                                                                          | `OPENCLAW_STATE_DIR`                                                                        |
-| Default agent's workspace        | `~/.openclaw/workspace` (or `workspace-<profile>` when `OPENCLAW_PROFILE` is set)      | `agents.entries.*.workspace`, then `agents.defaults.workspace`, or `OPENCLAW_WORKSPACE_DIR` |
+| Default agent's workspace        | `<stateDir>/workspace` (`~/.openclaw-<profile>/workspace` for a named profile)         | `agents.entries.*.workspace`, then `agents.defaults.workspace`, or `OPENCLAW_WORKSPACE_DIR` |
 | Other agents' workspace          | `<stateDir>/workspace-<agentId>` (or `<agents.defaults.workspace>/<agentId>` when set) | `agents.entries.*.workspace`                                                                |
 | Agent dir                        | `~/.openclaw/agents/<agentId>/agent`                                                   | `agents.entries.*.agentDir`                                                                 |
-| Sessions and transcripts         | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`                             | —                                                                                           |
+| Sessions and transcripts         | `<agentDir>/openclaw-agent.sqlite`                                                     | `agents.entries.*.agentDir`                                                                 |
 | Legacy/archive session artifacts | `~/.openclaw/agents/<agentId>/sessions`                                                | —                                                                                           |
 
 ### Single-agent mode (default)
@@ -62,8 +62,8 @@ when personas must not share compiled wiki knowledge.
 If you configure nothing, OpenClaw runs one agent:
 
 - `agentId` defaults to `main`.
-- Sessions key as `agent:main:<mainKey>` (default `mainKey` is `main`).
-- Workspace defaults to `~/.openclaw/workspace` (or `workspace-<profile>` when `OPENCLAW_PROFILE` is set to something other than `default`).
+- The main session key is `agent:main:main`.
+- Workspace defaults to `<stateDir>/workspace` (`~/.openclaw/workspace` for the default install and `~/.openclaw-<profile>/workspace` for a named profile).
 - State defaults to `~/.openclaw/agents/main/agent`.
 
 ## Agent helper
@@ -74,13 +74,109 @@ Add a new isolated agent:
 openclaw agents add work
 ```
 
-Flags: `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <channel[:accountId]>` (repeatable), `--non-interactive` (requires `--workspace`).
+Flags: `--role <role>`, `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <channel[:accountId]>` (repeatable), `--non-interactive` (requires `--workspace` unless a role is supplied).
 
 Add `bindings` to route inbound messages (the wizard offers to do this for you), then verify:
 
 ```bash
 openclaw agents list --bindings
 ```
+
+In the Control UI, **Agents** at `/agents` shows the roster, current work status,
+and recent chat previews, with **Open chat** opening each agent's main session.
+Use **Manage agents** to configure the roster at `/settings/agents`.
+
+**Settings → Agents** updates model choices when the Gateway
+publishes a new catalog. Refreshing choices preserves your selected model,
+fallbacks, and identity draft. If the read fails, the editor shows an error and
+keeps the previous choices until a later update succeeds. Model and fallback
+edits keep their normal automatic save behavior.
+
+### Agent provenance
+
+OpenClaw records how each configured agent was created: `operator` for CLI,
+onboarding, and Gateway requests; `agent` when the system agent requested it;
+and `claw` when a Claw install added it. Agent-created entries also retain the
+requesting agent id. A configured agent can ask OpenClaw to create another
+agent through its `openclaw` tool. The system agent files the typed operation,
+shows the requesting agent id to the operator, and creates the agent only after
+operator approval. Inspect the current creation hierarchy with:
+
+```bash
+openclaw agents list --tree
+```
+
+Deleted creators remain historical provenance. If the creator is no longer in
+the configured roster, its children appear at the root of the tree.
+
+## Team preset
+
+Create a small team with written role contracts and directed delegation:
+
+```bash
+openclaw agents team create --non-interactive
+openclaw agent --agent coordinator --message "Research the options and draft a recommendation."
+```
+
+The preset creates a chief of staff (`coordinator`), researcher, writer, and
+reviewer, each with its own workspace and completed identity. The chief of staff remains the
+human's point of contact: it discovers matching specialists, assigns bounded
+work, checks their artifacts, and reports a coherent result. Specialists return
+artifacts and evidence to the coordinator without delegating further. Their
+operating programs live in `AGENTS.md`, so they also apply in spawned sessions
+that do not load `SOUL.md` or `IDENTITY.md`.
+
+The bundled roles are [Claw sources](/cli/claws), sharing the portable
+`CLAW.md` format for identity, the `SOUL.md` body, and declared workspace
+files. `agents add --role <role>` loads one of these sources. With the
+experimental Claws surface enabled, the equivalent source path from a source
+checkout is `openclaw claws add docs/reference/templates/roles/<role>`; follow
+the [Claw preview and consent flow](/cli/claws#inspect-and-preview).
+
+You can also create the chief of staff or the full team from the Control UI:
+choose **New agent** in the sidebar or Agents home, then select the role or
+small-team recommendation in the custodian chat. Creation uses the same role
+templates and waits for your approval.
+
+The relevant per-agent delegation fragment is:
+
+```json5 validate=false
+{
+  agents: {
+    entries: {
+      coordinator: {
+        subagents: {
+          allowAgents: ["researcher", "writer", "reviewer"],
+          delegationMode: "prefer",
+        },
+      },
+      researcher: { subagents: { allowAgents: [] } },
+      writer: { subagents: { allowAgents: [] } },
+      reviewer: { subagents: { allowAgents: [] } },
+    },
+  },
+}
+```
+
+`"prefer"` guides the coordinator to delegate suitable work; it is prompt guidance,
+not a scheduler. `allowAgents` controls explicit spawn targets. The preset keeps
+`agents.defaults.subagents` and `tools.*` unchanged, so existing tool availability
+and access policy still apply. Role instructions require human approval before
+external sends, publication, purchases, deletion, or production changes.
+These delegation settings remain team wiring in config. The role Claws will
+carry them once the separate Claw profile support lands.
+
+The coordinator is an explicit target. Team creation
+sets `agents.defaults.systemAgent.agentId` to the coordinator only when that
+owner is unset; an existing owner is preserved and reported. In an explicit fleet,
+this also designates the default for operations that support default-agent selection.
+Explicit targets and [routing bindings](/concepts/agent-bindings) take precedence.
+
+Use `--prefix <p>` to namespace all team ids, `--coordinator <id>` to rename the
+coordinator, and `--workspace-root <dir>` to choose the parent directory for the
+separate workspaces. All ids are checked for conflicts before creation. See
+[`agents team create`](/cli/agents#agents-team-create) for flags and examples,
+or use the team choice during [onboarding](/start/wizard#choose-one-agent-or-a-team).
 
 ## Quick start
 
@@ -91,7 +187,7 @@ openclaw agents list --bindings
     openclaw agents add social
     ```
 
-    Each agent gets its own workspace with `SOUL.md`, `AGENTS.md`, and optional `USER.md`, plus a dedicated `agentDir` and session store under `~/.openclaw/agents/<agentId>`.
+    Each agent gets its own workspace with `SOUL.md`, `AGENTS.md`, and optional `USER.md`, plus a dedicated `agentDir` and session store. By default, those agent files live under `~/.openclaw/agents/<agentId>`.
 
   </Step>
   <Step title="Create channel accounts">
@@ -126,7 +222,7 @@ Each configured `agentId` is a distinct persona boundary for core agent state:
 
 - Different accounts per channel (per `accountId`).
 - Different personalities (per-agent `AGENTS.md`/`SOUL.md`).
-- Separate auth and sessions, with cross-agent access enabled only through explicit features or plugin configuration.
+- Separate auth and sessions, with cross-agent session access on by default and governed by `tools.agentToAgent`. Narrow session visibility with `tools.sessions.visibility`, restrict agent pairs with `tools.agentToAgent.allow`, or set `tools.agentToAgent.enabled: false` to block ordinary cross-agent access. Requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all` visibility; use separate gateways for strict separation.
 
 This lets multiple people share one Gateway while keeping core agent state separate.
 
@@ -163,11 +259,13 @@ filtering, migration, and trust-boundary details.
 
 ## Cross-agent memory search
 
-The QMD cross-agent search path was removed. Builtin memory does not search
+The QMD cross-agent search path was removed in v2026.8.1 along with the rest
+of the QMD backend. Builtin memory does not search
 another agent's transcript corpus; each agent searches only its own configured
 memory and eligible same-agent session sources. Put intentionally shared
 Markdown in an explicit shared `memory.search.extraPaths` directory when the
-same reference material should be indexed by multiple agents.
+same reference material should be indexed by multiple agents. For the full
+upgrade path, see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
 
 ## One WhatsApp number, multiple people (DM split)
 
@@ -216,6 +314,32 @@ Bindings are deterministic and most-specific wins. See [Channel routing](/channe
 
 For existing multi-agent configs, `openclaw doctor --fix` materializes legacy ambient default routing into channel-wide bindings plus explicit heartbeat, Custodian, and Talk targets. Single-agent configs are unchanged.
 
+For a multi-agent roster defined directly in the main config file without a
+legacy `default: true` marker, Doctor adds `agents.ownership: "explicit"` for
+both keyed `agents.entries` and older `agents.list` rosters, including with
+`--fix --non-interactive`. Existing bindings and per-surface owners remain
+unchanged. Last-known-good recovery applies the same ownership stamp before
+validating and restoring a directly authored markerless roster.
+Doctor never promotes narrower conversation bindings to account-wide ownership.
+It does not borrow ownership from another account or channel, choose between
+conflicting owners, or assign other unowned surfaces.
+
+During a legacy `agents.list` migration, unbound accounts keep
+their historical first-agent fallback as an explicit account binding, including
+when narrower conversation routes name other agents. Doctor
+records the binding alongside the ownership stamp. Both update-channel migration
+and manual Doctor require the original roster; if it is unavailable, Doctor reports
+that reason and leaves the bindings unchanged. An account whose owner remains
+unresolved reports the required binding and stays blocked without automatic
+restart attempts; other accounts and the Gateway continue serving.
+
+When migrating a legacy `agents.list` roster without a default marker, Doctor
+also pins the first agent's inherited workspace to `agents.entries.<id>.workspace`. Its customized instructions
+and historical `memory/` notes remain in their original directory. Explicit
+workspaces stay authoritative. If an earlier upgrade already left two edited
+workspaces, select the intended per-agent workspace and reconcile their contents
+from your backups; Doctor does not merge directories.
+
 ## Multiple accounts / phone numbers
 
 Channels that support multiple accounts (e.g. WhatsApp) use `accountId` to identify each login. Each `accountId` routes to its own agent, so one server can host multiple phone numbers without mixing sessions.
@@ -229,7 +353,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
 - `agentId`: one "brain" (workspace, per-agent auth, per-agent session store).
 - `accountId`: one channel account instance (e.g. WhatsApp account `personal` vs `biz`).
 - `binding`: routes inbound messages to an `agentId` by `(channel, accountId, peer)`, and optionally guild/team ids.
-- Direct chats collapse to `agent:<agentId>:<mainKey>` (per-agent "main"; see `session.mainKey`).
+- Direct chats collapse to `agent:<agentId>:main` by default (the per-agent [main session](/concepts/main-session)).
 
 ## Platform examples
 
@@ -367,10 +491,10 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
         },
       ],
 
-      // Off by default: agent-to-agent messaging must be explicitly enabled + allowlisted.
+      // On by default. Omitted/empty `allow` permits every agent pair;
+      // list requester and target ids to restrict access, or set enabled: false to turn it off.
       tools: {
         agentToAgent: {
-          enabled: false,
           allow: ["home", "work"],
         },
       },
@@ -516,7 +640,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
 
 Each agent can have its own sandbox and tool restrictions:
 
-```js
+```json5
 {
   agents: {
     entries: {
@@ -524,23 +648,23 @@ Each agent can have its own sandbox and tool restrictions:
         default: true,
         workspace: "~/.openclaw/workspace-personal",
         sandbox: {
-          mode: "off",  // No sandbox for personal agent
+          mode: "off", // No sandbox for personal agent
         },
         // No tool restrictions - all tools available
       },
       family: {
         workspace: "~/.openclaw/workspace-family",
         sandbox: {
-          mode: "all",     // Always sandboxed
-          scope: "agent",  // One container per agent
+          mode: "all", // Always sandboxed
+          scope: "agent", // One container per agent
           docker: {
             // Optional one-time setup after container creation
             setupCommand: "apt-get update && apt-get install -y git curl",
           },
         },
         tools: {
-          allow: ["read"],                    // Only read tool
-          deny: ["exec", "write", "edit", "apply_patch"],    // Deny others
+          allow: ["read"], // Only read tool
+          deny: ["exec", "write", "edit", "apply_patch"], // Deny others
         },
       },
     },
@@ -568,6 +692,8 @@ See [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) for detail
 
 - [ACP agents](/tools/acp-agents) — running external coding harnesses
 - [Channel routing](/channels/channel-routing) — how messages route to agents
+- [Parallel specialist lanes](/concepts/parallel-specialist-lanes) — splitting one job across role-scoped agents
 - [Presence](/concepts/presence) — agent presence and availability
 - [Session](/concepts/session) — session isolation and routing
 - [Sub-agents](/tools/subagents) — spawning background agent runs
+- [`openclaw agents`](/cli/agents) — create and inspect agents from the CLI

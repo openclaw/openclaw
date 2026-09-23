@@ -1,20 +1,24 @@
 // Context engine host compatibility tests cover doctor warnings for host/context mismatches.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import {
   getContextEngineRegistration,
+  registerContextEngineInRegistry,
   registerContextEngineForOwner,
 } from "../../../context-engine/registry.js";
 import type { ContextEngine, ContextEngineHostCapability } from "../../../context-engine/types.js";
+import { acquirePluginRegistryForInspection } from "../../../plugins/loader.js";
+import { PluginInstance } from "../../../plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
+import { PluginRegistryInspectionResources } from "../../../plugins/registry-inspection-resources.js";
+import { retireInspectionInstances } from "../../../plugins/registry-inspection.test-support.js";
+import { createPluginRecord } from "../../../plugins/status.test-helpers.js";
 import {
   collectContextEngineHostCompatibilityWarnings,
   maybeRepairContextEngineHostCompatibility,
 } from "./context-engine-host-compat.js";
-
-vi.mock("../../../agents/agent-scope-config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../agents/agent-scope-config.js")>()),
-  resolveDefaultAgentDir: vi.fn(() => "/tmp/openclaw-doctor-host-compat"),
-}));
 
 vi.mock("../../../agents/cli-backends.js", () => ({
   resolveCliBackendConfig: vi.fn((runtimeId: string) => ({ id: runtimeId })),
@@ -36,6 +40,10 @@ vi.mock("../../../agents/harness/registry.js", () => ({
 
 vi.mock("../../../context-engine/init.js", () => ({
   ensureContextEnginesInitialized: vi.fn(),
+}));
+
+vi.mock("../../../plugins/loader.js", () => ({
+  acquirePluginRegistryForInspection: vi.fn(),
 }));
 
 let engineCounter = 0;
@@ -98,6 +106,111 @@ function configWithEngine(engineId: string, cfg: OpenClawConfig = {}): OpenClawC
 }
 
 describe("doctor context-engine host compatibility", () => {
+  it.each([false, true])(
+    "settles context engine custody before returning (disposal fails: %s)",
+    async (disposalFails) => {
+      const id = uniqueEngineId();
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id });
+      registry.plugins.push(record);
+      const instance = new PluginInstance(id, { record, registry });
+      const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
+      resources.attach(registry);
+      const retired = vi.fn();
+      resources.register("fixture", { id: "doctor-resource", dispose: retired });
+      const disposalStarted = createDeferred();
+      const disposalGate = createDeferred();
+      class DoctorEngine extends LegacyContextEngine {
+        override readonly info = {
+          id,
+          name: "Doctor custody fixture",
+          get hostRequirements(): ContextEngine["info"]["hostRequirements"] {
+            return undefined;
+          },
+        };
+        async dispose() {
+          expect(retired).not.toHaveBeenCalled();
+          disposalStarted.resolve();
+          await disposalGate.promise;
+          if (disposalFails) {
+            throw new Error("doctor engine disposal failed");
+          }
+        }
+      }
+      registerContextEngineInRegistry(
+        registry,
+        id,
+        instance.wrap(() => new DoctorEngine()),
+        `plugin:${id}`,
+      );
+      vi.mocked(acquirePluginRegistryForInspection).mockResolvedValue({
+        registry,
+        release: () => resources.release(),
+      });
+      const pending = collectContextEngineHostCompatibilityWarnings({
+        cfg: configWithEngine(id),
+        doctorFixCommand: "openclaw doctor --fix",
+      });
+      try {
+        expect(
+          await Promise.race([
+            disposalStarted.promise.then(() => "disposing"),
+            pending.then(() => "returned"),
+          ]),
+        ).toBe("disposing");
+        expect(retired).not.toHaveBeenCalled();
+        disposalGate.resolve();
+        const warnings = await pending;
+        if (disposalFails) {
+          expect(warnings.join("\n")).toContain("doctor engine disposal failed");
+        } else {
+          expect(warnings).toEqual([]);
+        }
+        expect(retired).toHaveBeenCalledOnce();
+      } finally {
+        disposalGate.resolve();
+        await pending.catch(() => {});
+        await resources.release();
+        await instance.dispose();
+        vi.mocked(acquirePluginRegistryForInspection).mockReset();
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "reports offline inspection availability without activating or repairing an engine (discovered=%s)",
+    async (discovered) => {
+      const id = uniqueEngineId();
+      const factory = vi.fn(() => {
+        throw new Error("Doctor must not initialize an engine to inspect its metadata");
+      });
+      const registry = createEmptyPluginRegistry();
+      if (discovered) {
+        registry.contextEngines.set(id, {
+          factory,
+          owner: `plugin:${id}`,
+          lifecycle: "readOnlyDiscovery",
+        });
+      }
+      vi.mocked(acquirePluginRegistryForInspection).mockImplementation(async () => ({
+        registry,
+        release: async () => undefined,
+      }));
+      const cfg = configWithEngine(id);
+      const params = { cfg, doctorFixCommand: "openclaw doctor --fix" };
+      const warnings = await collectContextEngineHostCompatibilityWarnings(params);
+      expect(warnings.join("\n")).toContain(
+        discovered
+          ? "registered for read-only discovery; offline host compatibility inspection is unavailable"
+          : "because it is not registered",
+      );
+      const repair = await maybeRepairContextEngineHostCompatibility(params);
+      expect(repair).toEqual({ config: cfg, changes: [], warnings });
+      expect(repair.config).toBe(cfg);
+      expect(factory).not.toHaveBeenCalled();
+    },
+  );
+
   it("distinguishes read-only discovery registrations from runtime entries", () => {
     const id = uniqueEngineId();
     const factory = () => {
@@ -154,25 +267,61 @@ describe("doctor context-engine host compatibility", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("repairs an incompatible context engine by switching the global slot to legacy", async () => {
-    const engineId = registerEngine(["assemble-before-prompt"]);
-    const result = await maybeRepairContextEngineHostCompatibility({
+  it("uses the system agent when inspecting an explicit multi-agent roster", async () => {
+    const engineId = registerEngine([]);
+    const warnings = await collectContextEngineHostCompatibilityWarnings({
       cfg: configWithEngine(engineId, {
         agents: {
+          ownership: "explicit",
           defaults: {
+            systemAgent: { agentId: "main" },
             model: "anthropic/claude-sonnet-4-6",
-            models: {
-              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
-            },
+          },
+          entries: {
+            main: { agentDir: "/tmp/openclaw-doctor-host-compat" },
+            helper: {},
+            third: {},
           },
         },
       }),
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(result.config.plugins?.slots?.contextEngine).toBe("legacy");
+    expect(warnings).toEqual([]);
+  });
+
+  it("repairs an incompatible context engine by resetting the global slot to legacy", async () => {
+    const engineId = registerEngine(["assemble-before-prompt"]);
+    const cfg = configWithEngine(engineId, {
+      plugins: {
+        slots: {
+          memory: "custom-memory",
+        },
+      },
+      agents: {
+        defaults: {
+          model: "anthropic/claude-sonnet-4-6",
+          models: {
+            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    });
+    const warnings = await collectContextEngineHostCompatibilityWarnings({
+      cfg,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+    const result = await maybeRepairContextEngineHostCompatibility({
+      cfg,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings.join("\n")).toContain(
+      'remove the plugins.slots.contextEngine override and restore the default "legacy"',
+    );
+    expect(result.config.plugins?.slots).toEqual({ memory: "custom-memory" });
     expect(result.changes).toEqual([
-      `Set plugins.slots.contextEngine to "legacy" because context engine "${engineId}" is incompatible with every configured agent-run host.`,
+      `Reset plugins.slots.contextEngine to the default "legacy" because context engine "${engineId}" is incompatible with every configured agent-run host.`,
     ]);
   });
 

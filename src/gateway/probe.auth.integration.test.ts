@@ -10,10 +10,11 @@ installGatewayTestHooks({ scope: "suite" });
 
 const { callGateway } = await import("./call.js");
 const { probeGateway } = await import("./probe.js");
-const { storeDeviceAuthToken } = await import("../infra/device-auth-store.js");
+const { seedDeviceAuthToken } = await import("../infra/device-auth-store.test-support.js");
 const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
   await import("../infra/device-identity.js");
-const { approveDevicePairing, requestDevicePairing } = await import("../infra/device-pairing.js");
+const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+const { requestDevicePairing } = await import("../infra/device-pairing.js");
 await import("./server.js");
 
 let gatewayHarness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
@@ -74,7 +75,7 @@ async function seedCachedOperatorToken(scopes: string[]): Promise<void> {
   if (!token) {
     throw new Error("expected approved operator token");
   }
-  storeDeviceAuthToken({
+  seedDeviceAuthToken({
     deviceId: identity.deviceId,
     role: "operator",
     token,

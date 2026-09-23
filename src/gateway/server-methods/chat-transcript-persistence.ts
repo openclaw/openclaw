@@ -4,19 +4,34 @@ import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   findTranscriptEvent,
   loadTranscriptEventRowsAfterSeqSync,
-  patchSessionEntry,
+  patchSessionEntryCore,
   publishTranscriptUpdate,
   readSessionTranscriptWatermark,
+  rewriteAssistantTranscriptMessageForRun,
   rewriteTranscriptEventRowsExact,
   withTranscriptWriteLock,
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
-import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
+import {
+  ASSISTANT_DISPLAY_CONTENT_FIELD,
+  readAssistantDisplayContent,
+} from "../../shared/assistant-display-content.js";
+import {
+  extractAssistantPhaseText,
+  readAssistantTextBlocksForPhase,
+} from "../../shared/chat-message-content.js";
+import {
+  abortedPartialPersistenceError,
+  type AbortedPartialSnapshot,
+  type ChatAbortOrigin,
+} from "./chat-aborted-partial.js";
 import {
   sanitizeAssistantDisplayText,
   type AssistantDisplayContentBlock,
@@ -30,6 +45,8 @@ type TranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
+  /** Set when the commit predicate declined the append; not an error. */
+  skipped?: boolean;
   error?: string;
 };
 
@@ -53,6 +70,132 @@ export type SourceReplyContentState = {
   backedManagedOutgoingContent: boolean;
 };
 
+function mergeAssistantDisplayContent(
+  modelContent: AssistantDisplayContentBlock[],
+  preparedDisplayContent: AssistantDisplayContentBlock[],
+  retainedCommentary: ReadonlySet<unknown>,
+): AssistantDisplayContentBlock[] {
+  const remainingDisplayContent = [...preparedDisplayContent];
+  const content: AssistantDisplayContentBlock[] = [];
+  for (const block of modelContent) {
+    if (block.type !== "text" || typeof block.text !== "string" || retainedCommentary.has(block)) {
+      content.push(block);
+      continue;
+    }
+    const matchingTextIndex = remainingDisplayContent.findIndex(
+      (candidate) => candidate.type === "text" && candidate.text === block.text,
+    );
+    if (matchingTextIndex < 0) {
+      content.push(block);
+      continue;
+    }
+    const nextTextOffset = remainingDisplayContent
+      .slice(matchingTextIndex + 1)
+      .findIndex((candidate) => candidate.type === "text");
+    const segmentEnd =
+      nextTextOffset < 0 ? remainingDisplayContent.length : matchingTextIndex + nextTextOffset + 1;
+    content.push(...remainingDisplayContent.splice(0, segmentEnd));
+  }
+  content.push(...remainingDisplayContent);
+  return content;
+}
+
+function buildAssistantDisplayRewrite(params: {
+  message: Record<string, unknown>;
+  displayContent: AssistantDisplayContentBlock[];
+  managedMediaUrls?: readonly string[];
+  retainOriginalText?: true;
+}): Record<string, unknown> {
+  const previousDisplay = Array.isArray(params.message[ASSISTANT_DISPLAY_CONTENT_FIELD])
+    ? readAssistantDisplayContent(params.message)
+    : undefined;
+  const previousMedia = transcriptEventRecord(params.message.openclawDelivery)?.mediaUrls;
+  const managedMediaUrls = previousDisplay
+    ? [
+        ...(Array.isArray(previousMedia)
+          ? previousMedia.filter((value): value is string => typeof value === "string")
+          : []),
+        ...(params.managedMediaUrls ?? []),
+      ]
+    : params.managedMediaUrls;
+  const prepared = applyAssistantDeliveryDirectives(
+    {
+      ...params.message,
+      content: params.displayContent.map((block) => Object.assign({}, block)),
+    },
+    { managedMediaUrls },
+  );
+  const original =
+    previousDisplay ??
+    (Array.isArray(params.message.content)
+      ? (params.message.content as AssistantDisplayContentBlock[])
+      : []);
+  const retainedCommentary = new Set<unknown>(
+    previousDisplay
+      ? readAssistantTextBlocksForPhase({ ...params.message, content: original }, "commentary")
+      : [],
+  );
+  // Final delivery replaces its own media while retaining prepared progress segments.
+  let inCommentary = false;
+  const content: AssistantDisplayContentBlock[] = [];
+  const seenText = new Set<string>();
+  for (const block of original) {
+    if (block.type === "text") {
+      inCommentary = retainedCommentary.has(block);
+    }
+    if (inCommentary) {
+      content.push(block);
+      continue;
+    }
+    if (block.type === "thinking" || block.type === "toolCall") {
+      content.push(block);
+      continue;
+    }
+    if (
+      block.type !== "text" ||
+      typeof block.text !== "string" ||
+      (!params.retainOriginalText &&
+        !prepared.content.some(
+          (candidate) => candidate.type === "text" && candidate.text === block.text,
+        ))
+    ) {
+      continue;
+    }
+    const splitText = splitMediaFromOutput(block.text).text;
+    if (splitText === block.text && /\bMEDIA:/iu.test(block.text)) {
+      continue;
+    }
+    const text = sanitizeAssistantDisplayText(splitText, {
+      preserveBoundaries: true,
+    });
+    if (text) {
+      if (text === block.text || previousDisplay) {
+        content.push(text === block.text ? block : { ...block, text });
+      } else {
+        const { textSignature: _textSignature, ...rest } = block;
+        content.push({ ...rest, text });
+      }
+      seenText.add(text);
+    } else if (previousDisplay) {
+      content.push({ ...block, text: "" });
+    }
+  }
+  for (const block of prepared.content) {
+    if (block.type === "text" && typeof block.text === "string" && !seenText.has(block.text)) {
+      content.push(block);
+    }
+  }
+  return {
+    ...prepared,
+    content: previousDisplay ? params.message.content : content,
+    [ASSISTANT_DISPLAY_CONTENT_FIELD]: mergeAssistantDisplayContent(
+      content,
+      prepared.content,
+      retainedCommentary,
+    ),
+  };
+}
+
 export function assistantTranscriptScope(
   params: AssistantTranscriptScopeParams,
 ): ResolvedAssistantTranscriptScope | null {
@@ -74,10 +217,7 @@ function transcriptEventId(event: TranscriptEvent): string | undefined {
 }
 
 function transcriptEventMessage(event: TranscriptEvent): Record<string, unknown> | undefined {
-  const message = transcriptEventRecord(event)?.message;
-  return message && typeof message === "object" && !Array.isArray(message)
-    ? (message as Record<string, unknown>)
-    : undefined;
+  return transcriptEventRecord(transcriptEventRecord(event)?.message);
 }
 
 function findAssistantTranscriptMessageByIdempotencyKeyInEvents(
@@ -124,7 +264,7 @@ function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
   ];
   const message = target ? transcriptEventMessage(target) : undefined;
   const messageId = target ? transcriptEventId(target) : undefined;
-  const text = message ? extractAssistantTranscriptText(message) : undefined;
+  const text = message ? extractAssistantPhaseText(message) : undefined;
   if (!messageId || !message || !text) {
     return null;
   }
@@ -137,41 +277,6 @@ function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
     actualMedia.size === expectedMedia.size &&
     [...expectedMedia].every((value) => actualMedia.has(value));
   return exactMediaMatch ? { messageId, message } : null;
-}
-
-function mergeManagedMediaIntoAssistantContent(params: {
-  message: Record<string, unknown>;
-  replacement: AssistantDisplayContentBlock[];
-}): AssistantDisplayContentBlock[] | null {
-  const original = Array.isArray(params.message.content)
-    ? (params.message.content as AssistantDisplayContentBlock[])
-    : [];
-  const managedBlocks = params.replacement.filter((block) => block?.type !== "text");
-  if (managedBlocks.length === 0) {
-    return null;
-  }
-  let replaced = false;
-  const merged: AssistantDisplayContentBlock[] = [];
-  for (const block of original) {
-    if (block?.type !== "text" || typeof block.text !== "string") {
-      merged.push(block);
-      continue;
-    }
-    const split = splitMediaFromOutput(block.text);
-    const directiveTagsChanged = stripInlineDirectiveTagsForDisplay(split.text).changed;
-    const visibleText = sanitizeAssistantDisplayText(split.text, {
-      preserveBoundaries: !directiveTagsChanged,
-    });
-    if (visibleText) {
-      const { textSignature: _textSignature, ...rest } = block;
-      merged.push({ ...rest, text: visibleText });
-    }
-    if (split.mediaUrls?.length && !replaced) {
-      merged.push(...managedBlocks);
-      replaced = true;
-    }
-  }
-  return replaced ? merged : null;
 }
 
 function findSourceReplyTranscriptMirrorByIdempotencyKeyInEvents(
@@ -256,6 +361,8 @@ async function transcriptExists(scope: SessionTranscriptWriteScope): Promise<boo
 }
 
 export async function appendAssistantTranscriptMessage(params: {
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
   sessionKey: string;
   message: string;
   label?: string;
@@ -266,12 +373,14 @@ export async function appendAssistantTranscriptMessage(params: {
   agentId?: string;
   createIfMissing?: boolean;
   idempotencyKey?: string;
+  stopReason?: "stop" | "aborted";
   abortMeta?: {
     aborted: true;
-    origin: "rpc" | "stop-command";
+    origin: ChatAbortOrigin;
     runId: string;
   };
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
+  contextFreeCommand?: true;
   cfg?: OpenClawConfig;
 }): Promise<TranscriptAppendResult> {
   const scope = assistantTranscriptScope(params);
@@ -281,8 +390,9 @@ export async function appendAssistantTranscriptMessage(params: {
   if (!params.createIfMissing && !(await transcriptExists(scope))) {
     return { ok: false, error: "transcript not found" };
   }
-
   const appended = await appendInjectedAssistantMessageToTranscript({
+    expectedSessionId: params.expectedSessionId,
+    expectedLifecycleRevision: params.expectedLifecycleRevision,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     storePath: params.storePath,
@@ -291,11 +401,39 @@ export async function appendAssistantTranscriptMessage(params: {
     label: params.label,
     content: params.content,
     idempotencyKey: params.idempotencyKey,
+    stopReason: params.stopReason,
     abortMeta: params.abortMeta,
     ttsSupplement: params.ttsSupplement,
+    ...(params.contextFreeCommand === true ? { contextFreeCommand: true } : {}),
     config: params.cfg,
   });
   return appended;
+}
+
+export async function persistAbortedPartials(params: {
+  context: { logGateway: { warn: (message: string) => void } };
+  snapshots: AbortedPartialSnapshot[];
+}): Promise<string | undefined> {
+  let warning: string | undefined;
+  for (const snapshot of params.snapshots) {
+    if (!snapshot.ok) {
+      throw abortedPartialPersistenceError(snapshot.error, warning);
+    }
+    const appended = await appendAssistantTranscriptMessage(snapshot.value);
+    if (appended.skipped) {
+      continue;
+    }
+    if (!appended.ok) {
+      const error = `chat.abort transcript append failed: ${appended.error ?? "unknown error"}`;
+      params.context.logGateway.warn(error);
+      if (snapshot.abortOrigin === "placement-abandon") {
+        throw new Error(error);
+      }
+      warning =
+        "Stopped, but a reply could not be saved to history. Copy any visible text before leaving this chat.";
+    }
+  }
+  return warning;
 }
 
 async function touchAssistantTranscriptSessionEntry(
@@ -305,7 +443,7 @@ async function touchAssistantTranscriptSessionEntry(
     return;
   }
   const transcriptMarkerUpdatedAt = Date.now();
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     {
       storePath: scope.storePath,
       sessionKey: scope.sessionKey,
@@ -399,12 +537,16 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
       if (!replacement) {
         return event;
       }
-      return Object.assign({}, event as Record<string, unknown>, {
+      const message = buildAssistantDisplayRewrite({
         message: {
           ...replacement.message,
           idempotencyKey: replacement.request.idempotencyKey,
-          content: replacement.request.state.persistedContent,
         },
+        displayContent: replacement.request.state.persistedContent,
+        managedMediaUrls: replacement.request.metadata?.mediaUrls,
+      });
+      return Object.assign({}, event as Record<string, unknown>, {
+        message,
       });
     });
     await transcript.replaceEvents(rewrittenEvents);
@@ -418,6 +560,7 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
 export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: {
   content: AssistantDisplayContentBlock[];
   idempotencyKey: string;
+  managedMediaUrls?: readonly string[];
   scope: SessionTranscriptWriteScope;
 }): Promise<{ messageId: string } | null> {
   const idempotencyKey = params.idempotencyKey.trim();
@@ -433,10 +576,11 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
     const rewrittenEvents = events.map((event) =>
       transcriptEventId(event) === target.messageId
         ? Object.assign({}, event as Record<string, unknown>, {
-            message: {
-              ...target.message,
-              content: params.content,
-            },
+            message: buildAssistantDisplayRewrite({
+              message: target.message,
+              displayContent: params.content,
+              managedMediaUrls: params.managedMediaUrls,
+            }),
           })
         : event,
     );
@@ -477,18 +621,15 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   if (!targetRow) {
     return null;
   }
-  const mergedContent = mergeManagedMediaIntoAssistantContent({
+  const rewrittenMessage = buildAssistantDisplayRewrite({
     message: target.message,
-    replacement: params.content,
+    displayContent: params.content,
+    managedMediaUrls: params.mediaUrls,
+    // Indexed replies can contain earlier chunks; exact final/mirror replacements cannot.
+    retainOriginalText: true,
   });
-  if (!mergedContent) {
-    return null;
-  }
   const rewrittenEvent = Object.assign({}, targetRow.event as Record<string, unknown>, {
-    message: {
-      ...target.message,
-      content: mergedContent,
-    },
+    message: rewrittenMessage,
   });
   const rewritten = await rewriteTranscriptEventRowsExact(params.scope, {
     allowInitialGenerationMaterialization: initialGenerationMaterialized,
@@ -502,6 +643,32 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
     ],
   });
   return rewritten ? { generation: rewritten.generation, messageId: target.messageId } : null;
+}
+
+/** Adds managed display media to the completion reply without rewriting model content. */
+export async function enrichAssistantTranscriptMediaForRun(params: {
+  content: AssistantDisplayContentBlock[];
+  mediaUrls: readonly string[];
+  runId: string;
+  expectedLifecycleRevision: SessionLifecycleRevisionExpectation;
+  scope: ResolvedAssistantTranscriptScope;
+}): Promise<{ messageId: string } | null> {
+  return await rewriteAssistantTranscriptMessageForRun({
+    scope: params.scope,
+    runId: params.runId,
+    expectedLifecycleRevision: params.expectedLifecycleRevision,
+    rewriteMessage: (message) => ({
+      ...buildAssistantDisplayRewrite({
+        message,
+        displayContent: params.content,
+        managedMediaUrls: params.mediaUrls,
+        retainOriginalText: true,
+      }),
+      // The display projection owns MEDIA stripping; transcript signatures and
+      // prompt-prefix bytes must remain identical to the model's original reply.
+      content: message.content,
+    }),
+  });
 }
 
 export async function publishAssistantTranscriptRewrite(params: {

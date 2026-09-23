@@ -1,568 +1,575 @@
 import { performance } from "node:perf_hooks";
-import pLimit from "p-limit";
-import { withTimeout } from "../node-host/with-timeout.js";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runAbortableTimeout } from "../node-host/with-timeout.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
-import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { setPreparedModelRuntimeAuthMaterializations } from "./prepared-model-runtime-auth.js";
+import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
 import {
+  createFullModelCatalogAccess,
+  MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS,
+} from "./prepared-model-runtime.catalog-access.js";
+import type {
+  PreparedModelRuntimeAgentFacts,
+  PreparedModelRuntimeCatalogFacts,
+  PreparedModelRuntimeCatalogSource,
+} from "./prepared-model-runtime.catalog-contract.js";
+import {
+  assertPreparedModelRuntimeInputCurrent,
+  assertPreparedModelRuntimeCandidatesCurrent,
   PreparedModelRuntimePublicationSupersededError,
-  toPreparedModelRuntimeError,
 } from "./prepared-model-runtime.errors.js";
 import {
   fingerprintPreparedRuntimeFacts,
-  prepareAgentCatalogSource,
+  prepareConfiguredModelFacts,
   prepareConfiguredRuntimeFactsBatch,
-  prepareFullCatalogFacts,
   prepareWorkspaceBuildGroup,
-  type PreparedModelRuntimeAgentFacts,
-  type PreparedModelRuntimeCatalogFacts,
-  type PreparedModelRuntimeCatalogSource,
+  type PreparedConfiguredModelRegistries,
 } from "./prepared-model-runtime.facts.js";
+import {
+  createPreparedModelRuntimeSnapshot,
+  prepareFullCatalogFacts,
+} from "./prepared-model-runtime.full-catalog.js";
 import {
   createPreparedInboundRegistryLoader,
   preparedModelRuntimeWorkspaceFactsKey,
 } from "./prepared-model-runtime.inbound-registry.js";
+import { registerPreparedModelRuntimeClose } from "./prepared-model-runtime.lifecycle.js";
+import {
+  discardPreparedPluginGeneration,
+  registerPreparedPluginLifetime,
+  retainPreparedPluginRegistry,
+} from "./prepared-model-runtime.plugin-lifetime.js";
+import { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
+import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
-  PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
 
 const MAX_CONCURRENT_MODEL_RUNTIME_AGENT_SOURCE_BUILDS = 2;
-const MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS = 1;
-const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS);
 
-type PreparedModelRuntimeCatalogAccess = Readonly<{
-  loadFullModelCatalog: () => Promise<ModelCatalogSnapshot>;
+export type PreparedModelRuntimeBuildCandidate = Readonly<{
+  input: PreparedModelRuntimeInput;
+  catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"];
+  inventoryOwner?: Parameters<typeof createFullModelCatalogAccess>[0]["inventoryOwner"];
+  pluginGeneration?: PreparedModelRuntimePluginGeneration;
+  prepareInboundPluginRegistry?: boolean;
+  isGenerationCurrent?: () => boolean;
+  retirementSignal: AbortSignal;
+  isBuildCurrent?: () => boolean;
+  onBeforeAuthCapture?: () => void;
+  inspectRegistry?: boolean;
 }>;
-type PreparedModelRuntimeBuildGuards =
-  | ReadonlyMap<PreparedModelRuntimeInput, () => boolean>
-  | (() => boolean);
 
 export type PreparedModelRuntimeBuildResult = Readonly<{
   snapshot: PreparedModelRuntimeSnapshot;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }>;
 
-function runSerializedPreparedModelRuntimeTask<T>(params: {
-  agentDir: string;
-  agentBuildCompletions: Map<string, Promise<void>>;
-  isCurrent: () => boolean;
-  task: () => Promise<T>;
-}): Promise<T> {
-  const previous = params.agentBuildCompletions.get(params.agentDir);
-  const pending = (async () => {
-    if (previous) {
-      await previous;
-    }
-    if (!params.isCurrent()) {
-      throw new PreparedModelRuntimePublicationSupersededError(
-        `prepared model runtime catalog generation was superseded for ${params.agentDir}`,
-      );
-    }
-    return await params.task();
-  })();
-  const completion = pending.then(
-    () => undefined,
-    () => undefined,
-  );
-  params.agentBuildCompletions.set(params.agentDir, completion);
-  void completion.then(() => {
-    if (params.agentBuildCompletions.get(params.agentDir) === completion) {
-      params.agentBuildCompletions.delete(params.agentDir);
-    }
-  });
-  return pending;
-}
-
-function assertPreparedModelRuntimeInputCurrent(
-  input: PreparedModelRuntimeInput,
-  guards: PreparedModelRuntimeBuildGuards,
-): void {
-  const isCurrent = typeof guards === "function" ? guards : guards.get(input);
-  if (isCurrent && !isCurrent()) {
-    throw new PreparedModelRuntimePublicationSupersededError(
-      `prepared model runtime publication was superseded for ${input.agentDir}`,
-    );
+function groupBuildCandidates<K>(
+  candidates: readonly PreparedModelRuntimeBuildCandidate[],
+  keyOf: (candidate: PreparedModelRuntimeBuildCandidate) => K,
+): Map<K, PreparedModelRuntimeBuildCandidate[]> {
+  const groups = new Map<K, PreparedModelRuntimeBuildCandidate[]>();
+  for (const candidate of candidates) {
+    const key = keyOf(candidate);
+    const group = groups.get(key) ?? [];
+    group.push(candidate);
+    groups.set(key, group);
   }
-}
-
-function assertPreparedModelRuntimeInputsCurrent(
-  inputs: readonly PreparedModelRuntimeInput[],
-  guards: PreparedModelRuntimeBuildGuards,
-): void {
-  for (const input of inputs) {
-    assertPreparedModelRuntimeInputCurrent(input, guards);
-  }
-}
-
-function createFullModelCatalogAccess(params: {
-  agentFacts: PreparedModelRuntimeAgentFacts;
-  pluginGeneration: PreparedModelRuntimePluginGeneration;
-  agentBuildCompletions: Map<string, Promise<void>>;
-  isCurrent: () => boolean;
-  eagerCatalog?: ModelCatalogSnapshot;
-}): PreparedModelRuntimeCatalogAccess {
-  let fullCatalog = params.eagerCatalog;
-  let pending: Promise<ModelCatalogSnapshot> | undefined;
-  const assertCurrent = () => {
-    if (!params.isCurrent()) {
-      throw new PreparedModelRuntimePublicationSupersededError(
-        `prepared model runtime catalog generation was superseded for ${params.agentFacts.input.agentDir}`,
-      );
-    }
-  };
-  return {
-    loadFullModelCatalog: () => {
-      if (fullCatalog) {
-        return Promise.resolve(fullCatalog);
-      }
-      if (!pending) {
-        pending = runSerializedPreparedModelRuntimeTask({
-          agentDir: params.agentFacts.input.agentDir,
-          agentBuildCompletions: params.agentBuildCompletions,
-          isCurrent: params.isCurrent,
-          task: async () =>
-            await limitFullModelCatalogBuild(async () => {
-              // Full inventory belongs to explicit control-plane reads. The generation queue
-              // prevents a stale plan from overlapping or following a replacement build.
-              assertCurrent();
-              // Agent facts remain bound to the published turn generation. Auth mutations advance
-              // that owner generation, while plugin facts remain bound to this exact generation.
-              const fullCatalogMode: PreparedModelRuntimeCatalogMode = "live";
-              const catalogSource = await prepareAgentCatalogSource(
-                params.agentFacts,
-                params.pluginGeneration,
-                fullCatalogMode,
-                false,
-              );
-              assertCurrent();
-              const facts = await prepareFullCatalogFacts(
-                params.agentFacts,
-                params.pluginGeneration,
-                fullCatalogMode,
-                catalogSource,
-              );
-              assertCurrent();
-              fullCatalog = facts.modelCatalog;
-              return fullCatalog;
-            }),
-        }).finally(() => {
-          pending = undefined;
-        });
-      }
-      return pending;
-    },
-  };
-}
-
-function createSnapshot(
-  agentFacts: PreparedModelRuntimeAgentFacts,
-  pluginGeneration: PreparedModelRuntimePluginGeneration,
-  catalogFacts: PreparedModelRuntimeCatalogFacts,
-  catalogAccess: PreparedModelRuntimeCatalogAccess,
-): PreparedModelRuntimeSnapshot {
-  const { credentials, input } = agentFacts;
-  const { mediaCapabilityProviders, messageToolCatalog, pluginMetadataSnapshot, pluginRegistry } =
-    pluginGeneration;
-  const { configuredRuntimeModels, inlineProviderModels, modelCatalog, templateModelRegistry } =
-    catalogFacts;
-  const createStores = (): PreparedModelRuntimeStores => {
-    // Runtime API keys and session extensions mutate these objects. Fork them per run while the
-    // credential map and parsed catalog remain owned by the lifecycle snapshot.
-    const authStorage = AuthStorage.inMemory(credentials);
-    return { authStorage, modelRegistry: templateModelRegistry.fork(authStorage) };
-  };
-  const snapshot: PreparedModelRuntimeSnapshot = Object.freeze({
-    ...(input.agentId ? { agentId: input.agentId } : {}),
-    agentDir: input.agentDir,
-    activeProjectKeys: [],
-    ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
-    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    config: input.config,
-    authModes: resolveUsableAgentCredentialModes(credentials),
-    metadataSnapshot: pluginMetadataSnapshot,
-    allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
-    ...(pluginRegistry ? { pluginRegistry } : {}),
-    ...(messageToolCatalog ? { messageToolCatalog } : {}),
-    ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
-    modelCatalog,
-    loadFullModelCatalog: catalogAccess.loadFullModelCatalog,
-    configuredRuntimeModels,
-    inlineProviderModels,
-    createStores,
-  });
-  setPreparedModelRuntimeAuthMaterializations(
-    snapshot,
-    Object.freeze([...getPreparedRuntimeAuthMaterializations(input.agentDir)]),
-  );
-  return snapshot;
+  return groups;
 }
 
 async function buildSnapshotBatch(
-  inputs: readonly PreparedModelRuntimeInput[],
+  requestedCandidates: readonly PreparedModelRuntimeBuildCandidate[],
+  registryResources: PreparedModelRuntimeBuildResources,
   catalogMode: PreparedModelRuntimeCatalogMode,
-  agentBuildCompletions: Map<string, Promise<void>>,
-  generationGuards: ReadonlyMap<PreparedModelRuntimeInput, () => boolean>,
-  buildGuards: PreparedModelRuntimeBuildGuards,
-  inboundPluginRegistryInputs: ReadonlySet<PreparedModelRuntimeInput>,
-  reusablePluginGenerations: ReadonlyMap<
-    PreparedModelRuntimeInput,
-    PreparedModelRuntimePluginGeneration
-  >,
+  pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
+  includeCredentialProviders = catalogMode === "live",
+  onStage?: (stage: string) => void,
+  onPrepared?: (input: PreparedModelRuntimeInput, result: PreparedModelRuntimeBuildResult) => void,
+  signal?: AbortSignal,
 ): Promise<PreparedModelRuntimeBuildResult[]> {
-  const freshGroups = new Map<string, PreparedModelRuntimeInput[]>();
-  const reusableGroups = new Map<
-    PreparedModelRuntimePluginGeneration,
-    PreparedModelRuntimeInput[]
+  const configs = new Map<
+    OpenClawConfig,
+    { config: OpenClawConfig; nativeConfigFingerprint: string }
   >();
-  for (const input of inputs) {
-    const reusablePluginGeneration = reusablePluginGenerations.get(input);
-    if (reusablePluginGeneration) {
-      const group = reusableGroups.get(reusablePluginGeneration);
-      if (group) {
-        group.push(input);
-      } else {
-        reusableGroups.set(reusablePluginGeneration, [input]);
-      }
-      continue;
-    }
-    const ownerKind = inboundPluginRegistryInputs.has(input) ? "configured" : "dynamic";
-    const key = `${ownerKind}\0${preparedModelRuntimeWorkspaceFactsKey(input)}`;
-    const group = freshGroups.get(key);
-    if (group) {
-      group.push(input);
-    } else {
-      freshGroups.set(key, [input]);
-    }
-  }
-  const groups: Array<{
-    groupInputs: PreparedModelRuntimeInput[];
-    pluginGeneration?: PreparedModelRuntimePluginGeneration;
-  }> = [
-    ...[...reusableGroups].map(([pluginGeneration, groupInputs]) => ({
-      groupInputs,
-      pluginGeneration,
-    })),
-    ...[...freshGroups.values()].map((groupInputs) => ({ groupInputs })),
-  ];
-  const preparedInputs = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeAgentFacts>();
-  const pluginGenerations = new Map<
-    PreparedModelRuntimeInput,
-    PreparedModelRuntimePluginGeneration
-  >();
-  const loadInboundPluginRegistry = createPreparedInboundRegistryLoader();
-  let runtimePluginMs = 0;
-  let pluginMetadataMs = 0;
-  let staticProviderCatalogMs = 0;
-  let ambientCredentialsMs = 0;
-  let agentFactsMs = 0;
-  let configuredProjectionMs = 0;
-  const workspaceFactsStartedAt = performance.now();
-  // Workspace plugin loading and static hooks are intentionally sequential. Large parallel
-  // workspace fanout recreates the CPU/RSS spike this generation boundary is meant to contain.
-  for (const { groupInputs, pluginGeneration } of groups) {
-    if (typeof buildGuards === "function") {
-      assertPreparedModelRuntimeInputsCurrent(groupInputs, buildGuards);
-    }
-    const prepareInboundPluginRegistry = groupInputs.some((input) =>
-      inboundPluginRegistryInputs.has(input),
-    );
-    const prepared = await prepareWorkspaceBuildGroup(
-      groupInputs,
-      catalogMode,
-      {},
-      prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
-      pluginGeneration,
-    );
-    assertPreparedModelRuntimeInputsCurrent(groupInputs, buildGuards);
-    runtimePluginMs += prepared.buildStats.runtimePluginMs;
-    pluginMetadataMs += prepared.buildStats.pluginMetadataMs;
-    staticProviderCatalogMs += prepared.buildStats.staticProviderCatalogMs;
-    ambientCredentialsMs += prepared.buildStats.ambientCredentialsMs;
-    agentFactsMs += prepared.buildStats.agentFactsMs;
-    configuredProjectionMs += prepared.buildStats.configuredProjectionMs;
-    for (const agentFacts of prepared.agentFacts) {
-      preparedInputs.set(agentFacts.input, agentFacts);
-      pluginGenerations.set(agentFacts.input, prepared.pluginGeneration);
-    }
-  }
-  const workspaceFactsMs = performance.now() - workspaceFactsStartedAt;
-  const catalogSourceStartedAt = performance.now();
-  const catalogSources = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogSource>();
-  if (catalogMode === "live") {
-    const sourceInputsByAgentDir = new Map<string, PreparedModelRuntimeInput[]>();
-    for (const input of inputs) {
-      const group = sourceInputsByAgentDir.get(input.agentDir);
-      if (group) {
-        group.push(input);
-      } else {
-        sourceInputsByAgentDir.set(input.agentDir, [input]);
-      }
-    }
-    const sourceErrors: unknown[] = [];
-    const sourceBuild = await runTasksWithConcurrency({
-      limit: MAX_CONCURRENT_MODEL_RUNTIME_AGENT_SOURCE_BUILDS,
-      errorMode: "stop",
-      onTaskError: (error) => {
-        sourceErrors.push(error);
-      },
-      tasks: [...sourceInputsByAgentDir.values()].map((sourceInputs) => async () => {
-        // Generated catalogs are agent-directory owned. Preserve write serialization within one
-        // directory while allowing bounded progress across distinct agents.
-        for (const input of sourceInputs) {
-          const prepared = preparedInputs.get(input);
-          const pluginGeneration = pluginGenerations.get(input);
-          if (!prepared) {
-            throw new Error(`prepared model runtime agent facts missing for ${input.agentDir}`);
-          }
-          if (!pluginGeneration) {
-            throw new Error(
-              `prepared model runtime plugin generation missing for ${input.agentDir}`,
-            );
-          }
-          // A replacement waits for this batch's completion. Stop the stale batch before another
-          // same-directory write so a superseded generation cannot overwrite catalog state.
-          assertPreparedModelRuntimeInputCurrent(input, buildGuards);
-          const catalogSource = await prepareAgentCatalogSource(
-            prepared,
-            pluginGeneration,
-            catalogMode,
-          );
-          assertPreparedModelRuntimeInputCurrent(input, buildGuards);
-          catalogSources.set(input, catalogSource);
-        }
-      }),
-    });
-    if (sourceBuild.hasError) {
-      // A superseded owner is lifecycle control flow. Preserve any genuine in-flight sibling
-      // failure so auth refresh diagnostics do not disappear behind that expected cancellation.
-      throw toPreparedModelRuntimeError(
-        sourceErrors.find(
-          (error) => !(error instanceof PreparedModelRuntimePublicationSupersededError),
-        ) ?? sourceBuild.firstError,
-      );
-    }
-  }
-  const catalogSourceMs = performance.now() - catalogSourceStartedAt;
-  const preparedCatalogs = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogFacts>();
-  let runtimeRegistryCount = 0;
-  const registryStartedAt = performance.now();
-  if (catalogMode === "live") {
-    // Explicit live owners still request the complete inventory. Keep those builds sequential
-    // instead of multiplying heap and GC pressure when a command names several agents.
-    for (const input of inputs) {
-      const agentFacts = preparedInputs.get(input);
-      const pluginGeneration = pluginGenerations.get(input);
-      if (!agentFacts || !pluginGeneration) {
-        throw new Error(`prepared model runtime facts missing for ${input.agentDir}`);
-      }
-      const catalogSource = catalogSources.get(input);
-      if (!catalogSource) {
-        throw new Error(`prepared model runtime catalog source missing for ${input.agentDir}`);
-      }
-      assertPreparedModelRuntimeInputCurrent(input, buildGuards);
-      preparedCatalogs.set(
-        input,
-        await prepareFullCatalogFacts(agentFacts, pluginGeneration, catalogMode, catalogSource),
-      );
-      assertPreparedModelRuntimeInputCurrent(input, buildGuards);
-      runtimeRegistryCount += 1;
-    }
-  } else {
-    for (const { groupInputs } of groups) {
-      assertPreparedModelRuntimeInputsCurrent(groupInputs, buildGuards);
-      const pluginGeneration = pluginGenerations.get(groupInputs[0]!);
-      if (!pluginGeneration) {
-        throw new Error("prepared model runtime plugin generation is missing");
-      }
-      const batch = prepareConfiguredRuntimeFactsBatch({
-        agentFacts: groupInputs.map((input) => {
-          const agentFacts = preparedInputs.get(input);
-          if (!agentFacts) {
-            throw new Error(`prepared model runtime facts missing for ${input.agentDir}`);
-          }
-          return agentFacts;
+  const candidates = requestedCandidates.map((candidate) => {
+    const source = candidate.input.config;
+    let shared = configs.get(source);
+    if (!shared) {
+      const config = captureRuntimeConfig(source);
+      shared = {
+        config,
+        nativeConfigFingerprint: fingerprintPreparedRuntimeFacts({
+          agents: config.agents,
+          plugins: config.plugins,
         }),
-        pluginGeneration,
-      });
-      runtimeRegistryCount += batch.registryCount;
-      for (const [input, catalogFacts] of batch.catalogs) {
-        preparedCatalogs.set(input, catalogFacts);
-      }
-      assertPreparedModelRuntimeInputsCurrent(groupInputs, buildGuards);
-    }
-  }
-  const registryMs = performance.now() - registryStartedAt;
-  const preparedAgentFacts = [...preparedInputs.values()];
-  const configuredRuntimeModelCount = [...preparedCatalogs.values()].reduce(
-    (count, facts) => count + facts.configuredRuntimeModels.length,
-    0,
-  );
-  const generatedCatalogPluginCount = new Set(
-    preparedAgentFacts.flatMap((facts) => facts.configuredGeneratedCatalogPluginIds),
-  ).size;
-  const generatedCatalogReadCount = preparedAgentFacts.reduce(
-    (count, facts) => count + facts.configuredGeneratedCatalogPluginIds.length,
-    0,
-  );
-  onBuildStats?.({
-    agentCount: inputs.length,
-    workspaceGroupCount: groups.length,
-    configuredFactsGroupCount: groups.length,
-    catalogSourceCount:
-      catalogMode === "live"
-        ? [...preparedInputs.values()].filter(({ input }) => !input.readOnly).length
-        : 0,
-    credentialGroupCount: new Set(
-      [...preparedInputs.values()].map((agentFacts) =>
-        fingerprintPreparedRuntimeFacts(agentFacts.credentials),
-      ),
-    ).size,
-    catalogGroupCount: catalogMode === "live" ? inputs.length : 0,
-    runtimeRegistryCount,
-    configuredRuntimeModelCount,
-    generatedCatalogPluginCount,
-    generatedCatalogReadCount,
-    workspaceFactsMs,
-    runtimePluginMs,
-    pluginMetadataMs,
-    staticProviderCatalogMs,
-    ambientCredentialsMs,
-    agentFactsMs,
-    configuredProjectionMs,
-    catalogSourceMs,
-    registryMs,
-    sourceConcurrencyLimit: MAX_CONCURRENT_MODEL_RUNTIME_AGENT_SOURCE_BUILDS,
-    fullCatalogConcurrencyLimit: MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS,
-  });
-  assertPreparedModelRuntimeInputsCurrent(inputs, buildGuards);
-  return inputs.map((input) => {
-    const agentFacts = preparedInputs.get(input);
-    const pluginGeneration = pluginGenerations.get(input);
-    const catalogFacts = preparedCatalogs.get(input);
-    if (!agentFacts || !pluginGeneration || !catalogFacts) {
-      throw new Error(`prepared model runtime snapshot facts missing for ${input.agentDir}`);
+      };
+      configs.set(source, shared);
     }
     return {
-      snapshot: createSnapshot(
-        agentFacts,
-        pluginGeneration,
-        catalogFacts,
-        createFullModelCatalogAccess({
-          agentFacts,
-          pluginGeneration,
-          agentBuildCompletions,
-          isCurrent: generationGuards.get(input) ?? (() => false),
-          ...(catalogMode === "live" ? { eagerCatalog: catalogFacts.modelCatalog } : {}),
-        }),
-      ),
-      pluginGeneration,
+      ...candidate,
+      input: { ...candidate.input, config: shared.config },
+      nativeConfigFingerprint: shared.nativeConfigFingerprint,
     };
   });
+  const candidateByInput = new Map(candidates.map((candidate) => [candidate.input, candidate]));
+  const requestedByInput = new Map(
+    candidates.map((candidate, index) => [candidate.input, requestedCandidates[index]!.input]),
+  );
+  const results = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeBuildResult>();
+  const prepareSnapshot = (
+    candidate: PreparedModelRuntimeBuildCandidate,
+    agentFacts: PreparedModelRuntimeAgentFacts,
+    pluginGeneration: PreparedModelRuntimePluginGeneration,
+    catalogFacts: PreparedModelRuntimeCatalogFacts,
+  ) => {
+    const snapshot = createPreparedModelRuntimeSnapshot(
+      candidate.catalogOwner,
+      agentFacts,
+      pluginGeneration,
+      catalogFacts,
+      createFullModelCatalogAccess({
+        agentFacts,
+        nativeConfigFingerprint: candidateByInput.get(candidate.input)!.nativeConfigFingerprint,
+        catalogFacts,
+        pluginGeneration,
+        isCurrent: candidate.isGenerationCurrent ?? (() => false),
+        retirementSignal: candidate.retirementSignal,
+        inventoryOwner: candidate.inventoryOwner ?? {},
+      }),
+      requestedByInput.get(candidate.input)!.config,
+    );
+    const result = { snapshot, pluginGeneration };
+    results.set(candidate.input, result);
+    onPrepared?.(requestedByInput.get(candidate.input)!, result);
+  };
+  const assertBuildCurrent = (input: PreparedModelRuntimeInput) =>
+    assertPreparedModelRuntimeInputCurrent(input, candidateByInput.get(input)!.isBuildCurrent);
+  const preparedGenerations = new Set<PreparedModelRuntimePluginGeneration>();
+  try {
+    const generations = groupBuildCandidates(candidates, (candidate) => candidate.pluginGeneration);
+    const fresh = generations.get(undefined) ?? [];
+    // Reusable generations precede fresh ones; preserve first-seen order within each group.
+    generations.delete(undefined);
+    generations.set(undefined, fresh);
+    const groups = [...generations].flatMap(([pluginGeneration, generationCandidates]) =>
+      [
+        ...groupBuildCandidates(generationCandidates, (candidate) => {
+          const workspace = preparedModelRuntimeWorkspaceFactsKey(candidate.input);
+          if (candidate.inspectRegistry) {
+            return `inspection\0${workspace}`;
+          }
+          const kind = candidate.prepareInboundPluginRegistry ? "configured" : "dynamic";
+          return pluginGeneration ? workspace : `${kind}\0${workspace}`;
+        }).values(),
+      ].map((groupCandidates) => ({ groupCandidates, pluginGeneration })),
+    );
+    const preparedInputs = new Map<
+      PreparedModelRuntimeInput,
+      {
+        agentFacts: PreparedModelRuntimeAgentFacts;
+        pluginGeneration: PreparedModelRuntimePluginGeneration;
+      }
+    >();
+    const requirePreparedInput = (input: PreparedModelRuntimeInput) => {
+      const prepared = preparedInputs.get(input);
+      if (!prepared) {
+        throw new Error(`prepared model runtime facts missing for ${input.agentDir}`);
+      }
+      return prepared;
+    };
+    const loadInboundPluginRegistry = createPreparedInboundRegistryLoader();
+    const configuredModelRegistries: PreparedConfiguredModelRegistries = new Map();
+    // Config objects can change between publications. Share this projection only
+    // inside the current build batch so every later publication reads fresh config.
+    const configuredHarnessRuntimesByConfig = new Map<OpenClawConfig, readonly string[]>();
+    const configuredModelFactsByConfig = new Map<
+      OpenClawConfig,
+      Map<
+        PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
+        ReturnType<typeof prepareConfiguredModelFacts>
+      >
+    >();
+    const getConfiguredModelFacts: typeof prepareConfiguredModelFacts = (config, metadata) => {
+      let factsByMetadata = configuredModelFactsByConfig.get(config);
+      if (!factsByMetadata) {
+        factsByMetadata = new Map();
+        configuredModelFactsByConfig.set(config, factsByMetadata);
+      }
+      let facts = factsByMetadata.get(metadata);
+      if (!facts) {
+        facts = prepareConfiguredModelFacts(config, metadata);
+        factsByMetadata.set(metadata, facts);
+      }
+      return facts;
+    };
+    let runtimePluginMs = 0;
+    let pluginMetadataMs = 0;
+    let staticProviderCatalogMs = 0;
+    let ambientCredentialsMs = 0;
+    let agentFactsMs = 0;
+    let configuredProjectionMs = 0;
+    let runtimeRegistryCount = 0;
+    let registryMs = 0;
+    const preparedCatalogs = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogFacts>();
+    const workspaceFactsStartedAt = performance.now();
+    // Workspace plugin loading and static hooks are intentionally sequential. Large parallel
+    // workspace fanout recreates the CPU/RSS spike this generation boundary is meant to contain.
+    for (const { groupCandidates, pluginGeneration } of groups) {
+      // Already-resolved promises do not let timers or Gateway I/O run.
+      await nextTurn();
+      for (const candidate of groupCandidates) {
+        assertBuildCurrent(candidate.input);
+      }
+      const prepareInboundPluginRegistry = groupCandidates.some(
+        (candidate) => candidate.prepareInboundPluginRegistry,
+      );
+      const preferBuiltPluginArtifacts =
+        pluginGeneration?.preferBuiltPluginArtifacts ?? prepareInboundPluginRegistry;
+      const getConfiguredHarnessRuntimes = () => {
+        const config = groupCandidates[0]!.input.config;
+        let runtimes = configuredHarnessRuntimesByConfig.get(config);
+        if (!runtimes) {
+          runtimes = collectConfiguredAgentHarnessRuntimes(config);
+          configuredHarnessRuntimesByConfig.set(config, runtimes);
+        }
+        return runtimes;
+      };
+      const prepared = await prepareWorkspaceBuildGroup(
+        groupCandidates.map(({ input }) => input),
+        catalogMode,
+        {
+          preferBuiltPluginArtifacts,
+          includeCredentialProviders,
+          getConfiguredHarnessRuntimes,
+          getConfiguredModelFacts,
+          assertCurrent: assertBuildCurrent,
+          onBeforeAuthCapture: (input) => candidateByInput.get(input)!.onBeforeAuthCapture?.(),
+          onStage,
+          signal,
+          registryResources,
+          ...(groupCandidates.some((candidate) => candidate.inspectRegistry)
+            ? { loadRuntimeRegistry: registryResources.load.bind(registryResources) }
+            : {}),
+        },
+        prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
+        pluginGeneration,
+        pluginMetadataSnapshot,
+      );
+      preparedGenerations.add(prepared.pluginGeneration);
+      assertPreparedModelRuntimeCandidatesCurrent(groupCandidates);
+      runtimePluginMs += prepared.buildStats.runtimePluginMs;
+      pluginMetadataMs += prepared.buildStats.pluginMetadataMs;
+      staticProviderCatalogMs += prepared.buildStats.staticProviderCatalogMs;
+      ambientCredentialsMs += prepared.buildStats.ambientCredentialsMs;
+      agentFactsMs += prepared.buildStats.agentFactsMs;
+      configuredProjectionMs += prepared.buildStats.configuredProjectionMs;
+      for (const agentFacts of prepared.agentFacts) {
+        preparedInputs.set(agentFacts.input, {
+          agentFacts,
+          pluginGeneration: prepared.pluginGeneration,
+        });
+      }
+      if (catalogMode === "static") {
+        const startedAt = performance.now();
+        const batch = await prepareConfiguredRuntimeFactsBatch({
+          agentFacts: prepared.agentFacts,
+          pluginGeneration: prepared.pluginGeneration,
+          assertCurrent: assertBuildCurrent,
+          registries: configuredModelRegistries,
+        });
+        runtimeRegistryCount += batch.registryCount;
+        registryMs += performance.now() - startedAt;
+        for (const candidate of groupCandidates) {
+          await nextTurn();
+          assertBuildCurrent(candidate.input);
+          const facts = batch.catalogs.get(candidate.input)!;
+          preparedCatalogs.set(candidate.input, facts);
+          prepareSnapshot(
+            candidate,
+            requirePreparedInput(candidate.input).agentFacts,
+            prepared.pluginGeneration,
+            facts,
+          );
+        }
+      }
+    }
+    const workspaceFactsMs = performance.now() - workspaceFactsStartedAt;
+    const catalogSourceStartedAt = performance.now();
+    onStage?.("agent catalog sources");
+    const catalogSources = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogSource>();
+    if (catalogMode === "live") {
+      const sourceCandidatesByAgentDir = groupBuildCandidates(
+        candidates,
+        ({ input }) => input.agentDir,
+      );
+      const sourceErrors: unknown[] = [];
+      const sourceBuild = await runTasksWithConcurrency({
+        limit: MAX_CONCURRENT_MODEL_RUNTIME_AGENT_SOURCE_BUILDS,
+        errorMode: "stop",
+        onTaskError: (error) => {
+          sourceErrors.push(error);
+        },
+        tasks: [...sourceCandidatesByAgentDir.values()].map((sourceCandidates) => async () => {
+          // Generated catalogs are agent-directory owned. Preserve write serialization within one
+          // directory while allowing bounded progress across distinct agents.
+          for (const candidate of sourceCandidates) {
+            await nextTurn();
+            const { input } = candidate;
+            const { agentFacts, pluginGeneration } = requirePreparedInput(input);
+            // A replacement waits for this batch's completion. Stop the stale batch before another
+            // same-directory write so a superseded generation cannot overwrite catalog state.
+            assertPreparedModelRuntimeInputCurrent(input, candidate.isBuildCurrent);
+            const catalogSource = await prepareAgentCatalogSource(
+              agentFacts,
+              pluginGeneration,
+              catalogMode,
+            );
+            assertPreparedModelRuntimeInputCurrent(input, candidate.isBuildCurrent);
+            catalogSources.set(input, catalogSource);
+          }
+        }),
+      });
+      if (sourceBuild.hasError) {
+        // A superseded owner is lifecycle control flow. Preserve any genuine in-flight sibling
+        // failure so auth refresh diagnostics do not disappear behind that expected cancellation.
+        throw toStringifiedError(
+          sourceErrors.find(
+            (error) => !(error instanceof PreparedModelRuntimePublicationSupersededError),
+          ) ?? sourceBuild.firstError,
+        );
+      }
+    }
+    const catalogSourceMs = performance.now() - catalogSourceStartedAt;
+    const registryStartedAt = performance.now();
+    onStage?.("model registries");
+    if (catalogMode === "live") {
+      // Explicit live owners still request the complete inventory. Keep those builds sequential
+      // instead of multiplying heap and GC pressure when a command names several agents.
+      for (const candidate of candidates) {
+        await nextTurn();
+        const { input } = candidate;
+        const { agentFacts, pluginGeneration } = requirePreparedInput(input);
+        const catalogSource = catalogSources.get(input);
+        if (!catalogSource) {
+          throw new Error(`prepared model runtime catalog source missing for ${input.agentDir}`);
+        }
+        assertPreparedModelRuntimeInputCurrent(input, candidate.isBuildCurrent);
+        preparedCatalogs.set(
+          input,
+          await prepareFullCatalogFacts(agentFacts, pluginGeneration, catalogMode, catalogSource),
+        );
+        assertPreparedModelRuntimeInputCurrent(input, candidate.isBuildCurrent);
+        runtimeRegistryCount += 1;
+      }
+    }
+    registryMs += performance.now() - registryStartedAt;
+    const preparedAgentFacts = [...preparedInputs.values()].map(({ agentFacts }) => agentFacts);
+    const configuredRuntimeModelCount = [...preparedCatalogs.values()].reduce(
+      (count, facts) => count + facts.configuredRuntimeModels.length,
+      0,
+    );
+    const generatedCatalogPluginCount = new Set(
+      preparedAgentFacts.flatMap((facts) => facts.configuredGeneratedCatalogPluginIds),
+    ).size;
+    const generatedCatalogReadCount = preparedAgentFacts.reduce(
+      (count, facts) => count + facts.configuredGeneratedCatalogPluginIds.length,
+      0,
+    );
+    onBuildStats?.({
+      agentCount: candidates.length,
+      workspaceGroupCount: groups.length,
+      configuredFactsGroupCount: groups.length,
+      catalogSourceCount:
+        catalogMode === "live"
+          ? preparedAgentFacts.filter(({ input }) => !input.readOnly).length
+          : 0,
+      credentialGroupCount: new Set(
+        preparedAgentFacts.map(({ credentials }) => fingerprintPreparedRuntimeFacts(credentials)),
+      ).size,
+      catalogGroupCount: catalogMode === "live" ? candidates.length : 0,
+      runtimeRegistryCount,
+      configuredRuntimeModelCount,
+      generatedCatalogPluginCount,
+      generatedCatalogReadCount,
+      workspaceFactsMs,
+      runtimePluginMs,
+      pluginMetadataMs,
+      staticProviderCatalogMs,
+      ambientCredentialsMs,
+      agentFactsMs,
+      configuredProjectionMs,
+      catalogSourceMs,
+      registryMs,
+      sourceConcurrencyLimit: MAX_CONCURRENT_MODEL_RUNTIME_AGENT_SOURCE_BUILDS,
+      fullCatalogConcurrencyLimit: MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS,
+    });
+    assertPreparedModelRuntimeCandidatesCurrent(candidates);
+    for (const candidate of candidates) {
+      if (results.has(candidate.input)) {
+        continue;
+      }
+      await nextTurn();
+      const { input } = candidate;
+      assertBuildCurrent(input);
+      const { agentFacts, pluginGeneration } = requirePreparedInput(input);
+      const catalogFacts = preparedCatalogs.get(input);
+      if (!catalogFacts) {
+        throw new Error(`prepared model runtime snapshot facts missing for ${input.agentDir}`);
+      }
+      prepareSnapshot(candidate, agentFacts, pluginGeneration, catalogFacts);
+    }
+    assertPreparedModelRuntimeCandidatesCurrent(candidates);
+    return candidates.map(({ input }) => results.get(input)!);
+  } catch (error) {
+    const cleanup = await Promise.allSettled(
+      [...preparedGenerations].map(discardPreparedPluginGeneration),
+    );
+    const failures = cleanup.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) {
+      throw new AggregateError([error, ...failures], "Prepared model build and cleanup failed", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
 }
 
 export function startSerializedSnapshotBuildBatch(
-  inputs: readonly PreparedModelRuntimeInput[],
+  candidates: readonly PreparedModelRuntimeBuildCandidate[],
   agentBuildCompletions: Map<string, Promise<void>>,
-  buildTimeoutMs: number,
+  buildTimeoutMs: number | undefined,
   catalogMode: PreparedModelRuntimeCatalogMode = "live",
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
-  generationGuards: ReadonlyMap<PreparedModelRuntimeInput, () => boolean> = new Map(),
-  buildGuards: PreparedModelRuntimeBuildGuards = generationGuards,
-  inboundPluginRegistryInputs: ReadonlySet<PreparedModelRuntimeInput> = new Set(),
-  reusablePluginGenerations: ReadonlyMap<
-    PreparedModelRuntimeInput,
-    PreparedModelRuntimePluginGeneration
-  > = new Map(),
+  pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
+  includeCredentialProviders = catalogMode === "live",
+  progress?: {
+    onStage: (stage: string) => void;
+    onPrepared: (input: PreparedModelRuntimeInput, result: PreparedModelRuntimeBuildResult) => void;
+  },
+  acquisitionSignal?: AbortSignal,
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult[]>;
   completion: Promise<void>;
 } {
-  const agentDirs = [...new Set(inputs.map((input) => input.agentDir))];
-  const previousBuildCompletions = [
-    ...new Set(
-      agentDirs
-        .map((agentDir) => agentBuildCompletions.get(agentDir))
-        .filter((completion): completion is Promise<void> => completion !== undefined),
-    ),
-  ];
+  const cancellation = new AbortController();
+  const signal = acquisitionSignal
+    ? AbortSignal.any([acquisitionSignal, cancellation.signal])
+    : cancellation.signal;
+  const finished = createDeferredCore();
+  const unregisterClose = registerPreparedModelRuntimeClose(async (error) => {
+    cancellation.abort(error);
+    await finished.promise;
+  });
+  const agentDirs = [...new Set(candidates.map(({ input }) => input.agentDir))];
+  let stage = "previous generation completion";
+  const previousBuildCompletions = agentDirs
+    .map((agentDir) => agentBuildCompletions.get(agentDir))
+    .filter((completion) => completion !== undefined);
+  const agentCompletions = progress
+    ? new Map(agentDirs.map((agentDir) => [agentDir, createDeferredCore()]))
+    : undefined;
+  const remainingByAgent = new Map(
+    agentDirs.map((agentDir) => [
+      agentDir,
+      candidates.filter(({ input }) => input.agentDir === agentDir).length,
+    ]),
+  );
   // Lifecycle events may overlap. The timeout covers queueing plus this build, while completion
   // follows the real work so a timed-out generation can never overlap a replacement.
   const startBuild = (async () => {
+    // Register before waiting: shutdown also owns resources from unfinished builds.
+    registerPreparedPluginLifetime();
+    await using registryResources = new PreparedModelRuntimeBuildResources(
+      retainPreparedPluginRegistry,
+    );
     if (previousBuildCompletions.length > 0) {
       await Promise.all(previousBuildCompletions);
+      // Queued publications register while the prior build settles. Recheck them here so a
+      // retired owner cannot start expensive workspace preparation ahead of its replacement.
+      assertPreparedModelRuntimeCandidatesCurrent(candidates);
     }
-    return {
-      actualBuild: buildSnapshotBatch(
-        inputs,
-        catalogMode,
-        agentBuildCompletions,
-        generationGuards,
-        buildGuards,
-        inboundPluginRegistryInputs,
-        reusablePluginGenerations,
-        onBuildStats,
-      ),
-    };
+    signal.throwIfAborted();
+    return await buildSnapshotBatch(
+      candidates,
+      registryResources,
+      catalogMode,
+      pluginMetadataSnapshot,
+      onBuildStats,
+      includeCredentialProviders,
+      (nextStage) => {
+        stage = nextStage;
+        progress?.onStage(nextStage);
+      },
+      progress
+        ? (input, result) => {
+            progress.onPrepared(input, result);
+            const remaining = remainingByAgent.get(input.agentDir)! - 1;
+            remainingByAgent.set(input.agentDir, remaining);
+            if (remaining === 0) {
+              // This directory has no remaining writes; another workspace must not hold its auth refresh.
+              agentCompletions!.get(input.agentDir)!.resolve();
+            }
+          }
+        : undefined,
+      signal,
+    );
   })();
+  let abandoned = false;
+  const pending = runAbortableTimeout(
+    () => startBuild,
+    buildTimeoutMs,
+    () => `prepared model runtime publication (${stage})`,
+  ).catch((error: unknown) => {
+    abandoned = true;
+    throw error;
+  });
+  // A timeout only settles its observer. Serialize later builds behind the raw work
+  // and disposal of any result that can no longer be published.
   const completion = startBuild
-    .then(async ({ actualBuild }) => await actualBuild)
     .then(
-      () => undefined,
-      () => undefined,
+      async (results) => {
+        if (abandoned) {
+          await Promise.all(
+            results.map(({ pluginGeneration }) =>
+              discardPreparedPluginGeneration(pluginGeneration),
+            ),
+          );
+        }
+      },
+      () => {},
+    )
+    .then(
+      () => {},
+      () => {},
     );
   for (const agentDir of agentDirs) {
-    agentBuildCompletions.set(agentDir, completion);
-    void completion.then(() => {
-      if (agentBuildCompletions.get(agentDir) === completion) {
+    const agentCompletion = agentCompletions?.get(agentDir);
+    if (agentCompletion) {
+      void completion.then(() => agentCompletion.resolve());
+    }
+    const ownedCompletion = agentCompletion?.promise ?? completion;
+    agentBuildCompletions.set(agentDir, ownedCompletion);
+    void ownedCompletion.then(() => {
+      if (agentBuildCompletions.get(agentDir) === ownedCompletion) {
         agentBuildCompletions.delete(agentDir);
       }
     });
   }
-  return {
-    pending: withTimeout(
-      async () => {
-        const { actualBuild } = await startBuild;
-        return await actualBuild;
-      },
-      buildTimeoutMs,
-      "prepared model runtime publication",
-    ),
-    completion,
-  };
-}
-
-export function startSerializedSnapshotBuild(
-  input: PreparedModelRuntimeInput,
-  agentBuildCompletions: Map<string, Promise<void>>,
-  buildTimeoutMs: number,
-  catalogMode: PreparedModelRuntimeCatalogMode = "live",
-  generationGuard: () => boolean = () => true,
-  prepareInboundPluginRegistry = false,
-): {
-  pending: Promise<PreparedModelRuntimeBuildResult>;
-  completion: Promise<void>;
-} {
-  const build = startSerializedSnapshotBuildBatch(
-    [input],
-    agentBuildCompletions,
-    buildTimeoutMs,
-    catalogMode,
-    undefined,
-    new Map([[input, generationGuard]]),
-    undefined,
-    prepareInboundPluginRegistry ? new Set([input]) : undefined,
-  );
-  return {
-    pending: build.pending.then((results) => results[0]!),
-    completion: build.completion,
-  };
+  void completion.then(() => {
+    unregisterClose();
+    finished.resolve();
+  });
+  return { pending, completion };
 }

@@ -1,20 +1,33 @@
-// Gateway TLS runtime loads configured certificates or generates a local
-// self-signed pair, returning server-ready options plus client fingerprint.
+// Public certificate inspection is read-only; server startup alone provisions TLS material.
 import { X509Certificate } from "node:crypto";
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { normalizeTlsFingerprint } from "../../../packages/gateway-client/src/client-address-utils.js";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import { runExec } from "../../process/exec.js";
 import { CONFIG_DIR, resolveUserPath, shortenHomeInString } from "../../utils.js";
+import { readFileDescriptorBounded } from "../boundary-file-read.js";
 import { ensureDurableDirectory, publishFileNoClobber } from "../directory-durability.js";
 import { sameFileIdentity } from "../fs-safe-advanced.js";
 import { canonicalPathFromExistingAncestor, pathExists } from "../fs-safe.js";
 import { resolveSystemBin } from "../resolve-system-bin.js";
-import { normalizeFingerprint } from "./fingerprint.js";
 
 const GATEWAY_TLS_CERT_GENERATION_TIMEOUT_MS = 30_000;
+// Leaf material may include a certificate chain; CA bundles retain their separate contract.
+const MAX_TLS_LEAF_FILE_BYTES = 64 * 1024;
+
+async function readTlsLeafFile(filePath: string): Promise<string> {
+  // Follow configured certificate/key symlinks, then bound reads on the opened descriptor.
+  const file = await fs.open(filePath, "r");
+  try {
+    return (await readFileDescriptorBounded(file.fd, MAX_TLS_LEAF_FILE_BYTES)).toString("utf8");
+  } finally {
+    await file.close();
+  }
+}
 
 type GatewayTlsLog = {
   info?: (message: string) => void;
@@ -189,8 +202,35 @@ async function generateSelfSignedCert(params: {
   }
 }
 
-/** Load or generate gateway TLS material and return server-ready TLS options. */
-export async function loadGatewayTlsRuntime(
+function resolveGatewayTlsCertPath(certPath: string | undefined): string {
+  // Blank paths use the default; resolveUserPath owns trimming and home expansion.
+  return resolveUserPath(
+    typeof certPath === "string" && certPath.trim()
+      ? certPath
+      : path.join(CONFIG_DIR, "gateway", "tls", "gateway-cert.pem"),
+  );
+}
+
+/** Read only public certificate bytes. Inspection never provisions or requires server secrets. */
+export async function inspectGatewayTlsCertificate(
+  cfg: Pick<GatewayTlsConfig, "enabled" | "certPath"> | undefined,
+): Promise<Result<{ cert: string; fingerprintSha256: string }, string>> {
+  if (cfg?.enabled !== true) {
+    return err("gateway tls is disabled");
+  }
+  try {
+    const cert = await readTlsLeafFile(resolveGatewayTlsCertPath(cfg.certPath));
+    const fingerprintSha256 = normalizeTlsFingerprint(new X509Certificate(cert).fingerprint256);
+    return fingerprintSha256
+      ? ok({ cert, fingerprintSha256 })
+      : err("gateway tls: unable to compute certificate fingerprint");
+  } catch (error) {
+    return err(`gateway tls: failed to load cert (${String(error)})`);
+  }
+}
+
+/** Server lifecycle only: load TLS material; startup may also provision a missing pair. */
+export async function loadGatewayTlsServerRuntime(
   cfg: GatewayTlsConfig | undefined,
   log?: GatewayTlsLog,
 ): Promise<GatewayTlsRuntime> {
@@ -204,11 +244,7 @@ export async function loadGatewayTlsRuntime(
   // passed through verbatim so resolveUserPath owns all normalization (it trims
   // and expands ~); trimming here would duplicate it and silently rewrite paths
   // that contain leading/trailing spaces.
-  const certPath = resolveUserPath(
-    typeof cfg.certPath === "string" && cfg.certPath.trim()
-      ? cfg.certPath
-      : path.join(baseDir, "gateway-cert.pem"),
-  );
+  const certPath = resolveGatewayTlsCertPath(cfg.certPath);
   const keyPath = resolveUserPath(
     typeof cfg.keyPath === "string" && cfg.keyPath.trim()
       ? cfg.keyPath
@@ -222,13 +258,13 @@ export async function loadGatewayTlsRuntime(
   if (!hasCert && !hasKey && autoGenerate) {
     try {
       await generateSelfSignedCert({ certPath, keyPath, log });
-    } catch (err) {
+    } catch (error) {
       return {
         enabled: false,
         required: true,
         certPath,
         keyPath,
-        error: `gateway tls: failed to generate cert (${String(err)})`,
+        error: `gateway tls: failed to generate cert (${String(error)})`,
       };
     }
   }
@@ -244,11 +280,11 @@ export async function loadGatewayTlsRuntime(
   }
 
   try {
-    const cert = await fs.readFile(certPath, "utf8");
-    const key = await fs.readFile(keyPath, "utf8");
+    const cert = await readTlsLeafFile(certPath);
+    const key = await readTlsLeafFile(keyPath);
     const ca = caPath ? await fs.readFile(caPath, "utf8") : undefined;
     const x509 = new X509Certificate(cert);
-    const fingerprintSha256 = normalizeFingerprint(x509.fingerprint256 ?? "");
+    const fingerprintSha256 = normalizeTlsFingerprint(x509.fingerprint256 ?? "");
 
     if (!fingerprintSha256) {
       return {
@@ -261,6 +297,9 @@ export async function loadGatewayTlsRuntime(
       };
     }
 
+    const tlsOptions: tls.TlsOptions = { cert, key, ca, minVersion: "TLSv1.3" };
+    // Reject incomplete renewals before any listener can adopt mismatched material.
+    tls.createSecureContext(tlsOptions);
     return {
       enabled: true,
       required: true,
@@ -268,21 +307,16 @@ export async function loadGatewayTlsRuntime(
       keyPath,
       caPath,
       fingerprintSha256,
-      tlsOptions: {
-        cert,
-        key,
-        ca,
-        minVersion: "TLSv1.3",
-      },
+      tlsOptions,
     };
-  } catch (err) {
+  } catch (error) {
     return {
       enabled: false,
       required: true,
       certPath,
       keyPath,
       caPath,
-      error: `gateway tls: failed to load cert (${String(err)})`,
+      error: `gateway tls: failed to load cert (${String(error)})`,
     };
   }
 }

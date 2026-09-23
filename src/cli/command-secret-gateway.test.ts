@@ -1,9 +1,17 @@
-// Command secret gateway tests cover secret resolution for gateway-backed CLI commands.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { coerceConfig, resolveConfigForRead } from "../config/io.read-helpers.js";
+import {
+  getAuthoredConfigSecretRef,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
+import { analyzeCommandSecretAssignmentsFromSnapshot } from "../secrets/command-config.js";
+import { collectConfigAssignments as collectRuntimeConfigAssignments } from "../secrets/runtime-config-collectors.js";
+import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -13,7 +21,6 @@ import {
   TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
 } from "../test-utils/talk-test-provider.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
-import { testing as commandSecretGatewayTesting } from "./command-secret-gateway.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -42,9 +49,21 @@ vi.mock("../utils/message-channel.js", () => ({
   GATEWAY_CLIENT_NAMES: { CLI: "cli" },
 }));
 
+vi.mock("../secrets/command-config.js", { spy: true });
+vi.mock("../secrets/runtime-config-collectors.js", { spy: true });
+vi.mock("../secrets/target-registry-query.js", { spy: true });
+vi.mock("../plugins/plugin-registry-contributions.js", { spy: true });
+
+function resetCommandSecretMocks(): void {
+  vi.mocked(analyzeCommandSecretAssignmentsFromSnapshot).mockReset();
+  vi.mocked(collectRuntimeConfigAssignments).mockReset();
+  vi.mocked(discoverConfigSecretTargetsByIds).mockReset();
+  vi.mocked(resolveManifestContractOwnerPluginId).mockReset();
+}
+
 beforeEach(() => {
   callGateway.mockReset();
-  commandSecretGatewayTesting.resetDepsForTest();
+  resetCommandSecretMocks();
 });
 
 afterEach(async () => {
@@ -166,14 +185,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
   function setSingleSecretTargetDeps(params: {
     path: string;
     pathSegments: readonly string[];
-    resolveManifestContractOwnerPluginId?: NonNullable<
-      Parameters<
-        typeof commandSecretGatewayTesting.setDepsForTest
-      >[0]["resolveManifestContractOwnerPluginId"]
-    >;
+    collectConfigAssignments?: typeof collectRuntimeConfigAssignments;
+    resolveManifestContractOwnerPluginId?: typeof resolveManifestContractOwnerPluginId;
   }): () => void {
-    const deps: Parameters<typeof commandSecretGatewayTesting.setDepsForTest>[0] = {
-      analyzeCommandSecretAssignmentsFromSnapshot: ({ inactiveRefPaths, resolvedConfig }) => {
+    vi.mocked(analyzeCommandSecretAssignmentsFromSnapshot).mockImplementation(
+      ({ inactiveRefPaths, resolvedConfig }) => {
         const value = readPath(resolvedConfig, params.pathSegments);
         const resolved = typeof value === "string" && value.length > 0;
         const inactive = Boolean(inactiveRefPaths?.has(params.path));
@@ -207,10 +223,15 @@ describe("resolveCommandSecretRefsViaGateway", () => {
                 ],
         } as never;
       },
-      collectConfigAssignments: ({ context }) => {
-        context.assignments.push({ path: params.path } as never);
-      },
-      discoverConfigSecretTargetsByIds: (config) =>
+    );
+    vi.mocked(collectRuntimeConfigAssignments).mockImplementation(
+      params.collectConfigAssignments ??
+        (({ context }) => {
+          context.assignments.push({ path: params.path } as never);
+        }),
+    );
+    vi.mocked(discoverConfigSecretTargetsByIds).mockImplementation(
+      (config) =>
         [
           {
             entry: { expectedResolvedValue: "string" },
@@ -219,11 +240,55 @@ describe("resolveCommandSecretRefsViaGateway", () => {
             value: readPath(config, params.pathSegments),
           },
         ] as never,
-    };
+    );
     if (params.resolveManifestContractOwnerPluginId) {
-      deps.resolveManifestContractOwnerPluginId = params.resolveManifestContractOwnerPluginId;
+      vi.mocked(resolveManifestContractOwnerPluginId).mockImplementation(
+        params.resolveManifestContractOwnerPluginId,
+      );
     }
-    return commandSecretGatewayTesting.setDepsForTest(deps);
+    return resetCommandSecretMocks;
+  }
+
+  function setDiscordAccountTargetDeps(): () => void {
+    vi.mocked(analyzeCommandSecretAssignmentsFromSnapshot).mockImplementation(
+      () =>
+        ({
+          assignments: [
+            {
+              path: "channels.discord.accounts.ops.token",
+              pathSegments: ["channels", "discord", "accounts", "ops", "token"],
+              value: "ops-token",
+            },
+          ],
+          diagnostics: [],
+          inactive: [],
+          unresolved: [],
+        }) as never,
+    );
+    vi.mocked(collectRuntimeConfigAssignments).mockImplementation(({ context }) => {
+      context.assignments.push(
+        { path: "channels.discord.accounts.ops.token" } as never,
+        { path: "channels.discord.accounts.chat.token" } as never,
+      );
+    });
+    vi.mocked(discoverConfigSecretTargetsByIds).mockImplementation(
+      () =>
+        [
+          {
+            entry: { expectedResolvedValue: "string" },
+            path: "channels.discord.accounts.ops.token",
+            pathSegments: ["channels", "discord", "accounts", "ops", "token"],
+            value: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" },
+          },
+          {
+            entry: { expectedResolvedValue: "string" },
+            path: "channels.discord.accounts.chat.token",
+            pathSegments: ["channels", "discord", "accounts", "chat", "token"],
+            value: { source: "env", provider: "default", id: "DISCORD_CHAT_TOKEN" },
+          },
+        ] as never,
+    );
+    return resetCommandSecretMocks;
   }
 
   function setFirecrawlWebSearchTargetDeps(): () => void {
@@ -331,43 +396,185 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("sk-live");
   });
 
-  it("enforces unresolved checks only for allowed paths when provided", async () => {
-    const restoreDeps = commandSecretGatewayTesting.setDepsForTest({
-      analyzeCommandSecretAssignmentsFromSnapshot: () =>
-        ({
-          assignments: [
-            {
-              path: "channels.discord.accounts.ops.token",
-              pathSegments: ["channels", "discord", "accounts", "ops", "token"],
-              value: "ops-token",
-            },
-          ],
-          diagnostics: [],
-          inactive: [],
-          unresolved: [],
-        }) as never,
-      collectConfigAssignments: ({ context }) => {
-        context.assignments.push(
-          { path: "channels.discord.accounts.ops.token" } as never,
-          { path: "channels.discord.accounts.chat.token" } as never,
-        );
+  it.each(["$OTHER", "${OTHER}"])(
+    "preserves source provenance while gateway assignments materialize literal %s",
+    async (resolvedLiteral) => {
+      const read = resolveConfigForRead(buildTalkTestProviderConfig("$SOURCE"), {});
+      const config = read.resolvedConfigRaw as OpenClawConfig;
+      setConfigResolutionFacts(config, read.resolutionFacts);
+      callGateway.mockResolvedValueOnce({
+        assignments: [
+          {
+            path: TALK_TEST_PROVIDER_API_KEY_PATH,
+            pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+            value: resolvedLiteral,
+          },
+        ],
+      });
+
+      const result = await resolveCommandSecretRefsViaGateway({
+        config,
+        commandName: "memory status",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+      });
+
+      expect(readTalkProviderApiKey(result.resolvedConfig)).toBe(resolvedLiteral);
+      expect(getAuthoredConfigSecretRef(config, TALK_TEST_PROVIDER_API_KEY_PATH)?.id).toBe(
+        "SOURCE",
+      );
+      expect(
+        getAuthoredConfigSecretRef(result.resolvedConfig, TALK_TEST_PROVIDER_API_KEY_PATH),
+      ).toBeNull();
+      expect(result.hadUnresolvedTargets).toBe(false);
+    },
+  );
+
+  describe.each([
+    {
+      name: "dotted object key",
+      config: { talk: { providers: { "acme.speech": { apiKey: "${SOURCE_KEY}" } } } },
+      targetPath: 'talk.providers["acme.speech"].apiKey',
+      pathSegments: ["talk", "providers", "acme.speech", "apiKey"],
+      targetId: "talk.providers.*.apiKey",
+      fixtureTarget: false,
+    },
+    {
+      name: "numeric object key",
+      config: { talk: { providers: { "0": { apiKey: "${SOURCE_KEY}" } } } },
+      targetPath: 'talk.providers["0"].apiKey',
+      pathSegments: ["talk", "providers", "0", "apiKey"],
+      targetId: "talk.providers.*.apiKey",
+      fixtureTarget: false,
+    },
+    {
+      name: "array index",
+      config: {
+        plugins: { entries: { fixture: { config: { tokens: ["${SOURCE_KEY}"] } } } },
       },
-      discoverConfigSecretTargetsByIds: () =>
-        [
-          {
-            entry: { expectedResolvedValue: "string" },
-            path: "channels.discord.accounts.ops.token",
-            pathSegments: ["channels", "discord", "accounts", "ops", "token"],
-            value: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" },
+      targetPath: "plugins.entries.fixture.config.tokens[0]",
+      pathSegments: ["plugins", "entries", "fixture", "config", "tokens", "0"],
+      targetId: "plugins.entries.fixture.config.tokens.*",
+      fixtureTarget: true,
+    },
+  ])(
+    "gateway assignment for $name",
+    ({ config: input, targetPath, pathSegments, targetId, fixtureTarget }) => {
+      it.each(["canonical", "omitted", "display-only"])(
+        "applies and clears only the actual target when path is %s",
+        async (pathMode) => {
+          const read = resolveConfigForRead(input, {});
+          const config = coerceConfig(read.resolvedConfigRaw);
+          setConfigResolutionFacts(config, read.resolutionFacts);
+          const restoreDeps = fixtureTarget
+            ? setSingleSecretTargetDeps({ path: targetPath, pathSegments })
+            : undefined;
+          const resolvedLiteral = "${MATERIALIZED_LITERAL}";
+          callGateway.mockResolvedValueOnce({
+            assignments: [
+              {
+                ...(pathMode === "omitted"
+                  ? {}
+                  : { path: pathMode === "canonical" ? targetPath : "display-only" }),
+                pathSegments,
+                value: resolvedLiteral,
+              },
+            ],
+          });
+          const request = {
+            commandName: "memory status",
+            targetIds: new Set([targetId]),
+            allowedPaths: new Set([targetPath]),
+          };
+
+          try {
+            const result = await resolveCommandSecretRefsViaGateway({ ...request, config });
+
+            expect(readPath(result.resolvedConfig, pathSegments)).toBe(resolvedLiteral);
+            expect(getAuthoredConfigSecretRef(config, targetPath)?.id).toBe("SOURCE_KEY");
+            expect(getAuthoredConfigSecretRef(result.resolvedConfig, targetPath)).toBeNull();
+            expect(result.hadUnresolvedTargets).toBe(false);
+            expect(result.targetStatesByPath).toEqual({ [targetPath]: "resolved_gateway" });
+
+            const next = await resolveCommandSecretRefsViaGateway({
+              ...request,
+              config: result.resolvedConfig,
+            });
+            expect(readPath(next.resolvedConfig, pathSegments)).toBe(resolvedLiteral);
+            expect(next.hadUnresolvedTargets).toBe(false);
+            expect(callGateway).toHaveBeenCalledOnce();
+          } finally {
+            restoreDeps?.();
+          }
+        },
+      );
+    },
+  );
+
+  it("uses the explicit agent owner during channels resolve secret preflight", async () => {
+    const channelPath = "channels.telegram.botToken";
+    const channelPathSegments = ["channels", "telegram", "botToken"];
+    const config = {
+      agents: {
+        entries: {
+          ops: { sandbox: { backend: "docker" } },
+          research: { sandbox: { backend: "docker" } },
+        },
+        defaults: {
+          sandbox: {
+            backend: "ssh",
+            ssh: {
+              identityData: {
+                source: "env",
+                provider: "default",
+                id: "STALE_SANDBOX_IDENTITY",
+              },
+            },
           },
-          {
-            entry: { expectedResolvedValue: "string" },
-            path: "channels.discord.accounts.chat.token",
-            pathSegments: ["channels", "discord", "accounts", "chat", "token"],
-            value: { source: "env", provider: "default", id: "DISCORD_CHAT_TOKEN" },
-          },
-        ] as never,
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const { collectConfigAssignments } = await vi.importActual<
+      typeof import("../secrets/runtime-config-collectors.js")
+    >("../secrets/runtime-config-collectors.js");
+    const restoreDeps = setSingleSecretTargetDeps({
+      path: channelPath,
+      pathSegments: channelPathSegments,
+      collectConfigAssignments,
     });
+    callGateway.mockResolvedValueOnce({
+      assignments: [
+        {
+          path: channelPath,
+          pathSegments: channelPathSegments,
+          value: "resolved-telegram-token",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    try {
+      const result = await resolveCommandSecretRefsViaGateway({
+        config,
+        commandName: "channels resolve",
+        targetIds: new Set([channelPath]),
+        agentId: "ops",
+        mode: "read_only_operational",
+      });
+
+      expect(result.resolvedConfig.channels?.telegram?.botToken).toBe("resolved-telegram-token");
+      expect(callGateway.mock.calls[0]?.[0].params).not.toHaveProperty("agentId");
+    } finally {
+      restoreDeps();
+    }
+  });
+
+  it("enforces unresolved checks only for allowed paths when provided", async () => {
+    const restoreDeps = setDiscordAccountTargetDeps();
     callGateway.mockResolvedValueOnce({
       assignments: [
         {
@@ -430,42 +637,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
   });
 
   it("retries old gateways without allowed paths and still filters scoped results", async () => {
-    const restoreDeps = commandSecretGatewayTesting.setDepsForTest({
-      analyzeCommandSecretAssignmentsFromSnapshot: () =>
-        ({
-          assignments: [
-            {
-              path: "channels.discord.accounts.ops.token",
-              pathSegments: ["channels", "discord", "accounts", "ops", "token"],
-              value: "ops-token",
-            },
-          ],
-          diagnostics: [],
-          inactive: [],
-          unresolved: [],
-        }) as never,
-      collectConfigAssignments: ({ context }) => {
-        context.assignments.push(
-          { path: "channels.discord.accounts.ops.token" } as never,
-          { path: "channels.discord.accounts.chat.token" } as never,
-        );
-      },
-      discoverConfigSecretTargetsByIds: () =>
-        [
-          {
-            entry: { expectedResolvedValue: "string" },
-            path: "channels.discord.accounts.ops.token",
-            pathSegments: ["channels", "discord", "accounts", "ops", "token"],
-            value: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" },
-          },
-          {
-            entry: { expectedResolvedValue: "string" },
-            path: "channels.discord.accounts.chat.token",
-            pathSegments: ["channels", "discord", "accounts", "chat", "token"],
-            value: { source: "env", provider: "default", id: "DISCORD_CHAT_TOKEN" },
-          },
-        ] as never,
-    });
+    const restoreDeps = setDiscordAccountTargetDeps();
     callGateway
       .mockRejectedValueOnce(
         new Error("secrets.resolve invalid request: invalid secrets.resolve params"),
@@ -584,17 +756,21 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     const envKey = "TALK_API_KEY_FAILFAST";
     await withEnvValue(envKey, undefined, async () => {
       callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-      await expect(
-        resolveCommandSecretRefsViaGateway({
-          config: buildTalkTestProviderConfig({
-            source: "env",
-            provider: "default",
-            id: envKey,
-          }),
-          commandName: "memory status",
-          targetIds: new Set(["talk.providers.*.apiKey"]),
+      const resolution = resolveCommandSecretRefsViaGateway({
+        config: buildTalkTestProviderConfig({
+          source: "env",
+          provider: "default",
+          id: envKey,
         }),
-      ).rejects.toThrow(/failed to resolve secrets from the active gateway snapshot/i);
+        commandName: "memory status",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+      });
+      await expect(resolution).rejects.toThrow(
+        /failed to resolve secrets from the active gateway snapshot/i,
+      );
+      await expect(resolution).rejects.toThrow(/local resolution also failed/i);
+      await expect(resolution).rejects.toThrow(/check the configured secret sources/i);
+      await expect(resolution).rejects.not.toThrow(envKey);
     });
   });
 
@@ -625,6 +801,28 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       expect(
         result.diagnostics.some((entry) => entry.includes("resolved command secrets locally")),
       ).toBe(true);
+    });
+  });
+
+  it("falls back to local resolution when the gateway stalls secrets.resolve past the caller's budget", async () => {
+    await withEnvValue("TALK_API_KEY", "local-fallback-key", async () => {
+      callGateway.mockImplementation(
+        (request: { timeoutMs: number }) =>
+          new Promise((_resolve, reject) => {
+            // A reachable gateway that never replies fails only at the request deadline it was given.
+            setTimeout(() => reject(new Error("gateway timeout")), request.timeoutMs);
+          }),
+      );
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: makeTalkProviderApiKeySecretRefConfig("TALK_API_KEY"),
+        commandName: "status",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+        gatewaySecretResolveTimeoutMs: 50,
+      });
+
+      expect(callGateway.mock.calls[0]?.[0]).toMatchObject({ timeoutMs: 50 });
+      expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("local-fallback-key");
+      expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
   });
 
@@ -1467,6 +1665,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       const result = await resolveCommandSecretRefsViaGateway({
         config: {
           talk: {
+            provider: "gateway",
             providers: {
               gateway: {
                 apiKey: {
@@ -1475,21 +1674,28 @@ describe("resolveCommandSecretRefsViaGateway", () => {
                   id: "GATEWAY_ONLY_TALK_KEY",
                 },
               },
-              local: {
-                apiKey: { source: "env", provider: "default", id: localEnvKey },
+            },
+            realtime: {
+              provider: "local",
+              providers: {
+                local: {
+                  apiKey: { source: "env", provider: "default", id: localEnvKey },
+                },
               },
             },
           },
         } as OpenClawConfig,
         commandName: "reply",
-        targetIds: new Set(["talk.providers.*.apiKey"]),
+        targetIds: new Set(["talk.providers.*.apiKey", "talk.realtime.providers.*.apiKey"]),
       });
 
       expect(result.resolvedConfig.talk?.providers?.gateway?.apiKey).toBe("gateway-owned-key");
-      expect(result.resolvedConfig.talk?.providers?.local?.apiKey).toBe("local-fallback-key");
+      expect(result.resolvedConfig.talk?.realtime?.providers?.local?.apiKey).toBe(
+        "local-fallback-key",
+      );
       expect(result.targetStatesByPath).toMatchObject({
         "talk.providers.gateway.apiKey": "resolved_gateway",
-        "talk.providers.local.apiKey": "resolved_local",
+        "talk.realtime.providers.local.apiKey": "resolved_local",
       });
       expect(
         result.diagnostics.some((entry) => entry.includes("gateway secrets.resolve unavailable")),

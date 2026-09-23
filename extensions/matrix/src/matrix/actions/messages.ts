@@ -1,11 +1,12 @@
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMatrixReplacementContent } from "../media-text.js";
 import { fetchMatrixPollMessageSummary, resolveMatrixPollRootEventId } from "../poll-summary.js";
 import { isPollEventType, isPollStartType } from "../poll-types.js";
 import { editMessageMatrix, sendMessageMatrix } from "../send.js";
 import { withResolvedRoomAction } from "./client.js";
 import { resolveMatrixActionLimit } from "./limits.js";
-import { summarizeMatrixRawEvent } from "./summary.js";
+import { fetchEventSummary, summarizeMatrixRawEvent } from "./summary.js";
 import {
   EventType,
   type MatrixActionClientOpts,
@@ -44,18 +45,7 @@ function resolveLatestMatrixReplacements(events: readonly MatrixRawEvent[]) {
   for (const event of events) {
     const targetId = resolveMatrixReplacementTarget(event);
     const original = targetId ? originals.get(targetId) : undefined;
-    const newContent = event.content["m.new_content"];
-    if (
-      !targetId ||
-      !original ||
-      event.sender !== original.sender ||
-      event.type !== original.type ||
-      event.state_key !== undefined ||
-      event.unsigned?.redacted_because ||
-      !newContent ||
-      typeof newContent !== "object" ||
-      Array.isArray(newContent)
-    ) {
+    if (!targetId || !original || !resolveMatrixReplacementContent(original, event)) {
       continue;
     }
 
@@ -127,6 +117,20 @@ export async function deleteMatrixMessage(
 ) {
   await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
     await client.redactEvent(resolvedRoom, messageId, opts.reason);
+  });
+}
+
+export async function readMatrixMessage(
+  roomId: string,
+  eventId: string,
+  opts: MatrixActionClientOpts = {},
+): Promise<MatrixMessageSummary> {
+  return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
+    const message = await fetchEventSummary(client, resolvedRoom, eventId);
+    if (!message) {
+      throw new Error(`Matrix message ${eventId} was not found in room ${resolvedRoom}.`);
+    }
+    return message;
   });
 }
 

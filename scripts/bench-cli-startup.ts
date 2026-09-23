@@ -1,10 +1,30 @@
 // Bench Cli Startup script supports OpenClaw repository automation.
-import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import {
+  assertCompatibleCliStartupExecutionModes,
+  assertCompatibleCliStartupMemoryMetrics,
+  CLI_RUNTIME_MEMORY_METRIC,
+  type CliStartupExecutionMode,
+  cliStartupMemoryMetric,
+} from "./lib/cli-startup-memory-contract.mts";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
 
 type CommandCase = {
   id: string;
@@ -22,6 +42,7 @@ type Sample = {
   ms: number;
   firstOutputMs: number | null;
   maxRssMb: number | null;
+  memory?: SampleMemory;
   exitCode: number | null;
   signal: string | null;
   startedAt?: string;
@@ -29,6 +50,26 @@ type Sample = {
   timedOut?: boolean;
   stdoutTail?: string;
   stderrTail?: string;
+};
+
+type RssObservation = {
+  pid: number;
+  parentPid: number;
+  matchesArguments: boolean;
+  matchesInvocation: boolean;
+  maxRssBytes: number | null;
+};
+
+type SampleMemory = {
+  runtimePid: number | null;
+  processes: Array<{
+    pid: number;
+    parentPid: number;
+    role: "runtime" | "launcher" | "auxiliary" | "unresolved";
+    metricKind: "process-high-water-rss";
+    maxRssBytes: number | null;
+  }>;
+  error?: string;
 };
 
 type CaseRuns = {
@@ -54,6 +95,8 @@ type CaseSummary = {
 
 type SuiteResult = {
   entry: string;
+  executionMode?: CliStartupExecutionMode;
+  memoryMetric?: string;
   cases: Array<{
     id: string;
     name: string;
@@ -105,6 +148,7 @@ type CliOptions = {
   runs: number;
   warmup: number;
   timeoutMs: number;
+  runtimeRss: boolean;
   json: boolean;
   output?: string;
   cpuProfDir?: string;
@@ -116,9 +160,135 @@ const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TIMEOUT_KILL_GRACE_MS = 1_000;
 const TIMEOUT_KILL_GRACE_MS = resolveTimeoutKillGraceMs(process.env);
-const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const DEFAULT_ENTRY = "openclaw.mjs";
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+
+type SampleTransport = {
+  prefix: string[];
+  binary: string;
+  env: Record<string, string>;
+  cwd: string;
+};
+
+function sampleTransport(): SampleTransport | undefined {
+  const raw = process.env.OPENCLAW_BENCH_TRANSPORT_JSON;
+  if (raw === undefined) {
+    return undefined;
+  }
+  const value: unknown = JSON.parse(raw);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid benchmark transport");
+  }
+  const prefix = "prefix" in value ? value.prefix : undefined;
+  const binary = "binary" in value ? value.binary : undefined;
+  const env = "env" in value ? value.env : undefined;
+  const cwd = "cwd" in value ? value.cwd : undefined;
+  if (
+    !Array.isArray(prefix) ||
+    prefix.length === 0 ||
+    !prefix.every(
+      (part: unknown) => typeof part === "string" && part.length > 0 && !part.includes("\0"),
+    ) ||
+    typeof prefix[0] !== "string" ||
+    !path.isAbsolute(prefix[0]) ||
+    typeof binary !== "string" ||
+    !path.isAbsolute(binary) ||
+    binary.includes("\0") ||
+    !env ||
+    typeof env !== "object" ||
+    Array.isArray(env)
+  ) {
+    throw new Error("Invalid benchmark transport");
+  }
+  const fixedEnv: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(env)) {
+    if (!/^[A-Z_][A-Z0-9_]*$/u.test(key) || typeof entry !== "string" || entry.includes("\0")) {
+      throw new Error("Invalid benchmark transport environment");
+    }
+    fixedEnv[key] = entry;
+  }
+  if (!fixedEnv.HOME || !path.isAbsolute(fixedEnv.HOME) || !fixedEnv.PATH) {
+    throw new Error("Benchmark transport requires fixed HOME and PATH");
+  }
+  const directory = cwd === undefined ? fixedEnv.HOME : cwd;
+  if (typeof directory !== "string" || !path.isAbsolute(directory) || directory.includes("\0")) {
+    throw new Error("Invalid benchmark transport cwd");
+  }
+  return { prefix, binary, env: fixedEnv, cwd: directory };
+}
+
+function transportedCommand(
+  transport: SampleTransport,
+  args: string[],
+  env: Record<string, string> = {},
+  timeoutMs?: number,
+): { command: string; args: string[] } {
+  return {
+    command: expectDefined(transport.prefix[0], "benchmark transport command"),
+    args: [
+      ...transport.prefix.slice(1),
+      "/usr/bin/env",
+      "-C",
+      transport.cwd,
+      "-i",
+      ...Object.entries({ ...transport.env, ...env }).map(([key, value]) => `${key}=${value}`),
+      ...(timeoutMs === undefined
+        ? []
+        : ["/usr/bin/timeout", "--signal=TERM", "--kill-after=1s", `${timeoutMs / 1000}s`]),
+      transport.binary,
+      ...args,
+    ],
+  };
+}
+
+function sampleFilesystem(
+  transport: SampleTransport,
+  operation: "create" | "prepare" | "remove",
+  root?: string,
+  config?: Record<string, unknown> | null,
+  hook?: string,
+): string {
+  // Only the SUT opens these paths. Its replies are never read as paths on the runner.
+  const launch = transportedCommand(transport, [
+    "--input-type=module",
+    "-e",
+    `import fs from "node:fs"; import os from "node:os"; import path from "node:path";
+const {operation,root,config,hook} = JSON.parse(fs.readFileSync(0,"utf8"));
+if (operation === "create") process.stdout.write(fs.mkdtempSync(path.join(os.tmpdir(),"openclaw-cli-bench-home-")));
+else if (operation === "prepare") {
+  fs.mkdirSync(path.join(root,".openclaw"),{recursive:true});
+  if (config) fs.writeFileSync(path.join(root,".openclaw/openclaw.json"),JSON.stringify(config)+"\\n");
+  fs.writeFileSync(path.join(root,"measure-rss.mjs"),hook);
+} else if (operation === "remove") fs.rmSync(root,{recursive:true,force:true});
+else throw new Error("Invalid sample filesystem operation");`,
+  ]);
+  return execFileSync(launch.command, launch.args, {
+    input: JSON.stringify({ operation, root, config, hook }),
+    encoding: "utf8",
+    timeout: 10_000,
+    maxBuffer: 64 * 1024,
+    env: { PATH: process.env.PATH },
+  });
+}
+
+function createSampleRoot(transport?: SampleTransport): string {
+  if (!transport) {
+    return mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-home-"));
+  }
+  const root = sampleFilesystem(transport, "create");
+  if (!path.isAbsolute(root) || /[\0\r\n]/u.test(root)) {
+    throw new Error("Invalid SUT sample directory");
+  }
+  return root;
+}
+
+function removeSampleRoot(root: string, transport?: SampleTransport): void {
+  if (transport) {
+    sampleFilesystem(transport, "remove", root);
+  } else {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 function resolveTimeoutKillGraceMs(env: NodeJS.ProcessEnv): number {
   const raw = env.VITEST ? env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS : undefined;
@@ -143,7 +313,7 @@ const VALUE_FLAGS = new Set([
   "--timeout-ms",
   "--warmup",
 ]);
-const BOOLEAN_FLAGS = new Set(["--help", "--json"]);
+const BOOLEAN_FLAGS = new Set(["--help", "--json", "--runtime-rss"]);
 
 const COMMAND_CASES: readonly CommandCase[] = [
   {
@@ -453,17 +623,18 @@ const COMMAND_CASES: readonly CommandCase[] = [
     expectedNonzeroOutputIncludes: ['"ok"', '"gateway_transport_error"'],
   },
   {
-    id: "gatewayHealthJsonConnected",
-    name: "gateway health --json (connected)",
+    id: "gatewayHealthJsonWarmState",
+    name: "gateway health --json (warm state)",
     args: ["gateway", "health", "--json"],
     presets: [],
     stateScope: "case",
   },
   {
-    id: "gatewayHealthJsonFirstDevice",
-    name: "gateway health --json (first device)",
+    id: "gatewayHealthJsonFreshState",
+    name: "gateway health --json (fresh state)",
     args: ["gateway", "health", "--json"],
     presets: [],
+    stateScope: "sample",
   },
   {
     id: "configGetGatewayPort",
@@ -673,7 +844,7 @@ function formatMs(value: number): string {
 }
 
 function formatMb(value: number): string {
-  return `${value.toFixed(1)}MB`;
+  return `${value.toFixed(1)}MiB`;
 }
 
 function collectExitSummary(samples: Sample[]): string {
@@ -689,11 +860,13 @@ function collectExitSummary(samples: Sample[]): string {
 }
 
 function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> | null {
+  const usesSharedToken =
+    commandCase.id === "gatewayHealthJsonWarmState" ||
+    commandCase.id === "gatewayHealthJsonFreshState";
   if (
     commandCase.id !== "configGetGatewayPort" &&
     commandCase.id !== "gatewayHealthJson" &&
-    commandCase.id !== "gatewayHealthJsonConnected" &&
-    commandCase.id !== "gatewayHealthJsonFirstDevice" &&
+    !usesSharedToken &&
     commandCase.id !== "health" &&
     commandCase.id !== "healthJson"
   ) {
@@ -702,7 +875,7 @@ function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> |
   const port = parseGatewayPortEnv(process.env.OPENCLAW_GATEWAY_PORT);
   return {
     gateway: {
-      auth: { mode: "none" },
+      auth: { mode: usesSharedToken ? "token" : "none" },
       bind: "loopback",
       mode: "local",
       port,
@@ -735,6 +908,152 @@ function parseMaxRssMb(stderr: string): number | null {
   return Number(lastMatch[1]) / 1024;
 }
 
+function buildRuntimeRssHook(tmpDir: string): string {
+  const rssHookPath = path.join(tmpDir, "measure-rss.mjs");
+  writeFileSync(
+    rssHookPath,
+    `import { writeFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
+import { isMainThread } from "node:worker_threads";
+if (isMainThread) {
+  const { directory, entries, args } = JSON.parse(process.env.OPENCLAW_BENCH_MEMORY);
+  let entry;
+  try {
+    if (process.argv[1]) entry = realpathSync(process.argv[1]);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const matchesArguments = JSON.stringify(process.argv.slice(2)) === JSON.stringify(args);
+  const record = {
+    pid: process.pid,
+    parentPid: process.ppid,
+    matchesArguments,
+    matchesInvocation: entries.includes(entry) && matchesArguments,
+    maxRssBytes: null,
+  };
+  const file = join(directory, String(process.pid) + ".json");
+  writeFileSync(file, JSON.stringify(record));
+  process.on("exit", () => {
+    record.maxRssBytes = process.resourceUsage().maxRSS * 1024;
+    writeFileSync(file, JSON.stringify(record));
+  });
+}
+`,
+    "utf8",
+  );
+  return rssHookPath;
+}
+
+function readSampleMemory(directory: string, entryPid: number | undefined): SampleMemory {
+  const memory: SampleMemory = { runtimePid: null, processes: [] };
+  try {
+    const observations: RssObservation[] = readdirSync(directory).map((file) => {
+      const value: unknown = JSON.parse(readFileSync(path.join(directory, file), "utf8"));
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        !("pid" in value) ||
+        typeof value.pid !== "number" ||
+        !Number.isSafeInteger(value.pid) ||
+        value.pid <= 0 ||
+        file !== `${value.pid}.json` ||
+        !("parentPid" in value) ||
+        typeof value.parentPid !== "number" ||
+        !Number.isSafeInteger(value.parentPid) ||
+        value.parentPid < 0 ||
+        !("matchesArguments" in value) ||
+        typeof value.matchesArguments !== "boolean" ||
+        !("matchesInvocation" in value) ||
+        typeof value.matchesInvocation !== "boolean" ||
+        !("maxRssBytes" in value) ||
+        !(
+          value.maxRssBytes === null ||
+          (typeof value.maxRssBytes === "number" &&
+            Number.isSafeInteger(value.maxRssBytes) &&
+            value.maxRssBytes > 0)
+        )
+      ) {
+        throw new Error("invalid process RSS observation");
+      }
+      return {
+        pid: value.pid,
+        parentPid: value.parentPid,
+        matchesArguments: value.matchesArguments,
+        matchesInvocation: value.matchesInvocation,
+        maxRssBytes: value.maxRssBytes,
+      };
+    });
+    memory.processes = observations.map((record) => ({
+      pid: record.pid,
+      parentPid: record.parentPid,
+      role: record.matchesInvocation ? "unresolved" : "auxiliary",
+      metricKind: "process-high-water-rss",
+      maxRssBytes: record.maxRssBytes,
+    }));
+    if (observations.some((record) => record.matchesArguments && !record.matchesInvocation)) {
+      throw new Error("unrecognized CLI entry with matching command arguments");
+    }
+    const invocation = observations.filter((record) => record.matchesInvocation);
+    const entryObservation = invocation.find((record) => record.pid === entryPid);
+    if (!entryObservation) {
+      throw new Error("missing CLI entry process identity");
+    }
+    let current: RssObservation = entryObservation;
+    const lineage = new Set<number>();
+    // Respawns preserve CLI argv and the preload. Follow the unique invocation
+    // chain, not exit order, RSS magnitude, or platform-specific ready flags.
+    while (true) {
+      if (lineage.has(current.pid)) {
+        throw new Error("cyclic CLI process identity");
+      }
+      lineage.add(current.pid);
+      if (current.maxRssBytes === null) {
+        throw new Error(`missing process high-water RSS for CLI PID ${current.pid}`);
+      }
+      const parentPid = current.pid;
+      const children = invocation.filter((record) => record.parentPid === parentPid);
+      if (children.length > 1) {
+        throw new Error("ambiguous CLI runtime identity: multiple matching children");
+      }
+      const child = children[0];
+      if (!child) {
+        break;
+      }
+      current = child;
+    }
+    if (lineage.size !== invocation.length) {
+      throw new Error("disconnected CLI runtime identity");
+    }
+    memory.runtimePid = current.pid;
+    for (const record of memory.processes) {
+      if (lineage.has(record.pid)) {
+        record.role = record.pid === current.pid ? "runtime" : "launcher";
+      }
+    }
+  } catch (error) {
+    memory.error = error instanceof Error ? error.message : String(error);
+  }
+  return memory;
+}
+
+function memoryInvocationEntries(entry: string): string[] {
+  const resolvedEntry = realpathSync(entry);
+  const entries = [resolvedEntry];
+  // The wrapper's compile-cache handoff can enter dist directly.
+  if (path.basename(resolvedEntry) === "openclaw.mjs") {
+    for (const name of ["entry.js", "entry.mjs"]) {
+      try {
+        entries.push(realpathSync(path.join(path.dirname(resolvedEntry), "dist", name)));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+    }
+  }
+  return entries;
+}
+
 function nodeImportSpecifierForPath(filePath: string): string {
   return pathToFileURL(filePath).href;
 }
@@ -759,23 +1078,41 @@ async function runSample(params: {
   entry: string;
   commandCase: CommandCase;
   timeoutMs: number;
+  runtimeRss: boolean;
   cpuProfDir?: string;
   heapProfDir?: string;
   rssHookPath: string;
   runRoot?: string;
 }): Promise<Sample> {
-  const runRoot = params.runRoot ?? mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-home-"));
+  const transport = sampleTransport();
+  const runRoot = params.runRoot ?? createSampleRoot(transport);
   const ownsRunRoot = params.runRoot == null;
   const stateDir = path.join(runRoot, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
   const configFixture = buildConfigFixture(params.commandCase);
-  if (configFixture) {
+  let rssHookPath = params.rssHookPath;
+  if (transport) {
+    sampleFilesystem(
+      transport,
+      "prepare",
+      runRoot,
+      configFixture,
+      readFileSync(rssHookPath, "utf8"),
+    );
+    rssHookPath = path.join(runRoot, "measure-rss.mjs");
+  } else if (configFixture) {
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(configPath, `${JSON.stringify(configFixture, null, 2)}\n`, "utf8");
   }
   const nodeArgs = [
+    ...(transport
+      ? [
+          "--import",
+          `data:text/javascript,${encodeURIComponent(`process.chdir(${JSON.stringify(path.dirname(params.entry))});`)}`,
+        ]
+      : []),
     "--import",
-    nodeImportSpecifierForPath(params.rssHookPath),
+    nodeImportSpecifierForPath(rssHookPath),
     ...buildCpuOrHeapFlags({
       cpuProfDir: params.cpuProfDir,
       heapProfDir: params.heapProfDir,
@@ -793,24 +1130,51 @@ async function runSample(params: {
   let forceKillAt: number | null = null;
   let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
   const maxOutputLength = 32 * 1024 * 1024;
+  const memoryDirectory = params.runtimeRss
+    ? mkdtempSync(path.join(path.dirname(params.rssHookPath), "sample-"))
+    : undefined;
 
   try {
     return await new Promise<Sample>((resolve) => {
-      const useProcessGroup = process.platform !== "win32";
-      const proc = spawn(process.execPath, nodeArgs, {
+      const sampleEnv = {
+        HOME: runRoot,
+        USERPROFILE: runRoot,
+        OPENCLAW_HOME: runRoot,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_HIDE_BANNER: "1",
+        NO_COLOR: "1",
+        FORCE_COLOR: "0",
+        ...(memoryDirectory
+          ? {
+              OPENCLAW_BENCH_MEMORY: JSON.stringify({
+                directory: memoryDirectory,
+                entries: memoryInvocationEntries(params.entry),
+                args: params.commandCase.args,
+              }),
+            }
+          : {}),
+      };
+      const launch = transport
+        ? transportedCommand(
+            transport,
+            nodeArgs,
+            {
+              ...sampleEnv,
+              ...(process.env.OPENCLAW_GATEWAY_TOKEN
+                ? { OPENCLAW_GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN }
+                : {}),
+              ...(process.env.OPENCLAW_GATEWAY_PORT
+                ? { OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT }
+                : {}),
+            },
+            params.timeoutMs,
+          )
+        : { command: process.execPath, args: nodeArgs };
+      const proc = spawn(launch.command, launch.args, {
         cwd: process.cwd(),
-        detached: useProcessGroup,
-        env: {
-          ...process.env,
-          HOME: runRoot,
-          USERPROFILE: runRoot,
-          OPENCLAW_HOME: runRoot,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_HIDE_BANNER: "1",
-          NO_COLOR: "1",
-          FORCE_COLOR: "0",
-        },
+        detached: process.platform !== "win32",
+        env: transport ? { PATH: process.env.PATH } : { ...process.env, ...sampleEnv },
         stdio: ["ignore", "pipe", "pipe"],
       });
 
@@ -824,10 +1188,19 @@ async function runSample(params: {
           forceKillTimer = null;
         }
         const ms = Number(process.hrtime.bigint() - started) / 1e6;
+        const memory = memoryDirectory ? readSampleMemory(memoryDirectory, proc.pid) : undefined;
+        const runtimeRss = memory?.processes.find(
+          (record) => record.role === "runtime",
+        )?.maxRssBytes;
         resolve({
           ms,
           firstOutputMs,
-          maxRssMb: parseMaxRssMb(stderr),
+          maxRssMb: memory
+            ? runtimeRss == null
+              ? null
+              : runtimeRss / 1024 / 1024
+            : parseMaxRssMb(stderr),
+          ...(memory ? { memory } : {}),
           startedAt: startedAt.toISOString(),
           endedAt: new Date().toISOString(),
           ...(timedOut ? { timedOut } : {}),
@@ -843,10 +1216,10 @@ async function runSample(params: {
 
       const timeout = setTimeout(() => {
         timedOut = true;
-        signalSampleProcess(proc, "SIGTERM", useProcessGroup);
+        signalSampleProcess(proc, "SIGTERM");
         forceKillAt = Date.now() + TIMEOUT_KILL_GRACE_MS;
         forceKillTimer = setTimeout(() => {
-          signalSampleProcess(proc, "SIGKILL", useProcessGroup);
+          signalSampleProcess(proc, "SIGKILL");
         }, TIMEOUT_KILL_GRACE_MS).unref?.();
       }, params.timeoutMs);
       timeout.unref?.();
@@ -886,12 +1259,11 @@ async function runSample(params: {
                   stderrTail: tailLines(stderr, 20),
                 }),
           });
-        if (timedOut && isSampleProcessGroupAlive(proc, useProcessGroup)) {
+        if (timedOut && isSampleProcessGroupAlive(proc)) {
           void finishAfterTimeoutCleanup({
             complete,
             forceKillAt,
             proc,
-            useProcessGroup,
           });
           return;
         }
@@ -899,8 +1271,11 @@ async function runSample(params: {
       });
     });
   } finally {
+    if (memoryDirectory) {
+      rmSync(memoryDirectory, { recursive: true, force: true });
+    }
     if (ownsRunRoot) {
-      rmSync(runRoot, { recursive: true, force: true });
+      removeSampleRoot(runRoot, transport);
     }
   }
 }
@@ -909,74 +1284,48 @@ async function finishAfterTimeoutCleanup(params: {
   complete: () => void;
   forceKillAt: number | null;
   proc: ReturnType<typeof spawn>;
-  useProcessGroup: boolean;
 }): Promise<void> {
   const graceRemainingMs =
     params.forceKillAt === null
       ? TIMEOUT_KILL_GRACE_MS
       : Math.max(0, params.forceKillAt - Date.now());
   if (graceRemainingMs > 0) {
-    await waitForSampleProcessGroupExit(params.proc, params.useProcessGroup, graceRemainingMs);
+    await waitForSampleProcessGroupExit(params.proc, graceRemainingMs);
   }
-  if (isSampleProcessGroupAlive(params.proc, params.useProcessGroup)) {
-    signalSampleProcess(params.proc, "SIGKILL", params.useProcessGroup);
+  if (isSampleProcessGroupAlive(params.proc)) {
+    signalSampleProcess(params.proc, "SIGKILL");
   }
-  await waitForSampleProcessGroupExit(params.proc, params.useProcessGroup, TIMEOUT_KILL_GRACE_MS);
+  await waitForSampleProcessGroupExit(params.proc, TIMEOUT_KILL_GRACE_MS);
   params.complete();
 }
 
-function signalSampleProcess(
-  proc: ReturnType<typeof spawn>,
-  signal: NodeJS.Signals,
-  useProcessGroup: boolean,
-): void {
+function signalSampleProcess(proc: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
   if (!proc.pid) {
     return;
   }
-  try {
-    if (useProcessGroup) {
-      process.kill(-proc.pid, signal);
-    } else {
-      proc.kill(signal);
-    }
-  } catch (error) {
+  const handleSignalError = (error: unknown) => {
     const code = (error as NodeJS.ErrnoException | undefined)?.code;
     if (code !== "ESRCH" && code !== "EPERM") {
       throw error;
     }
-  }
+  };
+  terminateManagedChild(proc, signal, {
+    onChildSignalError: handleSignalError,
+    onProcessGroupSignalError: handleSignalError,
+    processGroupFallback: "never",
+    useWindowsTaskkill: false,
+  });
 }
 
-function isSampleProcessGroupAlive(
-  proc: ReturnType<typeof spawn>,
-  useProcessGroup: boolean,
-): boolean {
-  if (!useProcessGroup || !proc.pid) {
-    return false;
-  }
-  try {
-    process.kill(-proc.pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException | undefined)?.code === "EPERM";
-  }
+function isSampleProcessGroupAlive(proc: ReturnType<typeof spawn>): boolean {
+  return inspectManagedProcessGroup(proc, { errorPolicy: "alive-on-eperm" }) === "live";
 }
 
-async function waitForSampleProcessGroupExit(
+function waitForSampleProcessGroupExit(
   proc: ReturnType<typeof spawn>,
-  useProcessGroup: boolean,
   timeoutMs: number,
 ): Promise<boolean> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!isSampleProcessGroupAlive(proc, useProcessGroup)) {
-      return true;
-    }
-    await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
-    });
-  }
-  return !isSampleProcessGroupAlive(proc, useProcessGroup);
+  return waitForManagedProcessGroupExit(proc, timeoutMs, { errorPolicy: "alive-on-eperm" });
 }
 
 async function runCase(params: {
@@ -985,6 +1334,7 @@ async function runCase(params: {
   runs: number;
   warmup: number;
   timeoutMs: number;
+  runtimeRss: boolean;
   cpuProfDir?: string;
   heapProfDir?: string;
   rssHookPath: string;
@@ -992,10 +1342,9 @@ async function runCase(params: {
   const warmupSamples: Sample[] = [];
   const samples: Sample[] = [];
   const totalRuns = params.warmup + params.runs;
+  const transport = sampleTransport();
   const caseRunRoot =
-    params.commandCase.stateScope === "case"
-      ? mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-home-"))
-      : undefined;
+    params.commandCase.stateScope === "case" ? createSampleRoot(transport) : undefined;
   try {
     for (let i = 0; i < totalRuns; i += 1) {
       const sample = await runSample({ ...params, runRoot: caseRunRoot });
@@ -1008,7 +1357,7 @@ async function runCase(params: {
     return { warmupSamples, samples };
   } finally {
     if (caseRunRoot) {
-      rmSync(caseRunRoot, { recursive: true, force: true });
+      removeSampleRoot(caseRunRoot, transport);
     }
   }
 }
@@ -1019,6 +1368,7 @@ function tailLines(value: string, maxLines: number): string {
 
 function printSuite(result: SuiteResult): void {
   console.log(`Entry: ${result.entry}`);
+  console.log(`RSS metric: ${cliStartupMemoryMetric(result)}`);
   for (const commandCase of result.cases) {
     const { durationMs, firstOutputMs, maxRssMb, exitSummary } = commandCase.summary;
     const rssSummary =
@@ -1061,6 +1411,8 @@ function printDelta(primary: SuiteResult, secondary: SuiteResult): void {
 }
 
 function buildCaseDeltas(primary: SuiteResult, secondary: SuiteResult): CaseDelta[] {
+  assertCompatibleCliStartupExecutionModes(primary, secondary);
+  assertCompatibleCliStartupMemoryMetrics(primary, secondary);
   const primaryById = new Map(primary.cases.map((commandCase) => [commandCase.id, commandCase]));
   const deltas: CaseDelta[] = [];
   for (const commandCase of secondary.cases) {
@@ -1113,7 +1465,9 @@ export function collectFailedSamples(result: SuiteResult): string[] {
         } else if (!expectedExitCodes.has(sample.exitCode ?? -1)) {
           failures.push(`${label}: exited with code ${String(sample.exitCode)}`);
         } else if (sample.maxRssMb === null) {
-          failures.push(`${label}: did not report max RSS`);
+          failures.push(
+            `${label}: did not report max RSS${sample.memory?.error ? ` (${sample.memory.error})` : ""}`,
+          );
         } else if (sample.exitCode !== 0) {
           const output = `${sample.stdoutTail ?? ""}\n${sample.stderrTail ?? ""}`;
           const missing = (commandCase.expectedNonzeroOutputIncludes ?? []).filter(
@@ -1135,6 +1489,7 @@ export function collectFailedSamples(result: SuiteResult): string[] {
 
 async function buildSuiteResult(params: {
   entry: string;
+  executionMode: CliStartupExecutionMode;
   options: CliOptions;
   rssHookPath: string;
 }): Promise<SuiteResult> {
@@ -1146,6 +1501,7 @@ async function buildSuiteResult(params: {
       runs: params.options.runs,
       warmup: params.options.warmup,
       timeoutMs: params.options.timeoutMs,
+      runtimeRss: params.options.runtimeRss,
       cpuProfDir: params.options.cpuProfDir,
       heapProfDir: params.options.heapProfDir,
       rssHookPath: params.rssHookPath,
@@ -1174,6 +1530,8 @@ async function buildSuiteResult(params: {
   }
   return {
     entry: params.entry,
+    executionMode: params.executionMode,
+    ...(params.options.runtimeRss ? { memoryMetric: CLI_RUNTIME_MEMORY_METRIC } : {}),
     cases,
   };
 }
@@ -1193,6 +1551,7 @@ function parseOptions(): CliOptions {
     runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS, "--runs"),
     warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP, "--warmup"),
     timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
+    runtimeRss: hasFlag("--runtime-rss"),
     json: hasFlag("--json"),
     output: parseFlagValue("--output"),
     cpuProfDir: parseFlagValue("--cpu-prof-dir"),
@@ -1220,6 +1579,7 @@ Options:
   --compare-candidate <path>   Read a saved JSON report as the candidate and print deltas
   --cpu-prof-dir <dir>         Write V8 CPU profiles for each run
   --heap-prof-dir <dir>        Write V8 heap profiles for each run
+  --runtime-rss                Attribute RSS to the CLI runtime (default: legacy last marker)
   --json                       Emit machine-readable JSON
   --help                       Show this text
 
@@ -1254,13 +1614,6 @@ function readBenchmarkComparison(
   };
 }
 
-function readBenchmarkComparisonForTesting(
-  baselinePath: string,
-  candidatePath: string,
-): { comparison: unknown } {
-  return readBenchmarkComparison(baselinePath, candidatePath);
-}
-
 async function main(): Promise<void> {
   validateCliArgs();
   if (hasFlag("--help")) {
@@ -1269,6 +1622,15 @@ async function main(): Promise<void> {
   }
 
   const options = parseOptions();
+  const transport = sampleTransport();
+  if (transport && options.runtimeRss) {
+    throw new Error("Cross-user runtime RSS sampling is not supported");
+  }
+  if (transport && (options.cpuProfDir || options.heapProfDir)) {
+    throw new Error(
+      "Cross-user CLI profiles must be collected through the SUT diagnostic exporter",
+    );
+  }
   if (options.compareBaseline || options.compareCandidate) {
     if (!options.compareBaseline || !options.compareCandidate) {
       throw new Error("--compare-baseline and --compare-candidate must be provided together");
@@ -1288,16 +1650,18 @@ async function main(): Promise<void> {
     return;
   }
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-"));
-  const rssHookPath = buildRssHook(tmpDir);
+  const rssHookPath = options.runtimeRss ? buildRuntimeRssHook(tmpDir) : buildRssHook(tmpDir);
   try {
     const primary = await buildSuiteResult({
       entry: options.entryPrimary,
+      executionMode: transport ? "transport" : "native",
       options,
       rssHookPath,
     });
     const secondary = options.entrySecondary
       ? await buildSuiteResult({
           entry: options.entrySecondary,
+          executionMode: transport ? "transport" : "native",
           options,
           rssHookPath,
         })
@@ -1372,9 +1736,7 @@ export const testing = {
   parseGatewayPortEnv,
   parseNonNegativeInt,
   parsePositiveInt,
-  readBenchmarkComparison: readBenchmarkComparisonForTesting,
   validateCliArgs,
-  writeJsonOutput,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

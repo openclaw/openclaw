@@ -35,6 +35,11 @@ export type SandboxToolPolicyResolved = {
 
 export type SandboxWorkspaceAccess = "none" | "ro" | "rw";
 
+/** Prepared resource ownership; only proven profiles retain cross-session workspaces. */
+export type SandboxIsolationSubject =
+  | { kind: "profile"; profileId: string }
+  | { kind: "session"; sessionKey: string };
+
 export type SandboxBrowserConfig = {
   enabled: boolean;
   image: string;
@@ -96,6 +101,12 @@ export type SandboxBrowserContext = {
 
 export type SandboxContext = {
   enabled: boolean;
+  /** Immutable creator policy: this session may never escape to a host execution target. */
+  required?: true;
+  /** Core-prepared execution projection; ordinary rw sandboxes retain the requested workspace. */
+  workspaceSource?: "managed-worktree";
+  /** Selected repository subdirectory within the full private projection. */
+  workspaceCwd?: string;
   backendId: SandboxBackendId;
   sessionKey: string;
   workspaceDir: string;
@@ -103,6 +114,7 @@ export type SandboxContext = {
   skillsWorkspaceDir?: string;
   skillsEligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
+  readOnlyResourceMounts?: Array<{ hostPath: string; containerPath: string }>;
   workspaceAccess: SandboxWorkspaceAccess;
   runtimeId: string;
   runtimeLabel: string;
@@ -122,5 +134,6 @@ export type SandboxWorkspaceInfo = {
   skillsWorkspaceDir?: string;
   skillsEligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
+  readOnlyResourceMounts?: Array<{ hostPath: string; containerPath: string }>;
   workspaceAccess?: SandboxWorkspaceAccess;
 };

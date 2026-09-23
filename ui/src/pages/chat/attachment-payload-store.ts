@@ -1,25 +1,24 @@
-// Control UI chat module implements attachment payload store behavior.
+import { estimateBase64DecodedBytes, isValidBase64 } from "@openclaw/media-core/base64";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import {
+  payloads,
+  releaseChatAttachmentPayload,
+  releaseChatAttachmentPayloads,
+  releaseVideoPoster,
+  revokeObjectUrl,
+  type AttachmentPayload,
+} from "./attachment-payload-lifecycle.ts";
 
-type AttachmentPayload = {
-  dataUrl?: string;
-  previewUrl?: string;
-};
+export {
+  releaseChatAttachmentPayload,
+  releaseChatAttachmentPayloads,
+} from "./attachment-payload-lifecycle.ts";
 
-const payloads = new Map<string, AttachmentPayload>();
-
-function createObjectUrl(file: File): string | undefined {
+function createObjectUrl(blob: Blob): string | undefined {
   if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
     return undefined;
   }
-  return URL.createObjectURL(file);
-}
-
-function revokeObjectUrl(url: string | undefined): void {
-  if (!url || typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") {
-    return;
-  }
-  URL.revokeObjectURL(url);
+  return URL.createObjectURL(blob);
 }
 
 export function registerChatAttachmentPayload(params: {
@@ -27,54 +26,137 @@ export function registerChatAttachmentPayload(params: {
   dataUrl: string;
   file: File;
 }): ChatAttachment {
-  const previous = payloads.get(params.attachment.id);
-  revokeObjectUrl(previous?.previewUrl);
-  const objectUrl = createObjectUrl(params.file);
-  const previewUrl = objectUrl ?? params.attachment.previewUrl;
+  releaseChatAttachmentPayload(params.attachment.id);
   payloads.set(params.attachment.id, {
+    blob: params.file,
     dataUrl: params.dataUrl,
-    ...(previewUrl ? { previewUrl } : {}),
   });
-  return {
-    ...params.attachment,
-    ...(previewUrl ? { previewUrl } : {}),
-  };
+  return params.attachment;
 }
 
 export function getChatAttachmentDataUrl(attachment: ChatAttachment): string | null {
   return attachment.dataUrl ?? payloads.get(attachment.id)?.dataUrl ?? null;
 }
 
+export function getChatAttachmentVideoPosterUrl(
+  attachment: ChatAttachment,
+): Promise<string | null> | null {
+  const payload = payloads.get(attachment.id);
+  if (payload?.videoPoster) {
+    return payload.videoPoster.promise;
+  }
+  // Use retained Files; never reconstruct a data URL just for a poster.
+  if (!(payload?.blob instanceof File) || payload.blob.size > 512 * 1024 * 1024) {
+    return null;
+  }
+  const file = payload.blob;
+  const src = createObjectUrl(file);
+  if (!src) {
+    return null;
+  }
+  const controller = new AbortController();
+  const poster: NonNullable<AttachmentPayload["videoPoster"]> = {
+    controller,
+    promise: import("../../lib/media/video-poster.ts")
+      .then(
+        ({ requestVideoPoster }) =>
+          requestVideoPoster({
+            key: file,
+            src,
+            width: 54,
+            height: 54,
+            signal: controller.signal,
+          }),
+        () => null,
+      )
+      .then((blob) => {
+        if (!blob || payloads.get(attachment.id)?.videoPoster !== poster) {
+          return null;
+        }
+        poster.url = createObjectUrl(blob);
+        return poster.url ?? null;
+      })
+      .finally(() => revokeObjectUrl(src)),
+  };
+  payload.videoPoster = poster;
+  return poster.promise;
+}
+
+function blobFromDataUrl(dataUrl: string): Blob | null {
+  const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
+  if (!match) {
+    return null;
+  }
+  const metadata = match[1] ?? "";
+  const payload = match[2] ?? "";
+  try {
+    if (metadata.toLowerCase().includes(";base64")) {
+      const binary = atob(payload.replace(/\s+/gu, ""));
+      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+      return new Blob([bytes], { type: metadata.split(";", 1)[0] });
+    }
+    return new Blob([decodeURIComponent(payload.replace(/\+/gu, "%20"))], {
+      type: metadata.split(";", 1)[0],
+    });
+  } catch {
+    return null;
+  }
+}
+
+export function getChatAttachmentBlob(attachment: ChatAttachment): Blob | null {
+  const stored = payloads.get(attachment.id);
+  if (stored?.blob) {
+    return stored.blob;
+  }
+  const dataUrl = getChatAttachmentDataUrl(attachment);
+  if (!dataUrl) {
+    return null;
+  }
+  const blob = blobFromDataUrl(dataUrl);
+  if (blob) {
+    payloads.set(attachment.id, { ...stored, blob, dataUrl });
+  }
+  return blob;
+}
+
+// Recovery prepares bytes without owning URLs. Allocate once when presented, so
+// stale reads cannot leak previews or replace a URL another pane still uses.
 export function getChatAttachmentPreviewUrl(attachment: ChatAttachment): string | null {
-  return (
-    attachment.previewUrl ?? payloads.get(attachment.id)?.previewUrl ?? attachment.dataUrl ?? null
-  );
+  const preview = attachment.previewUrl ?? payloads.get(attachment.id)?.previewUrl;
+  if (preview) {
+    return preview;
+  }
+  const blob = getChatAttachmentBlob(attachment);
+  const objectUrl = blob && createObjectUrl(blob);
+  if (objectUrl) {
+    payloads.set(attachment.id, { ...payloads.get(attachment.id), previewUrl: objectUrl });
+  }
+  return objectUrl ?? getChatAttachmentDataUrl(attachment);
 }
 
-function cloneChatAttachmentMetadata(attachment: ChatAttachment): ChatAttachment {
-  const { dataUrl: _dataUrl, ...metadata } = attachment;
-  return metadata;
-}
-
-export function cloneChatAttachmentsMetadata(
+/** Gives another mounted composer payload ownership independent of the source. */
+export function cloneChatAttachmentsForIndependentOwner(
   attachments: readonly ChatAttachment[],
 ): ChatAttachment[] {
-  return attachments.map(cloneChatAttachmentMetadata);
+  return attachments.map((attachment) => {
+    const { id: _id, previewUrl: _previewUrl, ...metadata } = attachment;
+    const dataUrl = getChatAttachmentDataUrl(attachment);
+    return { ...metadata, id: generateAttachmentId(), ...(dataUrl ? { dataUrl } : {}) };
+  });
 }
 
-export function releaseChatAttachmentPayload(id: string): void {
-  const payload = payloads.get(id);
-  if (!payload) {
-    return;
-  }
-  revokeObjectUrl(payload.previewUrl);
-  payloads.delete(id);
-}
-
-export function releaseChatAttachmentPayloads(attachments: readonly ChatAttachment[] = []): void {
-  for (const attachment of attachments) {
-    releaseChatAttachmentPayload(attachment.id);
-  }
+/**
+ * Releases displaced attachments except ids still referenced by a retained
+ * owner (live composer, surviving fallbacks). Attachments are backups of
+ * composer state, so shared ids across owners are the norm — dropping one
+ * owner must never revoke another owner's payload.
+ */
+export function releaseDisplacedChatAttachmentPayloads(
+  displaced: readonly ChatAttachment[],
+  retained: ReadonlyArray<readonly ChatAttachment[]>,
+): void {
+  const retainedIds = new Set(retained.flat().map((attachment) => attachment.id));
+  releaseChatAttachmentPayloads(displaced.filter((attachment) => !retainedIds.has(attachment.id)));
 }
 
 export function generateAttachmentId(): string {
@@ -85,8 +167,8 @@ export function generateAttachmentId(): string {
 // size-bounded inline images come back; a corrupt transcript entry is skipped,
 // never fatal. 5 MiB decoded matches the gateway media cap (MEDIA_MAX_BYTES).
 const RESTORED_IMAGE_MIME = /^image\/[\w.+-]+$/u;
-const BASE64_PAYLOAD = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
-const RESTORED_ATTACHMENT_MAX_BASE64_CHARS = Math.ceil((5 * 1024 * 1024) / 3) * 4;
+const RESTORED_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+const RESTORED_ATTACHMENT_MAX_BASE64_CHARS = Math.ceil(RESTORED_ATTACHMENT_MAX_BYTES / 3) * 4;
 
 export function replaceChatAttachmentsFromEditor(
   current: readonly ChatAttachment[],
@@ -95,9 +177,9 @@ export function replaceChatAttachmentsFromEditor(
   releaseChatAttachmentPayloads(current);
   return restored.flatMap(({ mimeType, data }) =>
     RESTORED_IMAGE_MIME.test(mimeType) &&
-    data.length > 0 &&
     data.length <= RESTORED_ATTACHMENT_MAX_BASE64_CHARS &&
-    BASE64_PAYLOAD.test(data)
+    isValidBase64(data) &&
+    estimateBase64DecodedBytes(data) <= RESTORED_ATTACHMENT_MAX_BYTES
       ? [
           {
             id: generateAttachmentId(),
@@ -114,6 +196,7 @@ function discardChatAttachmentDataUrl(id: string): void {
   if (!payload) {
     return;
   }
+  releaseVideoPoster(payload);
   if (payload.previewUrl) {
     payloads.set(id, { previewUrl: payload.previewUrl });
     return;

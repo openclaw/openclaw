@@ -3,7 +3,7 @@ import {
   type AssistantMessage,
   type Model,
 } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi, type Mock } from "vitest";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -18,7 +18,7 @@ const hoistedStreamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
 }));
 
-export const streamMocks = hoistedStreamMocks;
+export const streamMocks: { streamSimple: Mock } = hoistedStreamMocks;
 
 export const testModel: Model = {
   id: "test-model",
@@ -29,8 +29,8 @@ export const testModel: Model = {
   reasoning: false,
   input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 100,
-  maxTokens: 100,
+  contextWindow: 32_768,
+  maxTokens: 8_192,
 };
 
 const sessions: AgentSession[] = [];
@@ -82,10 +82,21 @@ export function createAssistantResultStream(message: AssistantMessage) {
   return stream;
 }
 
-export const createOverflowAssistant = (activeModel: Model) => ({
-  ...createAssistant(activeModel, [{ type: "text", text: "truncated answer" }], "length", 100),
-  usage: { ...createUsage(100), output: 0 },
-});
+export function createOverflowAssistant(activeModel: Model) {
+  const contextWindow = activeModel.contextWindow;
+  if (typeof contextWindow !== "number" || !Number.isFinite(contextWindow) || contextWindow <= 0) {
+    throw new Error("Overflow fixture requires a finite positive model context window");
+  }
+  return {
+    ...createAssistant(
+      activeModel,
+      [{ type: "text", text: "truncated answer" }],
+      "length",
+      contextWindow,
+    ),
+    usage: { ...createUsage(contextWindow), output: 0 },
+  };
+}
 
 export const createAutoCompactionSettings = () =>
   SettingsManager.inMemory({
@@ -116,6 +127,9 @@ export async function createTestSession(
     resourceLoader?: ResourceLoader;
     customTools?: ToolDefinition[];
     contextOverflowRecoveryOwner?: "session" | "caller";
+    withSessionWriteSettlement?: NonNullable<
+      Parameters<typeof createAgentSession>[0]
+    >["withSessionWriteSettlement"];
   } = {},
 ) {
   const model = options.model ?? testModel;
@@ -135,12 +149,14 @@ export async function createTestSession(
   });
   const sessionOptions = {
     model,
+    authStorage,
     noTools: "builtin" as const,
     customTools: options.customTools,
     resourceLoader: options.resourceLoader ?? createResourceLoader(),
     sessionManager,
     settingsManager,
     modelRegistry,
+    withSessionWriteSettlement: options.withSessionWriteSettlement,
   };
   const result = options.contextOverflowRecoveryOwner
     ? await createAgentSessionForEmbeddedRunner(sessionOptions, {
@@ -148,7 +164,7 @@ export async function createTestSession(
       })
     : await createAgentSession(sessionOptions);
   sessions.push(result.session);
-  return { ...result, settingsManager, sessionManager };
+  return { ...result, modelRegistry, settingsManager, sessionManager };
 }
 
 export function appendHistory(sessionManager: SessionManager, assistant: AssistantMessage): void {

@@ -16,16 +16,13 @@ import {
 import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.secrets.js";
 import {
   encodePluginModelCatalogRelativePath,
-  loadPersistedPluginModelCatalogs,
+  loadPersistedPluginModelCatalogsReadOnly,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "./plugin-model-catalog.js";
 
-function listPersistedPluginModelCatalogs(agentDir: string) {
-  return loadPersistedPluginModelCatalogs(agentDir).catalogs;
-}
-
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  listExternalCliSyncProviderIds: () => [],
   resolveExternalCliAuthProfiles: () => [],
   syncExternalCliCredentials: () => false,
 }));
@@ -51,12 +48,13 @@ vi.mock("./models-config.providers.js", async () => {
   }
 
   return {
-    applyNativeStreamingUsageCompat: (providers: Record<string, ModelsProviderConfig>) => providers,
     enforceSourceManagedProviderSecrets: ({
       providers,
     }: {
       providers: Record<string, ModelsProviderConfig>;
     }) => providers,
+    materializeConfiguredProviderCatalogModels: (providers: Record<string, ModelsProviderConfig>) =>
+      providers,
     normalizeProviders: ({ providers }: { providers: Record<string, ModelsProviderConfig> }) =>
       providers,
     normalizeProviderCatalogModelsForConfig: (providers: Record<string, ModelsProviderConfig>) =>
@@ -102,7 +100,7 @@ installModelsConfigTestHooks();
 
 let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
-let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles/store.js").clearRuntimeAuthProfileStoreSnapshots;
+let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles/runtime-snapshots.js").clearRuntimeAuthProfileStoreSnapshots;
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
 let resetModelsJsonReadyCacheForTest: typeof import("./models-config-state.test-support.js").resetModelsJsonReadyCacheForTest;
 
@@ -119,7 +117,7 @@ async function readGeneratedProviders(
   const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
   const parsed = JSON.parse(raw) as { providers?: Record<string, ParsedProviderConfig> };
   const providers = { ...parsed.providers };
-  for (const { contents } of listPersistedPluginModelCatalogs(agentDir)) {
+  for (const { contents } of loadPersistedPluginModelCatalogsReadOnly(agentDir)) {
     const catalog = JSON.parse(contents) as {
       generatedBy?: string;
       providers?: Record<string, ParsedProviderConfig>;
@@ -154,7 +152,8 @@ describe("models-config", () => {
   beforeAll(async () => {
     vi.resetModules();
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
-    ({ clearRuntimeAuthProfileStoreSnapshots } = await import("./auth-profiles/store.js"));
+    ({ clearRuntimeAuthProfileStoreSnapshots } =
+      await import("./auth-profiles/runtime-snapshots.js"));
     ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
     ({ resetModelsJsonReadyCacheForTest } = await import("./models-config-state.test-support.js"));
   });
@@ -271,7 +270,7 @@ describe("models-config", () => {
         pluginMetadataSnapshot,
       });
 
-      const persistedCatalog = listPersistedPluginModelCatalogs(agentDir).find(
+      const persistedCatalog = loadPersistedPluginModelCatalogsReadOnly(agentDir).find(
         (catalog) => catalog.pluginId === "deepseek",
       );
       expect(persistedCatalog).toBeDefined();

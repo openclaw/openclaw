@@ -2,7 +2,7 @@ import {
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { toError } from "./attempt-config.js";
+import { toCopilotError } from "./attempt-config.js";
 import {
   BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS,
   type AgentHarnessAttemptResult,
@@ -31,7 +31,7 @@ export async function finalizeCopilotAttempt(
       messages: result.messagesSnapshot,
       success: !aborted && !failure && !timedOut,
       ...(failure
-        ? { error: toError(failure.error).message }
+        ? { error: toCopilotError(failure.error).message }
         : timedOut
           ? { error: "Copilot SDK turn timed out." }
           : {}),
@@ -62,6 +62,7 @@ export function deferBackgroundCompactionCleanup(params: {
 }): Promise<"aborted" | "completed" | "deadline"> {
   return (async () => {
     let outcome: "aborted" | "completed" | "deadline" = "deadline";
+    let finalizationError: Error | undefined;
     try {
       outcome = await awaitDeferredCleanupBeforeDeadline({
         abortSignal: params.abortSignal,
@@ -75,7 +76,11 @@ export function deferBackgroundCompactionCleanup(params: {
         await cancelBackgroundCompactionBeforeTeardown(params.session);
         params.bridge.settleCompactionWait();
       }
-      params.finalizeNativeSubagents?.();
+      try {
+        params.finalizeNativeSubagents?.();
+      } catch (error) {
+        finalizationError = toCopilotError(error);
+      }
       params.bridge.detach();
       try {
         await params.session.disconnect();
@@ -94,6 +99,9 @@ export function deferBackgroundCompactionCleanup(params: {
       try {
         await params.pool.release(params.handle);
       } catch {}
+    }
+    if (finalizationError) {
+      throw finalizationError;
     }
     return outcome;
   })();

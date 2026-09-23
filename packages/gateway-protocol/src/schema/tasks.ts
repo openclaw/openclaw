@@ -2,7 +2,9 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { ChatHistoryActivitySchema } from "./logs-chat.js";
 import { NonEmptyString } from "./primitives.js";
+import { withSince } from "./since.js";
 
 /**
  * Task ledger protocol schemas.
@@ -31,6 +33,52 @@ const TaskDeliveryStatusSchema = Type.Union([
   Type.Literal("not_applicable"),
 ]);
 const TaskTerminalOutcomeSchema = Type.Union([Type.Literal("succeeded"), Type.Literal("blocked")]);
+const TaskExecutionSchema = closedObject({
+  state: Type.Union([
+    Type.Literal("queued"),
+    Type.Literal("running"),
+    Type.Literal("waiting"),
+    Type.Literal("finished"),
+    Type.Literal("unknown"),
+  ]),
+  currentTool: Type.Optional(closedObject({ name: Type.String(), startedAt: TimestampSchema })),
+  lastActivityAt: Type.Optional(TimestampSchema),
+  wait: Type.Optional(
+    closedObject({
+      kind: Type.Union([
+        Type.Literal("children"),
+        Type.Literal("external"),
+        Type.Literal("agent_messages"),
+        Type.Literal("approval"),
+        Type.Literal("user_input"),
+      ]),
+      dependencies: Type.Optional(
+        Type.Array(
+          closedObject({
+            runId: NonEmptyString,
+            sessionKey: Type.Optional(Type.String()),
+            taskId: Type.Optional(Type.String()),
+            label: Type.Optional(Type.String()),
+          }),
+          { maxItems: 100 },
+        ),
+      ),
+      pendingCount: Type.Optional(Type.Integer({ minimum: 0 })),
+    }),
+  ),
+});
+const TaskListSortBySchema = Type.Unsafe<"updatedAt" | "endedAt">({
+  type: "string",
+  enum: ["updatedAt", "endedAt"],
+});
+const TaskDiffStatSchema = withSince(
+  "2026.8",
+  closedObject({
+    files: Type.Integer({ minimum: 0 }),
+    added: Type.Integer({ minimum: 0 }),
+    removed: Type.Integer({ minimum: 0 }),
+  }),
+);
 
 /** Public task summary returned by task list/get/cancel responses. */
 export const TaskSummarySchema = closedObject({
@@ -42,6 +90,7 @@ export const TaskSummarySchema = closedObject({
   agentId: Type.Optional(Type.String()),
   sessionKey: Type.Optional(Type.String()),
   childSessionKey: Type.Optional(Type.String()),
+  hasTranscript: Type.Optional(Type.Boolean()),
   ownerKey: Type.Optional(Type.String()),
   runId: Type.Optional(Type.String()),
   taskId: Type.Optional(Type.String()),
@@ -54,6 +103,9 @@ export const TaskSummarySchema = closedObject({
   endedAt: Type.Optional(TimestampSchema),
   toolUseCount: Type.Optional(Type.Integer({ minimum: 0 })),
   lastToolName: Type.Optional(Type.String()),
+  execution: Type.Optional(withSince("2026.9", TaskExecutionSchema)),
+  lastActivity: Type.Optional(withSince("2026.8", Type.String({ maxLength: 200 }))),
+  diffStat: Type.Optional(TaskDiffStatSchema),
   progressSummary: Type.Optional(Type.String()),
   terminalSummary: Type.Optional(Type.String()),
   error: Type.Optional(Type.String()),
@@ -66,18 +118,21 @@ export const TaskSummarySchema = closedObject({
 });
 
 /** Task list filters with bounded pagination. */
+export const TASKS_LIST_CURSOR_MAX_LENGTH = 512;
+
 export const TasksListParamsSchema = closedObject({
   status: Type.Optional(Type.Union([TaskLedgerStatusSchema, Type.Array(TaskLedgerStatusSchema)])),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
-  cursor: Type.Optional(Type.String()),
+  cursor: Type.Optional(Type.String({ maxLength: TASKS_LIST_CURSOR_MAX_LENGTH })),
+  sortBy: Type.Optional(withSince("2026.8", TaskListSortBySchema)),
 });
 
 /** Task list page response. */
 export const TasksListResultSchema = closedObject({
   tasks: Type.Array(TaskSummarySchema),
-  nextCursor: Type.Optional(Type.String()),
+  nextCursor: Type.Optional(Type.String({ maxLength: TASKS_LIST_CURSOR_MAX_LENGTH })),
 });
 
 /** Lookup request for one task id. */
@@ -88,6 +143,20 @@ export const TasksGetParamsSchema = closedObject({
 /** Lookup result for one task summary. */
 export const TasksGetResultSchema = closedObject({
   task: TaskSummarySchema,
+});
+
+/** Runtime-independent, bounded transcript pages in chronological order. */
+export const TasksHistoryParamsSchema = closedObject({
+  taskId: NonEmptyString,
+  cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+});
+
+export const TasksHistoryResultSchema = closedObject({
+  /** Stable messageId or __openclaw.id anchors refreshes; entry IDs can have sibling rows. */
+  messages: Type.Array(Type.Unknown()),
+  activity: Type.Optional(Type.Array(ChatHistoryActivitySchema)),
+  nextCursor: Type.Optional(Type.String({ maxLength: 8192 })),
 });
 
 /** Cancel request for one task id with optional operator reason. */
@@ -127,6 +196,8 @@ export type TasksListParams = Static<typeof TasksListParamsSchema>;
 export type TasksListResult = Static<typeof TasksListResultSchema>;
 export type TasksGetParams = Static<typeof TasksGetParamsSchema>;
 export type TasksGetResult = Static<typeof TasksGetResultSchema>;
+export type TasksHistoryParams = Static<typeof TasksHistoryParamsSchema>;
+export type TasksHistoryResult = Static<typeof TasksHistoryResultSchema>;
 export type TasksCancelParams = Static<typeof TasksCancelParamsSchema>;
 export type TasksCancelResult = Static<typeof TasksCancelResultSchema>;
 export type TasksRecoveryParams = Static<typeof TasksRecoveryParamsSchema>;

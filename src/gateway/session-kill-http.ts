@@ -1,21 +1,21 @@
 // Gateway HTTP session kill handler.
 // Stops subagent runs through the admin-scoped HTTP control surface.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { killSubagentRunAdmin } from "../agents/subagent-control.js";
+import { killSubagentRunAdmin } from "../agents/subagents/registry/subagent-control.js";
 import { getRuntimeConfig } from "../config/io.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
   sendMissingScopeForbidden,
 } from "./http-common.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeGatewayHttpRequestOrReply,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
+import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 type SessionKeyPathResolution =
@@ -42,14 +42,9 @@ function resolveSessionKeyFromPath(pathname: string): SessionKeyPathResolution {
 export async function handleSessionKillHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
-    auth: ResolvedGatewayAuth;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
-  },
+  opts: GatewayHttpRequestAuthOptions,
 ): Promise<boolean> {
-  const cfg = getRuntimeConfig();
+  const cfg = opts.cfg ?? getRuntimeConfig();
   const url = new URL(req.url ?? "/", "http://localhost");
   const sessionKeyResolution = resolveSessionKeyFromPath(url.pathname);
   if (!sessionKeyResolution.matched) {
@@ -67,12 +62,12 @@ export async function handleSessionKillHttpRequest(
   }
 
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
+    ...opts,
     req,
     res,
-    auth: opts.auth,
+    cfg,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
   });
   if (!requestAuth) {
     return true;
@@ -87,7 +82,18 @@ export async function handleSessionKillHttpRequest(
     return true;
   }
 
-  const { entry, canonicalKey } = loadSessionEntry(sessionKey);
+  const requestedAgent = resolveRequestedSessionAgentId(
+    cfg,
+    sessionKey,
+    url.searchParams.get("agentId") ?? undefined,
+  );
+  if (!requestedAgent.ok) {
+    sendInvalidRequest(res, requestedAgent.error.message);
+    return true;
+  }
+  const { entry, canonicalKey } = loadSessionEntry(sessionKey, {
+    agentId: requestedAgent.agentId,
+  });
   if (!entry) {
     sendJson(res, 404, {
       ok: false,
@@ -99,10 +105,22 @@ export async function handleSessionKillHttpRequest(
     return true;
   }
 
-  const result = await killSubagentRunAdmin({
-    cfg,
-    sessionKey: canonicalKey,
-  });
+  const result = await killSubagentRunAdmin(
+    {
+      cfg,
+      sessionKey: canonicalKey,
+      agentId: requestedAgent.agentId,
+    },
+    { assertCurrent: requestAuth.assertCurrent },
+  );
+
+  if (result.found && result.error) {
+    sendJson(res, 503, {
+      ok: false,
+      error: { type: "unavailable", message: result.error },
+    });
+    return true;
+  }
 
   sendJson(res, 200, {
     ok: true,

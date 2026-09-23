@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayLockDir } from "../config/paths.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
+import * as windowsProcessStart from "./windows-process-start.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
 
@@ -21,6 +23,64 @@ afterEach(() => {
 });
 
 describe("gateway lock state directory", () => {
+  it.skipIf(process.platform !== "win32")(
+    "reuses the current process identity across gateway lock lifetimes",
+    async () => {
+      const startTime = getFileLockProcessStartTime(process.pid);
+      expect(startTime).not.toBeNull();
+      const probe = vi.spyOn(windowsProcessStart, "readWindowsProcessStartTimeSync");
+      await withTempDir("openclaw-gateway-lock-identity-", async (root) => {
+        const env = {
+          ...process.env,
+          OPENCLAW_STATE_DIR: root,
+          OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+        };
+        await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}", "utf8");
+        for (let index = 0; index < 2; index += 1) {
+          const lock = expectGatewayLock(
+            await acquireGatewayLock({ allowInTests: true, env, timeoutMs: 30 }),
+          );
+          try {
+            for (const lockPath of [lock.lockPath, lock.stateLockPath]) {
+              expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toMatchObject({
+                pid: process.pid,
+                startTime,
+              });
+            }
+          } finally {
+            await lock.release();
+          }
+        }
+      });
+      expect(probe).not.toHaveBeenCalled();
+    },
+  );
+
+  it("releases in-tree locks separately from Gateway lifecycle ownership", async () => {
+    await withTempDir("openclaw-gateway-lock-release-", async (root) => {
+      const stateDir = path.join(await fs.realpath(root), "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(configPath, "{}", "utf8");
+      const lock = expectGatewayLock(
+        await acquireGatewayLock({
+          allowInTests: true,
+          env: {
+            ...process.env,
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_STATE_DIR: stateDir,
+          },
+          timeoutMs: 30,
+        }),
+      );
+
+      await lock.releaseInTree();
+      await expect(fs.access(lock.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(lock.stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await lock.release();
+    });
+  });
+
   it("keeps lock, coordinator, and reclaim paths inside the selected state", async () => {
     await withTempDir("openclaw-gateway-lock-state-", async (root) => {
       const canonicalRoot = await fs.realpath(root);
@@ -47,11 +107,12 @@ describe("gateway lock state directory", () => {
       const lockDir = resolveGatewayLockDir(stateDir);
       const stateLockPath = path.join(lockDir, "gateway.state.lock");
       try {
+        expect(lock.stateDir).toBe(stateDir);
         expect(lock.stateLockPath).toBe(stateLockPath);
         expect(path.dirname(lock.lockPath)).toBe(lockDir);
         expect(path.basename(lock.lockPath)).toMatch(/^gateway\.[0-9a-f]{8}\.lock$/u);
-        await expect(fs.access(`${lock.lockPath}.sqlite`)).resolves.toBeUndefined();
-        await expect(fs.access(`${lock.stateLockPath}.sqlite`)).resolves.toBeUndefined();
+        await fs.access(`${lock.lockPath}.sqlite`);
+        await fs.access(`${lock.stateLockPath}.sqlite`);
       } finally {
         await lock.release();
       }
@@ -76,6 +137,39 @@ describe("gateway lock state directory", () => {
       await expect(fs.access(path.join(fakeHome, ".openclaw"))).rejects.toMatchObject({
         code: "ENOENT",
       });
+    });
+  });
+
+  it("canonicalizes a missing state leaf through a symlinked parent", async () => {
+    await withTempDir("openclaw-gateway-lock-symlink-", async (root) => {
+      const canonicalRoot = await fs.realpath(root);
+      const realParent = path.join(canonicalRoot, "real");
+      const linkedParent = path.join(canonicalRoot, "linked");
+      await fs.mkdir(realParent, { recursive: true });
+      await fs.symlink(realParent, linkedParent, process.platform === "win32" ? "junction" : "dir");
+
+      const linkedStateDir = path.join(linkedParent, "missing-state");
+      const stateDir = path.join(realParent, "missing-state");
+      const lockDir = resolveGatewayLockDir(stateDir);
+      const lock = expectGatewayLock(
+        await acquireGatewayLock({
+          allowInTests: true,
+          env: {
+            ...process.env,
+            OPENCLAW_CONFIG_PATH: path.join(linkedStateDir, "openclaw.json"),
+            OPENCLAW_STATE_DIR: linkedStateDir,
+          },
+          timeoutMs: 30,
+        }),
+      );
+
+      try {
+        expect(lock.stateDir).toBe(stateDir);
+        expect(lock.stateLockPath).toBe(path.join(lockDir, "gateway.state.lock"));
+        expect(path.dirname(lock.lockPath)).toBe(lockDir);
+      } finally {
+        await lock.release();
+      }
     });
   });
 });

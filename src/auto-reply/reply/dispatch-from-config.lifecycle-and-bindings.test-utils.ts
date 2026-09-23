@@ -1,8 +1,10 @@
-// Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
+// Imported by a dispatch-from-config entrypoint to keep its mocked suite in one Vitest module graph.
 import { AsyncResource } from "node:async_hooks";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { waitForAbortSignal } from "../../infra/abort-signal.js";
 import { registerPluginCommand } from "../../plugins/commands.js";
 import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.test-fixtures.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -17,6 +19,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import {
   createDispatcher,
@@ -25,6 +28,8 @@ import {
   hookMocks,
   internalHookMocks,
   messageAuditMocks,
+  mockPluginBinding,
+  mockPluginBindingClaim,
   mocks,
   runtimePluginMocks,
   sessionBindingMocks,
@@ -43,13 +48,44 @@ import {
   firstMockArg,
   firstFinalReplyPayload,
   installThreadingTestPlugin,
-  requireBlockReplyHandler,
   messageAuditEvents,
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+function mockPendingPluginClaim(params: {
+  bindingId: string;
+  targetSessionKey: string;
+  conversationId: string;
+}) {
+  setNoAbort();
+  hookMocks.runner.hasHooks.mockImplementation(
+    ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+  );
+  hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
+  let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
+  hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
+    async () =>
+      await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
+        resolveClaim = resolve;
+      }),
+  );
+  mockPluginBinding({
+    bindingId: params.bindingId,
+    targetSessionKey: params.targetSessionKey,
+    conversation: {
+      channel: "discord",
+      accountId: "default",
+      conversationId: params.conversationId,
+    },
+    pluginId: "test-plugin",
+    pluginRoot: "/tmp/test-plugin",
+  });
+  return (outcome: PluginTargetedInboundClaimOutcome) => resolveClaim?.(outcome);
+}
 
 beforeAll(globalBeforeAll0);
 
@@ -746,38 +782,23 @@ describe("dispatchReplyFromConfig", () => {
         },
       ]),
     );
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBindingClaim();
+    mockPluginBinding({
       bindingId: "binding-1",
       targetSessionKey: "plugin-binding:codex:abc123",
-      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "channel:1481858418548412579",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-        data: {
-          kind: "codex-app-server-session",
-          version: 1,
-          sessionFile: "/tmp/session.jsonl",
-          workspaceDir: "/workspace/openclaw",
-        },
+      pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      data: {
+        kind: "codex-app-server-session",
+        version: 1,
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/workspace/openclaw",
       },
-    } satisfies SessionBindingRecord);
+    });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -804,7 +825,11 @@ describe("dispatchReplyFromConfig", () => {
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-1");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-1",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     const inboundClaimCall = hookMocks.runner.runInboundClaimForPluginOutcome.mock
       .calls[0] as unknown as
       | [
@@ -865,31 +890,18 @@ describe("dispatchReplyFromConfig", () => {
         },
       ]),
     );
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBindingClaim(undefined, { pluginId: "test-plugin", receiveMessages: false });
+    mockPluginBinding({
       bindingId: "binding-null-rejection",
       targetSessionKey: "plugin-binding:test:null-rejection",
-      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "channel:null-rejection",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "test-plugin",
-        pluginRoot: "/plugins/test-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      pluginId: "test-plugin",
+      pluginRoot: "/plugins/test-plugin",
+    });
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "discord",
@@ -935,31 +947,18 @@ describe("dispatchReplyFromConfig", () => {
 
   it("looks up plugin bindings with the canonical conversation target", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "codex", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
-    const binding = {
+    mockPluginBindingClaim(undefined, { pluginId: "codex", receiveMessages: false });
+    const binding = createPluginBindingRecord({
       bindingId: "binding-slack-user",
       targetSessionKey: "plugin-binding:codex:slack-user",
-      targetKind: "session",
       conversation: {
         channel: "slack",
         accountId: "default",
         conversationId: "user:U123",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "codex",
-        pluginRoot: "/tmp/codex",
-      },
-    } satisfies SessionBindingRecord;
+      pluginId: "codex",
+      pluginRoot: "/tmp/codex",
+    });
     sessionBindingMocks.resolveByConversation.mockImplementation((conversation) =>
       conversation.conversationId === "user:U123" ? binding : null,
     );
@@ -996,36 +995,169 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
-  it("holds session lifecycle mutation until an interrupted plugin claim exits", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
-    let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
-      async () =>
-        await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
-          resolveClaim = resolve;
-        }),
-    );
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
-      bindingId: "binding-lifecycle-race",
-      targetSessionKey: "plugin-binding:test:race",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:lifecycle-race",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
+  it.each(["fresh owner", "hook-only admission"] as const)(
+    "retains cancelled plugin media staging until cleanup settles with %s",
+    async (ownership) => {
+      setNoAbort();
+      mockPluginBindingClaim(
+        {
+          status: "handled",
+          result: { handled: true, reply: { text: "must not send" } },
+        },
+        { pluginId: "test-plugin", receiveMessages: false },
+      );
+      mockPluginBinding({
+        bindingId: "binding-staging-cancellation",
+        targetSessionKey: "plugin-binding:test:staging-cancellation",
+        conversation: {
+          channel: "imessage",
+          accountId: "default",
+          conversationId: "chat:staging-cancellation",
+        },
         pluginId: "test-plugin",
         pluginRoot: "/tmp/test-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      });
+      const sessionKey = "agent:main:imessage:direct:staging-cancellation";
+      const sessionId = "staging-cancellation-session";
+      sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+      const existingOperation =
+        ownership === "hook-only admission"
+          ? createReplyOperation({ sessionKey, sessionId, resetTriggered: false })
+          : undefined;
+      const abort = new AbortController();
+      const cancellation = new Error("attachment request cancelled");
+      const cleanup = createDeferred();
+      let cleanupStarted = false;
+      let cleanupFinished = false;
+      stageSandboxMediaMocks.stageSandboxMedia.mockImplementationOnce(async () => {
+        await waitForAbortSignal(abort.signal);
+        try {
+          throw cancellation;
+        } finally {
+          cleanupStarted = true;
+          await cleanup.promise;
+          cleanupFinished = true;
+        }
+      });
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
+      const externalLifecycleRequest = new AsyncResource("external-staging-cancellation");
+      const dispatchResult = vi.fn();
+      const dispatchFailure = vi.fn();
+      const dispatch = withDispatchProcessedOutcomeSink(() =>
+        dispatchReplyFromConfig({
+          ctx: buildTestCtx({
+            Provider: "imessage",
+            Surface: "imessage",
+            To: "imessage:chat:staging-cancellation",
+            AccountId: "default",
+            SessionKey: sessionKey,
+            Body: "inspect this attachment",
+            MessageSid: "message-staging-cancellation",
+            media: [{ path: "/remote/photo.jpg", contentType: "image/jpeg" }],
+            MediaRemoteHost: "user@gateway-host",
+          }),
+          cfg: emptyConfig,
+          dispatcher,
+          replyOptions: { abortSignal: abort.signal },
+          replyResolver,
+        }),
+      );
+      const dispatchSettled = dispatch.then(dispatchResult, dispatchFailure);
+      let mutation: Promise<void> | undefined;
+      let mutationPrepared = false;
+      let mutationRan = false;
+      try {
+        await vi.waitFor(() => {
+          expect(stageSandboxMediaMocks.stageSandboxMedia).toHaveBeenCalledOnce();
+        });
+        const operation = replyRunRegistry.get(sessionKey);
+        expect(operation).toBeDefined();
+        expect(
+          isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
+        ).toBe(true);
+        if (existingOperation) {
+          expect(operation).toBe(existingOperation);
+          existingOperation.complete();
+          expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+        }
+        abort.abort(cancellation);
+        mutation = externalLifecycleRequest.runInAsyncScope(async () =>
+          runExclusiveSessionLifecycleMutation({
+            scope: "/tmp/mock-sessions.json",
+            identities: [sessionKey, sessionId],
+            prepare: async () => {
+              mutationPrepared = true;
+              await interruptSessionWorkAdmissions({
+                scope: "/tmp/mock-sessions.json",
+                identities: [sessionKey, sessionId],
+              });
+            },
+            run: async () => {
+              mutationRan = true;
+            },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(cleanupStarted).toBe(true);
+          expect(mutationPrepared).toBe(true);
+          expect(dispatchFailure).not.toHaveBeenCalled();
+          expect(dispatchResult).toHaveBeenCalledWith({
+            result: { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } },
+            processedOutcome: { outcome: "skipped", reason: "reply_operation_aborted" },
+          });
+        });
+        expect(cleanupFinished).toBe(false);
+        expect(mutationRan).toBe(false);
+        expect(
+          isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
+        ).toBe(true);
+        expect(replyRunRegistry.get(sessionKey)).toBe(existingOperation ? undefined : operation);
+        expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(mocks.routeReply).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+
+        cleanup.resolve();
+        await mutation;
+        await dispatchSettled;
+        expect(cleanupFinished).toBe(true);
+        expect(mutationRan).toBe(true);
+        expect(
+          isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
+        ).toBe(false);
+        expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+        expect(dispatchResult).toHaveBeenCalledOnce();
+        expect(dispatchFailure).not.toHaveBeenCalled();
+        expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+        expect(messageAuditEvents()[0]).toMatchObject({
+          status: "blocked",
+          outcome: "skipped",
+          reasonCode: "reply_operation_aborted",
+        });
+        expect(messageAuditEvents()[0]).not.toHaveProperty("errorCode");
+        expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(mocks.routeReply).not.toHaveBeenCalled();
+        expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+        expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      } finally {
+        abort.abort(cancellation);
+        cleanup.resolve();
+        existingOperation?.complete();
+        await Promise.allSettled([dispatchSettled, mutation]);
+        externalLifecycleRequest.emitDestroy();
+      }
+    },
+  );
+
+  it("holds session lifecycle mutation until an interrupted plugin claim exits", async () => {
+    const resolveClaim = mockPendingPluginClaim({
+      bindingId: "binding-lifecycle-race",
+      targetSessionKey: "plugin-binding:test:race",
+      conversationId: "channel:lifecycle-race",
+    });
     const sessionKey = "agent:main:discord:channel:lifecycle-race";
     const sessionId = "plugin-lifecycle-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
@@ -1086,111 +1218,12 @@ describe("dispatchReplyFromConfig", () => {
     externalLifecycleRequest.emitDestroy();
   });
 
-  it("holds an owned lifecycle lease until abort-insensitive resolver work settles", async () => {
-    setNoAbort();
-    const sessionKey = "agent:main:discord:channel:owned-resolver-race";
-    const sessionId = "owned-resolver-session";
-    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
-    let releaseResolver: () => void = () => {};
-    const resolverGate = new Promise<void>((resolve) => {
-      releaseResolver = resolve;
-    });
-    let signalResolverEntered: () => void = () => {};
-    const resolverEntered = new Promise<void>((resolve) => {
-      signalResolverEntered = resolve;
-    });
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      signalResolverEntered();
-      await resolverGate;
-      await requireBlockReplyHandler(opts?.onBlockReply)({ text: "stale late block" });
-      return { text: "stale late final" } satisfies ReplyPayload;
-    });
-    const dispatch = dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        To: "discord:channel:owned-resolver-race",
-        AccountId: "default",
-        SessionKey: sessionKey,
-        Body: "hold this resolver",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-    await resolverEntered;
-
-    const externalLifecycleRequest = new AsyncResource("external-owned-resolver-lifecycle");
-    let mutationRan = false;
-    const mutation = externalLifecycleRequest.runInAsyncScope(
-      async () =>
-        await runExclusiveSessionLifecycleMutation({
-          scope: "/tmp/mock-sessions.json",
-          identities: [sessionKey, sessionId],
-          prepare: async () => {
-            await interruptSessionWorkAdmissions({
-              scope: "/tmp/mock-sessions.json",
-              identities: [sessionKey, sessionId],
-            });
-          },
-          run: async () => {
-            mutationRan = true;
-          },
-        }),
-    );
-
-    try {
-      const result = await dispatch;
-      expect(result.queuedFinal).toBe(false);
-      expect(mutationRan).toBe(false);
-      expect(isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
-        true,
-      );
-
-      releaseResolver();
-      await mutation;
-
-      expect(mutationRan).toBe(true);
-      expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    } finally {
-      releaseResolver();
-      await mutation;
-      externalLifecycleRequest.emitDestroy();
-    }
-  });
-
   it("holds a lifecycle lease for plugin claims behind an active reply operation", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
-    let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
-      async () =>
-        await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
-          resolveClaim = resolve;
-        }),
-    );
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    const resolveClaim = mockPendingPluginClaim({
       bindingId: "binding-active-lifecycle-race",
       targetSessionKey: "plugin-binding:test:active-race",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:active-lifecycle-race",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "test-plugin",
-        pluginRoot: "/tmp/test-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      conversationId: "channel:active-lifecycle-race",
+    });
     const sessionKey = "agent:main:discord:channel:active-lifecycle-race";
     const sessionId = "plugin-active-lifecycle-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
@@ -1261,35 +1294,11 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it("does not abort the active owner when its in-band mutation interrupts borrowed work", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
-    let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
-      async () =>
-        await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
-          resolveClaim = resolve;
-        }),
-    );
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    const resolveClaim = mockPendingPluginClaim({
       bindingId: "binding-owner-mutation-race",
       targetSessionKey: "plugin-binding:test:owner-mutation-race",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:owner-mutation-race",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "test-plugin",
-        pluginRoot: "/tmp/test-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      conversationId: "channel:owner-mutation-race",
+    });
     const sessionKey = "agent:main:discord:channel:owner-mutation-race";
     const sessionId = "owner-mutation-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
@@ -1362,29 +1371,23 @@ describe("dispatchReplyFromConfig", () => {
 
   it("completes an owned reply operation interrupted during a plugin fallback notice", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+    mockPluginBindingClaim(
+      {
+        status: "missing_plugin",
+      },
+      { pluginLoaded: false, receiveMessages: false },
     );
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "missing_plugin",
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBinding({
       bindingId: "binding-interrupted-fallback",
       targetSessionKey: "plugin-binding:test:interrupted-fallback",
-      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "channel:interrupted-fallback",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "missing-plugin",
-        pluginRoot: "/tmp/missing-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      pluginId: "missing-plugin",
+      pluginRoot: "/tmp/missing-plugin",
+    });
     const sessionKey = "agent:main:discord:channel:interrupted-fallback";
     const sessionId = "interrupted-fallback-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
@@ -1483,11 +1486,11 @@ describe("dispatchReplyFromConfig", () => {
         remoteMediaMode?: string;
       };
       expect(params.sessionKey).toBe("agent:main:imessage:direct:user");
-      expect(params.workspaceDir).toContain(".openclaw/workspace");
+      expect(params.workspaceDir).toContain(path.join(".openclaw", "workspace"));
       expect(params.remoteMediaMode).toBe("cache");
       params.ctx.media = [{ path: stagedPath, url: stagedPath, contentType: "image/jpeg" }];
       params.sessionCtx.media = params.ctx.media;
-      return { staged: new Map([[rawPath, stagedPath]]) };
+      return { staged: new Map([[0, stagedPath]]) };
     });
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>
@@ -1507,29 +1510,22 @@ describe("dispatchReplyFromConfig", () => {
         return { status: "handled", result: { handled: true } };
       },
     );
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBinding({
       bindingId: "binding-imessage-codex-media",
       targetSessionKey: "plugin-binding:codex:imessage",
-      targetKind: "session",
       conversation: {
         channel: "imessage",
         accountId: "default",
         conversationId: "chat:abc",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/plugins/openclaw-codex-app-server",
-        data: {
-          kind: "codex-app-server-session",
-          version: 1,
-          sessionFile: "/tmp/session.jsonl",
-          workspaceDir: "/workspace/openclaw",
-        },
+      pluginRoot: "/plugins/openclaw-codex-app-server",
+      data: {
+        kind: "codex-app-server-session",
+        version: 1,
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/workspace/openclaw",
       },
-    } satisfies SessionBindingRecord);
+    });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -1560,7 +1556,11 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
     ]);
     expect(stageSandboxMediaMocks.stageSandboxMedia).toHaveBeenCalledTimes(1);
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-imessage-codex-media");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-imessage-codex-media",
+      undefined,
+      expect.objectContaining({ channel: "imessage", accountId: "default" }),
+    );
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
   });
@@ -1733,15 +1733,7 @@ describe("dispatchReplyFromConfig", () => {
         },
       ]),
     );
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
+    mockPluginBindingClaim();
     sessionBindingMocks.resolveByConversation.mockImplementation(
       (ref: {
         channel: string;
@@ -1752,24 +1744,17 @@ describe("dispatchReplyFromConfig", () => {
         ref.channel === "discord" &&
         ref.accountId === "default" &&
         ref.conversationId === "1510164477642014740"
-          ? ({
+          ? createPluginBindingRecord({
               bindingId: "binding-discord-thread",
               targetSessionKey: "plugin-binding:codex:thread",
-              targetKind: "session",
               conversation: {
                 channel: "discord",
                 accountId: "default",
                 conversationId: "1510164477642014740",
                 parentConversationId: "channel:1510164477642014999",
               },
-              status: "active",
-              boundAt: 1710000000000,
-              metadata: {
-                pluginBindingOwner: "plugin",
-                pluginId: "openclaw-codex-app-server",
-                pluginRoot: "/plugins/openclaw-codex-app-server",
-              },
-            } satisfies SessionBindingRecord)
+              pluginRoot: "/plugins/openclaw-codex-app-server",
+            })
           : null,
     );
     const dispatcher = createDispatcher();
@@ -1826,38 +1811,26 @@ describe("dispatchReplyFromConfig", () => {
 
   it("does not run plugin-owned binding delivery when the caller already aborted", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+    mockPluginBindingClaim({
       status: "handled",
       result: { handled: true, reply: { text: "should not send" } },
     });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBinding({
       bindingId: "binding-aborted-1",
       targetSessionKey: "plugin-binding:codex:abc123",
-      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "channel:1481858418548412579",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/workspace/openclaw-app-server",
-        data: {
-          kind: "codex-app-server-session",
-          version: 1,
-          sessionFile: "/tmp/session.jsonl",
-          workspaceDir: "/workspace/openclaw",
-        },
+      pluginRoot: "/workspace/openclaw-app-server",
+      data: {
+        kind: "codex-app-server-session",
+        version: 1,
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/workspace/openclaw",
       },
-    } satisfies SessionBindingRecord);
+    });
     const abortController = new AbortController();
     abortController.abort();
     const cfg = emptyConfig;
@@ -1881,15 +1854,20 @@ describe("dispatchReplyFromConfig", () => {
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyOptions: { abortSignal: abortController.signal },
-      replyResolver,
-    });
+    const { result, processedOutcome } = await withDispatchProcessedOutcomeSink(() =>
+      dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyOptions: { abortSignal: abortController.signal },
+        replyResolver,
+      }),
+    );
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    // The aborted skip queues nothing; the sink must name the branch so the
+    // kernel's zero-count warning is attributable to a benign abort.
+    expect(processedOutcome).toEqual({ outcome: "skipped", reason: "reply_operation_aborted" });
     expect(sessionBindingMocks.touch).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
@@ -1911,39 +1889,24 @@ describe("dispatchReplyFromConfig", () => {
         { allowReservedCommandNames: true },
       ),
     ).toEqual({ ok: true });
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBindingClaim();
+    mockPluginBinding({
       bindingId: "binding-command-escape-1",
       targetSessionKey: "plugin-binding:codex:abc123",
-      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "channel:1481858418548412579",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-        detachHint: "/codex detach",
-        data: {
-          kind: "codex-app-server-session",
-          version: 1,
-          sessionFile: "/tmp/session.jsonl",
-          workspaceDir: "/workspace/openclaw",
-        },
+      pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      detachHint: "/codex detach",
+      data: {
+        kind: "codex-app-server-session",
+        version: 1,
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/workspace/openclaw",
       },
-    } satisfies SessionBindingRecord);
+    });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -1978,7 +1941,11 @@ describe("dispatchReplyFromConfig", () => {
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 0 } });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-escape-1");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-command-escape-1",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).toHaveBeenCalledTimes(1);
@@ -1987,32 +1954,17 @@ describe("dispatchReplyFromConfig", () => {
 
   it("keeps authorized unknown slash text in a plugin-owned binding routed to the bound plugin", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBindingClaim();
+    mockPluginBinding({
       bindingId: "binding-command-unknown-slash",
       targetSessionKey: "plugin-binding:codex:abc123",
-      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "channel:1481858418548412579",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-      },
-    } satisfies SessionBindingRecord);
+      pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+    });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -2038,7 +1990,11 @@ describe("dispatchReplyFromConfig", () => {
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-unknown-slash");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-command-unknown-slash",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
       "openclaw-codex-app-server",
       expect.objectContaining({ content: "/notes keep this with the bound plugin" }),

@@ -4,8 +4,9 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
-import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SmsChannelRuntime } from "./inbound.js";
 import { createSmsIngressSpool } from "./ingress-spool.js";
@@ -96,6 +97,9 @@ afterEach(async () => {
 describe("createSmsIngressSpool", () => {
   it("retries acknowledged MMS provider outages before adopting later same-sender messages", async () => {
     const stateDir = await createStateDir();
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    disposers.push(() => nowSpy.mockRestore());
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     disposers.push(() => {
       vi.unstubAllEnvs();
@@ -147,6 +151,8 @@ describe("createSmsIngressSpool", () => {
         saveRemoteMedia: async (options: Parameters<typeof saveRemoteMedia>[0]) =>
           await saveRemoteMedia({
             ...options,
+            // The guard resolves Twilio before the loopback fetch override runs.
+            lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
             fetchImpl: async (_url, init) =>
               await fetch(`${mediaOrigin}/twilio-media`, {
                 headers: init?.headers,
@@ -155,6 +161,7 @@ describe("createSmsIngressSpool", () => {
           }),
       },
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         buildContext: (input: Parameters<SmsChannelRuntime["inbound"]["buildContext"]>[0]) => {
           deliveries.push({
             id: String(input.extra?.MessageSid),
@@ -232,14 +239,14 @@ describe("createSmsIngressSpool", () => {
     const firstResponse = await postSignedCallback(mediaCallback);
     expect(firstResponse.status).toBe(200);
     expect(firstResponse.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
-    await vi.waitFor(async () => {
-      expect(mediaRequests).toBe(1);
-      expect(await queue.listPending()).toEqual([
-        expect.objectContaining({ id: messageSid, lastError: expect.stringContaining("HTTP 429") }),
-      ]);
-    });
+    await spool.waitForIdle();
+    expect(mediaRequests).toBe(1);
+    expect(await queue.listPending()).toEqual([
+      expect.objectContaining({ id: messageSid, lastError: expect.stringContaining("HTTP 429") }),
+    ]);
     expect(deliveries).toEqual([]);
 
+    now += 1_000;
     const secondSid = `SM${"d".repeat(32)}`;
     const secondResponse = await postSignedCallback({
       ...form(secondSid),
@@ -247,7 +254,7 @@ describe("createSmsIngressSpool", () => {
       Body: "the later message",
     });
     expect(secondResponse.status).toBe(200);
-    await vi.waitFor(() => expect(deliveries).toHaveLength(2), { timeout: 5_000 });
+    await spool.waitForIdle();
     expect(deliveries).toEqual([
       { id: messageSid, body: "keep this attachment", attachments: 1 },
       { id: secondSid, body: "the later message", attachments: 0 },

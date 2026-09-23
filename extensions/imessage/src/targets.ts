@@ -1,7 +1,3 @@
-// Imessage plugin module implements targets behavior.
-import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeBareIMessageChatIdentifier } from "./target-identifiers.js";
 import {
   type ChatSenderAllowParams,
   createAllowedChatSenderMatcher,
@@ -9,7 +5,10 @@ import {
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedChatTarget,
   resolveServicePrefixedOrChatAllowTarget,
-} from "./target-parsing-helpers.js";
+} from "openclaw/plugin-sdk/channel-targets";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeIMessageHandleValue } from "./normalize.js";
+import { normalizeBareIMessageChatIdentifier } from "./target-identifiers.js";
 
 export type IMessageService = "imessage" | "sms" | "auto";
 
@@ -82,18 +81,7 @@ export function normalizeIMessageHandle(raw: string): string {
     }
   }
 
-  if (trimmed.includes("@")) {
-    return normalizeLowercaseStringOrEmpty(trimmed);
-  }
-  const bareChatIdentifier = normalizeBareIMessageChatIdentifier(trimmed);
-  if (bareChatIdentifier) {
-    return `chat_identifier:${bareChatIdentifier}`;
-  }
-  const normalized = normalizeE164(trimmed);
-  if (normalized) {
-    return normalized;
-  }
-  return trimmed.replace(/\s+/g, "");
+  return normalizeIMessageHandleValue(trimmed) ?? trimmed.replace(/\s+/g, "");
 }
 
 export function parseIMessageTarget(raw: string): IMessageTarget {

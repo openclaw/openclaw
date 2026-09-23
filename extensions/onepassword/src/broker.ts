@@ -409,28 +409,43 @@ export class OnePasswordBroker {
 
   async list(invocation: ToolInvocationContext): Promise<ListedItem[]> {
     const { config } = this.currentConfig();
-    const grants = new Map(
-      (await this.stores.grants.entries()).map((entry) => [entry.key, entry.value]),
+    const items = Object.entries(config.items).toSorted(([left], [right]) =>
+      left.localeCompare(right),
     );
-    const now = this.now();
     const agentId = invocation.agentId;
-    return Object.entries(config.items)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([slug, item]) => {
-        const grant = agentId ? grants.get(standingGrantKey(agentId, slug)) : undefined;
-        return {
-          slug,
-          description: item.description ?? "",
-          policy: item.policy,
-          standingGrantActive: Boolean(
-            grant &&
-            grant.agentId === agentId &&
-            grant.slug === slug &&
-            grant.expiresAtMs > now &&
-            grant.targetFingerprint === fingerprintOnePasswordTarget(item),
-          ),
-        };
-      });
+    let grants: Array<StandingGrant | undefined> = [];
+    if (agentId) {
+      const keys = items.map(([slug]) => standingGrantKey(agentId, slug));
+      if (this.stores.grants.lookupMany) {
+        grants = (await this.stores.grants.lookupMany(keys)).map((result) => {
+          if (!result.ok) {
+            throw result.error;
+          }
+          return result.value;
+        });
+      } else {
+        const entries = new Map(
+          (await this.stores.grants.entries()).map((entry) => [entry.key, entry.value]),
+        );
+        grants = keys.map((key) => entries.get(key));
+      }
+    }
+    const now = this.now();
+    return items.map(([slug, item], index) => {
+      const grant = grants[index];
+      return {
+        slug,
+        description: item.description ?? "",
+        policy: item.policy,
+        standingGrantActive: Boolean(
+          grant &&
+          grant.agentId === agentId &&
+          grant.slug === slug &&
+          grant.expiresAtMs > now &&
+          grant.targetFingerprint === fingerprintOnePasswordTarget(item),
+        ),
+      };
+    });
   }
 
   async get(

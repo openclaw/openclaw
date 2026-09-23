@@ -4,7 +4,6 @@ import {
   fetchWithRuntimeDispatcherOrMockedGlobal,
   type DispatcherAwareRequestInit,
 } from "../infra/net/runtime-fetch.js";
-import type { LookupFn, resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { saveRemoteMedia, type FetchLike } from "./fetch.js";
 import type { SavedMedia } from "./store.js";
 
@@ -31,22 +30,12 @@ export async function saveRemoteMediaForStore(params: {
   headers?: Record<string, string>;
   subdir: string;
   maxBytes: number;
-  resolvePinnedHostnameForTest?: typeof resolvePinnedHostname;
+  abortSignal?: AbortSignal;
 }): Promise<SavedMedia> {
-  const resolvePinned = params.resolvePinnedHostnameForTest;
-  const lookupFn: LookupFn | undefined = resolvePinned
-    ? ((async (hostname: string) => {
-        const pinned = await resolvePinned(hostname);
-        return pinned.addresses.map((address) => ({
-          address,
-          family: address.includes(":") ? 6 : 4,
-        }));
-      }) as unknown as LookupFn)
-    : undefined;
   const { id, path, size, contentType } = await saveRemoteMedia({
     url: params.source,
     fetchImpl: fetchWithoutIgnoredBody,
-    requestInit: params.headers ? { headers: params.headers } : undefined,
+    requestInit: { headers: params.headers, signal: params.abortSignal },
     filePathHint: params.source,
     // The store discards this synthetic underscore stem but keeps its extension,
     // preserving the URL-suffix fallback without embedding the remote basename.
@@ -56,10 +45,6 @@ export async function saveRemoteMediaForStore(params: {
     responseHeaderTimeoutMs: REMOTE_MEDIA_TIMEOUT_MS,
     readIdleTimeoutMs: REMOTE_MEDIA_TIMEOUT_MS,
     subdir: params.subdir,
-    ...(lookupFn ? { lookupFn } : {}),
-    ...(resolvePinned
-      ? { ssrfPolicy: { allowedHostnames: [new URL(params.source).hostname] } }
-      : {}),
   });
   return { id, path, size, contentType };
 }

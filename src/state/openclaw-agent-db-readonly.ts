@@ -1,42 +1,42 @@
-import fs from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
 import {
-  assertCanonicalAgentMediaPersistenceVersion,
-  assertExistingAgentSchemaOwner,
+  createOpenClawAgentDatabaseClaim,
+  type OpenClawAgentDatabaseClaim,
+} from "./openclaw-agent-db-identity.js";
+import { withCommittedOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-companion.js";
+import {
+  readOpenClawAgentDatabase,
+  type OpenClawAgentDatabaseReadOnlyResult,
+  type OpenClawAgentReadOnlyDatabase,
+} from "./openclaw-agent-db-readonly-open.js";
+import {
+  retainCachedOpenClawAgentDatabaseReadOnly,
+  withScopedOpenClawAgentDatabaseReadOnly,
+  type OpenClawAgentDatabaseReadOnlyBehavior,
+} from "./openclaw-agent-db-readonly-scope.js";
+import {
+  assertCanonicalAgentPersistenceVersion,
   assertSupportedAgentSchemaVersion,
-  readExistingAgentSchemaMeta,
-} from "./openclaw-agent-db-schema-helpers.js";
-import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
+} from "./openclaw-agent-db-schema-read.js";
+import {
+  borrowOpenClawAgentDatabase,
+  getOpenClawAgentDatabaseIfOpen,
+} from "./openclaw-agent-db.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
-type OpenClawAgentReadOnlyDatabase = {
-  agentId: string;
-  db: DatabaseSync;
-  path: string;
-};
-
-type OpenClawAgentDatabaseReadOnlyResult<T> =
-  | { found: true; value: T }
-  | { found: false; reason: "database-missing" | "schema-missing" | "table-missing" };
-
-function isMissingTableError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error as NodeJS.ErrnoException).code === "ERR_SQLITE_ERROR" &&
-    /\bno such table:/iu.test(error.message)
-  );
-}
+export {
+  openOpenClawAgentDatabaseReadOnly,
+  type OpenClawAgentReadOnlyDatabase,
+  type OpenClawAgentReadOnlyDatabaseHandle,
+  type OpenClawAgentDatabaseReadOnlyOpenResult,
+} from "./openclaw-agent-db-readonly-open.js";
 
 /**
  * Look up a process-held handle without adopting writer-side failures.
@@ -55,10 +55,31 @@ function findOpenAgentDatabase(
   }
 }
 
+/** Retain an existing store across awaits without materializing a writable database. */
+export function retainOpenClawAgentDatabaseReadOnly(
+  options: OpenClawAgentDatabaseOptions,
+):
+  | { found: true; database: OpenClawAgentReadOnlyDatabase; claim: OpenClawAgentDatabaseClaim }
+  | { found: false; reason: "database-missing" | "schema-missing" } {
+  const opened = findOpenAgentDatabase(options);
+  if (opened && !opened.db.isTransaction) {
+    const borrowed = borrowOpenClawAgentDatabase(options);
+    return {
+      found: true,
+      database: opened,
+      claim: createOpenClawAgentDatabaseClaim(opened, borrowed.release),
+    };
+  }
+  const agentId = normalizeAgentId(options.agentId);
+  const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+  return retainCachedOpenClawAgentDatabaseReadOnly({ ...options, agentId, path: pathname });
+}
+
 /** Read agent state without creating, registering, migrating, or joining its writable lifecycle. */
 export function withOpenClawAgentDatabaseReadOnly<T>(
   operation: (database: OpenClawAgentReadOnlyDatabase) => T,
   options: OpenClawAgentDatabaseOptions,
+  behavior: OpenClawAgentDatabaseReadOnlyBehavior = {},
 ): OpenClawAgentDatabaseReadOnlyResult<T> {
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
@@ -66,51 +87,34 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     // Read-only misses must not create process-lifetime handles; only creation and
     // write paths may materialize the process-held incognito database.
     const database = getOpenClawAgentDatabaseIfOpen({ ...options, agentId });
+    if (database && behavior.allowExtension) {
+      throw new Error("Extension-capable read-only access is unavailable for incognito databases.");
+    }
     return database
-      ? { found: true, value: operation(database) }
+      ? readOpenClawAgentDatabase(database, operation)
       : { found: false, reason: "database-missing" };
   }
-  // Reusing a handle this process already holds is what keeps row loops cheap:
-  // opening and closing a connection per call made reads scale with row count.
-  // An in-flight transaction is skipped so callers never observe uncommitted
-  // rows that a fresh read-only connection could not have seen.
-  const opened = findOpenAgentDatabase({ ...options, agentId });
-  if (opened && !opened.db.isTransaction) {
-    // A newer build can migrate this file while the handle stays open, so the
-    // forward-compatibility gate still runs before any reused read.
-    assertSupportedAgentSchemaVersion(opened.db, pathname);
-    try {
-      return { found: true, value: operation(opened) };
-    } catch (error) {
-      if (isMissingTableError(error)) {
-        return { found: false, reason: "table-missing" };
-      }
-      throw error;
-    }
+  // Borrow only outside a transaction so readers see committed rows.
+  // The writer owns reused handles; this call closes only fresh connections.
+  const processOpened = behavior.allowExtension
+    ? undefined
+    : findOpenAgentDatabase({ ...options, agentId });
+  if (processOpened?.db.isTransaction) {
+    return withCommittedOpenClawAgentDatabaseReadOnly(processOpened, operation, {
+      ...options,
+      agentId,
+    });
   }
-  if (!fs.existsSync(pathname)) {
-    return { found: false, reason: "database-missing" };
+  const reusable = processOpened && !processOpened.db.isTransaction ? processOpened : undefined;
+  if (!reusable) {
+    return withScopedOpenClawAgentDatabaseReadOnly(
+      operation,
+      { ...options, agentId, path: pathname },
+      behavior,
+    );
   }
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
-  try {
-    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    assertSupportedAgentSchemaVersion(db, pathname);
-    assertCanonicalAgentMediaPersistenceVersion(db, pathname);
-    const schemaMeta = readExistingAgentSchemaMeta(db);
-    if (!schemaMeta) {
-      return { found: false, reason: "schema-missing" };
-    }
-    assertExistingAgentSchemaOwner(schemaMeta, agentId, pathname);
-    try {
-      return { found: true, value: operation({ agentId, db, path: pathname }) };
-    } catch (error) {
-      if (isMissingTableError(error)) {
-        return { found: false, reason: "table-missing" };
-      }
-      throw error;
-    }
-  } finally {
-    clearNodeSqliteKyselyCacheForDatabase(db);
-    db.close();
-  }
+  // Share only this admission's fresh value; a later read must check again.
+  const userVersion = assertSupportedAgentSchemaVersion(reusable.db, pathname);
+  assertCanonicalAgentPersistenceVersion(reusable.db, pathname, userVersion);
+  return readOpenClawAgentDatabase(reusable, operation);
 }

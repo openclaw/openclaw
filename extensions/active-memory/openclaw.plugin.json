@@ -1,14 +1,77 @@
 {
   "id": "active-memory",
+  "categories": ["memory"],
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [{ "id": "active-memory-session-toggles-json-to-plugin-state" }]
   },
   "activation": {
     "onStartup": true
   },
   "name": "Active Memory",
   "description": "Runs bounded pre-reply memory retrieval and implements per-agent Remember across conversations for eligible private conversations.",
+  "configGroups": [
+    {
+      "id": "memory-recall",
+      "title": "Memory recall",
+      "order": 10,
+      "properties": ["enabled", "mode"]
+    },
+    {
+      "id": "conversations",
+      "title": "Conversations",
+      "order": 20,
+      "properties": ["agents", "allowedChatTypes", "allowedChatIds", "deniedChatIds"]
+    },
+    {
+      "id": "recall-model",
+      "title": "Recall model",
+      "order": 30,
+      "properties": ["model", "modelFallback", "modelFallbackPolicy", "thinking", "fastMode"]
+    },
+    {
+      "id": "recall-prompt",
+      "title": "Recall prompt",
+      "order": 40,
+      "properties": [
+        "queryMode",
+        "promptStyle",
+        "toolsAllow",
+        "promptOverride",
+        "promptAppend",
+        "maxSummaryChars"
+      ]
+    },
+    {
+      "id": "conversation-context",
+      "title": "Conversation context",
+      "order": 50,
+      "properties": [
+        "recentUserTurns",
+        "recentAssistantTurns",
+        "recentUserChars",
+        "recentAssistantChars"
+      ]
+    },
+    {
+      "id": "timeouts-and-caching",
+      "title": "Timeouts and caching",
+      "order": 60,
+      "properties": [
+        "timeoutMs",
+        "setupGraceTimeoutMs",
+        "cacheTtlMs",
+        "circuitBreakerMaxTimeouts",
+        "circuitBreakerCooldownMs"
+      ]
+    },
+    {
+      "id": "diagnostics",
+      "title": "Diagnostics",
+      "order": 70,
+      "properties": ["logging", "persistTranscripts", "transcriptDir"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -124,7 +187,7 @@
     },
     "allowedChatIds": {
       "label": "Allowed Chat IDs",
-      "help": "Optional explicit allowlist of chat/user IDs (e.g. Feishu chat_id oc_xxx, open_id ou_xxx, Telegram chat id, Slack channel id). When non-empty, Active Memory only runs for sessions whose conversation id is in the list, across **every** chat type at once (direct, group, channel). Setting this narrows every allowed chat type simultaneously — if you want 'all directs + only specific groups', use allowedChatTypes: ['group'] + allowedChatIds: [<group ids>] and rely on direct chats being matched via the direct session id (e.g. the user's open_id) instead. Leave empty to fall back to allowedChatTypes alone."
+      "help": "Optional allowlist of resolved conversation IDs. A non-empty list narrows every targeted conversation, including direct messages and Remember across conversations. For advanced Active Memory with direct messages and selected groups, enable both types in allowedChatTypes and list both direct peer IDs and group IDs. With a non-empty list, sessions without a resolved conversation ID are skipped. Leave empty for no additional ID restriction."
     },
     "deniedChatIds": {
       "label": "Denied Chat IDs",
@@ -188,7 +251,7 @@
     },
     "transcriptDir": {
       "label": "Transcript Directory",
-      "help": "Relative directory under the agent sessions folder used when transcript persistence is enabled."
+      "help": "Relative artifact directory under the plugin-owned per-agent transcript directory in the OpenClaw state directory. The agent id is URI-encoded; the default subdirectory is active-memory."
     }
   }
 }

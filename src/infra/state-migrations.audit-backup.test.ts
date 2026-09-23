@@ -4,12 +4,12 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
-  createLegacyAuditBackupSnapshots,
   hasLegacyAuditBackupSources,
   isLegacyAuditMigrationBackupPath,
-} from "./state-migrations.audit-backup.js";
+} from "./backup-audit-paths.js";
+import { createLegacyAuditBackupCapture } from "./state-migrations.audit-backup.js";
 
 const TEST_SCRUB_PATTERN = Buffer.from(
   Array.from({ length: 32 }, (_, index) => (index % 2 === 0 ? 0x20 : 0x09)),
@@ -56,36 +56,58 @@ describe("legacy audit raw backup snapshots", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("recognizes only supported audit migration paths", () => {
-    const stateDir = "/opt/openclaw/state";
+  it.each([
+    ["logs/config-audit.jsonl", true],
+    ["logs/.config-audit.jsonl.doctor-importing", true],
+    ["audit/.system-agent.jsonl.doctor-importing.2", true],
+    ["audit/crestodian.jsonl.migrated.2.raw", true],
+    ["logs/config-audit.jsonl.migrated.raw", true],
+    ["audit/system-agent.jsonl.migrated.10.raw", true],
+    ["logs/config-audit.jsonl.migrated.raw.doctor-scrub-progress", true],
+    ["logs/config-audit.jsonl.migrated.10.raw.doctor-scrub-restore", true],
+    ["logs/config-audit.jsonl.migrated.raw.doctor-scrub-staging", true],
+    ["logs/config-audit.jsonl.migrated", false],
+    ["audit/system-agent.jsonl.migrated.2", false],
+    ["logs/other.jsonl.migrated.raw", false],
+    ["plugins/example/cache.jsonl.migrated.raw", false],
+    ["audit/config-audit.jsonl.migrated.raw", false],
+    ["logs/config-audit.jsonl.migrated.1.raw", false],
+  ])(
+    "keeps discovery and exclusion consistent for %s and its quarantines",
+    async (relative, expected) => {
+      await withTestDir({ prefix: "openclaw-audit-backup-family-" }, async (stateDir) => {
+        let sourcePath = path.join(stateDir, relative);
+        await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+        await fs.writeFile(sourcePath, "fixture");
+        for (const suffix of ["", ".quarantined-2026-09-17", ".quarantined-retained-copy"]) {
+          if (suffix) {
+            await fs.rename(sourcePath, sourcePath + suffix);
+            sourcePath += suffix;
+          }
+          expect(isLegacyAuditMigrationBackupPath(sourcePath, stateDir)).toBe(expected);
+          await expect(hasLegacyAuditBackupSources(stateDir)).resolves.toBe(expected);
+        }
+      });
+    },
+  );
+
+  it("rejects paths outside the audit state root", () => {
     expect(
       isLegacyAuditMigrationBackupPath(
-        `${stateDir}/logs/config-audit.jsonl.migrated.10.raw.doctor-scrub-restore`,
-        stateDir,
+        "/opt/other/logs/config-audit.jsonl.migrated.raw.quarantined-copy",
+        "/opt/state",
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isLegacyAuditMigrationBackupPath(
-        `${stateDir}/audit/.system-agent.jsonl.doctor-importing.2`,
-        stateDir,
-      ),
-    ).toBe(true);
-    expect(
-      isLegacyAuditMigrationBackupPath(
-        `${stateDir}/logs/config-audit.jsonl.migrated.raw.doctor-scrub-progress`,
-        stateDir,
-      ),
-    ).toBe(true);
-    expect(
-      isLegacyAuditMigrationBackupPath(
-        `${stateDir}/plugins/example/cache.jsonl.migrated.raw`,
-        stateDir,
+        "/opt/state/logs/../../logs/config-audit.jsonl.migrated.raw.quarantined-copy",
+        "/opt/state",
       ),
     ).toBe(false);
   });
 
   it("propagates audit-directory inspection failures", async () => {
-    await withTempDir({ prefix: "openclaw-audit-backup-inspection-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-audit-backup-inspection-" }, async (stateDir) => {
       await fs.writeFile(path.join(stateDir, "logs"), "not a directory");
 
       await expect(hasLegacyAuditBackupSources(stateDir)).rejects.toMatchObject({
@@ -95,7 +117,7 @@ describe("legacy audit raw backup snapshots", () => {
   });
 
   it("captures an active legacy source before the later SQLite snapshot", async () => {
-    await withTempDir({ prefix: "openclaw-audit-backup-active-" }, async (rootDir) => {
+    await withTestDir({ prefix: "openclaw-audit-backup-active-" }, async (rootDir) => {
       const stateDir = path.join(rootDir, "state");
       const tempDir = path.join(rootDir, "backup-temp");
       const sourcePath = path.join(stateDir, "logs", "config-audit.jsonl");
@@ -103,7 +125,7 @@ describe("legacy audit raw backup snapshots", () => {
       await fs.mkdir(tempDir);
       await fs.writeFile(sourcePath, `${JSON.stringify(configAuditRecord("active-value-7f3c"))}\n`);
 
-      const snapshots = await createLegacyAuditBackupSnapshots({ stateDir, tempDir });
+      const { snapshots } = await createLegacyAuditBackupCapture({ stateDir, tempDir });
       const snapshotAsset = expectDefined(snapshots[0], "snapshot");
       const snapshot = await fs.readFile(snapshotAsset.sourcePath, "utf8");
 
@@ -116,7 +138,7 @@ describe("legacy audit raw backup snapshots", () => {
   });
 
   it("captures a stable active prefix while an old writer keeps appending", async () => {
-    await withTempDir({ prefix: "openclaw-audit-backup-appending-" }, async (rootDir) => {
+    await withTestDir({ prefix: "openclaw-audit-backup-appending-" }, async (rootDir) => {
       const stateDir = path.join(rootDir, "state");
       const tempDir = path.join(rootDir, "backup-temp");
       const sourcePath = path.join(stateDir, "logs", "config-audit.jsonl");
@@ -130,14 +152,14 @@ describe("legacy audit raw backup snapshots", () => {
         ]),
       );
 
-      const snapshotPromise = createLegacyAuditBackupSnapshots({ stateDir, tempDir });
+      const snapshotPromise = createLegacyAuditBackupCapture({ stateDir, tempDir });
       for (let index = 0; index < 8; index += 1) {
         await fs.appendFile(
           sourcePath,
           `${JSON.stringify(configAuditRecord(`late-value-${index}-9a21`))}\n`,
         );
       }
-      const snapshots = await snapshotPromise;
+      const { snapshots } = await snapshotPromise;
       const snapshotAsset = expectDefined(snapshots[0], "snapshot");
       const snapshot = await fs.readFile(snapshotAsset.sourcePath, "utf8");
 
@@ -153,7 +175,7 @@ describe("legacy audit raw backup snapshots", () => {
   });
 
   it("captures an unimported append without archiving its secret", async () => {
-    await withTempDir({ prefix: "openclaw-audit-backup-" }, async (rootDir) => {
+    await withTestDir({ prefix: "openclaw-audit-backup-" }, async (rootDir) => {
       const stateDir = path.join(rootDir, "state");
       const tempDir = path.join(rootDir, "backup-temp");
       const rawPath = path.join(stateDir, "logs", "config-audit.jsonl.migrated.raw");
@@ -161,7 +183,7 @@ describe("legacy audit raw backup snapshots", () => {
       await fs.mkdir(tempDir);
       await fs.writeFile(rawPath, `${JSON.stringify(configAuditRecord("late-value-7f3c"))}\n`);
 
-      const snapshots = await createLegacyAuditBackupSnapshots({ stateDir, tempDir });
+      const { snapshots } = await createLegacyAuditBackupCapture({ stateDir, tempDir });
 
       expect(snapshots).toHaveLength(1);
       const snapshotAsset = expectDefined(snapshots[0], "snapshot");
@@ -175,7 +197,7 @@ describe("legacy audit raw backup snapshots", () => {
   });
 
   it("reconstructs a scrub-in-progress source and sanitizes its later append", async () => {
-    await withTempDir({ prefix: "openclaw-audit-backup-recovery-" }, async (rootDir) => {
+    await withTestDir({ prefix: "openclaw-audit-backup-recovery-" }, async (rootDir) => {
       const stateDir = path.join(rootDir, "state");
       const tempDir = path.join(rootDir, "backup-temp");
       const rawPath = path.join(stateDir, "logs", "config-audit.jsonl.migrated.raw");
@@ -193,7 +215,7 @@ describe("legacy audit raw backup snapshots", () => {
         await buildTestAuditRestoreJournal(rawPath, original, Math.floor(partial.length / 2)),
       );
 
-      const snapshots = await createLegacyAuditBackupSnapshots({ stateDir, tempDir });
+      const { snapshots } = await createLegacyAuditBackupCapture({ stateDir, tempDir });
       const snapshotAsset = expectDefined(snapshots[0], "snapshot");
       const snapshot = await fs.readFile(snapshotAsset.sourcePath, "utf8");
 
@@ -212,7 +234,7 @@ describe("legacy audit raw backup snapshots", () => {
   });
 
   it("ignores a stale restore journal after the raw archive is replaced", async () => {
-    await withTempDir({ prefix: "openclaw-audit-backup-stale-journal-" }, async (rootDir) => {
+    await withTestDir({ prefix: "openclaw-audit-backup-stale-journal-" }, async (rootDir) => {
       const stateDir = path.join(rootDir, "state");
       const tempDir = path.join(rootDir, "backup-temp");
       const rawPath = path.join(stateDir, "logs", "config-audit.jsonl.migrated.raw");
@@ -229,7 +251,7 @@ describe("legacy audit raw backup snapshots", () => {
         await buildTestAuditRestoreJournal(rawPath, original),
       );
 
-      const snapshots = await createLegacyAuditBackupSnapshots({ stateDir, tempDir });
+      const { snapshots } = await createLegacyAuditBackupCapture({ stateDir, tempDir });
       const snapshotAsset = expectDefined(snapshots[0], "snapshot");
       const snapshot = JSON.parse(await fs.readFile(snapshotAsset.sourcePath, "utf8"));
 

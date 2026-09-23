@@ -7,34 +7,42 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
+import { transformProviderMessages as transformMessages } from "./provider-transcript-transform.js";
+import type { ProviderMessage } from "./provider-types.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
   isImageWithMediaPayload,
 } from "./providers/tool-result-text.js";
-import { transformMessages } from "./transcript-transform.js";
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
-import type { Context, Model, TextContent, ThinkingContent, ToolCall } from "./types.js";
+import type { Context, Model, ThinkingContent, ToolCall } from "./types.js";
 import { sanitizeSurrogates } from "./utils/sanitize-unicode.js";
-import { stripSystemPromptCacheBoundary } from "./utils/system-prompt-cache-boundary.js";
+import {
+  splitSystemPromptRelocatableBoundary,
+  stripSystemPromptCacheBoundary,
+  stripSystemPromptRelocatableBoundary,
+} from "./utils/system-prompt-cache-boundary.js";
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
-
-function isTextContentBlock(block: { type: string }): block is TextContent {
-  return block.type === "text";
-}
-
-function isThinkingContentBlock(block: { type: string }): block is ThinkingContent {
-  return block.type === "thinking";
-}
-
-function isToolCallBlock(block: { type: string }): block is ToolCall {
-  return block.type === "toolCall";
-}
+type ChatCompletionContentPartVideo = {
+  type: "video_url";
+  video_url: { url: string };
+};
 
 function sanitizeToolResultText(text: string, fallback: string): string {
   const sanitized = sanitizeSurrogates(text);
   return sanitized.trim().length > 0 ? sanitized : fallback;
+}
+
+/** Whether replayed messages require a tools marker for proxy compatibility. */
+export function hasToolCallHistory(messages: Context["messages"]): boolean {
+  return messages.some(
+    (message) =>
+      message.role === "toolResult" ||
+      (message.role === "assistant" &&
+        Array.isArray(message.content) &&
+        message.content.some((block) => block.type === "toolCall")),
+  );
 }
 
 /** Convert a normalized transcript to OpenAI Chat Completions messages. */
@@ -65,14 +73,27 @@ export function convertMessages(
 
   const transformedMessages = transformMessages(context.messages, model, (id) =>
     normalizeToolCallId(id),
-  );
+  ) as ProviderMessage[];
 
+  // Local chat templates can place tools after system content. Move only the
+  // bounded Runtime facts so session identifiers do not split that prefix.
+  let relocatableSplit: { remainingPrompt: string; relocatable: string } | undefined;
+  let systemParamIndex: number | undefined;
   if (context.systemPrompt) {
     const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
     const role = useDeveloperRole ? "developer" : "system";
-    const systemPrompt = options.preserveSystemPromptCacheBoundary
-      ? context.systemPrompt
-      : stripSystemPromptCacheBoundary(context.systemPrompt);
+    let systemPrompt: string;
+    if (options.preserveSystemPromptCacheBoundary) {
+      // Explicit message breakpoints retain the existing system layout.
+      systemPrompt = stripSystemPromptRelocatableBoundary(context.systemPrompt);
+    } else {
+      const split = splitSystemPromptRelocatableBoundary(context.systemPrompt);
+      if (split && split.relocatable.length > 0) {
+        relocatableSplit = split;
+      }
+      systemPrompt = stripSystemPromptCacheBoundary(context.systemPrompt);
+    }
+    systemParamIndex = params.length;
     params.push({ role, content: sanitizeSurrogates(systemPrompt) });
   }
 
@@ -103,24 +124,29 @@ export function convertMessages(
         }
         params.push(userParam);
       } else {
-        const content: ChatCompletionContentPart[] = msg.content.map(
-          (item): ChatCompletionContentPart => {
+        const content: Array<ChatCompletionContentPart | ChatCompletionContentPartVideo> =
+          msg.content.map((item) => {
             if (item.type === "text") {
               return {
                 type: "text",
                 text: sanitizeSurrogates(item.text),
               } satisfies ChatCompletionContentPartText;
             }
+            if (item.type === "video") {
+              return {
+                type: "video_url",
+                video_url: { url: `data:${item.mimeType};base64,${item.data}` },
+              } satisfies ChatCompletionContentPartVideo;
+            }
             return {
               type: "image_url",
               image_url: { url: `data:${item.mimeType};base64,${item.data}` },
             } satisfies ChatCompletionContentPartImage;
-          },
-        );
+          });
         if (content.length === 0) {
           continue;
         }
-        const userParam: ChatCompletionMessageParam = { role: "user", content };
+        const userParam = { role: "user", content } as ChatCompletionMessageParam;
         if (isRuntimeContextCarrier) {
           options.cacheOptOutIndexes?.add(params.length);
         }
@@ -132,35 +158,36 @@ export function convertMessages(
         content: compat.requiresAssistantAfterToolResult ? "" : null,
       };
 
-      const assistantTextParts = msg.content
-        .filter(isTextContentBlock)
-        .filter((block) => block.text.trim().length > 0)
-        .map(
-          (block) =>
-            ({
-              type: "text",
-              text: sanitizeSurrogates(block.text),
-            }) satisfies ChatCompletionContentPartText,
-        );
-      // Separate content blocks are distinct utterances, so replay them the way
-      // the string-content flattener does rather than running them together.
-      const assistantText = assistantTextParts.map((part) => part.text).join("\n");
-
-      const nonEmptyThinkingBlocks = msg.content
-        .filter(isThinkingContentBlock)
-        .filter((block) => block.thinking.trim().length > 0);
-      if (nonEmptyThinkingBlocks.length > 0) {
-        if (compat.requiresThinkingAsText) {
-          const thinkingText = nonEmptyThinkingBlocks
-            .map((block) => sanitizeSurrogates(block.thinking))
-            .join("\n\n");
-          assistantMsg.content = [{ type: "text", text: thinkingText }, ...assistantTextParts];
-        } else {
-          // String content is the interoperable Chat Completions replay shape;
-          // content-part arrays make some compatible servers mirror JSON.
-          if (assistantText.length > 0) {
-            assistantMsg.content = assistantText;
-          }
+      const assistantTexts: string[] = [];
+      const nonEmptyThinkingBlocks: ThinkingContent[] = [];
+      const toolCalls: ToolCall[] = [];
+      msg.content.forEach((block) => {
+        if (block.type === "text" && block.text.trim().length > 0) {
+          assistantTexts.push(sanitizeSurrogates(block.text));
+        } else if (block.type === "thinking" && block.thinking.trim().length > 0) {
+          nonEmptyThinkingBlocks.push(block);
+        } else if (block.type === "toolCall") {
+          toolCalls.push(block);
+        }
+      });
+      if (nonEmptyThinkingBlocks.length > 0 && compat.requiresThinkingAsText) {
+        const thinkingText = nonEmptyThinkingBlocks
+          .map((block) => sanitizeSurrogates(block.thinking))
+          .join("\n\n");
+        assistantMsg.content = [
+          { type: "text", text: thinkingText },
+          ...assistantTexts.map((text): ChatCompletionContentPartText => ({
+            type: "text",
+            text,
+          })),
+        ];
+      } else {
+        // Keep separate utterances apart in the interoperable string replay shape.
+        const assistantText = assistantTexts.join("\n");
+        if (assistantText.length > 0) {
+          assistantMsg.content = assistantText;
+        }
+        if (nonEmptyThinkingBlocks.length > 0) {
           let signature = nonEmptyThinkingBlocks.at(0)?.thinkingSignature;
           if (model.provider === "opencode-go" && signature === "reasoning") {
             signature = "reasoning_content";
@@ -170,11 +197,8 @@ export function convertMessages(
               nonEmptyThinkingBlocks.map((block) => block.thinking).join("\n");
           }
         }
-      } else if (assistantText.length > 0) {
-        assistantMsg.content = assistantText;
       }
 
-      const toolCalls = msg.content.filter(isToolCallBlock);
       if (toolCalls.length > 0) {
         assistantMsg.tool_calls = toolCalls.map((toolCall) => ({
           id: toolCall.id,
@@ -210,16 +234,15 @@ export function convertMessages(
         (assistantMsg as { reasoning_content?: string }).reasoning_content = "";
       }
       const content = assistantMsg.content;
-      const hasContent =
-        content !== null &&
-        content !== undefined &&
-        (typeof content === "string" ? content.length > 0 : content.length > 0);
+      const hasContent = content !== null && content !== undefined && content.length > 0;
       if (!hasContent && !assistantMsg.tool_calls) {
         continue;
       }
       params.push(assistantMsg);
     } else if (msg.role === "toolResult") {
-      const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }> = [];
+      const imageContentParts: Array<
+        ChatCompletionContentPartText | { type: "image_url"; image_url: { url: string } }
+      > = [];
       let j = i;
 
       while (j < transformedMessages.length) {
@@ -230,7 +253,7 @@ export function convertMessages(
 
         const textResult = extractToolResultText(toolMsg.content);
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
-        const hasImages = toolMsg.content.some(isImageWithMediaPayload);
+        const images = toolMsg.content.filter(isImageWithMediaPayload);
         const content = sanitizeToolResultText(
           textResult,
           mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT,
@@ -245,14 +268,18 @@ export function convertMessages(
         }
         params.push(toolResultMsg);
 
-        if (hasImages && model.input.includes("image")) {
-          for (const block of toolMsg.content) {
-            if (isImageWithMediaPayload(block)) {
-              imageBlocks.push({
-                type: "image_url",
-                image_url: { url: `data:${block.mimeType};base64,${block.data}` },
-              });
-            }
+        if (images.length > 0 && model.input.includes("image")) {
+          const boundedToolName = sanitizeSurrogates(truncateUtf16Safe(toolMsg.toolName ?? "", 64));
+          // Count text-only replies too: names and bounded call IDs can collide.
+          imageContentParts.push({
+            type: "text",
+            text: `Image(s) from tool result #${j - i + 1}${boundedToolName ? ` (${boundedToolName})` : ""}:`,
+          });
+          for (const block of images) {
+            imageContentParts.push({
+              type: "image_url",
+              image_url: { url: `data:${block.mimeType};base64,${block.data}` },
+            });
           }
         }
         j += 1;
@@ -260,13 +287,13 @@ export function convertMessages(
 
       i = j - 1;
 
-      if (imageBlocks.length > 0) {
+      if (imageContentParts.length > 0) {
         if (compat.requiresAssistantAfterToolResult) {
           params.push({ role: "assistant", content: "I have processed the tool results." });
         }
         params.push({
           role: "user",
-          content: [{ type: "text", text: "Attached image(s) from tool result:" }, ...imageBlocks],
+          content: imageContentParts,
         });
         lastRole = "user";
       } else {
@@ -278,5 +305,52 @@ export function convertMessages(
     lastRole = msg.role;
   }
 
+  if (relocatableSplit !== undefined && systemParamIndex !== undefined) {
+    relocateNonBehavioralRegion({
+      params,
+      systemParamIndex,
+      split: relocatableSplit,
+      cacheOptOutIndexes: options.cacheOptOutIndexes,
+    });
+  }
+
   return params;
+}
+
+/** Commit relocation only after finding an emitted carrier. */
+function relocateNonBehavioralRegion(args: {
+  params: ChatCompletionMessageParam[];
+  systemParamIndex: number;
+  split: { remainingPrompt: string; relocatable: string };
+  cacheOptOutIndexes?: Set<number>;
+}): void {
+  const text = sanitizeSurrogates(stripSystemPromptCacheBoundary(args.split.relocatable));
+  // A trailing carrier would rewrite the earlier user turn on every follow-up.
+  for (let index = args.systemParamIndex + 1; index < args.params.length; index++) {
+    const param = args.params[index];
+    if (!param || param.role !== "user") {
+      continue;
+    }
+    if (typeof param.content === "string") {
+      param.content = `${param.content}\n\n${text}`;
+    } else if (Array.isArray(param.content)) {
+      param.content = [
+        ...param.content,
+        { type: "text", text } satisfies ChatCompletionContentPartText,
+      ];
+    } else {
+      continue;
+    }
+    // Shrink the system message only once a carrier turn is secured, so a
+    // projected-away user turn leaves the region where it already is.
+    const systemParam = args.params[args.systemParamIndex];
+    if (systemParam) {
+      systemParam.content = sanitizeSurrogates(
+        stripSystemPromptCacheBoundary(args.split.remainingPrompt),
+      );
+    }
+    // The turn now carries volatile text, so it must not anchor a cache breakpoint.
+    args.cacheOptOutIndexes?.add(index);
+    return;
+  }
 }

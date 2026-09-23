@@ -5,25 +5,24 @@ import {
   createChannelPartialDeliveryError,
   implicitMentionKindWhen,
   isChannelPartialDeliveryError,
+  logInboundDrop,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+import { resolveChannelGroupsConfigPath } from "openclaw/plugin-sdk/channel-policy";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 // Zalouser plugin module implements monitor behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
-import {
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  type HistoryEntry,
-  createChannelHistoryWindow,
-} from "openclaw/plugin-sdk/reply-history";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import { type HistoryEntry, createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
@@ -221,6 +220,7 @@ async function processMessage(
   message: ZaloInboundMessage,
   account: ResolvedZalouserAccount,
   config: OpenClawConfig,
+  groupsConfigPath: string,
   core: ZalouserCoreRuntime,
   runtime: RuntimeEnv,
   historyState: ZalouserGroupHistoryState,
@@ -339,33 +339,36 @@ async function processMessage(
     commandBody,
     config,
   );
-  const accessDecision = await resolveStableChannelMessageIngress({
-    channelId: "zalouser",
-    accountId: account.accountId,
-    identity: {
-      normalize: normalizeZalouserSender,
-      sensitivity: "pii",
-      entryIdPrefix: "zalouser-entry",
-    },
-    cfg: config,
-    readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
-    subject: { stableId: senderId },
-    conversation: {
-      kind: isGroup ? "group" : "direct",
-      id: isGroup ? "group" : senderId,
-    },
-    dmPolicy,
-    groupPolicy: senderGroupPolicy,
-    policy: { groupAllowFromFallbackToAllowFrom: false },
-    allowFrom: configAllowFrom,
-    groupAllowFrom: configGroupAllowFrom,
-    command: shouldComputeCommandAuth
-      ? {
-          directGroupAllowFrom: "effective",
-          commandGroupAllowFromFallbackToAllowFrom: true,
-        }
-      : undefined,
-  });
+  const resolveAccessDecision = async (contextBinding?: ChannelIngressContextBinding) =>
+    await core.channel.inbound.ingress.resolveStable({
+      channelId: "zalouser",
+      accountId: account.accountId,
+      identity: {
+        normalize: normalizeZalouserSender,
+        sensitivity: "pii",
+        entryIdPrefix: "zalouser-entry",
+      },
+      cfg: config,
+      readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
+      subject: { stableId: senderId },
+      conversation: {
+        kind: isGroup ? "group" : "direct",
+        id: isGroup ? chatId : senderId,
+      },
+      contextBinding,
+      dmPolicy,
+      groupPolicy: senderGroupPolicy,
+      policy: { groupAllowFromFallbackToAllowFrom: false },
+      allowFrom: configAllowFrom,
+      groupAllowFrom: configGroupAllowFrom,
+      command: shouldComputeCommandAuth
+        ? {
+            directGroupAllowFrom: "effective",
+            commandGroupAllowFromFallbackToAllowFrom: true,
+          }
+        : undefined,
+    });
+  let accessDecision = await resolveAccessDecision();
   if (isGroup && accessDecision.senderAccess.decision !== "allow") {
     if (accessDecision.senderAccess.reasonCode === "group_policy_empty_allowlist") {
       logVerbose(core, runtime, "Blocked zalouser group message (no group allowlist)");
@@ -414,7 +417,7 @@ async function processMessage(
     return;
   }
 
-  const commandAuthorized = accessDecision.commandAccess.requested
+  let commandAuthorized = accessDecision.commandAccess.requested
     ? accessDecision.commandAccess.authorized
     : undefined;
   const hasControlCommand = core.channel.commands.isControlCommandMessage(commandBody, config);
@@ -442,6 +445,32 @@ async function processMessage(
       id: peer.id,
     },
   });
+  const messageSid = resolveZalouserMessageSid({
+    msgId: message.msgId,
+    cliMsgId: message.cliMsgId,
+    fallback: `${message.timestampMs}`,
+  });
+  accessDecision = await resolveAccessDecision({
+    agentId: route.agentId,
+    sessionKey: route.sessionKey,
+    messageId: messageSid,
+    inboundEventKind: "user_request",
+  });
+  if (!accessDecision.senderAccess.allowed) {
+    logVerbose(core, runtime, `zalouser: authorization changed before dispatch for ${senderId}`);
+    return;
+  }
+  commandAuthorized = accessDecision.commandAccess.requested
+    ? accessDecision.commandAccess.authorized
+    : undefined;
+  if (isGroup && hasControlCommand && commandAuthorized !== true) {
+    logVerbose(
+      core,
+      runtime,
+      `zalouser: drop control command from unauthorized sender ${senderId}`,
+    );
+    return;
+  }
   const historyKey = isGroup ? route.sessionKey : undefined;
   const channelHistory = createChannelHistoryWindow({
     historyMap: historyState.groupHistories,
@@ -512,7 +541,14 @@ async function processMessage(
             }
           : null,
     });
-    logVerbose(core, runtime, `zalouser: skip group ${chatId} (mention required, not mentioned)`);
+    logInboundDrop({
+      log: runtime.log,
+      channel: "zalouser",
+      reason: "no mention",
+      target: chatId,
+      onceKey: JSON.stringify([account.accountId, chatId]),
+      hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(chatId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+    });
     return;
   }
 
@@ -551,17 +587,13 @@ async function processMessage(
       : undefined;
 
   const normalizedTo = isGroup ? `zalouser:group:${chatId}` : `zalouser:${chatId}`;
-  const messageSid = resolveZalouserMessageSid({
-    msgId: message.msgId,
-    cliMsgId: message.cliMsgId,
-    fallback: `${message.timestampMs}`,
-  });
   const messageSidFull = formatZalouserMessageSidFull({
     msgId: message.msgId,
     cliMsgId: message.cliMsgId,
   });
 
   const ctxPayload = core.channel.inbound.buildContext({
+    channelIngress: accessDecision,
     channel: "zalouser",
     accountId: route.accountId,
     messageId: messageSid,
@@ -655,6 +687,7 @@ async function processMessage(
         return await deliverZalouserReply({
           payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
           profile: account.profile,
+          mediaMaxBytes: account.mediaMaxBytes,
           chatId,
           isGroup,
           runtime,
@@ -693,6 +726,7 @@ async function processMessage(
 }
 
 async function deliverZalouserReply(params: {
+  mediaMaxBytes?: number;
   payload: OutboundReplyPayload;
   profile: string;
   chatId: string;
@@ -717,6 +751,7 @@ async function deliverZalouserReply(params: {
   const sendReplyPart = async (text: string, mediaUrl?: string) => {
     await sendMessageZalouser(chatId, text, {
       profile,
+      mediaMaxBytes: params.mediaMaxBytes,
       ...(mediaUrl ? { mediaUrl } : {}),
       isGroup,
       textMode: "markdown",
@@ -762,13 +797,17 @@ export async function monitorZalouserProvider(
   const { config } = options;
   let { account } = options;
   const { abortSignal, statusSink, runtime } = options;
+  // Name resolution below copies the map; retain its authored scope before that projection.
+  const groupsConfigPath = resolveChannelGroupsConfigPath({
+    cfg: config,
+    channel: "zalouser",
+    accountId: account.accountId,
+    groups: account.config.groups,
+  });
 
   const core = getZalouserRuntime();
-  const historyLimit = Math.max(
-    0,
-    account.config.historyLimit ??
-      config.messages?.groupChat?.historyLimit ??
-      DEFAULT_GROUP_HISTORY_LIMIT,
+  const historyLimit = resolvePromptHistoryLimit(
+    account.config.historyLimit ?? config.messages?.groupChat?.historyLimit,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
 
@@ -876,6 +915,7 @@ export async function monitorZalouserProvider(
         message,
         account,
         config,
+        groupsConfigPath,
         core,
         runtime,
         { historyLimit, groupHistories },

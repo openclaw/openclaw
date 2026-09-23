@@ -4,6 +4,7 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { prepareMSTeamsConnectorRequest } from "../send-handoff.js";
 
 const PRIVATE_QA_BUILD_ENV = "OPENCLAW_BUILD_PRIVATE_QA";
 const PRIVATE_QA_NONCE_HEADER = "x-openclaw-msteams-qa-nonce";
@@ -61,6 +62,7 @@ class PrivateQaHttpClient {
       headers.set("authorization", `Bearer ${token}`);
     }
     const method = String(config.method ?? "GET").toUpperCase();
+    const assertCurrent = await prepareMSTeamsConnectorRequest();
     const { response, release } = await fetchWithSsrFGuard({
       url: targetUrl.toString(),
       init: {
@@ -76,12 +78,16 @@ class PrivateQaHttpClient {
       policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(targetUrl.toString()),
       maxRedirects: 0,
       auditContext: "msteams-private-qa-connector",
+      beforeRequest: assertCurrent,
     });
     try {
       const text = await response.text();
       const data = text ? (JSON.parse(text) as T) : (undefined as T);
       if (!response.ok) {
-        throw new Error(`Microsoft Teams private QA connector returned HTTP ${response.status}`);
+        throw Object.assign(
+          new Error(`Microsoft Teams private QA connector returned HTTP ${response.status}`),
+          { statusCode: response.status },
+        );
       }
       return {
         data,

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements qa transport behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -228,7 +227,7 @@ export function findFailureOutboundMessage(
     (message) =>
       message.direction === "outbound" &&
       (!options?.accountId || message.accountId === options.accountId) &&
-      Boolean(extractQaFailureReplyText(message.text)),
+      Boolean(extractQaFailureReplyText(message)),
   );
 }
 
@@ -238,7 +237,7 @@ function assertNoFailureReplies(
 ) {
   const failureMessage = findFailureOutboundMessage(state, options);
   if (failureMessage) {
-    throw new Error(extractQaFailureReplyText(failureMessage.text) ?? failureMessage.text);
+    throw new Error(extractQaFailureReplyText(failureMessage) ?? failureMessage.text);
   }
 }
 
@@ -376,11 +375,12 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     timeoutMs?: number;
     pollIntervalMs?: number;
   }) => Promise<void>;
-  abstract buildAgentDelivery: (params: { target: string }) => {
+  abstract buildAgentDelivery: (params: { target: string; threadId?: string }) => {
     channel: string;
     to?: string;
     replyChannel: string;
     replyTo: string;
+    threadId?: string;
   };
   abstract handleAction: (params: {
     action: QaTransportActionName;
@@ -475,6 +475,8 @@ export function createQaStateBackedTransportAdapter(
     buildAgentDelivery = params.buildAgentDelivery;
     handleAction = params.handleAction;
     createReportNotes = params.createReportNotes;
+    whenUnhealthy = params.whenUnhealthy;
+    captureBeforeGatewayCleanup = params.captureBeforeGatewayCleanup;
 
     override sendInbound = params.sendInbound;
 
@@ -509,7 +511,11 @@ export function createQaStateBackedTransportAdapter(
     ...(params.createRuntimeEnvPatch
       ? { createRuntimeEnvPatch: params.createRuntimeEnvPatch }
       : {}),
+    ...(params.createRuntimePreloads
+      ? { createRuntimePreloads: params.createRuntimePreloads }
+      : {}),
     ...(params.prepareFlow ? { prepareFlow: params.prepareFlow } : {}),
+    ...(params.captureArtifacts ? { captureArtifacts: params.captureArtifacts } : {}),
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),
     ...(params.cleanupAfterGatewayStop
       ? { cleanupAfterGatewayStop: params.cleanupAfterGatewayStop }
@@ -564,9 +570,7 @@ export async function waitForQaTransportOutboundSequence(params: {
       // Failures belong to the account, even when a different conversation has a matching final.
       for (const { kind, message } of ownedEvents) {
         const failureReply =
-          kind === "deleted" || message.deleted
-            ? undefined
-            : extractQaFailureReplyText(message.text);
+          kind === "deleted" || message.deleted ? undefined : extractQaFailureReplyText(message);
         if (failureReply) {
           throw new Error(failureReply);
         }

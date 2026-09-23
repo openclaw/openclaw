@@ -39,6 +39,14 @@ describe("onboard log-contains helper", () => {
     expect(logTailContains(logPath, "prefix marker", 64)).toBe(false);
   });
 
+  it("retains an earlier prompt across a large terminal redraw", () => {
+    const logPath = writeLog(
+      `What should we call your first agent?\n${"\u001b[36m│\u001b[39m agent\r\n".repeat(12_000)}`,
+    );
+
+    expect(logTailContains(logPath, "What should we call your first agent?")).toBe(true);
+  });
+
   it("preserves CLI status behavior for matching and missing logs", () => {
     const logPath = writeLog(`${"x".repeat(4096)}\nWizard Complete\n`);
 

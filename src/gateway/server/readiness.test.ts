@@ -2,8 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { createAgentDatabaseInspectionRefusal } from "../../state/agent-database-admission.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { ChannelManager } from "../server-channels.js";
+import type { GatewayPluginReloadStatus } from "../server-plugin-runtime-generation.js";
 import { createReadinessChecker } from "./readiness.js";
 
 /**
@@ -30,9 +32,11 @@ function snapshotWith(
 function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
   return {
     getRuntimeSnapshot: vi.fn(() => snapshot),
+    pauseChannelStarts: vi.fn(() => () => {}),
     startChannels: vi.fn(),
     startChannel: vi.fn(),
     stopChannel: vi.fn(),
+    releaseChannelRouteHandoffs: vi.fn(),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
     recoverAutostartSuppression: vi.fn(async () => false),
@@ -40,6 +44,7 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
     isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
+    isAccountListed: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
     isAutoRestartScheduled: vi.fn(() => false),
     resetRestartAttempts: vi.fn(),
@@ -77,6 +82,7 @@ function createReadinessHarness(params: {
   getStartupPendingReason?: Parameters<typeof createReadinessChecker>[0]["getStartupPendingReason"];
   getGatewayDraining?: Parameters<typeof createReadinessChecker>[0]["getGatewayDraining"];
   getEventLoopHealth?: Parameters<typeof createReadinessChecker>[0]["getEventLoopHealth"];
+  getStateDatabaseFailure?: Parameters<typeof createReadinessChecker>[0]["getStateDatabaseFailure"];
   shouldSkipChannelReadiness?: Parameters<
     typeof createReadinessChecker
   >[0]["shouldSkipChannelReadiness"];
@@ -93,6 +99,7 @@ function createReadinessHarness(params: {
       getStartupPendingReason: params.getStartupPendingReason,
       getGatewayDraining: params.getGatewayDraining,
       getEventLoopHealth: params.getEventLoopHealth,
+      getStateDatabaseFailure: params.getStateDatabaseFailure,
       shouldSkipChannelReadiness: params.shouldSkipChannelReadiness,
       cacheTtlMs: params.cacheTtlMs,
     }),
@@ -216,6 +223,94 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("reports a terminal state database failure after the readiness cache expires", () => {
+    withReadinessClock(() => {
+      const stateDatabase = { failure: undefined as Error | undefined };
+      const { manager, readiness } = createReadinessHarness({
+        getStateDatabaseFailure: () => stateDatabase.failure,
+        cacheTtlMs: 1_000,
+      });
+      expect(readiness()).toEqual(readySnapshot());
+
+      stateDatabase.failure = new Error("newer shared-state schema");
+      vi.advanceTimersByTime(1_000);
+      expect(readiness()).toEqual(failingSnapshot(["state-database"], FIVE_MIN_MS + 1_000));
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("reports plugin replacement recovery immediately and resumes channel readiness after settlement", () => {
+    withReadinessClock(() => {
+      let pluginReload: GatewayPluginReloadStatus | undefined;
+      const startedAt = Date.now() - FIVE_MIN_MS;
+      const manager = createHealthyDiscordManager(startedAt, Date.now());
+      const readiness = createReadinessChecker({
+        channelManager: manager,
+        startedAt,
+        getPluginReloadStatus: () => pluginReload,
+      });
+      expect(readiness()).toEqual(readySnapshot());
+
+      vi.mocked(manager.getRuntimeSnapshot).mockReturnValue(
+        snapshotWith({ discord: stoppedAccount({ connected: false }) }),
+      );
+
+      pluginReload = {
+        phase: "recovering",
+        pluginIds: ["discord"],
+        deadlineAtMs: Date.now() + 5_000,
+        reason: "Waiting for admitted work before restoring the previous plugin runtime.",
+      };
+      expect(readiness()).toEqual({
+        ...failingSnapshot(["plugin-reload"]),
+        pluginReload,
+      });
+      pluginReload = {
+        phase: "failed",
+        pluginIds: ["discord"],
+        reason: "Plugin recovery failed; inspect discord and restart the Gateway.",
+      };
+      expect(readiness()).toEqual({
+        ...failingSnapshot(["plugin-reload"]),
+        pluginReload,
+      });
+
+      pluginReload = undefined;
+      expect(readiness()).toEqual(failingSnapshot(["discord"]));
+    });
+  });
+
+  it.each([false, true])(
+    "reports core agent refusal and recovery immediately (skip channels: %s)",
+    (skipChannels) => {
+      withReadinessClock(() => {
+        const refusal = createAgentDatabaseInspectionRefusal({
+          agentId: "main",
+          paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
+          reason: "Session identities require migration before this agent can run.",
+        });
+        let refused = false;
+        const readiness = createReadinessChecker({
+          channelManager: createManager(snapshotWith({})),
+          startedAt: Date.now() - FIVE_MIN_MS,
+          cacheTtlMs: 1_000,
+          shouldSkipChannelReadiness: () => skipChannels,
+          getAgentDatabaseAdmissionRefusals: () => (refused ? [refusal] : []),
+        });
+        expect(readiness()).toEqual(readySnapshot());
+
+        refused = true;
+        expect(readiness()).toEqual({
+          ...failingSnapshot(["agent-database:main"]),
+          agentDatabases: [refusal],
+        });
+
+        refused = false;
+        expect(readiness()).toEqual(readySnapshot());
+      });
+    },
+  );
+
   it("ignores disabled and unconfigured channels", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({
@@ -257,6 +352,20 @@ describe("createReadinessChecker", () => {
         },
       });
       expect(readiness()).toEqual(failingSnapshot(["discord"]));
+    });
+  });
+
+  it("keeps a long-running Reef account ready during fresh reconnect grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createLongRunningReadinessHarness({
+        reef: managedAccount({
+          connected: false,
+          lifecycle: "recovering",
+          lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
+          lastDisconnect: { at: Date.now() - 5_000, error: "socket closed" },
+        }),
+      });
+      expect(readiness()).toEqual(readySnapshot(THIRTY_ONE_MIN_MS));
     });
   });
 
@@ -479,6 +588,24 @@ describe("createReadinessChecker", () => {
 
       vi.advanceTimersByTime(600);
       expect(readiness()).toEqual(readySnapshot(301_100));
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("refreshes stopped channels when the clock moves behind cached readiness", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        accounts: { discord: managedAccount({ lifecycle: "ready" }) },
+        cacheTtlMs: 1_000,
+      });
+
+      expect(readiness()).toEqual(readySnapshot());
+      vi.mocked(manager.getRuntimeSnapshot).mockReturnValue(
+        snapshotWith({ discord: stoppedAccount({ connected: false, lifecycle: "stopped" }) }),
+      );
+      vi.setSystemTime(Date.now() - 60_000);
+
+      expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS - 60_000));
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
     });
   });

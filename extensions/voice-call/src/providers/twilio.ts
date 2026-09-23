@@ -1,6 +1,5 @@
-// Voice Call plugin module implements twilio behavior.
 import crypto from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -67,10 +66,6 @@ function createTwilioRequestDedupeKey(ctx: WebhookContext, verifiedRequestKey?: 
     .digest("hex")}`;
 }
 
-type StreamSendResult = {
-  sent: boolean;
-};
-
 type TwilioProviderConfig = {
   accountSid?: string;
   authToken?: string;
@@ -94,27 +89,25 @@ export class TwilioProvider implements VoiceCallProvider {
 
   /** Optional media stream handler for sending audio */
   private mediaStreamHandler: MediaStreamHandler | null = null;
+  private playbackMarkSequence = 0;
 
   /** Map of call SID to stream SID for media streams */
   private callStreamMap = new Map<string, string>();
   /** Per-call tokens for media stream authentication */
   private streamAuthTokens = new Map<string, string>();
 
-  /** Storage for TwiML content (for notify mode with URL-based TwiML) */
+  /** Storage for one-use pre-connect TwiML content */
   private readonly twimlStorage = new Map<string, string>();
-  /** Track notify-mode calls to avoid streaming on follow-up callbacks */
-  private readonly notifyCalls = new Set<string>();
   private readonly activeStreamCalls = new Set<string>();
 
   /**
    * Delete stored TwiML for a given `callId`.
    *
    * We keep TwiML in-memory only long enough to satisfy the initial Twilio
-   * webhook request (notify mode). Subsequent webhooks should not reuse it.
+   * webhook request before streaming. Subsequent webhooks should not reuse it.
    */
   private deleteStoredTwiml(callId: string): void {
     this.twimlStorage.delete(callId);
-    this.notifyCalls.delete(callId);
   }
 
   /**
@@ -179,8 +172,9 @@ export class TwilioProvider implements VoiceCallProvider {
     this.activeStreamCalls.add(callSid);
   }
 
-  hasRegisteredStream(callSid: string): boolean {
-    return this.callStreamMap.has(callSid);
+  hasRegisteredStream(callSid: string, streamSid?: string): boolean {
+    const current = this.callStreamMap.get(callSid);
+    return current !== undefined && (streamSid === undefined || current === streamSid);
   }
 
   unregisterCallStream(callSid: string, streamSid?: string): void {
@@ -245,21 +239,18 @@ export class TwilioProvider implements VoiceCallProvider {
     twiml: string,
     operation: string,
   ): Promise<void> {
-    for (const retryDelayMs of TWILIO_CALL_UPDATE_RETRY_DELAYS_MS) {
-      try {
-        await this.apiRequest(`/Calls/${providerCallId}.json`, { Twiml: twiml });
-        return;
-      } catch (err) {
-        if (!isTwilioCallNotInProgressError(err)) {
-          throw err;
-        }
+    await retryAsync(() => this.apiRequest(`/Calls/${providerCallId}.json`, { Twiml: twiml }), {
+      attempts: TWILIO_CALL_UPDATE_RETRY_DELAYS_MS.length + 1,
+      minDelayMs: 0,
+      shouldRetry: isTwilioCallNotInProgressError,
+      delayMs: ({ attempt }) => TWILIO_CALL_UPDATE_RETRY_DELAYS_MS[attempt - 1] ?? 0,
+      onRetry: ({ delayMs }) => {
         console.warn(
-          `[voice-call] Twilio ${operation} update hit call state race (21220); retrying in ${retryDelayMs}ms`,
+          `[voice-call] Twilio ${operation} update hit call state race (21220); retrying in ${delayMs}ms`,
         );
-        await sleep(retryDelayMs);
-      }
-    }
-    await this.apiRequest(`/Calls/${providerCallId}.json`, { Twiml: twiml });
+      },
+      sleep: (delayMs) => sleepWithAbort(delayMs),
+    });
   }
 
   /**
@@ -296,6 +287,16 @@ export class TwilioProvider implements VoiceCallProvider {
         dedupeKey,
         turnToken: turnTokenFromQuery,
       });
+
+      if (
+        event?.direction === "inbound" &&
+        event.type !== "call.ended" &&
+        event.providerCallId &&
+        this.currentPublicUrl &&
+        !this.callWebhookUrls.has(event.providerCallId)
+      ) {
+        this.callWebhookUrls.set(event.providerCallId, this.currentPublicUrl);
+      }
 
       // For Twilio, we must return TwiML. Most actions are driven by Calls API updates,
       // so the webhook response is typically a pause to keep the call alive.
@@ -361,7 +362,7 @@ export class TwilioProvider implements VoiceCallProvider {
 
     // Handle speech result (from <Gather>)
     const speechResult = params.get("SpeechResult");
-    if (speechResult) {
+    if (speechResult?.trim()) {
       return {
         ...baseEvent,
         type: "call.speech",
@@ -429,7 +430,6 @@ export class TwilioProvider implements VoiceCallProvider {
     const decision = decideTwimlResponse({
       ...view,
       hasStoredTwiml: Boolean(storedTwiml),
-      isNotifyCall: view.callIdFromQuery ? this.notifyCalls.has(view.callIdFromQuery) : false,
       hasActiveStreams: this.activeStreamCalls.size > 0,
       canStream: Boolean(view.callSid && this.getStreamUrl()),
     });
@@ -462,10 +462,9 @@ export class TwilioProvider implements VoiceCallProvider {
     if (!storedTwiml) {
       return null;
     }
-    const kind = this.notifyCalls.has(view.callIdFromQuery) ? "notify" : "pre-connect";
     this.deleteStoredTwiml(view.callIdFromQuery);
     console.log(
-      `[voice-call] Twilio initial TwiML consumed for call ${view.callIdFromQuery} (kind=${kind}, callSid=${view.callSid ?? "unknown"})`,
+      `[voice-call] Twilio initial TwiML consumed for call ${view.callIdFromQuery} (kind=pre-connect, callSid=${view.callSid ?? "unknown"})`,
     );
     return storedTwiml;
   }
@@ -685,37 +684,9 @@ export class TwilioProvider implements VoiceCallProvider {
     const handler = this.mediaStreamHandler;
     const ttsProvider = this.ttsProvider;
 
-    const normalizeSendResult = (raw: unknown): StreamSendResult => {
-      if (!raw || typeof raw !== "object") {
-        return { sent: true };
-      }
-      const typed = raw as {
-        sent?: unknown;
-      };
-      return {
-        sent: typed.sent === undefined ? true : Boolean(typed.sent),
-      };
-    };
-
-    const sendAudioChunk = (audio: Buffer): StreamSendResult => {
-      const raw = (handler as { sendAudio: (sid: string, chunk: Buffer) => unknown }).sendAudio(
-        streamSid,
-        audio,
-      );
-      return normalizeSendResult(raw);
-    };
-
-    const sendPlaybackMark = (name: string): StreamSendResult => {
-      const raw = (handler as { sendMark: (sid: string, markName: string) => unknown }).sendMark(
-        streamSid,
-        name,
-      );
-      return normalizeSendResult(raw);
-    };
-
     await handler.queueTts(streamSid, async (signal) => {
       const sendKeepAlive = () => {
-        sendAudioChunk(SILENCE_CHUNK);
+        handler.sendAudio(streamSid, SILENCE_CHUNK);
       };
       sendKeepAlive();
       const keepAlive = setInterval(() => {
@@ -727,6 +698,7 @@ export class TwilioProvider implements VoiceCallProvider {
       // Generate audio with core TTS (returns mu-law at 8kHz)
       let muLawAudio: Buffer;
       let synthTimeout: ReturnType<typeof setTimeout> | null = null;
+      let removeAbortListener = () => {};
       const synthTimeoutMs = ttsProvider.synthesisTimeoutMs;
       try {
         const synthPromise = ttsProvider.synthesizeForTelephony(text);
@@ -735,12 +707,27 @@ export class TwilioProvider implements VoiceCallProvider {
             reject(new Error(`Telephony TTS synthesis timed out after ${synthTimeoutMs}ms`));
           }, synthTimeoutMs);
         });
-        muLawAudio = await Promise.race([synthPromise, timeoutPromise]);
+        const abortPromise = new Promise<never>((_, reject) => {
+          const onAbort = () => {
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new Error("Telephony TTS synthesis aborted"),
+            );
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+          if (signal.aborted) {
+            onAbort();
+          }
+        });
+        muLawAudio = await Promise.race([synthPromise, timeoutPromise, abortPromise]);
       } finally {
         if (synthTimeout) {
           clearTimeout(synthTimeout);
         }
         clearInterval(keepAlive);
+        removeAbortListener();
       }
 
       if (muLawAudio.length === 0) {
@@ -755,10 +742,14 @@ export class TwilioProvider implements VoiceCallProvider {
           break;
         }
         chunkAttempts += 1;
-        const chunkResult = sendAudioChunk(chunk);
-        if (chunkResult.sent) {
-          chunkDelivered += 1;
+        const chunkResult = handler.sendAudio(streamSid, chunk);
+        if (!chunkResult.sent) {
+          handler.clearAudio(streamSid);
+          throw new Error(
+            `Telephony stream playback failed: audio chunk ${chunkAttempts} not delivered`,
+          );
         }
+        chunkDelivered += 1;
 
         // Drift-corrected pacing: schedule against an absolute clock to avoid cumulative delay.
         const waitMs = nextChunkDueAt - Date.now();
@@ -778,22 +769,14 @@ export class TwilioProvider implements VoiceCallProvider {
         }
       }
 
-      let markSent = true;
-      if (!signal.aborted) {
-        // Send a mark to track when audio finishes
-        markSent = sendPlaybackMark(`tts-${Date.now()}`).sent;
+      if (signal.aborted) {
+        return;
       }
-
-      if (!signal.aborted && chunkAttempts > 0 && (chunkDelivered === 0 || !markSent)) {
-        const failures: string[] = [];
-        if (chunkDelivered === 0) {
-          failures.push("no audio chunks delivered");
-        }
-        if (!markSent) {
-          failures.push("completion mark not delivered");
-        }
-        throw new Error(`Telephony stream playback failed: ${failures.join("; ")}`);
+      if (chunkAttempts === 0 || chunkDelivered !== chunkAttempts) {
+        throw new Error("Telephony stream playback failed: incomplete audio delivery");
       }
+      const markName = `tts-${Date.now()}-${++this.playbackMarkSequence}`;
+      await handler.sendMarkAndWait(streamSid, markName, muLawAudio.length / 8, signal);
     });
   }
 

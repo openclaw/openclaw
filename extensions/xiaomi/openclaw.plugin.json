@@ -1,6 +1,7 @@
 {
   "id": "xiaomi",
-  "icon": "https://cdn.simpleicons.org/xiaomi",
+  "categories": ["models"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
@@ -20,11 +21,59 @@
     ]
   },
   "modelCatalog": {
+    "modelsDev": {
+      "xiaomi": "xiaomi",
+      "xiaomi-token-plan": "xiaomi-token-plan-sgp"
+    },
     "providers": {
       "xiaomi": {
         "baseUrl": "https://api.xiaomimimo.com/v1",
         "api": "openai-completions",
         "models": [
+          {
+            "id": "mimo-v2.6-pro",
+            "name": "Xiaomi MiMo V2.6 Pro",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0.435,
+              "output": 0.87,
+              "cacheRead": 0.0036,
+              "cacheWrite": 0
+            },
+            "compat": { "codeMode": "preferred" }
+          },
+          {
+            "id": "mimo-v2.6-flash",
+            "name": "Xiaomi MiMo V2.6 Flash",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0.14,
+              "output": 0.28,
+              "cacheRead": 0.0028,
+              "cacheWrite": 0
+            },
+            "compat": { "codeMode": "preferred" }
+          },
+          {
+            "id": "mimo-v2.6-pro-ultraspeed",
+            "name": "Xiaomi MiMo V2.6 Pro UltraSpeed",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 4.35,
+              "output": 8.7,
+              "cacheRead": 0.036,
+              "cacheWrite": 0
+            }
+          },
           {
             "id": "mimo-v2.5",
             "name": "Xiaomi MiMo V2.5",
@@ -60,6 +109,26 @@
         "baseUrl": "https://token-plan-sgp.xiaomimimo.com/v1",
         "api": "openai-completions",
         "models": [
+          {
+            "id": "mimo-v2.6-pro",
+            "name": "Xiaomi MiMo V2.6 Pro",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "compat": { "codeMode": "preferred" }
+          },
+          {
+            "id": "mimo-v2.6-flash",
+            "name": "Xiaomi MiMo V2.6 Flash",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "compat": { "codeMode": "preferred" }
+          },
           {
             "id": "mimo-v2.5-pro",
             "name": "Xiaomi MiMo V2.5 Pro",
@@ -99,7 +168,7 @@
     }
   ],
   "contracts": {
-    "speechProviders": ["xiaomi"],
+    "speechProviders": ["xiaomi", "mimo"],
     "usageProviders": ["xiaomi", "xiaomi-token-plan"]
   },
   "providerAuthChoices": [

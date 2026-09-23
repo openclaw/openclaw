@@ -31,14 +31,11 @@ vi.mock("../plugins/plugin-registry-contributions.js", async (importOriginal) =>
 vi.mock("./command-execution-startup.js", () => ({
   applyCliExecutionStartupPresentation: vi.fn(async () => {}),
   ensureCliExecutionBootstrap: vi.fn(async () => {}),
-  resolveCliExecutionStartupContext: vi.fn(() => ({
-    startupPolicy: { loadPlugins: false, suppressDoctorStdout: true },
-  })),
 }));
 
 vi.mock("../commands/channels/shared.js", () => ({
   formatChannelAccountLabel: vi.fn(),
-  requireValidConfig: vi.fn(async () => testState.config),
+  requireValidChannelConfig: vi.fn(async () => testState.config),
 }));
 
 vi.mock("../commands/channel-setup/trusted-catalog.js", () => ({
@@ -48,6 +45,8 @@ vi.mock("../commands/channel-setup/trusted-catalog.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: vi.fn(() => undefined),
   resolveDefaultAgentId: vi.fn(() => "main"),
+  tryResolveConfiguredAgentWorkspaceDir: vi.fn(() => undefined),
+  tryResolveSystemAgentWorkspaceDir: vi.fn(() => undefined),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -117,7 +116,7 @@ it("resolves catalog-row repair hints without rebuilding the manifest registry",
     Object.fromEntries(
       OWNERLESS_CHANNEL_IDS.map((channelId) => [
         channelId,
-        { accounts: [], installed: false, origin: "configured" },
+        { label: channelId, accounts: [], installed: false, origin: "configured" },
       ]),
     ),
   );

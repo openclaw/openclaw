@@ -2,6 +2,7 @@
 import type { Chat, Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
+import { resolveTelegramForumFlag } from "./bot/helpers.js";
 import { buildTelegramQuestionCallbackData } from "./question-callback-data.js";
 import { getTelegramSequentialConstraints, getTelegramSequentialKey } from "./sequential-key.js";
 
@@ -148,7 +149,18 @@ describe("getTelegramSequentialKey", () => {
           text: "/steer@vacs_tars_bot keep going",
         }),
       },
-      "telegram:-100:control",
+      "telegram:-100:topic:5907",
+    ],
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 5907,
+          text: "/queue@some_other_bot status",
+        }),
+      },
+      "telegram:-100:topic:5907",
     ],
     [
       {
@@ -225,6 +237,60 @@ describe("getTelegramSequentialKey", () => {
     [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/whoami" }) },
       "telegram:123:control",
+    ],
+    // Interrupt commands keep the chat-wide control lane. `/approve` in particular must
+    // never queue behind the run that is blocked waiting on its own approval request.
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: 123 }),
+          text: "/approve exec:def456 allow-once",
+        }),
+      },
+      "telegram:123:control",
+    ],
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 202,
+          text: "/approve exec:def456 deny",
+        }),
+      },
+      "telegram:-100:control",
+    ],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/queue" }) },
+      "telegram:123:control",
+    ],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/steer do the thing" }) },
+      "telegram:123:control",
+    ],
+    // Session-mutating commands must not share the chat-wide control lane: their writes
+    // stay ordered behind their own topic's pending input, `activeRunSafe` notwithstanding.
+    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/new" }) }, "telegram:123"],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/new sync tars" }) },
+      "telegram:123",
+    ],
+    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/reset" }) }, "telegram:123"],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/think high" }) },
+      "telegram:123",
+    ],
+    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/compact" }) }, "telegram:123"],
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 202,
+          text: "/new sync tars",
+        }),
+      },
+      "telegram:-100:topic:202",
     ],
     [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/diagnostics" }) },
@@ -397,6 +463,59 @@ describe("getTelegramSequentialKey", () => {
     ],
   ])("resolves key %#", (input, expected) => {
     expect(getTelegramSequentialKey(input)).toEqual(expected);
+  });
+
+  it("keeps malformed message updates on the unknown lane", () => {
+    expect(getTelegramSequentialKey({ message: {} as Message })).toBe("telegram:unknown");
+  });
+
+  describe("forum flag cache fallback", () => {
+    it("uses cached forum flag to assign topic:1 lane when payload lacks is_forum and is_topic_message", async () => {
+      // Prime the cache the way bot-message-context does: resolveTelegramForumFlag
+      // calls cacheTelegramForumFlag internally when the hint is available.
+      await resolveTelegramForumFlag({
+        chatId: -9001,
+        chatType: "supergroup",
+        isGroup: true,
+        isForum: true,
+      });
+
+      // General topic message: no is_forum, no is_topic_message, no message_thread_id.
+      // Without the cache, getTelegramSequentialKey returns the base lane.
+      // With the cache primed, it must return topic:1.
+      const generalTopicCtx = {
+        message: mockMessage({
+          chat: mockChat({ id: -9001, type: "supergroup" }),
+        }),
+      };
+      expect(getTelegramSequentialKey(generalTopicCtx)).toBe("telegram:-9001:topic:1");
+    });
+
+    it("falls back to base lane when cache is empty and payload lacks is_forum hint", () => {
+      const ctx = {
+        message: mockMessage({
+          chat: mockChat({ id: -9002, type: "supergroup" }),
+        }),
+      };
+      expect(getTelegramSequentialKey(ctx)).toBe("telegram:-9002");
+    });
+
+    it("honors an explicit forum hint when the cached flag is stale", async () => {
+      await resolveTelegramForumFlag({
+        chatId: -9004,
+        chatType: "supergroup",
+        isGroup: true,
+        isForum: false,
+      });
+
+      const ctx = {
+        message: mockMessage({
+          chat: mockChat({ id: -9004, type: "supergroup" }),
+          is_topic_message: true,
+        }),
+      };
+      expect(getTelegramSequentialKey(ctx)).toBe("telegram:-9004:topic:1");
+    });
   });
 });
 

@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
@@ -7,7 +8,8 @@ import type {
   MemorySearchResult,
 } from "../../memory-host-sdk/host/types.js";
 import { resolveMemorySearchStaleness } from "../../memory-host-sdk/host/types.js";
-import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
+import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -107,12 +109,26 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agentId"));
       return;
     }
-    const agentId = requestedAgentId ?? resolveDefaultAgentId(cfg);
-    let acquired: Awaited<ReturnType<typeof getActiveMemorySearchManager>>;
+    let agentId = requestedAgentId;
+    if (!agentId) {
+      try {
+        agentId = resolveDefaultAgentId(cfg, {
+          surface: "memory search",
+          hint: "Pass agentId to select a configured agent.",
+        });
+      } catch (error) {
+        if (!(error instanceof AgentSelectionRequiredError)) {
+          throw error;
+        }
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return;
+      }
+    }
+    let acquired: Awaited<ReturnType<typeof getActiveMemorySearchManagerCore>>;
     try {
       // Use the transient CLI lifecycle so request cleanup cannot close a shared manager.
       // manager.search owns the same lazy/on-search sync behavior as the existing CLI path.
-      acquired = await getActiveMemorySearchManager({
+      acquired = await getActiveMemorySearchManagerCore({
         cfg,
         agentId,
         purpose: "cli",
@@ -138,22 +154,37 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    let readRebuildWarning: () => string | undefined = () => undefined;
     try {
+      const { captureMemoryRebuildNotice } = loadBundledPluginPublicArtifactModuleSync<{
+        captureMemoryRebuildNotice: (status: MemoryProviderStatus) => () => string | undefined;
+      }>({ dirName: "memory-core", artifactBasename: "search-api.js" });
+      readRebuildWarning = captureMemoryRebuildNotice(manager.status());
       const results = await manager.search(query, searchOptions);
       const status = manager.status();
+      const staleness = resolveMemorySearchStaleness(status, agentId);
+      const warning = [staleness?.warning, readRebuildWarning()]
+        .filter((message): message is string => typeof message === "string")
+        .join(" ");
       const payload: MemorySearchResponse = {
         agentId,
         provider: status.provider,
         searchMode: resolveSearchMode(status),
         results,
-        ...resolveMemorySearchStaleness(status, agentId),
+        ...staleness,
+        ...(warning ? { warning } : {}),
       };
       respond(true, payload, undefined);
     } catch (error) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, `memory search failed: ${formatErrorMessage(error)}`),
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          [`memory search failed: ${formatErrorMessage(error)}`, readRebuildWarning()]
+            .filter(Boolean)
+            .join(" "),
+        ),
       );
     } finally {
       await manager.close?.().catch(() => {});

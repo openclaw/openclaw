@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createSessionProjection,
   readSessionMessageIdentity,
+  readSessionProjectionFinalMessageIdentity,
   reduceSessionProjection,
   type SessionProjectionEvent,
   type SessionProjectionScope,
@@ -53,6 +54,35 @@ function replayInBothClients(
 
 describe("cross-client session projection conformance", () => {
   it.each([
+    { role: "user", rawSeq: 0 },
+    { role: "assistant", rawSeq: 9 },
+  ] as const)("keeps a canonical $role row stable through CLI enrichment", ({ role, rawSeq }) => {
+    const metadata = {
+      id: "native-row",
+      seq: 1,
+      transcriptPosition: { source: "canonical-transcript", rawSeq },
+    };
+    const native = { role, content: "Persisted message", __openclaw: metadata };
+    const enriched = {
+      ...native,
+      __openclaw: {
+        ...metadata,
+        importedFrom: "claude-cli",
+        cliSessionId: "external-session",
+        externalId: "provider-row",
+      },
+    };
+    let state = createSessionProjection(sharedScope, [enriched]);
+    state = reduceSessionProjection(state, { type: "messagePersisted", message: native });
+    state = reduceSessionProjection(state, { type: "snapshotLoaded", messages: [enriched] });
+
+    expect(state.messages).toEqual([enriched]);
+    expect(readSessionProjectionFinalMessageIdentity(enriched)).toBe(
+      readSessionProjectionFinalMessageIdentity(native),
+    );
+  });
+
+  it.each([
     {
       name: "persisted identity wins over conflicting Gateway envelope",
       message: persistedUser({ id: "persisted-id", runId: "persisted-run", sequence: 3 }),
@@ -60,12 +90,38 @@ describe("cross-client session projection conformance", () => {
         clientRunId: "envelope-run",
         messageId: "envelope-id",
         messageSeq: 99,
+        runId: "conflicting-producer-run",
       },
       expected: {
         id: "persisted-id",
         idempotencyKey: "persisted-run:user",
         role: "user",
         runId: "persisted-run",
+        sequence: 3,
+      },
+    },
+    {
+      name: "producer-owned assistant run wins over its assistant idempotency suffix",
+      message: {
+        __openclaw: {
+          id: "aborted-assistant",
+          idempotencyKey: "producer-run:assistant",
+          seq: 3,
+        },
+        content: [{ text: "held partial", type: "text" }],
+        role: "assistant",
+      },
+      envelope: {
+        clientRunId: "conflicting-client-run",
+        messageId: "aborted-assistant",
+        messageSeq: 3,
+        runId: "producer-run",
+      },
+      expected: {
+        id: "aborted-assistant",
+        idempotencyKey: "producer-run:assistant",
+        role: "assistant",
+        runId: "producer-run",
         sequence: 3,
       },
     },
@@ -208,7 +264,6 @@ describe("cross-client session projection conformance", () => {
       { message: firstImport, type: "messagePersisted" },
     ]);
 
-    expect(state.entries).toHaveLength(4);
     expect(state.entries.map((entry) => entry.identity?.externalSource)).toEqual([
       null,
       JSON.stringify(["provider-a", "cli-a", externalId]),

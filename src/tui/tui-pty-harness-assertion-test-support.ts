@@ -3,10 +3,10 @@ import { readFile } from "node:fs/promises";
 import { expect } from "vitest";
 import * as ansiSequences from "../../packages/terminal-core/src/ansi-sequences.js";
 import * as ansi from "../../packages/terminal-core/src/ansi.js";
+import { sleep } from "../utils/sleep.js";
 import { formatTuiFooter, sanitizeRenderableLine } from "./tui-formatters.js";
 import {
   PtyTestScreen,
-  sleep,
   type PtyRun,
   type PtyTerminalDimensions,
   waitFor,
@@ -72,9 +72,10 @@ type StartedTuiPtyFixture = {
   run: PtyRun;
   logPath: string;
   waitForLogEntry: (predicate: FixtureLogPredicate, timeoutMs?: number) => Promise<FixtureLogEntry>;
+  releaseReconnect: () => Promise<void>;
   cleanup: () => Promise<void>;
 };
-type TuiPtyFixtureOptions = { env?: NodeJS.ProcessEnv };
+type TuiPtyFixtureOptions = { env?: NodeJS.ProcessEnv; holdReconnect?: boolean };
 export type StartTuiPtyFixture = (opts?: TuiPtyFixtureOptions) => Promise<StartedTuiPtyFixture>;
 type TerminalAttackPayload = {
   text: string;
@@ -167,7 +168,7 @@ function assertAllowedOsc(body: string) {
   if (
     target === undefined ||
     (target !== "" &&
-      (!/^https?:\/\/\S+$/u.test(target) ||
+      (!/^(?:https?:\/\/|mailto:)\S+$/u.test(target) ||
         ansi.sanitizeForLog(target) !== target ||
         !URL.canParse(target)))
   ) {
@@ -209,7 +210,7 @@ function replayTerminalState(
   if (!terminalOutputIsComplete(raw)) {
     return undefined;
   }
-  for (const segment of ansiSequences.splitAnsiSegments(raw)) {
+  for (const segment of ansiSequences.iterateAnsiSegments(raw)) {
     if (segment.kind === "text") {
       // pi-tui expands visible tabs and does not use literal HT/BS for output layout.
       // Captured HT/BS bytes are invalid evidence, not terminal operations to replay.
@@ -415,19 +416,6 @@ async function assertTerminalAttackPrefixSanitized(
   );
 }
 
-function hasStatusFrame(
-  raw: string,
-  markers: string[],
-  status: RegExp,
-  dimensions: PtyTerminalDimensions,
-) {
-  return latestFrameHasRow(
-    raw,
-    dimensions,
-    (row) => markers.every((marker) => row.includes(marker)) && status.test(row),
-  );
-}
-
 async function exerciseSelectorOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
@@ -569,6 +557,7 @@ async function exerciseGatewayOutputSafety(
   ];
   const idlePayload = buildCompactTerminalAttackPayload("T08I", "\x1b[?7775h");
   const fixture = await startFixture({
+    holdReconnect: true,
     env: {
       OPENCLAW_TUI_PTY_COLS: "120",
       OPENCLAW_TUI_PTY_ROWS: "18",
@@ -580,17 +569,35 @@ async function exerciseGatewayOutputSafety(
   try {
     await fixture.run.waitForOutput("local ready", startupTimeoutMs);
     await fixture.run.write("/gateway-status\r", { delay: false });
-    await fixture.waitForLogEntry((entry) => entry.method === "getGatewayStatus");
     await fixture.waitForLogEntry((entry) => entry.method === "disconnect");
-    await fixture.run.waitForOutput("(no output)", startupTimeoutMs);
-    await assertTerminalAttackSanitized(fixture, idlePayload, startupTimeoutMs);
+    // Replay omits zero-width bidi isolates but preserves authenticated cells.
+    // The complete disconnect row must exist before reconnect replaces it.
+    await assertHistoricalTerminalAttackSanitized(
+      fixture,
+      idlePayload,
+      idlePayload.markers,
+      `local runtime stopped: ${idlePayload.expectedLine} | idle`,
+      startupTimeoutMs,
+    );
+    await waitForSynchronizedFrameRows(
+      fixture.run,
+      (rows) => rows.some((row) => row.includes("(no output)")),
+      startupTimeoutMs,
+    );
+    // Reconnect rebuilds history; release it only after both sanitized outputs were painted.
+    await fixture.releaseReconnect();
+    await waitForSynchronizedFrameRows(
+      fixture.run,
+      (rows) =>
+        rows.some((row) => row.includes("gateway reconnected after transport loss")) &&
+        rows.some((row) => row.includes("local ready | idle")),
+      startupTimeoutMs,
+    );
     const raw = fixture.run.output();
-    for (const attack of systemAttacks) {
+    for (const attack of [...systemAttacks, ...idlePayload.attacks]) {
       expect(raw).not.toContain(attack);
     }
-    expect(hasStatusFrame(fixture.run.output(), idlePayload.markers, /\| idle/u, fixture.run)).toBe(
-      true,
-    );
+    expect(raw).not.toContain("\uFFFD");
 
     const helpOffset = fixture.run.visibleOutput().length;
     await fixture.run.write("/help\r", { delay: false });
@@ -646,11 +653,8 @@ async function exerciseMarkdownAndAutocompleteOutputSafety(
     await fixture.run.write("\x14", { delay: false });
     await commandAssertion;
 
-    await fixture.run.write("\x1b", { delay: false });
-    await sleep(50);
-    await fixture.run.write("\x15", { delay: false });
-    await sleep(50);
-    await fixture.run.write("/think ", { delay: false });
+    // Ctrl+U replaces the input without a lone Escape absorbing it as an Alt chord over SSH.
+    await fixture.run.write("\x15/think ", { delay: false });
     await fixture.run.waitForOutput("T08_SAFE_THINKING", 5_000);
     const raw = fixture.run.output();
     expect(thinking.markers.some((marker) => raw.includes(marker))).toBe(false);

@@ -159,17 +159,20 @@ const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
   jitter: 0,
 };
 
-const defaultSleep = (ms: number) =>
-  new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
-
-function asFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
+const defaultSleep = async (ms: number): Promise<void> => {
+  let remainingMs = ms;
+  // Native timers overflow to a near-immediate wake; split rather than shorten a long wait.
+  do {
+    const delayMs = Math.min(remainingMs, MAX_TIMER_TIMEOUT_MS);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
+    remainingMs -= delayMs;
+  } while (remainingMs > 0);
+};
 
 function clampNumber(value: unknown, fallback: number, min?: number, max?: number): number {
-  const next = asFiniteNumber(value);
+  const next = Number.isFinite(value as number) ? (value as number) : undefined;
   if (next === undefined) {
     return fallback;
   }
@@ -177,12 +180,13 @@ function clampNumber(value: unknown, fallback: number, min?: number, max?: numbe
 }
 
 function resolveAttemptCount(value: unknown, fallback: number): number {
-  return Math.max(1, Math.round(asFiniteNumber(value) ?? fallback));
+  const attemptCount = Number.isFinite(value as number) ? (value as number) : fallback;
+  return Math.max(1, Math.round(attemptCount));
 }
 
 function resolveRetryDelayMs(value: number): number {
   const finite =
-    value === Number.POSITIVE_INFINITY ? MAX_TIMER_TIMEOUT_MS : (asFiniteNumber(value) ?? 0);
+    value === Number.POSITIVE_INFINITY ? MAX_TIMER_TIMEOUT_MS : Number.isFinite(value) ? value : 0;
   return Math.min(Math.max(Math.round(finite), 0), MAX_TIMER_TIMEOUT_MS);
 }
 
@@ -190,7 +194,7 @@ function resolveJitterConfig(value: unknown, fallback: number | "full"): number 
   if (value === "full") {
     return "full";
   }
-  const fraction = asFiniteNumber(value);
+  const fraction = Number.isFinite(value as number) ? (value as number) : undefined;
   return fraction === undefined ? fallback : Math.min(Math.max(fraction, 0), 1);
 }
 

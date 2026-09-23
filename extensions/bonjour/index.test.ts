@@ -1,4 +1,3 @@
-// Bonjour tests cover index plugin behavior.
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
@@ -74,7 +73,6 @@ describe("bonjour plugin entry", () => {
         gatewayTlsEnabled: true,
         gatewayTlsFingerprintSha256: "abc123",
         gatewayDirectReachable: true,
-        canvasPort: 9876,
         sshPort: 22,
         tailnetDns: "dev.tailnet.ts.net",
         cliPath: "/usr/local/bin/openclaw",
@@ -91,7 +89,6 @@ describe("bonjour plugin entry", () => {
         gatewayTlsEnabled: true,
         gatewayTlsFingerprintSha256: "abc123",
         gatewayDirectReachable: true,
-        canvasPort: 9876,
         sshPort: 22,
         tailnetDns: "dev.tailnet.ts.net",
         cliPath: "/usr/local/bin/openclaw",

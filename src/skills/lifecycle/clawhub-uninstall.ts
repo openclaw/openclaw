@@ -1,49 +1,64 @@
 import { randomUUID } from "node:crypto";
+import { lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  getAgentWorkspaceAccess,
+  WorkspaceAccessUnavailableError,
+} from "../../agents/workspace-access.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { resolveWorkspaceSkillInstallDir } from "./archive-install.js";
-import { formatClawHubSkillRef, parseRequestedClawHubSkillRef } from "./clawhub-store.js";
-import { resolveClawHubSkillStatusLinkSync, untrackClawHubSkill } from "./clawhub.js";
+import { isErrno } from "../../infra/errors.js";
+import { resolveClawHubSkillStatusLinkSync } from "./clawhub-status.js";
+import {
+  formatClawHubSkillRef,
+  parseRequestedClawHubSkillRef,
+  untrackClawHubSkill,
+} from "./clawhub-store.js";
+import { resolveWorkspaceSkillInstallDir } from "./install-paths.js";
 import {
   dispatchCommittedSkillChangeBestEffort,
   hasCommittedSkillChangeHooks,
   snapshotCommittedSkillArtifactBestEffort,
 } from "./skill-change-hook.js";
-import { digestClawHubSkillTree } from "./skill-tree-digest.js";
+import { checkClawHubSkillPlanAtPath, digestClawHubSkillTree } from "./skill-tree-digest.js";
+import type {
+  WorkspaceSkillLifecycle,
+  ClawHubSkillUninstallPlan,
+  ClawHubSkillUninstallPlanResult,
+} from "./workspace-types.js";
 
-export type ClawHubSkillUninstallPlan = {
-  workspaceDir: string;
-  // Replan from the registry identity so publisher/source changes cannot retarget deletion.
-  requestedRef: string;
-  slug: string;
-  version: string;
-  installedAt: number;
-  targetDir: string;
-  skillFilePath: string;
-  skillFileSha256: string;
-  fileTreeSha256: string;
-};
+export type { ClawHubSkillUninstallPlan } from "./workspace-types.js";
 
-type ClawHubSkillUninstallPlanResult =
-  | { ok: true; plan: ClawHubSkillUninstallPlan }
-  | {
-      ok: false;
-      code: "missing" | "ambiguous" | "modified";
-      error: string;
-    };
-
-export async function planClawHubSkillUninstall(params: {
-  workspaceDir: string;
-  slug: string;
-  expectedVersion: string;
-}): Promise<ClawHubSkillUninstallPlanResult> {
+export async function planClawHubSkillUninstall(
+  params: Parameters<WorkspaceSkillLifecycle["planClawHubSkillUninstall"]>[0],
+): Promise<ClawHubSkillUninstallPlanResult> {
+  const workspaceAccess = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
+  const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
+  if (access) {
+    if (!access.clawHubSkills) {
+      throw new WorkspaceAccessUnavailableError("Remote workspace ClawHub tracking is unavailable");
+    }
+    return await access.clawHubSkills.planClawHubSkillUninstall(params);
+  }
   let requestedRef: ReturnType<typeof parseRequestedClawHubSkillRef>;
   try {
     requestedRef = parseRequestedClawHubSkillRef(params.slug);
   } catch (error) {
     return { ok: false, code: "ambiguous", error: String(error) };
   }
+  return await planTrackedClawHubSkillState({
+    workspaceDir: params.workspaceDir,
+    requestedRef,
+    expectedVersion: params.expectedVersion,
+  });
+}
+
+async function planTrackedClawHubSkillState(params: {
+  workspaceDir: string;
+  requestedRef: ReturnType<typeof parseRequestedClawHubSkillRef>;
+  expectedVersion: string;
+}): Promise<ClawHubSkillUninstallPlanResult> {
+  const requestedRef = params.requestedRef;
   const slug = requestedRef.slug;
   const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, slug);
   const link = resolveClawHubSkillStatusLinkSync({
@@ -63,7 +78,7 @@ export async function planClawHubSkillUninstall(params: {
       ok: false,
       code: "ambiguous",
       error: link.valid
-        ? `Skill ${JSON.stringify(slug)} has no complete installed-file digest.`
+        ? `Skill ${JSON.stringify(slug)} was installed before OpenClaw recorded file fingerprints, so local changes cannot be detected.`
         : link.reason,
     };
   }
@@ -150,8 +165,24 @@ export async function applyClawHubSkillUninstall(
     removeDir?: typeof fs.rm;
     rename?: typeof fs.rename;
     untrack?: typeof untrackClawHubSkill;
-  } = {},
-): Promise<{ ok: true } | { ok: false; error: string }> {
+    /** Await remote authority, then retain the synchronous local mutation checks. */
+    authorizeMutation?: Parameters<typeof untrackClawHubSkill>[4];
+  } & Parameters<WorkspaceSkillLifecycle["applyClawHubSkillUninstall"]>[1] = {},
+): ReturnType<WorkspaceSkillLifecycle["applyClawHubSkillUninstall"]> {
+  const workspaceAccess = getAgentWorkspaceAccess(plan.workspaceDir, "loadSkills");
+  const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
+  if (access) {
+    if (!access.clawHubSkills) {
+      throw new WorkspaceAccessUnavailableError("Remote workspace ClawHub tracking is unavailable");
+    }
+    return await access.clawHubSkills.applyClawHubSkillUninstall(plan, {
+      beforePersistentApply: deps.beforePersistentApply,
+      beforeRollback: deps.beforeRollback,
+      onCommittedChange:
+        deps.onCommittedChange ??
+        (hasCommittedSkillChangeHooks() ? dispatchCommittedSkillChangeBestEffort : undefined),
+    });
+  }
   const current = await planClawHubSkillUninstall({
     workspaceDir: plan.workspaceDir,
     slug: plan.requestedRef,
@@ -160,7 +191,7 @@ export async function applyClawHubSkillUninstall(
   if (!current.ok) {
     return { ok: false, error: current.error };
   }
-  const shouldDispatchChange = hasCommittedSkillChangeHooks();
+  const shouldDispatchChange = Boolean(deps.onCommittedChange) || hasCommittedSkillChangeHooks();
   const before = shouldDispatchChange
     ? await snapshotCommittedSkillArtifactBestEffort({
         skillDir: plan.targetDir,
@@ -171,43 +202,103 @@ export async function applyClawHubSkillUninstall(
     : undefined;
   const stagedDir = `${plan.targetDir}.openclaw-skill-remove-${randomUUID()}`;
   let staged = false;
+  let removed = false;
   let restoreTracking: (() => Promise<void>) | undefined;
   const rename = deps.rename ?? fs.rename;
+  const sourceIdentity = await fs.lstat(plan.targetDir, { bigint: true });
+  const assertRollbackCurrent = () => {
+    // Only this operation's unchanged staging may return to an unclaimed destination.
+    const stagedIdentity = lstatSync(stagedDir, { bigint: true });
+    if (
+      sourceIdentity.dev === 0n ||
+      sourceIdentity.ino === 0n ||
+      stagedIdentity.dev !== sourceIdentity.dev ||
+      stagedIdentity.ino !== sourceIdentity.ino ||
+      lstatSync(plan.targetDir, { throwIfNoEntry: false }) !== undefined
+    ) {
+      throw new Error(
+        `Skill ${JSON.stringify(plan.slug)} staging or destination changed during rollback.`,
+      );
+    }
+    deps.beforeRollback?.();
+  };
+  const restoreStaged = async () => {
+    if (deps.authorizeMutation) {
+      await deps.authorizeMutation("rollback");
+    }
+    assertRollbackCurrent();
+    await rename(stagedDir, plan.targetDir);
+    staged = false;
+  };
   try {
+    if (deps.authorizeMutation) {
+      await deps.authorizeMutation("apply");
+    }
+    deps.beforePersistentApply?.();
     await rename(plan.targetDir, stagedDir);
     staged = true;
-    const content = await (deps.readFile ?? fs.readFile)(path.join(stagedDir, plan.skillFilePath));
-    if (sha256Hex(content) !== plan.skillFileSha256) {
-      await rename(stagedDir, plan.targetDir);
+    const stagedPlan = await checkClawHubSkillPlanAtPath(
+      plan,
+      stagedDir,
+      deps.readFile ?? fs.readFile,
+    );
+    if (!stagedPlan.ok) {
+      await restoreStaged();
       return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during removal.` };
     }
-    if ((await digestClawHubSkillTree(stagedDir)) !== plan.fileTreeSha256) {
-      await rename(stagedDir, plan.targetDir);
-      return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during removal.` };
+    if (deps.authorizeMutation) {
+      await deps.authorizeMutation("apply");
     }
-    restoreTracking = await (deps.untrack ?? untrackClawHubSkill)(plan.workspaceDir, plan.slug);
+    deps.beforePersistentApply?.();
+    restoreTracking = await (deps.untrack ?? untrackClawHubSkill)(
+      plan.workspaceDir,
+      plan.slug,
+      deps.beforePersistentApply,
+      assertRollbackCurrent,
+      deps.authorizeMutation,
+    );
+    if (deps.authorizeMutation) {
+      await deps.authorizeMutation("apply");
+    }
+    deps.beforePersistentApply?.();
     await (deps.removeDir ?? fs.rm)(stagedDir, { recursive: true, force: false });
+    removed = true;
     if (shouldDispatchChange) {
-      await dispatchCommittedSkillChangeBestEffort({
-        action: "removed",
-        source: "clawhub",
-        workspaceDir: plan.workspaceDir,
-        before,
-      });
+      if (deps.authorizeMutation) {
+        await deps.authorizeMutation("apply");
+      }
+      deps.beforePersistentApply?.();
+      try {
+        await (deps.onCommittedChange ?? dispatchCommittedSkillChangeBestEffort)({
+          action: "removed",
+          source: "clawhub",
+          workspaceDir: plan.workspaceDir,
+          before,
+        });
+      } catch {
+        // Forwarding is best-effort, like local hooks; removal has already committed.
+      }
     }
     return { ok: true };
   } catch (error) {
     const rollbackErrors: string[] = [];
-    try {
-      await restoreTracking?.();
-    } catch (rollbackError) {
-      rollbackErrors.push(`could not restore lockfile: ${String(rollbackError)}`);
-    }
-    if (staged) {
-      try {
-        await rename(stagedDir, plan.targetDir);
-      } catch (rollbackError) {
-        rollbackErrors.push(`could not restore skill directory: ${String(rollbackError)}`);
+    if (!removed) {
+      if (restoreTracking) {
+        try {
+          assertRollbackCurrent();
+          await restoreTracking();
+        } catch (rollbackError) {
+          rollbackErrors.push(`could not restore lockfile: ${String(rollbackError)}`);
+        }
+      }
+      if (staged) {
+        try {
+          await restoreStaged();
+        } catch (rollbackError) {
+          rollbackErrors.push(
+            `could not restore skill directory from ${stagedDir}: ${String(rollbackError)}`,
+          );
+        }
       }
     }
     return {
@@ -215,4 +306,29 @@ export async function applyClawHubSkillUninstall(
       error: `${String(error)}${rollbackErrors.length > 0 ? `; rollback incomplete: ${rollbackErrors.join("; ")}` : ""}`,
     };
   }
+}
+
+export async function guardTrackedSkillLocalState(
+  params: Parameters<WorkspaceSkillLifecycle["guardTrackedSkillLocalState"]>[0],
+): Promise<
+  { ok: true; plan: ClawHubSkillUninstallPlan | undefined } | { ok: false; error: string }
+> {
+  const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, params.slug);
+  try {
+    await fs.lstat(targetDir);
+  } catch (error) {
+    if (isErrno(error) && error.code === "ENOENT") {
+      return { ok: true, plan: undefined };
+    }
+    return { ok: false, error: String(error) };
+  }
+  const local = await planTrackedClawHubSkillState({
+    workspaceDir: params.workspaceDir,
+    requestedRef: { slug: params.slug },
+    expectedVersion: params.previousVersion ?? "",
+  });
+  if (local.ok) {
+    return { ok: true, plan: local.plan };
+  }
+  return { ok: false, error: local.error };
 }

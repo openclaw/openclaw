@@ -77,17 +77,11 @@ export interface AgentDeletionJournal {
   workspace_dir: string;
 }
 
-export interface AgentModelCatalogs {
-  agent_dir: string;
-  catalog_key: string;
-  raw_json: string;
-  updated_at: number;
-}
-
-export interface AndroidNotificationRecentPackages {
-  package_name: string;
-  sort_order: number;
-  updated_at_ms: number;
+export interface AgentProvenance {
+  agent_id: string;
+  created_at_ms: number;
+  created_via: string;
+  creator_agent_id: string | null;
 }
 
 export interface ApnsRegistrationTombstones {
@@ -149,18 +143,6 @@ export interface AuditIdentityKeys {
   id: Generated<number>;
   key: Uint8Array;
   key_id: string;
-}
-
-export interface AuthProfileState {
-  state_json: string;
-  store_key: string;
-  updated_at: number;
-}
-
-export interface AuthProfileStores {
-  store_json: string;
-  store_key: string;
-  updated_at: number;
 }
 
 export interface BackupRuns {
@@ -349,59 +331,6 @@ export interface ClawhubPromotionClaims {
   slug: string;
 }
 
-export interface ClawhubPromotionsFeedState {
-  etag: string | null;
-  feed_sequence: number | null;
-  last_checked_at_ms: number | null;
-  notified_slugs_json: Generated<string>;
-  payload_json: string | null;
-  state_key: string;
-  updated_at_ms: number;
-}
-
-export interface CommandLogEntries {
-  action: string;
-  entry_json: string;
-  id: string;
-  sender_id: string;
-  session_key: string;
-  source: string;
-  timestamp_ms: number;
-}
-
-export interface Commitments {
-  account_id: string | null;
-  agent_id: string;
-  attempts: number;
-  channel: string;
-  confidence: number;
-  created_at_ms: number;
-  dedupe_key: string;
-  dismissed_at_ms: number | null;
-  due_earliest_ms: number;
-  due_latest_ms: number;
-  due_timezone: string;
-  expired_at_ms: number | null;
-  id: string;
-  kind: string;
-  last_attempt_at_ms: number | null;
-  reason: string;
-  recipient_id: string | null;
-  record_json: string;
-  sender_id: string | null;
-  sensitivity: string;
-  sent_at_ms: number | null;
-  session_key: string;
-  snoozed_until_ms: number | null;
-  source: string;
-  source_message_id: string | null;
-  source_run_id: string | null;
-  status: string;
-  suggested_text: string;
-  thread_id: string | null;
-  updated_at_ms: number;
-}
-
 export interface ConfigHealthEntries {
   config_path: string;
   last_known_good_json: string | null;
@@ -416,6 +345,19 @@ export interface ConfigMachineState {
   value_json: string;
 }
 
+export interface ConfigRevisionKeys {
+  hmac_key: Uint8Array;
+  id: Generated<number>;
+}
+
+export interface CronJobRuntimeAuthorities {
+  authority_input_fingerprint: string | null;
+  authority_json: string | null;
+  job_id: string;
+  recovery_required: number;
+  store_key: string;
+}
+
 export interface CronJobScratch {
   content: string | null;
   job_id: string;
@@ -427,80 +369,42 @@ export interface CronJobScratch {
 
 export interface CronJobs {
   agent_id: string | null;
-  anchor_ms: number | null;
-  at: string | null;
-  consecutive_errors: number | null;
-  consecutive_skipped: number | null;
-  created_at_ms: number;
   declaration_key: string | null;
-  delete_after_run: number | null;
-  delivery_account_id: string | null;
-  delivery_best_effort: number | null;
-  delivery_channel: string | null;
-  delivery_completion_mode: string | null;
-  delivery_completion_to: string | null;
-  delivery_mode: string | null;
-  delivery_thread_id: string | null;
-  delivery_thread_id_type: string | null;
-  delivery_to: string | null;
   description: string | null;
-  display_name: string | null;
   enabled: number;
-  every_ms: number | null;
-  failure_alert_account_id: string | null;
-  failure_alert_after: number | null;
-  failure_alert_channel: string | null;
-  failure_alert_cooldown_ms: number | null;
-  failure_alert_disabled: number | null;
-  failure_alert_include_skipped: number | null;
-  failure_alert_mode: string | null;
-  failure_alert_to: string | null;
-  failure_delivery_account_id: string | null;
-  failure_delivery_channel: string | null;
-  failure_delivery_mode: string | null;
-  failure_delivery_to: string | null;
+  grant_definition_generation: number | null;
+  grant_definition_revision: string | null;
+  grant_definition_updated_at: number | null;
   job_id: string;
   job_json: string;
-  last_delivered: number | null;
-  last_delivery_error: string | null;
-  last_delivery_status: string | null;
-  last_duration_ms: number | null;
-  last_error: string | null;
-  last_failure_alert_at_ms: number | null;
-  last_run_at_ms: number | null;
-  last_run_status: string | null;
   name: string;
-  next_run_at_ms: number | null;
   owner_agent_id: string | null;
-  owner_session_key: string | null;
-  payload_allow_unsafe_external_content: number | null;
-  payload_external_content_source_json: string | null;
-  payload_fallbacks_json: string | null;
   payload_kind: string;
-  payload_light_context: number | null;
-  payload_message: string | null;
-  payload_model: string | null;
-  payload_thinking: string | null;
-  payload_timeout_seconds: number | null;
-  payload_tools_allow_is_default: number | null;
-  payload_tools_allow_json: string | null;
-  running_at_ms: number | null;
   runtime_updated_at_ms: number | null;
-  schedule_error_count: number | null;
-  schedule_expr: string | null;
   schedule_identity: string | null;
-  schedule_kind: string;
-  schedule_tz: string | null;
-  session_key: string | null;
-  session_target: string;
   sort_order: Generated<number>;
-  stagger_ms: number | null;
   state_json: Generated<string>;
   store_key: string;
-  trigger_once: number | null;
-  trigger_script: string | null;
   updated_at: number;
-  wake_mode: string;
+}
+
+export interface CronRunReceipts {
+  agent_id: string;
+  config_revision: string;
+  error_text: string | null;
+  finished_at_ms: number | null;
+  job_id: string;
+  owner_pid: number;
+  owner_start_time: number | null;
+  receipt_id: string;
+  request_run_id: string | null;
+  started_at_ms: number;
+  status: string;
+  store_key: string;
+}
+
+export interface CronRunTriggerStateRetirements {
+  receipt_id: string;
 }
 
 export interface CurrentConversationBindings {
@@ -516,9 +420,7 @@ export interface CurrentConversationBindings {
   parent_conversation_id: string | null;
   record_json: string;
   status: string;
-  target_agent_id: string;
   target_kind: string;
-  target_session_id: string | null;
   target_session_key: string;
   updated_at: number;
 }
@@ -559,6 +461,7 @@ export interface DeviceBootstrapTokens {
   profile_json: string | null;
   public_key: string | null;
   redeemed_profile_json: string | null;
+  setup_id: string | null;
   token: string;
   token_key: string;
   ts: number;
@@ -571,6 +474,23 @@ export interface DeviceIdentities {
   private_key_pem: string;
   public_key_pem: string;
   updated_at_ms: number;
+}
+
+export interface DevicePairSetupCompletions {
+  access: string;
+  completed_at_ms: number;
+  delivery_state: string;
+  device_id: string;
+  device_name: string | null;
+  retain_until_ms: number;
+  setup_id: string;
+}
+
+export interface DevicePairingJoinCodes {
+  created_at_ms: number | null;
+  expires_at_ms: number | null;
+  payload_json: string | null;
+  shortcode: string | null;
 }
 
 export interface DevicePairingPaired {
@@ -626,14 +546,6 @@ export interface DiagnosticEvents {
   sequence: Generated<number>;
 }
 
-export interface DiagnosticStabilityBundles {
-  bundle_json: string;
-  bundle_key: string;
-  created_at: number;
-  generated_at: string;
-  reason: string;
-}
-
 export interface ExecApprovalsConfig {
   agent_count: number;
   allowlist_count: number;
@@ -648,6 +560,23 @@ export interface ExecApprovalsConfig {
   updated_at_ms: number;
 }
 
+export interface ExecutionDecisionFacts {
+  action_family: string;
+  action_id: string | null;
+  context_id: string;
+  coverage_state: string;
+  decision_outcome: string;
+  execution_id: string;
+  occurred_at: number;
+  owner: string;
+  reason_code: string;
+  receipt_bytes: number;
+  receipt_id: string;
+  receipt_json: string;
+  run_id: string;
+  source_ref: string;
+}
+
 export interface ExecutionIdentityContexts {
   context_bytes: number;
   context_id: string;
@@ -656,6 +585,13 @@ export interface ExecutionIdentityContexts {
   created_at: number;
   execution_id: string;
   run_id: string;
+}
+
+export interface ExecutionOwnerLifecycleBindings {
+  context_id: string;
+  execution_id: string;
+  owner_id: string;
+  owner_kind: string;
 }
 
 export interface FleetCells {
@@ -757,20 +693,154 @@ export interface GatewayRestartSentinel {
   version: number;
 }
 
-export interface InstalledPluginIndex {
-  compat_registry_version: string;
-  diagnostics_json: string;
-  generated_at_ms: number;
-  host_contract_version: string;
-  index_key: string;
-  install_records_json: string;
-  migration_version: number;
-  plugins_json: string;
-  policy_hash: string;
-  refresh_reason: string | null;
+export interface GithubPersonalPublicationRequests {
+  agent_id: string;
+  base_branch: string;
+  body: string | null;
+  branch: string;
+  connection_generation: string;
+  created_at_ms: number;
+  effect_state: string | null;
+  error_code: string | null;
+  execution_id: string | null;
+  gateway_instance_id: string | null;
+  head_commit: string | null;
+  idempotency_key: string;
+  identity_account_id: number;
+  identity_login: string;
+  identity_profile_id: string;
+  identity_source: string;
+  last_effect: string | null;
+  next_action: string | null;
+  owner_profile_id: string;
+  pull_request_url: string | null;
+  push_repository: string;
+  reported_at_ms: number | null;
+  repository: string;
+  repository_fingerprint: string;
+  request_digest: string;
+  request_id: string;
+  session_id: string;
+  session_key: string;
+  source_head_commit: string;
+  source_index_tree: string;
+  status: string;
+  title: string | null;
   updated_at_ms: number;
-  version: number;
-  warning: string | null;
+  workspace_tree: string;
+  worktree_id: string;
+}
+
+export interface GithubPublicationRequests {
+  agent_id: string;
+  base_branch: string | null;
+  body: string | null;
+  branch: string;
+  claim_id: string | null;
+  created_at_ms: number;
+  environment_id: string | null;
+  error_code: string | null;
+  gateway_instance_id: string | null;
+  head_commit: string | null;
+  idempotency_key: string;
+  identity_account_id: number;
+  identity_login: string;
+  identity_profile_id: string | null;
+  identity_source: string;
+  next_action: string | null;
+  owner_epoch: number | null;
+  placement_generation: number | null;
+  pull_request_url: string | null;
+  reported_at_ms: number | null;
+  repository: string | null;
+  repository_fingerprint: string;
+  request_digest: string;
+  request_id: string;
+  run_id: string | null;
+  session_id: string;
+  session_key: string;
+  source_head_commit: string | null;
+  source_index_tree: string | null;
+  status: string;
+  title: string | null;
+  updated_at_ms: number;
+  workspace_tree: string | null;
+  worktree_id: string;
+}
+
+export interface GithubPublicationSessionLifecycles {
+  lifecycle_revision: string | null;
+  publication_kind: string;
+  request_id: string;
+  requester_authority_json: string | null;
+}
+
+export interface GithubRepositoryPublicationRequests {
+  agent_id: string;
+  base_branch: string | null;
+  body: string | null;
+  branch: string;
+  checkpoint_digest: string | null;
+  checkpoint_ref: string | null;
+  claim_id: string | null;
+  connection_generation: string | null;
+  created_at_ms: number;
+  effect_state: string | null;
+  environment_id: string | null;
+  error_code: string | null;
+  execution_id: string | null;
+  gateway_instance_id: string | null;
+  head_commit: string | null;
+  idempotency_key: string;
+  identity_account_id: number;
+  identity_login: string;
+  identity_profile_id: string | null;
+  identity_source: string;
+  last_effect: string | null;
+  next_action: string | null;
+  owner_epoch: number | null;
+  owner_profile_id: string | null;
+  placement_generation: number | null;
+  previous_head_commit: string | null;
+  pull_request_url: string | null;
+  push_repository: string | null;
+  pushed_head_commit: string | null;
+  reported_at_ms: number | null;
+  repository: string | null;
+  request_digest: string;
+  request_id: string;
+  requester_authority_json: string | null;
+  run_id: string | null;
+  session_id: string;
+  session_key: string;
+  session_lifecycle_revision: string | null;
+  source_head_commit: string | null;
+  source_index_tree: string | null;
+  status: string;
+  title: string | null;
+  updated_at_ms: number;
+  workspace_id: string;
+  workspace_tree: string | null;
+}
+
+export interface LocalWorkspaceProjections {
+  agent_id: string;
+  base_commit: string;
+  baseline_json: string | null;
+  baseline_ref: string | null;
+  created_at_ms: number;
+  journal_json: string | null;
+  journal_pack: Uint8Array | null;
+  lifecycle_revision: string | null;
+  paused_runtimes_json: string | null;
+  pending_ref: string | null;
+  pending_target: string | null;
+  projection_path: string;
+  revision: Generated<number>;
+  session_id: string;
+  session_key: string;
+  source_paths_json: string;
+  worktree_id: string;
 }
 
 export interface MacosPortGuardianRecords {
@@ -802,20 +872,16 @@ export interface ManagedOutgoingImageRecords {
   updated_at: string | null;
 }
 
+export interface McpOauthPendingAuthorizations {
+  create_time: number;
+  state: string;
+  store_key: string;
+}
+
 export interface McpOauthStores {
   format_version: number;
   store_json: string;
   store_key: string;
-  updated_at: number;
-}
-
-export interface MediaBlobs {
-  blob: Uint8Array;
-  content_type: string | null;
-  created_at: number;
-  id: string;
-  size_bytes: number;
-  subdir: string;
   updated_at: number;
 }
 
@@ -883,34 +949,6 @@ export interface MigrationSources {
   target_table: string;
 }
 
-export interface ModelCapabilityCache {
-  context_window: number;
-  cost_cache_read: number;
-  cost_cache_write: number;
-  cost_input: number;
-  cost_output: number;
-  input_image: number;
-  input_text: number;
-  max_tokens: number;
-  model_id: string;
-  name: string;
-  provider_id: string;
-  reasoning: number;
-  supports_tools: number | null;
-  updated_at_ms: number;
-}
-
-export interface ModelCatalogRemote {
-  bundle_json: string;
-  checked_at: number;
-  etag: string | null;
-  generated_at: number;
-  id: Generated<number>;
-  last_modified: string | null;
-  min_version: string | null;
-  source_url: string;
-}
-
 export interface NativeHookRelayBridges {
   expires_at_ms: number;
   hostname: string;
@@ -921,19 +959,67 @@ export interface NativeHookRelayBridges {
   updated_at_ms: number;
 }
 
-export interface NodeHostConfig {
-  config_key: string;
-  display_name: string | null;
-  gateway_context_path: string | null;
-  gateway_host: string | null;
-  gateway_port: number | null;
-  gateway_tls: number | null;
-  gateway_tls_fingerprint: string | null;
-  installed_apps_sharing: Generated<number>;
-  node_id: string;
-  token: string | null;
+export interface NodeWorkerLaunchCleanup {
+  cleanup_mode: string;
+  launch_id: string;
+  lineage_settled: number | null;
+}
+
+export interface NodeWorkerLaunchContainers {
+  container_json: string | null;
+  launch_id: string;
+}
+
+export interface NodeWorkerLaunches {
+  completed_at_ms: number | null;
+  created_at_ms: number;
+  environment_id: string;
+  error_text: string | null;
+  gateway_namespace: string;
+  launch_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  plan_hash: string;
+  result_json: string | null;
+  run_id: string;
+  session_id: string;
+  state: string;
+  supervisor_pid: number;
+  supervisor_start_time: number;
   updated_at_ms: number;
-  version: number;
+  worker_pid: number | null;
+  worker_start_time: number | null;
+}
+
+export interface NodeWorkerPreparedWorkspaces {
+  bound_at_ms: number | null;
+  cache_key: string;
+  created_at_ms: number;
+  environment_id: string;
+  gateway_namespace: string;
+  home_dir: string;
+  owner_epoch: number | null;
+  preparation_key: string;
+  prepared_manifest_ref: string;
+  retired_at_ms: number | null;
+  session_id: string | null;
+  session_key: string | null;
+  source_manifest_ref: string;
+  state: string;
+  workspace_dir: string;
+}
+
+export interface NodeWorkerTurns {
+  completed_at_ms: number | null;
+  created_at_ms: number;
+  error_text: string | null;
+  owner_launch_id: string;
+  plan_hash: string;
+  result_json: string | null;
+  run_id: string;
+  state: string;
+  turn_id: string;
+  updated_at_ms: number;
 }
 
 export interface OfficialExternalPluginCatalogSnapshots {
@@ -952,13 +1038,30 @@ export interface OfficialExternalPluginCatalogSnapshots {
   updated_at_ms: number;
 }
 
-export interface OnboardingRecommendations {
-  accepted_at_ms: number | null;
-  config_key: string;
-  inventory_hash: string;
-  matches_json: string;
-  offered_at_ms: number;
-  updated_at_ms: number;
+export interface OperatorApprovalExecutionIdentities {
+  approval_id: string;
+  source_context_id: string;
+  source_execution_id: string;
+}
+
+export interface OperatorApprovalStandingGrantGenerations {
+  grant_id: string;
+  job_definition_generation: number;
+}
+
+export interface OperatorApprovalStandingGrants {
+  agent_id: string;
+  created_at_ms: number;
+  cron_job_id: string;
+  expires_at_ms: number | null;
+  grant_id: string;
+  job_config_revision: string;
+  last_used_at_ms: number | null;
+  minted_by_approval_id: string;
+  operation_binding: string;
+  revoked_at_ms: number | null;
+  revoked_by: string | null;
+  use_count: Generated<number>;
 }
 
 export interface OperatorApprovals {
@@ -1000,6 +1103,36 @@ export interface OutboundMediaProvenance {
   version: number;
 }
 
+export interface OutboundMessageExecutionBindings {
+  context_id: string;
+  event_id: string;
+  execution_id: string;
+  run_id: string;
+}
+
+export interface OutboundMessageProgress {
+  account_ref: string | null;
+  action: string;
+  actor_id: string;
+  actor_type: string;
+  agent_id: string | null;
+  channel: string;
+  context_id: string | null;
+  conversation_kind: string;
+  conversation_ref: string | null;
+  duration_ms: number | null;
+  execution_id: string | null;
+  occurred_at: number;
+  outcome: string;
+  progress_id: string;
+  run_id: string | null;
+  schema_version: number;
+  sequence: Generated<number>;
+  source_id: string;
+  source_sequence: number;
+  target_ref: string | null;
+}
+
 export interface PluginBindingApprovals {
   account_id: string;
   approved_at: number;
@@ -1026,6 +1159,16 @@ export interface PluginStateEntries {
   namespace: string;
   plugin_id: string;
   value_json: string;
+}
+
+export interface Projects {
+  created_at_ms: number;
+  display_name: string;
+  id: string;
+  origin_url: string | null;
+  repo_root: string;
+  source: string;
+  updated_at_ms: number;
 }
 
 export interface SandboxRegistryEntries {
@@ -1056,6 +1199,7 @@ export interface SchemaMeta {
 }
 
 export interface SecretStoreEntries {
+  allowed_hosts: string | null;
   created_at_ms: number;
   deleted_at_ms: number | null;
   kind: string;
@@ -1069,8 +1213,27 @@ export interface SecretStoreEntries {
 
 export interface SessionGroups {
   created_at: number;
+  cwd: string | null;
   name: string;
   position: number;
+  worktree: number | null;
+}
+
+export interface SessionRepositoryWorkspaces {
+  agent_id: string;
+  base_commit: string | null;
+  base_manifest_hash: string | null;
+  branch: string;
+  checkpoint_ref: string | null;
+  created_at_ms: number;
+  manifest_hash: string | null;
+  requested_ref: string | null;
+  revision: number;
+  run_setup_script: Generated<number>;
+  session_key: string;
+  updated_at_ms: number;
+  url: string;
+  workspace_id: string;
 }
 
 export interface SessionStateEvents {
@@ -1118,30 +1281,48 @@ export interface SessionWatchCursors {
   target_session_key: string;
   updated_at: number;
   watcher_session_key: string;
+  watcher_store_path: string | null;
 }
 
-export interface SidebarSections {
-  position: number;
-  section_id: string;
+export interface SkillLibraryEntries {
+  author_profile_id: string;
+  created_at: number;
+  current_revision: string;
+  enabled: number;
+  owner_profile_id: string | null;
+  removed: number;
+  shared: number;
+  skill_id: string;
+  slug: string;
+  updated_at: number;
 }
 
-export interface SkillCuratorState {
-  id: Generated<number>;
-  last_attempt_at_ms: number;
-  last_error: string | null;
-  last_result_json: string;
-  last_success_at_ms: number | null;
+export interface SkillLibraryEvents {
+  action: string;
+  actor_profile_id: string;
+  created_at: number;
+  event_id: string;
+  revision: string;
+  skill_id: string;
 }
 
-export interface SkillLifecycle {
-  archived_reason: string | null;
-  created_at_ms: number;
-  pinned: Generated<number>;
-  skill_file: string;
-  skill_key: string;
-  skill_name: string;
-  state: string;
-  state_changed_at_ms: number;
+export interface SkillLibraryRevisions {
+  created_at: number;
+  description: string;
+  files_json: string;
+  revision: string;
+  skill_id: string;
+}
+
+export interface SkillLibraryUploads {
+  archive_blob: Uint8Array;
+  expires_at: number;
+  owner_profile_id: string;
+  published_skill_id: string | null;
+  sha256: string;
+  size_bytes: number;
+  slug: string;
+  upload_id: string;
 }
 
 export interface SkillUploadChunks {
@@ -1179,6 +1360,16 @@ export interface SkillUsage {
   use_count: number;
 }
 
+export interface SkillWorkshopCollectionReviews {
+  backup_id: string;
+  create_time: number;
+  dropped_json: string;
+  kept_names_json: string;
+  owner_agent_id: string;
+  review_id: string;
+  written_names_json: string;
+}
+
 export interface SkillWorkshopProposalEvents {
   actor_json: string;
   correlation_id: string | null;
@@ -1190,13 +1381,6 @@ export interface SkillWorkshopProposalEvents {
   proposed_version: string;
   revision_hash: string;
   sequence: Generated<number>;
-}
-
-export interface SkillWorkshopProposalOriginRuns {
-  mutation_count: number;
-  position: number;
-  proposal_id: string;
-  run_id: string;
 }
 
 export interface SkillWorkshopProposalRollbacks {
@@ -1227,7 +1411,6 @@ export interface SkillWorkshopProposals {
   status: string;
   status_reason: string | null;
   updated_at: string;
-  workspace_dir: string;
 }
 
 export interface StateLeases {
@@ -1242,65 +1425,14 @@ export interface StateLeases {
 }
 
 export interface SubagentRuns {
-  accumulated_runtime_ms: number | null;
-  agent_dir: string | null;
-  announce_retry_count: number | null;
-  archive_at_ms: number | null;
   child_session_key: string;
-  cleanup: string;
-  cleanup_completed_at: number | null;
-  cleanup_handled: number | null;
-  completion_announced_at: number | null;
   controller_session_key: string | null;
+  controller_store_path: string | null;
   created_at: number;
-  ended_at: number | null;
-  ended_hook_emitted_at: number | null;
-  ended_reason: string | null;
-  expects_completion_message: number | null;
-  fallback_frozen_result_captured_at: number | null;
-  fallback_frozen_result_text: string | null;
-  frozen_result_captured_at: number | null;
-  frozen_result_text: string | null;
-  label: string | null;
-  last_announce_delivery_error: string | null;
-  last_announce_retry_at: number | null;
-  model: string | null;
-  outcome_json: string | null;
-  pause_reason: string | null;
   payload_json: Generated<string>;
-  pending_final_delivery: number | null;
-  pending_final_delivery_attempt_count: number | null;
-  pending_final_delivery_created_at: number | null;
-  pending_final_delivery_last_attempt_at: number | null;
-  pending_final_delivery_last_error: string | null;
-  pending_final_delivery_payload_json: string | null;
-  requester_display_key: string;
-  requester_origin_json: string | null;
   requester_session_key: string;
-  requester_settle_wake_attempt_count: number | null;
-  requester_settle_wake_batch_run_ids_json: string | null;
-  requester_settle_wake_last_error: string | null;
-  requester_settle_wake_next_attempt_at: number | null;
-  requester_settle_wake_replay_count: number | null;
-  requester_settle_wake_retire_after: number | null;
-  requester_settle_wake_status: string | null;
+  requester_store_path: string | null;
   run_id: string;
-  run_timeout_seconds: number | null;
-  session_started_at: number | null;
-  spawn_mode: string | null;
-  started_at: number | null;
-  suppress_announce_reason: string | null;
-  swarm_collector: number | null;
-  swarm_completion_status: string | null;
-  swarm_group_id: string | null;
-  swarm_output_schema_json: string | null;
-  swarm_schema_error: string | null;
-  swarm_structured_json: string | null;
-  swarm_usage_json: string | null;
-  task: string;
-  task_name: string | null;
-  wake_on_descendant_settle: number | null;
-  workspace_dir: string | null;
 }
 
 export interface TaskDeliveryState {
@@ -1318,6 +1450,9 @@ export interface TaskRuns {
   detail_json: string | null;
   ended_at: number | null;
   error: string | null;
+  execution_owner_host: string | null;
+  execution_owner_pid: number | null;
+  execution_owner_start_identity: number | null;
   label: string | null;
   last_event_at: number | null;
   last_tool_name: string | null;
@@ -1342,72 +1477,52 @@ export interface TaskRuns {
   tool_use_count: number | null;
 }
 
-export interface TuiLastSessions {
-  scope_key: string;
-  session_key: string;
-  updated_at: number;
-}
-
-export interface UpdateCheckState {
-  auto_first_seen_at: string | null;
-  auto_first_seen_tag: string | null;
-  auto_first_seen_version: string | null;
-  auto_install_id: string | null;
-  auto_last_attempt_at: string | null;
-  auto_last_attempt_version: string | null;
-  auto_last_success_at: string | null;
-  auto_last_success_version: string | null;
-  last_available_tag: string | null;
-  last_available_version: string | null;
-  last_checked_at: string | null;
-  last_notified_tag: string | null;
-  last_notified_version: string | null;
-  state_key: string;
-  updated_at_ms: number;
-}
-
-export interface VoicewakeRoutingConfig {
-  config_key: string;
-  default_target_agent_id: string | null;
-  default_target_mode: string;
-  default_target_session_key: string | null;
-  updated_at_ms: number;
-  version: number;
-}
-
-export interface VoicewakeRoutingRoutes {
-  config_key: string;
-  position: number;
-  target_agent_id: string | null;
-  target_mode: string;
-  target_session_key: string | null;
+export interface UpdateRuns {
+  after_json: string;
+  before_json: string;
+  confirmed_at_ms: number | null;
+  created_at_ms: number;
+  downtime_ms: number | null;
+  finished_at_ms: number | null;
+  origin_json: string;
+  phase: string;
+  reason: string | null;
+  repair_json: string;
+  run_id: string;
+  status: string;
+  steps_json: string;
+  target_json: string;
   trigger: string;
   updated_at_ms: number;
+  verification_json: string;
 }
 
-export interface VoicewakeTriggers {
-  config_key: string;
-  position: number;
-  trigger: string;
+export interface UserPreferences {
+  pref_key: string;
+  profile_id: string;
   updated_at_ms: number;
+  value_json: string;
+}
+
+export interface WebPushApprovalDeliveries {
+  approval_id: string;
+  device_id: string;
+  prepared_at_ms: number;
+  subscription_id: string;
+  user_profile_id: string | null;
 }
 
 export interface WebPushSubscriptions {
   auth: string;
   created_at_ms: number;
+  device_id: string | null;
   endpoint: string;
   endpoint_hash: string;
   p256dh: string;
+  preferences_json: string | null;
   subscription_id: string;
   updated_at_ms: number;
-}
-
-export interface WebPushVapidKeys {
-  key_id: string;
-  private_key: string;
-  public_key: string;
-  subject: string;
-  updated_at_ms: number;
+  user_profile_id: string | null;
 }
 
 export interface WorkerEnvironmentCredentials {
@@ -1430,6 +1545,7 @@ export interface WorkerEnvironmentSshFallbackPorts {
 export interface WorkerEnvironments {
   attached_session_ids_json: Generated<string>;
   bootstrap_bundle_hash: string | null;
+  bootstrap_install_kind: string | null;
   bootstrap_openclaw_version: string | null;
   bootstrap_protocol_features_json: string | null;
   created_at_ms: number;
@@ -1437,9 +1553,17 @@ export interface WorkerEnvironments {
   destroy_requested_at_ms: number | null;
   environment_id: string;
   idle_since_at_ms: number | null;
+  last_activated_at_ms: number | null;
   last_error: string | null;
   lease_id: string | null;
+  node_device_id: string | null;
+  node_setup_id: string | null;
   owner_epoch: Generated<number>;
+  preparation_consumed_at_ms: number | null;
+  preparation_demand_at_ms: number | null;
+  preparation_expires_at_ms: number | null;
+  preparation_key: string | null;
+  preparation_purpose: string | null;
   profile_id: string;
   profile_snapshot_json: string;
   provider_id: string;
@@ -1469,11 +1593,28 @@ export interface WorkerInferenceTurns {
   updated_at_ms: number;
 }
 
+export interface WorkerSessionPlacementMoves {
+  abandon_source: number | null;
+  created_at_ms: number;
+  last_error: string | null;
+  operation_id: string;
+  session_id: string;
+  source_environment_id: string;
+  source_generation: number;
+  source_owner_epoch: number;
+  target_id: string | null;
+  target_kind: string;
+  target_machine_class: string | null;
+  target_os: string | null;
+  updated_at_ms: number;
+}
+
 export interface WorkerSessionPlacements {
   active_owner_epoch: number | null;
   agent_id: string;
   created_at_ms: number;
   environment_id: string | null;
+  execution_mode: string | null;
   last_live_event_ack_cursor: number | null;
   last_transcript_ack_cursor: number | null;
   recovery_error: string | null;
@@ -1495,6 +1636,21 @@ export interface WorkerSessionPlacements {
   workspace_base_manifest_ref: string | null;
 }
 
+export interface WorkerSessionToolOperations {
+  child_session_key: string | null;
+  created_at_ms: number;
+  gateway_instance_id: string;
+  operation_seed: string;
+  request_digest: string;
+  result_json: string | null;
+  source_claim_id: string;
+  source_session_id: string;
+  status: string;
+  tool_call_id: string;
+  tool_name: string;
+  updated_at_ms: number;
+}
+
 export interface WorkerTranscriptCommitHeads {
   environment_id: string;
   next_seq: number;
@@ -1514,6 +1670,17 @@ export interface WorkerTranscriptCommits {
   updated_at_ms: number;
 }
 
+export interface WorkerTurnToolAuthorities {
+  claim_id: string;
+  environment_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  run_id: string;
+  session_id: string;
+  tool_names_json: string;
+  updated_at_ms: number;
+}
+
 export interface WorkerWorkspacePendingResults {
   claim_id: string;
   created_at_ms: number;
@@ -1522,6 +1689,7 @@ export interface WorkerWorkspacePendingResults {
   owner_epoch: number;
   placement_generation: number;
   recovery_requested_at_ms: number | null;
+  repository_workspace_id: string | null;
   run_id: string;
   session_id: string;
   staged_result_ref: string | null;
@@ -1540,12 +1708,6 @@ export interface WorkerWorkspaceReconciliations {
   session_id: string;
 }
 
-export interface WorkspaceAttestations {
-  attested_at_ms: number;
-  updated_at_ms: number;
-  workspace_key: string;
-}
-
 export interface WorkspaceGeneratedBootstrapHashes {
   filename: string;
   sha256: string;
@@ -1561,12 +1723,14 @@ export interface WorkspacePathAliases {
 }
 
 export interface WorkspaceSetupState {
+  attestation_updated_at_ms: number | null;
+  attested_at_ms: number | null;
   bootstrap_seeded_at: string | null;
   setup_completed_at: string | null;
-  updated_at: number;
-  version: number;
+  updated_at: number | null;
+  version: number | null;
   workspace_key: string;
-  workspace_path: string;
+  workspace_path: string | null;
 }
 
 export interface WorktreeProvisionedFileChunks {
@@ -1574,6 +1738,21 @@ export interface WorktreeProvisionedFileChunks {
   data: Uint8Array;
   path: string;
   worktree_id: string;
+}
+
+export interface WorktreeTemplates {
+  backend: string;
+  cache_key: string;
+  common_dir: string;
+  content_key: string;
+  created_at: number;
+  id: string;
+  last_used_at: number;
+  path: string;
+  repo_root: string;
+  source_commit: string;
+  status: string;
+  worktree_root: string;
 }
 
 export interface Worktrees {
@@ -1600,14 +1779,11 @@ export interface DB {
   agent_database_leases: AgentDatabaseLeases;
   agent_databases: AgentDatabases;
   agent_deletion_journal: AgentDeletionJournal;
-  agent_model_catalogs: AgentModelCatalogs;
-  android_notification_recent_packages: AndroidNotificationRecentPackages;
+  agent_provenance: AgentProvenance;
   apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;
   audit_events: AuditEvents;
   audit_identity_keys: AuditIdentityKeys;
-  auth_profile_state: AuthProfileState;
-  auth_profile_stores: AuthProfileStores;
   backup_runs: BackupRuns;
   capture_blobs: CaptureBlobs;
   capture_events: CaptureEvents;
@@ -1621,24 +1797,28 @@ export interface DB {
   claw_package_refs: ClawPackageRefs;
   claw_workspace_files: ClawWorkspaceFiles;
   clawhub_promotion_claims: ClawhubPromotionClaims;
-  clawhub_promotions_feed_state: ClawhubPromotionsFeedState;
-  command_log_entries: CommandLogEntries;
-  commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
   config_machine_state: ConfigMachineState;
+  config_revision_keys: ConfigRevisionKeys;
+  cron_job_runtime_authorities: CronJobRuntimeAuthorities;
   cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;
+  cron_run_receipts: CronRunReceipts;
+  cron_run_trigger_state_retirements: CronRunTriggerStateRetirements;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
   device_auth_tokens: DeviceAuthTokens;
   device_bootstrap_tokens: DeviceBootstrapTokens;
   device_identities: DeviceIdentities;
+  device_pair_setup_completions: DevicePairSetupCompletions;
+  device_pairing_join_codes: DevicePairingJoinCodes;
   device_pairing_paired: DevicePairingPaired;
   device_pairing_pending: DevicePairingPending;
   diagnostic_events: DiagnosticEvents;
-  diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
+  execution_decision_facts: ExecutionDecisionFacts;
   execution_identity_contexts: ExecutionIdentityContexts;
+  execution_owner_lifecycle_bindings: ExecutionOwnerLifecycleBindings;
   fleet_cells: FleetCells;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;
@@ -1646,69 +1826,82 @@ export interface DB {
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;
-  installed_plugin_index: InstalledPluginIndex;
+  github_personal_publication_requests: GithubPersonalPublicationRequests;
+  github_publication_requests: GithubPublicationRequests;
+  github_publication_session_lifecycles: GithubPublicationSessionLifecycles;
+  github_repository_publication_requests: GithubRepositoryPublicationRequests;
+  local_workspace_projections: LocalWorkspaceProjections;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
+  mcp_oauth_pending_authorizations: McpOauthPendingAuthorizations;
   mcp_oauth_stores: McpOauthStores;
-  media_blobs: MediaBlobs;
   meeting_transcript_sessions: MeetingTranscriptSessions;
   meeting_transcript_summaries: MeetingTranscriptSummaries;
   meeting_transcript_utterances: MeetingTranscriptUtterances;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
-  model_capability_cache: ModelCapabilityCache;
-  model_catalog_remote: ModelCatalogRemote;
   native_hook_relay_bridges: NativeHookRelayBridges;
-  node_host_config: NodeHostConfig;
+  node_worker_launch_cleanup: NodeWorkerLaunchCleanup;
+  node_worker_launch_containers: NodeWorkerLaunchContainers;
+  node_worker_launches: NodeWorkerLaunches;
+  node_worker_prepared_workspaces: NodeWorkerPreparedWorkspaces;
+  node_worker_turns: NodeWorkerTurns;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
-  onboarding_recommendations: OnboardingRecommendations;
+  operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
+  operator_approval_standing_grant_generations: OperatorApprovalStandingGrantGenerations;
+  operator_approval_standing_grants: OperatorApprovalStandingGrants;
   operator_approvals: OperatorApprovals;
   outbound_media_provenance: OutboundMediaProvenance;
+  outbound_message_execution_bindings: OutboundMessageExecutionBindings;
+  outbound_message_progress: OutboundMessageProgress;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
+  projects: Projects;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
   secret_store_entries: SecretStoreEntries;
   session_groups: SessionGroups;
+  session_repository_workspaces: SessionRepositoryWorkspaces;
   session_state_events: SessionStateEvents;
   session_state_heads: SessionStateHeads;
   session_upstream_links: SessionUpstreamLinks;
   session_watch_cursors: SessionWatchCursors;
-  sidebar_sections: SidebarSections;
-  skill_curator_state: SkillCuratorState;
-  skill_lifecycle: SkillLifecycle;
+  skill_library_entries: SkillLibraryEntries;
+  skill_library_events: SkillLibraryEvents;
+  skill_library_revisions: SkillLibraryRevisions;
+  skill_library_uploads: SkillLibraryUploads;
   skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;
+  skill_workshop_collection_reviews: SkillWorkshopCollectionReviews;
   skill_workshop_proposal_events: SkillWorkshopProposalEvents;
-  skill_workshop_proposal_origin_runs: SkillWorkshopProposalOriginRuns;
   skill_workshop_proposal_rollbacks: SkillWorkshopProposalRollbacks;
   skill_workshop_proposals: SkillWorkshopProposals;
   state_leases: StateLeases;
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
   task_runs: TaskRuns;
-  tui_last_sessions: TuiLastSessions;
-  update_check_state: UpdateCheckState;
-  voicewake_routing_config: VoicewakeRoutingConfig;
-  voicewake_routing_routes: VoicewakeRoutingRoutes;
-  voicewake_triggers: VoicewakeTriggers;
+  update_runs: UpdateRuns;
+  user_preferences: UserPreferences;
+  web_push_approval_deliveries: WebPushApprovalDeliveries;
   web_push_subscriptions: WebPushSubscriptions;
-  web_push_vapid_keys: WebPushVapidKeys;
   worker_environment_credentials: WorkerEnvironmentCredentials;
   worker_environment_ssh_fallback_ports: WorkerEnvironmentSshFallbackPorts;
   worker_environments: WorkerEnvironments;
   worker_inference_turns: WorkerInferenceTurns;
+  worker_session_placement_moves: WorkerSessionPlacementMoves;
   worker_session_placements: WorkerSessionPlacements;
+  worker_session_tool_operations: WorkerSessionToolOperations;
   worker_transcript_commit_heads: WorkerTranscriptCommitHeads;
   worker_transcript_commits: WorkerTranscriptCommits;
+  worker_turn_tool_authorities: WorkerTurnToolAuthorities;
   worker_workspace_pending_results: WorkerWorkspacePendingResults;
   worker_workspace_reconciliations: WorkerWorkspaceReconciliations;
-  workspace_attestations: WorkspaceAttestations;
   workspace_generated_bootstrap_hashes: WorkspaceGeneratedBootstrapHashes;
   workspace_path_aliases: WorkspacePathAliases;
   workspace_setup_state: WorkspaceSetupState;
   worktree_provisioned_file_chunks: WorktreeProvisionedFileChunks;
+  worktree_templates: WorktreeTemplates;
   worktrees: Worktrees;
 }

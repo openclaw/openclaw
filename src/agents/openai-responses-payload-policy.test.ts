@@ -10,7 +10,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 
 describe("openai responses payload policy", () => {
-  it("forces store for native OpenAI responses payloads but keeps disable mode for transport defaults", () => {
+  it("preserves native no-store defaults while provider policy enables storage", () => {
     const model = {
       id: "gpt-5.4",
       name: "GPT-5.4",
@@ -33,6 +33,20 @@ describe("openai responses payload policy", () => {
     const disablePolicy = resolveOpenAIResponsesPayloadPolicy(model, { storeMode: "disable" });
     expect(disablePolicy.explicitStore).toBe(false);
     expect(disablePolicy.allowsServiceTier).toBe(true);
+  });
+
+  it("still forces store off under disable mode for a non-eligible (proxy) connection", () => {
+    const proxyModel = {
+      id: "gpt-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://proxy.example.com/v1",
+    } satisfies Pick<Model<"openai-responses">, "api" | "baseUrl" | "id" | "provider">;
+
+    const disablePolicy = resolveOpenAIResponsesPayloadPolicy(proxyModel, {
+      storeMode: "disable",
+    });
+    expect(disablePolicy.explicitStore).toBe(false);
   });
 
   it("couples native Responses server compaction to provider-managed store", () => {
@@ -196,27 +210,40 @@ describe("openai responses payload policy", () => {
     });
   });
 
-  it("strips disabled reasoning payloads for proxy-like OpenAI responses routes", () => {
-    const payload = {
-      reasoning: {
-        effort: "none",
-      },
-    } satisfies Record<string, unknown>;
-
-    applyOpenAIResponsesPayloadPolicy(
-      payload,
-      resolveOpenAIResponsesPayloadPolicy(
-        {
-          api: "openai-responses",
-          provider: "openai",
-          baseUrl: "https://proxy.example.com/v1",
+  it.each([
+    { compat: undefined, keepsNone: false },
+    { compat: { supportedReasoningEfforts: ["none", "low", "high"] }, keepsNone: true },
+    { compat: { supportedReasoningEfforts: [] }, keepsNone: false },
+    {
+      compat: { supportsReasoningEffort: false, supportedReasoningEfforts: ["none"] },
+      keepsNone: false,
+    },
+  ])(
+    "uses explicit proxy effort capabilities to retain none=$keepsNone",
+    ({ compat, keepsNone }) => {
+      const payload = {
+        reasoning: {
+          effort: "none",
         },
-        { storeMode: "disable" },
-      ),
-    );
+      } satisfies Record<string, unknown>;
 
-    expect(payload).not.toHaveProperty("reasoning");
-  });
+      applyOpenAIResponsesPayloadPolicy(
+        payload,
+        resolveOpenAIResponsesPayloadPolicy(
+          {
+            api: "openai-responses",
+            provider: "openai",
+            id: "gpt-5.6-luna",
+            baseUrl: "https://proxy.example.com/v1",
+            compat,
+          },
+          { storeMode: "disable" },
+        ),
+      );
+
+      expect(payload.reasoning).toEqual(keepsNone ? { effort: "none" } : undefined);
+    },
+  );
 
   it("emits store false for native OpenAI Codex responses disable mode", () => {
     const policy = resolveOpenAIResponsesPayloadPolicy(
@@ -246,6 +273,35 @@ describe("openai responses payload policy", () => {
     expect(policy.explicitStore).toBe(false);
     expect(policy.allowsServiceTier).toBe(true);
     expect(policy.shouldStripStore).toBe(false);
+  });
+
+  it("preserves native Azure payload policy after managed transport aliasing", () => {
+    const payload = {
+      input: [{ type: "message", role: "assistant", status: "completed", content: [] }],
+    } satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openclaw-azure-openai-responses-transport",
+          provider: "azure-openai-responses",
+          baseUrl: "https://example.openai.azure.com/openai/v1",
+          contextWindow: 200_000,
+        },
+        {
+          enableServerCompaction: true,
+          extraParams: { responsesServerCompaction: true },
+          storeMode: "provider-policy",
+        },
+      ),
+    );
+
+    expect(payload).toEqual({
+      store: true,
+      context_management: [{ type: "compaction", compact_threshold: 140_000 }],
+      input: [{ type: "message", role: "assistant", status: "completed", content: [] }],
+    });
   });
 
   it("strips status from input items for custom openai-responses endpoints", () => {
@@ -310,6 +366,21 @@ describe("openai responses payload policy", () => {
       provider: "azure-openai",
       baseUrl: "https://example.openai.azure.com/openai/v1",
     },
+    {
+      api: "azure-openai-responses",
+      provider: "azure",
+      baseUrl: "https://example.cognitiveservices.azure.com/openai/v1",
+    },
+    {
+      api: "azure-openai-responses",
+      provider: "azure",
+      baseUrl: "https://example.services.ai.azure.com/projects/demo/openai/v1",
+    },
+    {
+      api: "azure-openai-responses",
+      provider: "azure",
+      baseUrl: "https://example.api.cognitive.microsoft.com/openai/v1",
+    },
   ])("preserves status for native $provider Responses endpoints", (route) => {
     const model = {
       ...route,
@@ -330,5 +401,98 @@ describe("openai responses payload policy", () => {
     };
     applyOpenAIResponsesPayloadPolicy(payload, policy);
     expect((payload.input[0] as Record<string, unknown>).status).toBe("completed");
+  });
+
+  it("never promotes store for a custom endpoint without the explicit continuation opt-in", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openai-responses",
+        provider: "omniroute",
+        baseUrl: "https://omniroute.example.com/v1",
+      },
+      { storeMode: "provider-policy" },
+    );
+    expect(policy.explicitContinuationOptIn).toBe(false);
+    expect(policy.explicitStore).toBeUndefined();
+  });
+
+  it("promotes store for a custom endpoint once the operator opts a model in explicitly", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openai-responses",
+        provider: "omniroute",
+        baseUrl: "https://omniroute.example.com/v1",
+        compat: { supportsResponsesContinuation: true },
+      },
+      { storeMode: "provider-policy" },
+    );
+    expect(policy.explicitContinuationOptIn).toBe(true);
+    expect(policy.explicitStore).toBe(true);
+  });
+
+  it.each(["https://api.openai.com/v1", "https://proxy.example.com/v1"])(
+    "honors explicit no-store for an opted-in model at %s",
+    (baseUrl) => {
+      const policy = resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl,
+          compat: { supportsResponsesContinuation: true },
+        },
+        { storeMode: "disable" },
+      );
+      const payload = { store: true };
+      applyOpenAIResponsesPayloadPolicy(payload, policy);
+      expect(policy.explicitContinuationOptIn).toBe(true);
+      expect(payload.store).toBe(false);
+    },
+  );
+
+  it("never lets the continuation opt-in promote store for azure-openai-responses (store is hardcoded off downstream)", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "azure-openai-responses",
+        provider: "azure-openai",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+        compat: { supportsResponsesContinuation: true },
+      },
+      { storeMode: "provider-policy" },
+    );
+    expect(policy.explicitContinuationOptIn).toBe(false);
+  });
+
+  it("ignores the continuation opt-in for a non-Responses api", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openai-completions",
+        provider: "omniroute",
+        baseUrl: "https://omniroute.example.com/v1",
+        compat: { supportsResponsesContinuation: true },
+      },
+      { storeMode: "provider-policy" },
+    );
+    expect(policy.explicitContinuationOptIn).toBe(false);
+  });
+
+  it("never lets the continuation opt-in flip ChatGPT/Codex store:false to true", () => {
+    // isResponsesApi (the broad Responses-API predicate) also matches
+    // openai-chatgpt-responses. The opt-in must stay scoped to the custom
+    // openai-responses route only, or an operator setting the compat flag
+    // on a ChatGPT/Codex-routed model would silently flip its deliberate
+    // no-store contract -- reproduces the real request shape from the
+    // "emits store false for native OpenAI Codex responses disable mode"
+    // case above, plus the compat opt-in.
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        compat: { supportsResponsesContinuation: true },
+      },
+      { storeMode: "disable" },
+    );
+    expect(policy.explicitContinuationOptIn).toBe(false);
+    expect(policy.explicitStore).toBe(false);
   });
 });

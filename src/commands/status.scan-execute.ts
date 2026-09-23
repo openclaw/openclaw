@@ -3,14 +3,11 @@
 
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveMemoryPluginStatus, type MemoryPluginStatus } from "../status/memory-plugin.js";
 import type { StatusScanOverviewResult } from "./status.scan-overview.ts";
 import { resolveStatusSummaryFromOverview } from "./status.scan-overview.ts";
 import { buildStatusScanResult, type StatusScanResult } from "./status.scan-result.ts";
-import {
-  resolveMemoryPluginStatus,
-  type MemoryPluginStatus,
-  type MemoryStatusSnapshot,
-} from "./status.scan.shared.js";
+import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 
 /** Builds a full status scan result from an overview scan plus channel/plugin compatibility data. */
 export async function executeStatusScanFromOverview(params: {
@@ -39,8 +36,10 @@ export async function executeStatusScanFromOverview(params: {
   ]);
 
   return buildStatusScanResult({
+    env: params.overview.env ?? {},
     cfg: params.overview.cfg,
     sourceConfig: params.overview.sourceConfig,
+    configDiagnostics: params.overview.configDiagnostics,
     secretDiagnostics: params.overview.secretDiagnostics,
     osSummary: params.overview.osSummary,
     tailscaleMode: params.overview.tailscaleMode,

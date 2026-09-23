@@ -62,6 +62,17 @@ describe("extractMarkdownFormatRuns", () => {
         { start: 19, length: 4, styles: ["strikethrough"] },
       ],
     });
+    expect(
+      extractMarkdownFormatRuns(
+        "😀\ud800 **bold `a😀` mid 😀\udfff `b` tail** then _italics `c😀` end \ud800_.",
+      ),
+    ).toEqual({
+      text: "😀\ud800 bold `a😀` mid 😀\udfff `b` tail then italics `c😀` end \ud800.",
+      ranges: [
+        { start: 4, length: 27, styles: ["bold"] },
+        { start: 37, length: 19, styles: ["italic"] },
+      ],
+    });
   });
 
   it("keeps literal markers that CommonMark does not treat as emphasis", () => {
@@ -81,60 +92,37 @@ describe("extractMarkdownFormatRuns", () => {
     });
   });
 
-  it("restores inline code containing bare carriage returns without leaking masks", () => {
-    expect(extractMarkdownFormatRuns("`*x*\rmore`")).toEqual({
-      text: "`*x* more`",
-      ranges: [],
-    });
-  });
-
-  it("preserves multi-backtick inline code delimiters and contents", () => {
-    expect(extractMarkdownFormatRuns("Use ``a`*b*`` here")).toEqual({
-      text: "Use ``a`*b*`` here",
-      ranges: [],
-    });
-  });
-
-  it("separates code content that touches a backtick delimiter", () => {
-    expect(extractMarkdownFormatRuns("`` ` ``")).toEqual({
-      text: "`` ` ``",
-      ranges: [],
-    });
-  });
-
-  it("does not cross-protect backticks inside indented code blocks", () => {
-    expect(extractMarkdownFormatRuns("    `abc`")).toEqual({
-      text: "`abc`\n",
-      ranges: [],
-    });
-  });
-
-  it("does not escape dunders inside fenced code blocks", () => {
-    expect(extractMarkdownFormatRuns("```python\nobj.__class__\n```")).toEqual({
-      text: "obj.__class__\n",
-      ranges: [],
-    });
-  });
-
-  it("keeps Python dunder method declarations literal", () => {
-    expect(extractMarkdownFormatRuns("def __str__(self):")).toEqual({
-      text: "def __str__(self):",
-      ranges: [],
-    });
-  });
-
-  it("keeps standalone lowercase dunder calls literal", () => {
-    expect(extractMarkdownFormatRuns("Call __init__() and __str__(obj)")).toEqual({
-      text: "Call __init__() and __str__(obj)",
-      ranges: [],
-    });
-  });
-
-  it("keeps qualified and indexed dunder identifiers literal", () => {
-    expect(extractMarkdownFormatRuns("obj.__class__ print(__name__) __dict__['key']")).toEqual({
-      text: "obj.__class__ print(__name__) __dict__['key']",
-      ranges: [],
-    });
+  it.each([
+    [
+      "restores inline code containing bare carriage returns without leaking masks",
+      "`*x*\rmore`",
+      "`*x* more`",
+    ],
+    [
+      "preserves multi-backtick inline code delimiters and contents",
+      "Use ``a`*b*`` here",
+      "Use ``a`*b*`` here",
+    ],
+    ["separates code content that touches a backtick delimiter", "`` ` ``", "`` ` ``"],
+    ["does not cross-protect backticks inside indented code blocks", "    `abc`", "`abc`\n"],
+    [
+      "does not escape dunders inside fenced code blocks",
+      "```python\nobj.__class__\n```",
+      "obj.__class__\n",
+    ],
+    ["keeps Python dunder method declarations literal", "def __str__(self):", "def __str__(self):"],
+    [
+      "keeps standalone lowercase dunder calls literal",
+      "Call __init__() and __str__(obj)",
+      "Call __init__() and __str__(obj)",
+    ],
+    [
+      "keeps qualified and indexed dunder identifiers literal",
+      "obj.__class__ print(__name__) __dict__['key']",
+      "obj.__class__ print(__name__) __dict__['key']",
+    ],
+  ])("%s", (_name, input, expectedText) => {
+    expect(extractMarkdownFormatRuns(input)).toEqual({ text: expectedText, ranges: [] });
   });
 
   it("does not confuse ordinary parenthesized CommonMark bold with an identifier", () => {
@@ -144,17 +132,47 @@ describe("extractMarkdownFormatRuns", () => {
     });
   });
 
-  it("does not confuse an earlier matching bold span with a protected dunder", () => {
+  it("does not confuse an earlier matching bold span with a dunder call", () => {
     expect(extractMarkdownFormatRuns("**init**() then __init__()")).toEqual({
       text: "init() then __init__()",
       ranges: [{ start: 0, length: 4, styles: ["bold"] }],
     });
   });
 
-  it("searches past unrelated declarations for the matching dunder range", () => {
+  it("keeps dunder declarations literal after ordinary declarations", () => {
     expect(extractMarkdownFormatRuns("def init():\ndef __init__(self):")).toEqual({
       text: "def init():\ndef __init__(self):",
       ranges: [],
+    });
+  });
+
+  it("resolves reference labels that contain different dunder identifiers", () => {
+    expect(
+      extractMarkdownFormatRuns(
+        "[Class][obj.__class__]\n\n[obj.__class__]: https://example.org/python",
+      ),
+    ).toEqual({
+      text: "Class (https://example.org/python)",
+      ranges: [],
+    });
+  });
+
+  it("preserves every repeated destination containing a dunder identifier", () => {
+    expect(
+      extractMarkdownFormatRuns(
+        [
+          "[Class][docs] and [Type][docs] **done**",
+          "",
+          "[docs]: https://docs.python.org/3/library/stdtypes.html#instance.__class__",
+        ].join("\n"),
+      ),
+    ).toEqual({
+      text: [
+        "Class (https://docs.python.org/3/library/stdtypes.html#instance.__class__)",
+        "and Type (https://docs.python.org/3/library/stdtypes.html#instance.__class__)",
+        "done",
+      ].join(" "),
+      ranges: [{ start: 153, length: 4, styles: ["bold"] }],
     });
   });
 });

@@ -1,12 +1,29 @@
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+
+const registerChannelDelivery = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/question-gateway-runtime")>();
+  return {
+    ...actual,
+    questionGatewayRuntime: { ...actual.questionGatewayRuntime, registerChannelDelivery },
+  };
+});
+
+beforeEach(() => registerChannelDelivery.mockReset());
 import {
   describeTelegramDispatch,
+  emitToolStart,
   createContext,
+  createStatusReactionController,
   deliverReplies,
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
+  emitTelegramMessageSentHooks,
   expectDraftStreamParams,
   mockCallArg,
   requireInvocationOrder,
@@ -28,7 +45,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Working");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Done");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      2,
+      "Done",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(editMessageTelegram).not.toHaveBeenCalled();
@@ -49,7 +70,10 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
 
     expect(answerDraftStream.update.mock.calls).toEqual([
       ["Normal reply"],
-      [trailingFinalStatusText],
+      [
+        trailingFinalStatusText,
+        expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+      ],
     ]);
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(
@@ -173,7 +197,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await replyOptions?.onPartialReply?.({ text: "Done ", delta: "Done " });
         await replyOptions?.onPartialReply?.({ text: "Done answer", delta: "answer" });
         await dispatcherOptions.deliver({ text: "Done answer." }, { kind: "final" });
@@ -190,7 +214,10 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     expect(mockCallArg(answerDraftStream.updatePreview).text).toContain("Exec");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Done ");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Done answer");
-    expect(answerDraftStream.update).toHaveBeenLastCalledWith("Done answer.");
+    expect(answerDraftStream.update).toHaveBeenLastCalledWith(
+      "Done answer.",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -231,9 +258,17 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Message A final");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      1,
+      "Message A final",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Message B partial");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Message B final");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      3,
+      "Message B final",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -263,7 +298,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "First chunk.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Second chunk.");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "First chunk. \nSecond chunk.");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      3,
+      "First chunk. \nSecond chunk.",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
   });
@@ -310,7 +349,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Final answer");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      3,
+      "Final answer",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     const rotationOrder = requireInvocationOrder(
       answerDraftStream.forceNewMessage,
@@ -324,6 +367,74 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     );
     expect(rotationOrder).toBeLessThan(secondBlockUpdateOrder);
     expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("surfaces control failure while materializing a queued block before rotation", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    const statusReactionController = createStatusReactionController();
+    const context = createContext({ statusReactionController: statusReactionController as never });
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const firstPayload = {
+      text: "Pick one",
+      channelData: {
+        telegram: { buttons: [[{ text: "One", callback_data: `tgq1:${questionId}:0` }]] },
+      },
+    };
+    const secondPayload = { text: "Next answer" };
+    const buttonError = new Error("400: button rejected during rotation");
+    editMessageTelegram.mockResolvedValueOnce({ ok: true }).mockRejectedValueOnce(buttonError);
+    let observedError: unknown;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onBlockReplyQueued?.(firstPayload, { assistantMessageIndex: 0 });
+        await dispatcherOptions.deliver(firstPayload, {
+          kind: "block",
+          assistantMessageIndex: 0,
+        });
+        await replyOptions?.onBlockReplyQueued?.(secondPayload, { assistantMessageIndex: 1 });
+        try {
+          await dispatcherOptions.deliver(secondPayload, {
+            kind: "block",
+            assistantMessageIndex: 1,
+          });
+        } catch (error) {
+          observedError = error;
+          throw error;
+        }
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context });
+
+    expect(isChannelPartialDeliveryError(observedError)).toBe(true);
+    if (!isChannelPartialDeliveryError(observedError)) {
+      throw new Error("Expected queued block rotation to surface a partial delivery error");
+    }
+    expect(observedError.code).toBe("CHANNEL_PARTIAL_DELIVERY");
+    expect(formatErrorMessage(observedError)).toBe(formatErrorMessage(buttonError));
+    expect(observedError.deliveryResult).toEqual(
+      expect.objectContaining({
+        content: "Pick one",
+        messageIds: ["2001"],
+        receipt: expect.objectContaining({
+          primaryPlatformMessageId: "2001",
+          platformMessageIds: ["2001"],
+        }),
+        visibleReplySent: true,
+      }),
+    );
+    expect(emitTelegramMessageSentHooks).toHaveBeenCalledOnce();
+    expect(emitTelegramMessageSentHooks).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "Pick one", success: false, messageId: 2001 }),
+    );
+    expect(registerChannelDelivery).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.stop).toHaveBeenCalled();
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(statusReactionController.setError).toHaveBeenCalledOnce());
   });
 
   it("falls back to normal delivery before rotating a stale queued block preview", async () => {
@@ -347,7 +458,35 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
         firstBlockPreviewWentStale = true;
         await replyOptions?.onBlockReplyQueued?.(secondPayload, { assistantMessageIndex: 1 });
         await dispatcherOptions.deliver(secondPayload, { kind: "block" });
-        return { queuedFinal: true };
+        return {
+          queuedFinal: true,
+          settledReceipt: {
+            counts: {
+              tool: {
+                delivered: 0,
+                deliveredNotVisible: 0,
+                cancelled: 0,
+                failedBeforeSend: 0,
+                failedAfterSend: 0,
+              },
+              block: {
+                delivered: 2,
+                deliveredNotVisible: 0,
+                cancelled: 0,
+                failedBeforeSend: 0,
+                failedAfterSend: 0,
+              },
+              final: {
+                delivered: 1,
+                deliveredNotVisible: 0,
+                cancelled: 0,
+                failedBeforeSend: 0,
+                failedAfterSend: 0,
+              },
+            },
+            anyVisibleDelivered: true,
+          },
+        };
       },
     );
 
@@ -411,7 +550,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     expect(answerDraftStream.update.mock.calls).toEqual([
       ["Site A shows X."],
       ["Site B shows Y."],
-      ["Final answer"],
+      ["Final answer", expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) })],
     ]);
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     const firstBlockFlushOrder = requireInvocationOrder(
@@ -451,7 +590,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Existing preview");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "PFX Original block text");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Final answer");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      3,
+      "Final answer",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     const blockUpdateOrder = requireInvocationOrder(
       answerDraftStream.update,
@@ -473,7 +616,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("preserves boundary rotation after a queued prior block is canceled", async () => {
+  it("retires an unaccepted preview after its queued block is canceled", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -491,6 +634,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
         );
         await replyOptions?.onBlockReplyQueued?.(visiblePayload, { assistantMessageIndex: 1 });
         await dispatcherOptions.deliver(visiblePayload, { kind: "block" });
+        await dispatcherOptions.deliver({ text: "Site B final" }, { kind: "final" });
         return { queuedFinal: true };
       },
     );
@@ -499,16 +643,17 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A partial");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B final");
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
     const firstPartialUpdateOrder = requireInvocationOrder(
       answerDraftStream.update,
       0,
       "first answer draft update",
     );
     const rotationOrder = requireInvocationOrder(
-      answerDraftStream.forceNewMessage,
+      answerDraftStream.rotateToNewMessageDeferringDelete,
       0,
-      "first answer draft rotation",
+      "unaccepted answer preview retirement",
     );
     const visibleBlockUpdateOrder = requireInvocationOrder(
       answerDraftStream.update,
@@ -520,7 +665,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("expires skipped queued block rotations before later partial previews", async () => {
+  it("retires an unaccepted preview after its queued block is skipped", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -530,6 +675,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
         await replyOptions?.onAssistantMessageStart?.();
         dispatcherOptions.onSkip?.(payload, { kind: "block", reason: "silent" });
         await replyOptions?.onPartialReply?.({ text: "Site B shows Y." });
+        await dispatcherOptions.deliver({ text: "Site B shows Y." }, { kind: "final" });
         return { queuedFinal: true };
       },
     );
@@ -538,11 +684,12 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
     const rotationOrder = requireInvocationOrder(
-      answerDraftStream.forceNewMessage,
+      answerDraftStream.rotateToNewMessageDeferringDelete,
       0,
-      "first answer draft rotation",
+      "unaccepted answer preview retirement",
     );
     const secondPartialUpdateOrder = requireInvocationOrder(
       answerDraftStream.update,
@@ -598,7 +745,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("clears queued rotations when block delivery loses answer text", async () => {
+  it("retires an unaccepted preview when its queued block loses answer text", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -617,6 +764,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
           { kind: "block", assistantMessageIndex: 0 },
         );
         await replyOptions?.onPartialReply?.({ text: "Site B partial" });
+        await dispatcherOptions.deliver({ text: "Site B final" }, { kind: "final" });
         return { queuedFinal: true };
       },
     );
@@ -625,16 +773,17 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A partial");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B partial");
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
     const firstPartialUpdateOrder = requireInvocationOrder(
       answerDraftStream.update,
       0,
       "first answer draft update",
     );
     const rotationOrder = requireInvocationOrder(
-      answerDraftStream.forceNewMessage,
+      answerDraftStream.rotateToNewMessageDeferringDelete,
       0,
-      "first answer draft rotation",
+      "unaccepted answer preview retirement",
     );
     const nextPartialUpdateOrder = requireInvocationOrder(
       answerDraftStream.update,

@@ -1,3 +1,4 @@
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 // Native Apple Messages poll bindings for approval prompts.
 //
 // Native polls replace tapback controls when the imsg bridge supports them.
@@ -19,9 +20,9 @@ import {
   buildIMessageApprovalConversationKeyForInbound,
   enumerateApprovalTargetKeys,
   normalizeConversationKey,
-  normalizeIMessageGuid,
   type IMessageApprovalConversationKey,
 } from "./approval-target-keys.js";
+import { normalizeIMessageGuid } from "./message-guid.js";
 import type { IMessagePayload, IMessagePoll } from "./monitor/types.js";
 import { getOptionalIMessageRuntime } from "./runtime.js";
 import { normalizeIMessageHandle } from "./targets.js";
@@ -47,7 +48,7 @@ const APPROVAL_DECISIONS = new Set<ExecApprovalReplyDecision>([
 /** JSON-safe: option pairs stay an array so the persistent store round-trips. */
 type IMessageApprovalPollTarget = {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   optionDecisions: ReadonlyArray<readonly [string, ExecApprovalReplyDecision]>;
 };
 
@@ -156,15 +157,15 @@ export function mapSentPollOptionsToDecisions(params: {
   return seenDecisions.size === params.requested.length ? mapped : [];
 }
 
-function registerIMessageApprovalPollTarget(params: {
+async function registerIMessageApprovalPollTarget(params: {
   accountId: string;
   conversation: IMessageApprovalConversationKey;
   pollGuid?: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   optionDecisions: ReadonlyArray<readonly [string, ExecApprovalReplyDecision]>;
   expiresAtMs: number;
-}): boolean {
+}): Promise<boolean> {
   const accountId = params.accountId.trim();
   const approvalId = params.approvalId.trim();
   const expiresAtMs = asDateTimestampMs(params.expiresAtMs);
@@ -192,49 +193,54 @@ function registerIMessageApprovalPollTarget(params: {
     approvalKind: params.approvalKind,
     optionDecisions: params.optionDecisions,
   };
-  for (const key of keys) {
-    pollTargets.register(key, target, { ttlMs });
-    // The poll balloon outlives the approval and stays tappable. Keep its
-    // ownership marker for the full balloon lifetime even if the live target
-    // expires while the gateway is stopped.
-    pollTombstones.register(key, { approvalId }, { ttlMs: TOMBSTONE_TTL_MS });
-  }
+  await Promise.all(
+    keys.flatMap((key) => [
+      pollTargets.register(key, target, { ttlMs }),
+      // The poll balloon outlives the approval and stays tappable. Keep its
+      // ownership marker for the full balloon lifetime even if the live target
+      // expires while the gateway is stopped.
+      pollTombstones.register(key, { approvalId }, { ttlMs: TOMBSTONE_TTL_MS }),
+    ]),
+  );
   return true;
 }
 
-function unregisterIMessageApprovalPollTarget(params: {
+async function unregisterIMessageApprovalPollTarget(params: {
   accountId: string;
   conversation: IMessageApprovalConversationKey;
   pollGuid?: string;
   optionDecisions?: ReadonlyArray<readonly [string, ExecApprovalReplyDecision]>;
   approvalId?: string;
-}): void {
-  for (const key of enumeratePollTargetKeys({
+}): Promise<void> {
+  const keys = enumeratePollTargetKeys({
     accountId: params.accountId,
     conversation: params.conversation,
     pollGuid: params.pollGuid,
     optionIds: params.optionDecisions?.map(([optionId]) => optionId),
-  })) {
-    pollTargets.delete(key);
-    pollTombstones.register(
-      key,
-      { approvalId: params.approvalId ?? "" },
-      { ttlMs: TOMBSTONE_TTL_MS },
-    );
-  }
+  });
+  await Promise.all(
+    keys.flatMap((key) => [
+      pollTargets.delete(key),
+      pollTombstones.register(
+        key,
+        { approvalId: params.approvalId ?? "" },
+        { ttlMs: TOMBSTONE_TTL_MS },
+      ),
+    ]),
+  );
 }
 
 /**
  * Consume votes for a poll that was created but could not be safely bound.
  * Messages has no reliable retract primitive for this balloon.
  */
-function registerIMessageApprovalPollTombstone(params: {
+async function registerIMessageApprovalPollTombstone(params: {
   accountId: string;
   conversation: IMessageApprovalConversationKey;
   pollGuid?: string;
   optionIds?: readonly string[];
   approvalId: string;
-}): boolean {
+}): Promise<boolean> {
   const keys = enumeratePollTargetKeys({
     accountId: params.accountId,
     conversation: params.conversation,
@@ -244,9 +250,11 @@ function registerIMessageApprovalPollTombstone(params: {
   if (keys.length === 0) {
     return false;
   }
-  for (const key of keys) {
-    pollTombstones.register(key, { approvalId: params.approvalId }, { ttlMs: TOMBSTONE_TTL_MS });
-  }
+  await Promise.all(
+    keys.map((key) =>
+      pollTombstones.register(key, { approvalId: params.approvalId }, { ttlMs: TOMBSTONE_TTL_MS }),
+    ),
+  );
   return true;
 }
 
@@ -543,11 +551,12 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
       approvalKind: target.approvalKind,
       decision,
       channel: "imessage",
+      accountId: params.accountId,
       senderId: event.actorHandle,
       gatewayUrl: params.gatewayUrl,
       ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),
     });
-    unregisterIMessageApprovalPollTarget({
+    await unregisterIMessageApprovalPollTarget({
       ...lookupKey,
       optionDecisions: target.optionDecisions,
       approvalId: target.approvalId,
@@ -560,7 +569,7 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
     return true;
   } catch (error) {
     if (isApprovalNotFoundError(error)) {
-      unregisterIMessageApprovalPollTarget({
+      await unregisterIMessageApprovalPollTarget({
         ...lookupKey,
         optionDecisions: target.optionDecisions,
         approvalId: target.approvalId,

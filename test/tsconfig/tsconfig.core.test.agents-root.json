@@ -1,0 +1,31 @@
+{
+  "extends": "./tsconfig.core.test.shard.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-agents-root.tsbuildinfo"
+  },
+  "include": [
+    "../../src/agents/*.test.ts",
+    "../../src/agents/*.test.tsx"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../src/agents/bash-tools*.test.ts",
+    "../../src/agents/bash-tools*.test.tsx",
+    "../../src/agents/bootstrap-files.remote.test.ts",
+    "../../src/agents/code-mode*.test.ts",
+    "../../src/agents/code-mode*.test.tsx",
+    "../../src/agents/model-catalog.test.ts",
+    "../../src/agents/model-catalog.planning.test.ts",
+    "../../src/agents/model-catalog-view.test.ts",
+    "../../src/agents/prepared-model-runtime*.test.ts",
+    "../../src/agents/prepared-model-runtime*.test.tsx",
+    "../../src/agents/tool-*.test.ts",
+    "../../src/agents/tool-*.test.tsx",
+    "../../src/agents/workspace-access.test.ts",
+    "../../src/agents/workspace-bootstrap-policy.test.ts",
+    "../../src/agents/workspace-input-attachments.test.ts",
+    "../../src/agents/workspace-memory-client.test.ts"
+  ]
+}

@@ -1,16 +1,38 @@
-// Feishu plugin module implements comment shared behavior.
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
-  isRecord as sharedIsRecord,
-  normalizeOptionalString,
+  isRecord,
+  normalizeOptionalString as normalizeString,
   normalizeStringEntries,
-  readStringValue,
+  readStringValue as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { FEISHU_COMMENT_FILE_TYPES, type CommentFileType } from "./comment-target.js";
+import { captureFeishuSendAuthority } from "./send-context.js";
 import {
   getFeishuSendRateLimitCode,
   getFeishuSendRateLimitCodeFromResponse,
 } from "./send-rate-limit.js";
+
+export class FeishuReplyCommentError extends Error {
+  httpStatus?: number;
+  feishuCode?: number | string;
+  feishuMsg?: string;
+  feishuLogId?: string;
+
+  constructor(params: {
+    message: string;
+    httpStatus?: number;
+    feishuCode?: number | string;
+    feishuMsg?: string;
+    feishuLogId?: string;
+  }) {
+    super(params.message);
+    this.name = "FeishuReplyCommentError";
+    this.httpStatus = params.httpStatus;
+    this.feishuCode = params.feishuCode;
+    this.feishuMsg = params.feishuMsg;
+    this.feishuLogId = params.feishuLogId;
+  }
+}
 
 export function encodeQuery(params: Record<string, string | undefined>): string {
   const query = new URLSearchParams();
@@ -23,12 +45,6 @@ export function encodeQuery(params: Record<string, string | undefined>): string 
   const queryString = query.toString();
   return queryString ? `?${queryString}` : "";
 }
-
-export const readString = readStringValue;
-
-export const normalizeString = normalizeOptionalString;
-
-export const isRecord = sharedIsRecord;
 
 export function formatFeishuApiError(
   error: unknown,
@@ -103,13 +119,13 @@ export async function requestFeishuApi<T>(
   options: {
     includeConfigParams?: boolean;
     includeNestedErrorLogId?: boolean;
-    /** Base retry delay in ms; doubles on the second retry. @internal */
-    retryDelayMs?: number;
   } = {},
 ): Promise<T> {
+  const assertSendAuthority = captureFeishuSendAuthority();
   try {
     return await retryAsync(
       async () => {
+        assertSendAuthority?.();
         const result = await request();
         // Feishu SDK may fulfill with a rate-limit body (e.g. { code: 11232, ... })
         // instead of throwing. Rethrow it in the AxiosError response shape so
@@ -129,7 +145,7 @@ export async function requestFeishuApi<T>(
         // With a 2-retry budget the core exponential schedule (1x, 2x base)
         // matches the previous linear attempt*base backoff exactly; revisit
         // the delay curve if FEISHU_SEND_MAX_RETRIES grows.
-        minDelayMs: options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS,
+        minDelayMs: FEISHU_SEND_RETRY_BASE_MS,
         shouldRetry: (error) => getFeishuSendRateLimitCode(error) !== undefined,
       },
     );

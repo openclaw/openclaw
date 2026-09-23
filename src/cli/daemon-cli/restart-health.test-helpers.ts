@@ -1,5 +1,12 @@
 import { vi } from "vitest";
+import {
+  GatewayProtocolRequestError,
+  retainGatewayResponsePayload,
+} from "../../../packages/gateway-client/src/protocol-request.js";
 import type { GatewayService } from "../../daemon/service.js";
+import type { CallGatewayOptions } from "../../gateway/call.js";
+import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import type { ConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 
@@ -16,14 +23,57 @@ export const sleep = vi.fn(async (ms: number) => {
 export const classifyPortListener = vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(
   () => "gateway",
 );
-export const probeGateway = vi.fn();
+export const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>();
+
+export function gatewayResponseError(message: string): GatewayProtocolRequestError {
+  const error = new GatewayProtocolRequestError({ code: "UNAVAILABLE", message });
+  retainGatewayResponsePayload(error, undefined);
+  return error;
+}
+export const requestStartupProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
+
+vi.mock("../../gateway/local-http-probe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../gateway/local-http-probe.js")>();
+  return {
+    ...actual,
+    createConfiguredGatewayLocalProbe: (
+      ...args: Parameters<typeof actual.createConfiguredGatewayLocalProbe>
+    ) => {
+      const probe = actual.createConfiguredGatewayLocalProbe(...args);
+      return {
+        ...probe,
+        requestHttp: (params: Parameters<ConfiguredGatewayLocalProbe["requestHttp"]>[0]) =>
+          params.pathname === "/startupz" ? requestStartupProbe(params) : probe.requestHttp(params),
+      };
+    },
+  };
+});
+
 export const createConfigIO = vi.fn();
 export const readBestEffortConfig = vi.fn(async () => ({}));
 export const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn<
   (_opts: unknown) => Promise<{ auth: { token?: string; password?: string } }>
 >(async () => ({ auth: {} }));
 const hasActiveStartupMigrationLease = vi.fn<(_params?: unknown) => boolean>(() => false);
+
+export function createStartupMigrationActivityProbe(isActive: () => boolean) {
+  return vi.fn<
+    typeof import("../../infra/startup-migration-checkpoint.js").hasActiveStartupMigrationLease
+  >((params) => {
+    const active = isActive();
+    if (active) {
+      params?.onActivity?.({
+        owner: "migration-owner",
+        pid: 8000,
+        heartbeatAt: monotonicClock.nowMs,
+      });
+    }
+    return active;
+  });
+}
 export const readActiveGatewayLockIdentity = vi.fn();
+export const readGatewayOwnerLease =
+  vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>();
 export const resolveGatewayServiceProbeHosts = vi.fn<
   (_params?: unknown) => Promise<readonly string[]>
 >(async () => ["127.0.0.1"]);
@@ -42,8 +92,9 @@ vi.mock("../../infra/ports-probe.js", () => ({
   LOOPBACK_PORT_PROBE_HOSTS: ["127.0.0.1"],
 }));
 
-vi.mock("../../gateway/probe.js", () => ({
-  probeGateway: (opts: unknown) => probeGateway(opts),
+vi.mock("../../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/call.js")>()),
+  callGateway: (opts: CallGatewayOptions) => callGateway(opts),
 }));
 
 vi.mock("../../config/io.js", () => ({
@@ -58,10 +109,17 @@ vi.mock("../../gateway/probe-auth.js", () => ({
 vi.mock("../../infra/startup-migration-checkpoint.js", () => ({
   hasActiveStartupMigrationLease: (params: unknown) => hasActiveStartupMigrationLease(params),
   STARTUP_MIGRATION_LEASE_TTL_MS: 5 * 60_000,
+  STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS: 60_000,
+}));
+
+vi.mock("../../infra/gateway-owner-lease.js", () => ({
+  readGatewayOwnerLease: (params: { env?: NodeJS.ProcessEnv; port?: number }) =>
+    readGatewayOwnerLease(params),
 }));
 
 vi.mock("../../infra/gateway-lock.js", () => ({
-  readActiveGatewayLockIdentity: () => readActiveGatewayLockIdentity(),
+  readActiveGatewayLockIdentity: (params?: { env?: NodeJS.ProcessEnv }) =>
+    readActiveGatewayLockIdentity(params),
   isSameGatewayLockIdentity: (
     previous: { ownerId?: string; pid: number; createdAt: string; startTime?: number },
     current: { ownerId?: string; pid: number; createdAt: string; startTime?: number },
@@ -126,7 +184,7 @@ export async function inspectGatewayRestartWithSnapshot(params: {
   runtime: { status: "running"; pid: number } | { status: "stopped" };
   portUsage: PortUsage;
   expectedVersion?: string;
-  includeUnknownListenersAsStale?: boolean;
+  expectedBuildId?: string;
 }) {
   const service = makeGatewayService(params.runtime);
   inspectPortUsage.mockResolvedValue(params.portUsage);
@@ -136,15 +194,12 @@ export async function inspectGatewayRestartWithSnapshot(params: {
     port: 18789,
     probeHosts: ["127.0.0.1"],
     ...(params.expectedVersion === undefined ? {} : { expectedVersion: params.expectedVersion }),
-    ...(params.includeUnknownListenersAsStale === undefined
-      ? {}
-      : { includeUnknownListenersAsStale: params.includeUnknownListenersAsStale }),
+    ...(params.expectedBuildId === undefined ? {} : { expectedBuildId: params.expectedBuildId }),
   });
 }
 
-export async function inspectUnknownListenerFallback(params: {
+export async function inspectUnknownListener(params: {
   runtime: { status: "running"; pid: number } | { status: "stopped" };
-  includeUnknownListenersAsStale: boolean;
 }) {
   Object.defineProperty(process, "platform", { value: "win32", configurable: true });
   classifyPortListener.mockReturnValue("unknown");
@@ -156,15 +211,16 @@ export async function inspectUnknownListenerFallback(params: {
       listeners: [{ pid: 10920, command: "unknown" }],
       hints: [],
     },
-    includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
   });
 }
 
-export async function inspectAmbiguousOwnershipWithProbe(
-  probeResult: Awaited<ReturnType<typeof probeGateway>>,
-) {
+export async function inspectAmbiguousOwnershipWithProbe(error?: Error) {
   classifyPortListener.mockReturnValue("unknown");
-  probeGateway.mockResolvedValue(probeResult);
+  if (error) {
+    callGateway.mockRejectedValue(error);
+  } else {
+    callGateway.mockImplementation(gatewayHealthResponse());
+  }
   return inspectGatewayRestartWithSnapshot({
     runtime: { status: "running", pid: 8000 },
     portUsage: {
@@ -201,11 +257,15 @@ export async function waitForStoppedFreeGatewayRestart(
 }
 
 export function resetRestartHealthMocks() {
+  requestStartupProbe.mockReset();
+  requestStartupProbe.mockResolvedValue(null);
   monotonicClock.nowMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => monotonicClock.nowMs);
   inspectPortUsage.mockReset();
   readBestEffortConfig.mockReset();
-  readBestEffortConfig.mockResolvedValue({});
+  // These transport-mocked lifecycle tests spoof OS state; they must not load
+  // native credential storage under a platform different from the running host.
+  readBestEffortConfig.mockResolvedValue({ gateway: { auth: { mode: "none" } } });
   createConfigIO.mockReset();
   createConfigIO.mockReturnValue({
     readBestEffortConfig: () => readBestEffortConfig(),
@@ -224,15 +284,14 @@ export function resetRestartHealthMocks() {
   });
   classifyPortListener.mockReset();
   classifyPortListener.mockReturnValue("gateway");
-  probeGateway.mockReset();
-  probeGateway.mockResolvedValue({
-    ok: false,
-    close: null,
-  });
+  callGateway.mockReset();
+  callGateway.mockRejectedValue(new Error("connect ECONNREFUSED"));
   hasActiveStartupMigrationLease.mockReset();
   hasActiveStartupMigrationLease.mockReturnValue(false);
   readActiveGatewayLockIdentity.mockReset();
   readActiveGatewayLockIdentity.mockResolvedValue(undefined);
+  readGatewayOwnerLease.mockReset();
+  readGatewayOwnerLease.mockReturnValue(undefined);
   resolveGatewayServiceProbeHosts.mockReset();
   resolveGatewayServiceProbeHosts.mockResolvedValue(["127.0.0.1"]);
 }

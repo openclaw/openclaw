@@ -47,7 +47,7 @@ vi.mock("./token.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./token.js")>();
   return {
     ...actual,
-    loadDelegatedTokens: () => hostMockState.delegatedTokens,
+    loadDelegatedTokens: async () => hostMockState.delegatedTokens,
   };
 });
 

@@ -1,11 +1,22 @@
+import { retainGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
+import { createAbortError, isAbortError } from "../../infra/abort-signal.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
+import { captureCronRunAdmissionTracker } from "../mutation-completion.js";
+import {
+  CronRunReceiptRevisionError,
+  finishCronRunReceipt,
+  releaseLocalCronRunReceiptOwnership,
+  type CronRunReceiptSettlementDisposition,
+} from "../store/run-receipt-store.js";
+import { isCronRunTriggerStateRetiredInDatabase } from "../store/run-receipt-trigger-state.js";
+import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
-import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
+import { waitForRunSettlement } from "./ops-lifecycle.js";
 import {
   activatePreparedManualRun,
   type ActivatedManualRun,
@@ -13,34 +24,37 @@ import {
   inspectManualRunDisposition,
   type ManualRunOptions,
   type ManualRunTerminalTracker,
+  type OnExitRunOptions,
+  type PreparedManualRun,
   prepareManualRun,
   releasePreparedManualReservationAfterReloadWithRetry,
   releasePreparedManualReservationWithRetry,
 } from "./ops-run-preparation.js";
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
-import { releaseQueuedCronRun, runWithCronAdmission } from "./run-admission.js";
-import { mergeManualRunSnapshotAfterReload } from "./startup-run-repair.js";
-import type { CronServiceState, CronWakeMode, DeferredCronNotifications } from "./state.js";
-import { emit } from "./state.js";
 import {
-  ensureLoaded,
-  persistOrRestore,
-  pruneCronJobScratchAfterCommit,
-  snapshotStoreForRollback,
-} from "./store.js";
-import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
+  releaseQueuedCronRun,
+  runWithCronAdmission,
+  supersedeActivatedCronRun,
+} from "./run-admission.js";
+import { cronRunReceiptPersistHooks, resolveCronRunReceiptTerminalStatus } from "./run-receipts.js";
+import { publishCronRuntimeRows } from "./runtime-publication.js";
+import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
+import type {
+  CronRunMode,
+  CronServiceState,
+  CronWakeMode,
+  DeferredCronNotifications,
+} from "./state.js";
+import { emit, isImmediateCronRunMode } from "./state.js";
+import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import {
-  resolveCronRunScheduleOwnership,
-  resolveCronRunTriggerOwnership,
-} from "./timer-outcomes.js";
-import {
-  applyJobResult,
-  applyScriptRunResult,
-  applyTriggerNoFireResult,
-  applyTriggerRunResult,
-  armTimer,
-  executeJobCoreWithTimeout,
-} from "./timer.js";
+  createCronOwnerExecutionIdentityAdmission,
+  tryFinishCronTaskRunWithoutHistory,
+} from "./task-runs.js";
+import { createCronOutcomeEvent, recordCronOutcomeForJob } from "./timer-outcome-events.js";
+import { applyOutcomeToAuthoritativeJob } from "./timer-outcomes.js";
+import { armTimer, authorCronRunCompletion, executeJobCoreWithTimeout } from "./timer.js";
 import { wake } from "./wake.js";
 
 let nextManualRunId = 1;
@@ -48,13 +62,16 @@ let nextManualRunId = 1;
 async function finishPreparedManualRun(
   state: CronServiceState,
   prepared: ActivatedManualRun,
-  mode?: "due" | "force",
+  mode?: CronRunMode,
 ): Promise<void> {
   const executionJob = prepared.executionJob;
   const startedAt = prepared.startedAt;
   const jobId = prepared.jobId;
   const taskRunId = prepared.taskRunId;
   const runId = prepared.runId;
+  let finalized = false;
+  let supersedeReason: string | undefined;
+  let receiptSettlementDisposition: CronRunReceiptSettlementDisposition | undefined;
 
   try {
     let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
@@ -66,9 +83,23 @@ async function finishPreparedManualRun(
         streamBatch: prepared.streamBatch,
         streamScheduleKey: prepared.streamScheduleKey,
         streamSourceIdentity: prepared.streamSourceIdentity,
+        runReceipt: prepared.runReceipt,
+        executionIdentity: createCronOwnerExecutionIdentityAdmission({
+          state,
+          runReceipt: prepared.runReceipt,
+          taskId: prepared.taskId,
+          flowId: prepared.flowId,
+        }),
       });
     } catch (err) {
-      coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
+      if (err instanceof CronRunReceiptRevisionError && err.reason === "owner-unavailable") {
+        receiptSettlementDisposition = "owner-unavailable";
+      }
+      coreResult = authorCronRunCompletion(state, executionJob, {
+        status: "error",
+        error:
+          err instanceof CronRunReceiptRevisionError ? err.message : normalizeCronRunErrorText(err),
+      });
     }
     if (prepared.onTriggerDisposition) {
       const disposition = coreResult.triggerEval?.busy
@@ -86,17 +117,34 @@ async function finishPreparedManualRun(
     }
     const endedAt = state.deps.nowMs();
     const triggerSkipped = coreResult.status === "ok" && coreResult.triggerEval?.fired === false;
-    const emitMissingQueuedTerminal = () => {
+    const outcome = {
+      ...coreResult,
+      jobId,
+      job: prepared.admittedJob,
+      taskRunId,
+      activeJobMarker: prepared.activeJobMarker,
+      runReceipt: prepared.runReceipt,
+      startedAt,
+      endedAt,
+    };
+    const outcomeOptions = {
+      emit: false,
+      request: {
+        preserveCadence: isImmediateCronRunMode(mode),
+        scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
+      },
+    };
+    const emitMissingTerminal = (required = false) => {
       const tracker = prepared.terminalTracker;
-      if (!tracker || tracker.emitted) {
+      if ((!tracker && !required) || tracker?.emitted) {
         return;
       }
       const job =
         prepared.activeJobMarker?.jobRemoved === true
           ? executionJob
           : state.store?.jobs.find((entry) => entry.id === jobId);
-      // enqueueRun acknowledges a concrete run id, so every accepted request
-      // needs one terminal event even if the job or service owner changes mid-run.
+      // Queued calls carry a tracker for dedupe. A removed direct run has no
+      // tracker, but still needs one durable terminal event/history/task outcome.
       emitCronRunFinished(
         state,
         {
@@ -104,13 +152,16 @@ async function finishPreparedManualRun(
           action: "finished",
           job,
           status: triggerSkipped ? "skipped" : coreResult.status,
+          completionStatus: triggerSkipped ? "failed" : coreResult.completionStatus,
           error: triggerSkipped
             ? "queued manual run skipped: trigger condition not met"
             : coreResult.error,
-          deliveryError: coreResult.deliveryError,
+          deliveryError: coreResult.deliveryState.error,
+          deliverySuppressionReason: coreResult.deliveryState.deliverySuppressionReason,
           summary: triggerSkipped ? undefined : coreResult.summary,
           diagnostics: coreResult.diagnostics,
-          delivered: coreResult.delivered,
+          delivered: coreResult.deliveryState.delivered,
+          deliveryStatus: coreResult.deliveryState.status,
           delivery: coreResult.delivery,
           sessionId: coreResult.sessionId,
           sessionKey: coreResult.sessionKey,
@@ -126,194 +177,162 @@ async function finishPreparedManualRun(
         taskRunId,
         {
           errorClassification: triggerSkipped ? undefined : coreResult.errorClassification,
+          failureNotificationDetail: triggerSkipped
+            ? undefined
+            : coreResult.failureNotificationDetail,
         },
       );
     };
-    if (!triggerSkipped) {
-      // Terminal state must land even if the store merge below throws; the later
-      // emitCronRunFinished re-finalizes the same row to attach history detail
-      // (same-status terminal updates apply, so this does not race precedence).
-      tryFinishCronTaskRunWithoutHistory(state, {
-        taskRunId,
-        status: coreResult.status,
+    const finishRemovedRun = () => {
+      finishCronRunReceipt({
+        handle: prepared.runReceipt,
+        status: resolveCronRunReceiptTerminalStatus(
+          triggerSkipped ? "skipped" : coreResult.status,
+          coreResult.triggerEval?.fired,
+        ),
+        finishedAtMs: endedAt,
         error: coreResult.error,
-        endedAt,
-        summary: coreResult.summary,
-        childSessionKey: coreResult.sessionKey,
       });
-    }
-    if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
-      emitMissingQueuedTerminal();
+      finalized = true;
+      emitMissingTerminal(true);
+    };
+    if (prepared.activeJobMarker?.jobRemoved === true) {
+      finishRemovedRun();
       return;
     }
-
-    let finalized = false;
     let notifySetupTimeout = coreResult.isolatedAgentSetupTimeout !== undefined;
     await locked(state, async () => {
-      await ensureLoaded(state, { skipRecompute: true });
-      if (
-        !isCronActiveJobMarkerCurrent(prepared.activeJobMarker) ||
-        prepared.activeJobMarker?.jobRemoved === true
-      ) {
-        notifySetupTimeout = false;
-        return;
-      }
+      await ensureLoaded(state, { forceReload: true });
       const job = state.store?.jobs.find((entry) => entry.id === jobId);
-      if (!job) {
+      if (prepared.activeJobMarker?.jobRemoved === true || !job) {
+        notifySetupTimeout = false;
+        finishRemovedRun();
         return;
       }
-
-      const scheduleOwnership = resolveCronRunScheduleOwnership({
-        admittedJob: prepared.admittedJob,
-        currentJob: job,
-        activeJobMarker: prepared.activeJobMarker,
-      });
-      const triggerOwnership = resolveCronRunTriggerOwnership({
-        admittedJob: prepared.admittedJob,
-        currentJob: job,
-        activeJobMarker: prepared.activeJobMarker,
-      });
-      const scheduleMode =
-        scheduleOwnership === "stale"
-          ? "stale-preserve"
-          : mode === "force"
-            ? "force-preserve"
-            : "advance";
       const postPersistNotifications: DeferredCronNotifications = [];
-
-      let shouldDelete = false;
-      if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
-        // Manual due checks share scheduled quiet-tick semantics: persist the
-        // evaluation but create no finished event or run-history entry.
-        applyTriggerNoFireResult(
+      if (!triggerSkipped) {
+        const taskJob = structuredClone(job);
+        applyOutcomeToAuthoritativeJob(state, taskJob, outcome, {
+          ...outcomeOptions,
+          deferredNotifications: [],
+        });
+        recordCronOutcomeForJob(state, taskJob, { ...outcome, job: executionJob });
+      }
+      let removedJob: CronJob | undefined;
+      try {
+        const committed = commitCronRuntimeRows({
           state,
-          job,
-          {
-            startedAt,
-            endedAt,
-            triggerEval: coreResult.triggerEval,
+          jobIds: [jobId],
+          operationLabel: "cron.manual-run-finalization",
+          transactionHooks: cronRunReceiptPersistHooks({
+            state,
+            handle: prepared.runReceipt,
+            terminal: {
+              status: triggerSkipped ? "skipped" : coreResult.status,
+              finishedAtMs: endedAt,
+              error: coreResult.error,
+              ...(receiptSettlementDisposition
+                ? { disposition: receiptSettlementDisposition }
+                : {}),
+            },
+          }),
+          mutate: ({ database, jobs }) => {
+            const current = jobs.get(jobId);
+            if (!current) {
+              return { value: undefined };
+            }
+            const removed = applyOutcomeToAuthoritativeJob(state, current, outcome, {
+              ...outcomeOptions,
+              triggerStateRetired: isCronRunTriggerStateRetiredInDatabase({
+                database,
+                handle: prepared.runReceipt,
+              }),
+              deferredNotifications: postPersistNotifications,
+            });
+            return {
+              ...(removed ? { deleteJobIds: [jobId] } : { upsertJobIds: [jobId] }),
+              value: { job: structuredClone(current), removed },
+            };
           },
-          {
-            scheduleMode,
-            triggerOwnership,
-            deferredNotifications: postPersistNotifications,
-          },
-        );
-      } else {
-        shouldDelete = applyJobResult(
-          state,
-          job,
-          {
-            ...coreResult,
-            startedAt,
-            endedAt,
-          },
-          {
-            // Stale edits are preserved by scheduleOwnership inside applyJobResult;
-            // only a real forced run may request a force-preserved cadence marker.
-            scheduleMode: scheduleMode === "force-preserve" ? "preserve" : "advance",
-            scheduleOwnership,
-            scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
-            deferredNotifications: postPersistNotifications,
-          },
-        );
-        applyTriggerRunResult(
-          job,
-          {
-            status: coreResult.status,
-            endedAt,
-            triggerEval: coreResult.triggerEval,
-          },
-          { scheduleOwnership, triggerOwnership },
-        );
-        applyScriptRunResult(job, coreResult, { triggerOwnership });
-
-        // Stream payloads are event-owned by their batch. Generic recurring
-        // error backoff must not synthesize a later run without that batch.
-        if (job.schedule.kind === "stream") {
-          job.state.nextRunAtMs = undefined;
+        });
+        if (!committed) {
+          return;
         }
-
-        emitCronRunFinished(
+        removedJob = committed.removed ? committed.job : undefined;
+        runPostPersistCronNotifications(state, postPersistNotifications);
+        applyCronRuntimeRowsToState(
           state,
-          {
-            jobId: job.id,
-            action: "finished",
-            job,
+          committed.removed ? [] : [committed.job],
+          committed.removed ? [jobId] : [],
+          { publish: false },
+        );
+        if (triggerSkipped) {
+          tryFinishCronTaskRunWithoutHistory(state, {
+            taskRunId,
             status: coreResult.status,
             error: coreResult.error,
+            endedAt,
             summary: coreResult.summary,
-            diagnostics: coreResult.diagnostics,
-            delivered: job.state.lastDelivered,
-            deliveryStatus: job.state.lastDeliveryStatus,
-            deliveryError: job.state.lastDeliveryError,
-            failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
-            delivery: coreResult.delivery,
-            sessionId: coreResult.sessionId,
-            sessionKey: coreResult.sessionKey,
-            runId,
-            runAtMs: startedAt,
-            durationMs: job.state.lastDurationMs,
-            nextRunAtMs: job.state.nextRunAtMs,
-            ...(coreResult.triggerEval?.fired ? { triggerFired: true } : {}),
-            model: coreResult.model,
-            provider: coreResult.provider,
-            usage: coreResult.usage,
-          },
-          prepared.terminalTracker,
-          taskRunId,
-          {
+            childSessionKey: coreResult.sessionKey,
             triggerEval: coreResult.triggerEval,
-            scriptResult: coreResult,
-            errorClassification: coreResult.errorClassification,
-          },
-        );
+          });
+        }
+        // Retirement stops live publication, not the exact receipt's durable
+        // completion. Manual force runs retain their reservation-time schedule owner.
+        if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
+          finalized = true;
+          return;
+        }
+        if (!triggerSkipped) {
+          emitCronRunFinished(
+            state,
+            {
+              ...createCronOutcomeEvent(committed.job, outcome),
+              runId,
+            },
+            prepared.terminalTracker,
+            taskRunId,
+            {
+              triggerEval: coreResult.triggerEval,
+              scriptResult: {
+                scriptStateChanged: coreResult.scriptStateChanged,
+                scriptState: coreResult.scriptState,
+              },
+              errorClassification: coreResult.errorClassification,
+              failureNotificationDetail: coreResult.failureNotificationDetail,
+            },
+          );
+        }
+        publishCronRuntimeRows(state);
+        await recomputeUnownedCronSchedules(state, {
+          recomputeExpired: true,
+          ...(isImmediateCronRunMode(mode) ? { preserveExpiredPacedNextRunJobId: jobId } : {}),
+        });
+      } catch (error) {
+        if (error instanceof CronRunReceiptRevisionError) {
+          // A retired reservation cannot clear a successor's same-millisecond marker.
+          if (isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
+            supersedeReason = error.message;
+          }
+          notifySetupTimeout = false;
+          return;
+        }
+        throw error;
       }
-
-      // Manual runs should not advance other due jobs without executing them.
-      // Use maintenance-only recompute to repair missing values while
-      // preserving existing past-due nextRunAtMs entries for future timer ticks.
-      const postRunSnapshot = shouldDelete
-        ? null
-        : {
-            enabled: job.enabled,
-            updatedAtMs: job.updatedAtMs,
-            state: structuredClone(job.state),
-          };
-      const postRunRemoved = shouldDelete;
-      const removedJob = shouldDelete ? structuredClone(job) : undefined;
-      // Isolated Telegram send can persist target writeback directly to disk.
-      // Reload before final persist so manual `cron run` keeps those changes.
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
-        notifySetupTimeout = false;
-        return;
-      }
-      const rollbackSnapshot = snapshotStoreForRollback(state);
-      mergeManualRunSnapshotAfterReload({
-        state,
-        jobId,
-        snapshot: postRunSnapshot,
-        removed: postRunRemoved,
-      });
-      recomputeNextRunsForMaintenance(state, {
-        recomputeExpired: true,
-        deferredNotifications: postPersistNotifications,
-        ...(mode === "force"
-          ? {
-              preserveExpiredPacedNextRunJobId: jobId,
-            }
-          : {}),
-      });
-      await persistOrRestore(state, rollbackSnapshot, {
-        postPersistNotifications,
-      });
       if (removedJob) {
-        pruneCronJobScratchAfterCommit(state, [removedJob.id]);
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
       }
       finalized = true;
     });
+    if (supersedeReason) {
+      await supersedeActivatedCronRun({
+        state,
+        jobId,
+        reservationIdentity: prepared.reservationIdentity,
+        runReceipt: prepared.runReceipt,
+        reason: supersedeReason,
+      });
+    }
     if (notifySetupTimeout && isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
       maybeNotifyManualIsolatedSetupTimeout(state, {
         jobId,
@@ -321,23 +340,19 @@ async function finishPreparedManualRun(
         isolatedAgentSetupTimeout: coreResult.isolatedAgentSetupTimeout,
       });
     }
-    if (finalized) {
-      if (triggerSkipped) {
-        tryFinishCronTaskRunWithoutHistory(state, {
-          taskRunId,
-          status: coreResult.status,
-          error: coreResult.error,
-          endedAt,
-          summary: coreResult.summary,
-          childSessionKey: coreResult.sessionKey,
-        });
-      }
+    if (finalized && isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
       armTimer(state);
     }
-    emitMissingQueuedTerminal();
+    emitMissingTerminal();
   } finally {
-    releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
-    clearManualCronJobActive(state, jobId, prepared.activeJobMarker);
+    // A failed row write leaves the exact receipt for recovery of its terminal
+    // task fact. Only local liveness and admission ownership retire here.
+    releaseLocalCronRunReceiptOwnership(prepared.runReceipt);
+    try {
+      releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
+    } finally {
+      clearManualCronJobActive(state, jobId, prepared.activeJobMarker);
+    }
   }
 }
 
@@ -345,38 +360,98 @@ async function finishPreparedManualRun(
 export async function run(
   state: CronServiceState,
   id: string,
-  mode?: "due" | "force",
+  mode?: CronRunMode,
   opts?: ManualRunOptions,
 ) {
-  const prepared = await prepareManualRun(state, id, mode, opts);
-  if (!prepared.ok || !prepared.ran) {
-    return prepared;
-  }
-  const admission = await runWithCronAdmission(state, async () => {
-    let activeRun: Awaited<ReturnType<typeof activatePreparedManualRun>>;
-    try {
-      activeRun = await activatePreparedManualRun(state, prepared, mode);
-    } catch (error) {
-      // Activation failures still own the original durable reservation. Once
-      // activation succeeds, finishPreparedManualRun releases it after execution.
-      try {
-        await locked(state, async () => {
-          await releasePreparedManualReservationWithRetry(state, prepared);
-        });
-      } catch (cleanupError) {
-        state.deps.log.warn(
-          { jobId: prepared.jobId, err: String(cleanupError) },
-          "cron: failed to release manual run reservation after activation error",
-        );
+  const execute = async () => {
+    const prepared = await prepareManualRun(state, id, mode, opts);
+    if (!prepared.ok || !prepared.ran) {
+      return prepared;
+    }
+    return await executePreparedManualRun(state, prepared, mode);
+  };
+  return await (opts?.streamBatch !== undefined && state.deps.runSchedulerOwned
+    ? state.deps.runSchedulerOwned(execute)
+    : execute());
+}
+
+/** Consumes an observed exit only when its payload owns the durable reservation. */
+export async function runOnExit(state: CronServiceState, id: string, opts: OnExitRunOptions) {
+  const generation = state.lifecycleGeneration;
+  const execute = async () => {
+    const commitGuard = () => {
+      if (opts.signal.aborted || state.stopped || generation !== state.lifecycleGeneration) {
+        throw createAbortError("cron on-exit admission cancelled");
       }
-      throw error;
+      opts.commitGuard();
+    };
+    try {
+      while (await waitForRunSettlement(state, id, opts.signal)) {
+        commitGuard();
+        const prepared = await prepareManualRun(state, id, "force", {
+          onExit: { ...opts, commitGuard },
+          commitGuard,
+        });
+        if (!prepared.ok || !prepared.ran) {
+          if (prepared.ok && prepared.reason === "already-running") {
+            // Another caller won the receipt after our wait. The exit is still
+            // unconsumed, so follow that receipt before attempting admission again.
+            continue;
+          }
+          return prepared;
+        }
+        return await executePreparedManualRun(state, prepared, "force");
+      }
+    } catch (error) {
+      if (!isAbortError(error)) {
+        throw error;
+      }
     }
-    if (!activeRun.ran) {
-      return activeRun;
-    }
-    await finishPreparedManualRun(state, activeRun, mode);
-    return { ok: true, ran: true } as const;
-  });
+    return { ok: true, ran: false, reason: "stopped" } as const;
+  };
+  return await (state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(execute) : execute());
+}
+
+async function executePreparedManualRun(
+  state: CronServiceState,
+  prepared: Extract<PreparedManualRun, { ran: true }>,
+  mode?: CronRunMode,
+  onActivationSettled?: () => void,
+) {
+  const admission = await runWithCronAdmission(
+    state,
+    async () => {
+      let activeRun: Awaited<ReturnType<typeof activatePreparedManualRun>>;
+      try {
+        activeRun = await activatePreparedManualRun(state, prepared, mode);
+      } catch (error) {
+        // Activation failures still own the original durable reservation. Once
+        // activation succeeds, finishPreparedManualRun releases it after execution.
+        try {
+          await locked(state, async () => {
+            await releasePreparedManualReservationWithRetry(state, prepared);
+          });
+        } catch (cleanupError) {
+          state.deps.log.warn(
+            { jobId: prepared.jobId, err: String(cleanupError) },
+            "cron: failed to release manual run reservation after activation error",
+          );
+        }
+        throw error;
+      } finally {
+        // Activation owns the last caller-authorized write. The scheduled run
+        // owns execution afterward, so do not join its payload to the caller.
+        onActivationSettled?.();
+      }
+      if (!activeRun.ran) {
+        return activeRun;
+      }
+      await finishPreparedManualRun(state, activeRun, mode);
+      return { ok: true, ran: true } as const;
+    },
+    undefined,
+    prepared.onExit?.signal,
+  );
   if (admission.kind === "stopped") {
     await releasePreparedManualReservationAfterReloadWithRetry(state, prepared);
     return { ok: true, ran: false, reason: "stopped" } as const;
@@ -384,9 +459,14 @@ export async function run(
   return admission.value;
 }
 
-/** Queues a manual cron run behind the cron command lane and returns an immediate run id. */
-export async function enqueueRun(state: CronServiceState, id: string, mode?: "due" | "force") {
-  const disposition = await inspectManualRunDisposition(state, id, mode);
+/** Acknowledges queued manual work only after its durable reservation exists. */
+export async function enqueueRun(
+  state: CronServiceState,
+  id: string,
+  mode?: CronRunMode,
+  opts?: { commitGuard?: () => void },
+) {
+  const disposition = await inspectManualRunDisposition(state, id, mode, opts);
   if (!disposition.ok || !("runnable" in disposition && disposition.runnable)) {
     return disposition;
   }
@@ -394,84 +474,153 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   const scheduleOwnershipAtMs = state.deps.nowMs();
   const runId = `manual:${id}:${scheduleOwnershipAtMs}:${nextManualRunId++}`;
   const terminalTracker: ManualRunTerminalTracker = { emitted: false };
-  void runWithGatewayIndependentRootWorkContinuation(() =>
-    enqueueCommandInLane(
-      CommandLane.Cron,
-      async (owningCronLaneTaskMarker) => {
-        const result = await run(state, id, mode, {
-          runId,
-          scheduleOwnershipAtMs,
-          terminalTracker,
-          owningCronLaneTaskMarker,
-        });
-        if (result.ok && "ran" in result && !result.ran) {
-          if (result.reason !== "invalid-spec") {
-            const finishedAt = state.deps.nowMs();
-            const job = state.store?.jobs.find((entry) => entry.id === id);
-            emitCronRunFinished(
+  const releaseCallerAuthority = retainGatewayDeviceRevocation(opts?.commitGuard);
+  const acceptance = createDeferredCore<
+    { ok: true; enqueued: true; runId: string } | Exclude<PreparedManualRun, { ran: true }>
+  >();
+  const trackCallerWork = captureCronRunAdmissionTracker();
+  const activationSettled = createDeferredCore();
+  let accepted = false;
+  const acceptQueue = () => {
+    if (!accepted && trackCallerWork) {
+      // Retain the existing caller resources after the durable reservation and
+      // before acknowledging it. Genuine aborts and all commit guards stay live.
+      void trackCallerWork(() => activationSettled.promise).catch((error: unknown) => {
+        state.deps.log.error(
+          { jobId: id, runId, err: String(error) },
+          "cron: queued manual admission tracking failed",
+        );
+      });
+    }
+    accepted = true;
+    acceptance.resolve({ ok: true, enqueued: true, runId });
+  };
+  let queuedRun: Promise<unknown>;
+  try {
+    queuedRun = runWithGatewayIndependentRootWorkContinuation(async () => {
+      opts?.commitGuard?.();
+      const prepared = await prepareManualRun(state, id, mode, {
+        runId,
+        scheduleOwnershipAtMs,
+        terminalTracker,
+        commitGuard: opts?.commitGuard,
+      });
+      if (!prepared.ok || !prepared.ran) {
+        acceptance.resolve(prepared);
+        return prepared;
+      }
+      let dispatched = false;
+      try {
+        opts?.commitGuard?.();
+        return await enqueueCommandInLane(
+          CommandLane.Cron,
+          async (owningCronLaneTaskMarker) => {
+            acceptQueue();
+            dispatched = true;
+            const result = await executePreparedManualRun(
               state,
-              {
-                jobId: id,
-                action: "finished",
-                job,
-                status: "skipped",
-                error: `queued manual run skipped before execution: ${result.reason}`,
-                runId,
-                runAtMs: finishedAt,
-                durationMs: 0,
-                nextRunAtMs: job?.state.nextRunAtMs,
-              },
-              terminalTracker,
+              { ...prepared, owningCronLaneTaskMarker },
+              mode,
+              activationSettled.resolve,
+            );
+            if (result.ok && "ran" in result && !result.ran) {
+              if (result.reason !== "invalid-spec" && result.reason !== "ownerless") {
+                const finishedAt = state.deps.nowMs();
+                const job = state.store?.jobs.find((entry) => entry.id === id);
+                emitCronRunFinished(
+                  state,
+                  {
+                    jobId: id,
+                    action: "finished",
+                    job,
+                    status: "skipped",
+                    error: `queued manual run skipped before execution: ${result.reason}`,
+                    runId,
+                    runAtMs: finishedAt,
+                    durationMs: 0,
+                    nextRunAtMs: job?.state.nextRunAtMs,
+                  },
+                  terminalTracker,
+                );
+              }
+              state.deps.log.info(
+                { jobId: id, runId, reason: result.reason },
+                "cron: queued manual run skipped before execution",
+              );
+            }
+            return result;
+          },
+          {
+            onQueued: acceptQueue,
+            warnAfterMs: 5_000,
+            onWait: (waitMs, queuedAhead) => {
+              state.deps.log.warn(
+                { jobId: id, runId, waitMs, queuedAhead },
+                "cron: queued manual run waiting for an execution slot",
+              );
+            },
+          },
+        );
+      } finally {
+        if (!dispatched) {
+          try {
+            await releasePreparedManualReservationAfterReloadWithRetry(state, prepared);
+          } catch (cleanupError) {
+            state.deps.log.warn(
+              { jobId: id, err: String(cleanupError) },
+              "cron: failed to release manual reservation after queue rejection",
             );
           }
-          state.deps.log.info(
-            { jobId: id, runId, reason: result.reason },
-            "cron: queued manual run skipped before execution",
-          );
         }
-        return result;
-      },
-      {
-        warnAfterMs: 5_000,
-        onWait: (waitMs, queuedAhead) => {
-          state.deps.log.warn(
-            { jobId: id, runId, waitMs, queuedAhead },
-            "cron: queued manual run waiting for an execution slot",
-          );
+      }
+    }, "cron:manual-run");
+  } catch (error) {
+    activationSettled.resolve();
+    releaseCallerAuthority?.();
+    throw error;
+  }
+  void queuedRun
+    .catch((err: unknown) => {
+      if (!accepted) {
+        acceptance.reject(err);
+        return;
+      }
+      if (terminalTracker.emitted) {
+        state.deps.log.error(
+          { jobId: id, runId, err: String(err) },
+          "cron: queued manual run failed after emitting its terminal event",
+        );
+        return;
+      }
+      const finishedAt = state.deps.nowMs();
+      const job = state.store?.jobs.find((entry) => entry.id === id);
+      emitCronRunFinished(
+        state,
+        {
+          jobId: id,
+          action: "finished",
+          job,
+          status: "error",
+          error: normalizeCronRunErrorText(err),
+          runId,
+          runAtMs: finishedAt,
+          durationMs: 0,
+          nextRunAtMs: job?.state.nextRunAtMs,
         },
-      },
-    ),
-  ).catch((err: unknown) => {
-    if (terminalTracker.emitted) {
+        terminalTracker,
+      );
       state.deps.log.error(
         { jobId: id, runId, err: String(err) },
-        "cron: queued manual run failed after emitting its terminal event",
+        "cron: queued manual run background execution failed",
       );
-      return;
-    }
-    const finishedAt = state.deps.nowMs();
-    const job = state.store?.jobs.find((entry) => entry.id === id);
-    emitCronRunFinished(
-      state,
-      {
-        jobId: id,
-        action: "finished",
-        job,
-        status: "error",
-        error: normalizeCronRunErrorText(err),
-        runId,
-        runAtMs: finishedAt,
-        durationMs: 0,
-        nextRunAtMs: job?.state.nextRunAtMs,
-      },
-      terminalTracker,
-    );
-    state.deps.log.error(
-      { jobId: id, runId, err: String(err) },
-      "cron: queued manual run background execution failed",
-    );
-  });
-  return { ok: true, enqueued: true, runId } as const;
+    })
+    .finally(() => {
+      // Covers queue clearing, stopped admission, preparation failure, and any
+      // path that never entered the activation callback.
+      activationSettled.resolve();
+      releaseCallerAuthority?.();
+    });
+  return await acceptance.promise;
 }
 
 /** Enqueues manual wake text through the cron wake API. */

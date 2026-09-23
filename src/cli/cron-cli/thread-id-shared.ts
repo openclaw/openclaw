@@ -3,18 +3,19 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { CronCliError } from "./cron-cli-error.js";
 
 export function parseCronThreadIdOption(value: unknown): number | undefined {
-  const raw = normalizeOptionalString(value);
-  if (!raw) {
+  if (typeof value !== "string") {
     return undefined;
   }
-  if (!/^\d+$/.test(raw)) {
-    throw new Error("--thread-id must be a positive integer Telegram topic thread id");
+  const raw = normalizeOptionalString(value);
+  if (!raw || !/^\d+$/.test(raw)) {
+    throw new CronCliError("--thread-id must be a positive integer Telegram topic thread id");
   }
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error("--thread-id must be a safe positive integer Telegram topic thread id");
+    throw new CronCliError("--thread-id must be a safe positive integer Telegram topic thread id");
   }
   return parsed;
 }

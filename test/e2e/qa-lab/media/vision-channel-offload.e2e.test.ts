@@ -6,9 +6,11 @@ import {
   createQaChannelTransport,
   type MockOpenAiRequestSnapshot,
   startQaBusServer,
-  startQaGatewayChild,
+  createQaGatewayChild,
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const ACTIVE_MODEL_ID = "gpt-5.6-luna";
@@ -129,9 +131,11 @@ describe("QA-channel vision offload", () => {
     const mock = await startQaMockOpenAiServer();
     cleanups.push(() => mock.stop());
 
-    const gateway = await startQaGatewayChild({
+    const gatewayOwner = createQaGatewayChild();
+    cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+    const gateway = await gatewayOwner.start({
       repoRoot: REPO_ROOT,
-      useRepoCli: true,
+      command: createQaPreparedRepoCliCommand(REPO_ROOT),
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
       primaryModel: ACTIVE_MODEL_REF,
@@ -141,7 +145,6 @@ describe("QA-channel vision offload", () => {
       controlUiEnabled: false,
       mutateConfig: configureVisionOffload,
     });
-    cleanups.push(() => gateway.stop());
     await transport.waitReady({ gateway });
 
     const cursorResponse = await fetch(`${mock.baseUrl}/debug/request-cursor`);
@@ -200,7 +203,7 @@ describe("QA-channel vision offload", () => {
     expect(activeModelRequest.model, requestDiagnostics).toBe(ACTIVE_MODEL_ID);
     expect(activeModelRequest.imageInputCount, requestDiagnostics).toBe(0);
     expect(readInputRoles(activeModelRequest), requestDiagnostics).toEqual([
-      "system",
+      "developer",
       "user",
       "user",
     ]);

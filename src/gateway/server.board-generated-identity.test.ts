@@ -9,9 +9,10 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { READ_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
-import { getFreePort, installGatewayTestHooks, startGatewayServer } from "./test-helpers.js";
+import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -47,14 +48,14 @@ it(
 
     const events: string[] = [];
     const start = async () => {
-      const port = await getFreePort();
-      const server = await startGatewayServer(port, {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const server = await startTestGatewayServer(portClaim, {
         auth: { mode: "none" },
         bind: "loopback",
         controlUiEnabled: false,
         sidecarStartup: "defer",
       });
-      return { port, server };
+      return { port: portClaim.port, server };
     };
     const connect = (port: number, deviceFamily: string) =>
       connectGatewayClient({
@@ -74,10 +75,10 @@ it(
         timeoutMs: 30_000,
       });
 
-    let firstServer: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let firstServer: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let firstClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     let secondClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-    let restartedServer: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let restartedServer: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let restartedClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     try {
       const first = await start();

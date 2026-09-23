@@ -8,14 +8,20 @@ import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { createEmbeddedRunProgressController } from "./progress-controller.js";
 import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 
 export type PreparedEmbeddedRunInput = {
+  /** Retain lazy-writer cleanup with this prepared runtime after its logical result. */
+  onInitialWriterPrepared: (resource: AsyncDisposable) => void;
   runParams: RunEmbeddedAgentParamsWithSessionFile;
+  sessionAdmission?: ReturnType<typeof assertAgentHarnessRunAdmission>;
+  contextEngineAgentId?: string;
   provider: string;
   modelId: string;
   agentDir: string;
   workspaceResolution: ReturnType<typeof resolveRunWorkspaceDir>;
   workspaceDir: string;
+  bootstrapWorkspaceDir?: string;
   isCanonicalWorkspace: boolean;
   globalLane: string;
   hookRunner: ReturnType<typeof getGlobalHookRunner>;
@@ -30,6 +36,6 @@ export type PreparedEmbeddedRunInput = {
   progressController: ReturnType<typeof createEmbeddedRunProgressController>;
   laneController: ReturnType<typeof createEmbeddedRunLaneController>;
   lifecycleGeneration: NonNullable<RunEmbeddedAgentParams["lifecycleGeneration"]>;
-  suspendForFailure: (params: Omit<SessionSuspensionParams, "laneId">) => void;
+  suspendForFailure: (params: SessionSuspensionParams) => void;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 };

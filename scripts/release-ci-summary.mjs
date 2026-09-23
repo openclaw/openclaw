@@ -10,25 +10,72 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { execGhRead, plainGhEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
+import { validateFullReleaseCandidateBinding } from "./full-release-candidate-contract.mjs";
+import {
+  publicationAdmissionContract,
+  publicationObservationJson,
+  publicationSourceContract,
+  publicationSourceJson,
+  publicationSourceReuseIdentity,
+  validatePublicationAdmissionBinding,
+  validatePublicationSourceBinding,
+} from "./full-release-publication-contract.mjs";
+import {
+  classifyReleaseGhTransportError,
+  compareReleaseJobsByName,
+  composeReleaseChildAttemptEvidence,
+  formatReleaseStateOutcome,
+  isReleaseCheckJobAdvisory,
+  isReleaseGhArtifactMissingError,
+  isSplitChangelogEvidenceDelta,
+  classifyReleaseChangelogEvidenceComparison,
+  SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
+  MAX_RELEASE_ARTIFACT_BYTES,
+  normalizeReleaseCoveragePolicy,
+  normalizeReleaseTelegramWaiver,
+  releaseCompositeJobsSha256,
+  terminalPolicyPass,
+  validateReleaseChildDispatchBinding,
+  validateReleaseCoveragePolicyBinding,
+  validateReleaseExecutionPlanArtifact,
+  validateReleaseChildRunProvenance,
+  validateReleaseStateArtifact,
+  validateReleaseTelegramWaiverBinding,
+} from "./full-release-validation-policy.mjs";
+import { inspectActionsArtifactZip } from "./lib/actions-artifact-archive.mjs";
+import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
+import {
+  execGhRead,
+  execGhReadAsync,
+  plainGhAuthenticatedEnv,
+  resolvePlainGhBin,
+} from "./lib/plain-gh.mjs";
+import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 
+const sortReleaseJsonValueKeys = /** @type {<T>(value: T) => T} */ (sortJsonValueKeys); // Validated release JSON preserves its structural type.
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
 const RELEASE_EVIDENCE_SCHEMA = "openclaw.release-validation-evidence/v3";
+const PHASED_RELEASE_EVIDENCE_SCHEMA = "openclaw.release-validation-evidence/v4";
 const SHA_PINNED_BRANCH_PATTERN = /^release-ci\/[a-f0-9]{12}-[1-9][0-9]*$/u;
+const TRUSTED_RELEASE_PUBLISH_TAG_PATTERN =
+  /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u;
 const RELEASE_EVIDENCE_SCRIPT = "scripts/release-ci-summary.mjs";
 const RELEASE_EVIDENCE_FILE = fileURLToPath(import.meta.url);
 const RELEASE_EVIDENCE_REPO_ROOT = resolve(dirname(RELEASE_EVIDENCE_FILE), "..");
 const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
-const MAX_MANIFEST_ARTIFACT_ZIP_BYTES = 256 * 1024;
-const MAX_MANIFEST_JSON_BYTES = 128 * 1024;
 const MAX_MANIFEST_ENTRY_LIST_BYTES = 8 * 1024;
+const MAX_MANIFEST_ARTIFACT_ZIP_BYTES = MAX_RELEASE_ARTIFACT_BYTES + MAX_MANIFEST_ENTRY_LIST_BYTES;
 // Release evidence lookups run during full release validation, so keep enough
 // headroom for GitHub latency while preventing one stalled read from consuming
 // the workflow budget.
 const GH_COMMAND_TIMEOUT_MS = 60_000;
+const ARTIFACT_DOWNLOAD_MIN_BYTES_PER_SECOND = 256 * 1024;
+const ARTIFACT_DOWNLOAD_OVERHEAD_MS = 60_000;
+const ARTIFACT_DOWNLOAD_MAX_TIMEOUT_MS = 30 * 60_000;
+const ARTIFACT_DOWNLOAD_ATTEMPTS = 2;
 const SUCCESSFUL_PARENT_JOB_CONCLUSIONS = new Set(["neutral", "skipped", "success"]);
 
-const CHILD_DISPATCHES = [
+const LEGACY_CHILD_DISPATCHES = [
   {
     manifestKey: "normalCi",
     name: "CI",
@@ -71,27 +118,104 @@ const CHILD_DISPATCHES = [
   },
 ];
 
+const PHASED_CHILD_DISPATCHES = [
+  LEGACY_CHILD_DISPATCHES.find((child) => child.manifestKey === "normalCi"),
+  {
+    manifestKey: "pluginPrereleaseIndependent",
+    name: "Plugin Prerelease",
+    parentJobName: "Run plugin prerelease independent validation",
+    suffix: "-plugin-prerelease-independent",
+    trustedRef: "parent",
+    workflow: "plugin-prerelease.yml",
+  },
+  {
+    manifestKey: "pluginPrereleaseCandidate",
+    name: "Plugin Prerelease",
+    parentJobName: "Run plugin prerelease candidate validation",
+    suffix: "-plugin-prerelease-candidate",
+    trustedRef: "parent",
+    workflow: "plugin-prerelease.yml",
+  },
+  {
+    manifestKey: "releaseChecksIndependent",
+    name: "OpenClaw Release Checks",
+    parentJobName: "Run release checks independent validation",
+    suffix: "-release-checks-independent",
+    trustedRef: "parent",
+    workflow: "openclaw-release-checks.yml",
+  },
+  {
+    manifestKey: "releaseChecksCandidate",
+    name: "OpenClaw Release Checks",
+    parentJobName: "Run release checks candidate validation",
+    suffix: "-release-checks-candidate",
+    trustedRef: "parent",
+    workflow: "openclaw-release-checks.yml",
+  },
+  LEGACY_CHILD_DISPATCHES.find((child) => child.manifestKey === "npmTelegram"),
+  LEGACY_CHILD_DISPATCHES.find((child) => child.manifestKey === "productPerformance"),
+];
+// One phased child set plus current and reused parents.
+const MAX_EXPECTED_RUN_ATTEMPTS = PHASED_CHILD_DISPATCHES.length + 2;
+const MAX_EXPECTED_RUN_ATTEMPTS_JSON_BYTES = 4 * 1024;
+
+class ReleaseEvidenceRefreshRequiredError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ReleaseEvidenceRefreshRequiredError";
+    this.refreshable = true;
+  }
+}
+
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 const EVIDENCE_REUSE_POLICIES = new Set([
   EXACT_TARGET_EVIDENCE_REUSE_POLICY,
   CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY,
+  SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
 ]);
 
 const RERUN_GROUP_CHILD_KEYS = new Map([
   ["all", ["normalCi", "releaseChecks", "pluginPrerelease", "productPerformance"]],
   ["ci", ["normalCi"]],
   ["plugin-prerelease", ["pluginPrerelease"]],
-  ["release-checks", ["releaseChecks"]],
   ["install-smoke", ["releaseChecks"]],
   ["cross-os", ["releaseChecks"]],
   ["live-e2e", ["releaseChecks"]],
   ["package", ["releaseChecks"]],
-  ["qa", ["releaseChecks"]],
   ["qa-parity", ["releaseChecks"]],
   ["qa-live", ["releaseChecks"]],
   ["npm-telegram", ["npmTelegram"]],
   ["performance", ["productPerformance"]],
+]);
+
+const PHASED_RERUN_GROUP_CHILD_KEYS = new Map([
+  [
+    "all",
+    [
+      "normalCi",
+      "pluginPrereleaseIndependent",
+      "pluginPrereleaseCandidate",
+      "releaseChecksIndependent",
+      "releaseChecksCandidate",
+      "productPerformance",
+    ],
+  ],
+  ["ci", ["normalCi"]],
+  ["plugin-prerelease", ["pluginPrereleaseIndependent", "pluginPrereleaseCandidate"]],
+  ["install-smoke", ["releaseChecksIndependent"]],
+  ["cross-os", ["releaseChecksCandidate"]],
+  ["live-e2e", ["releaseChecksIndependent", "releaseChecksCandidate"]],
+  ["package", ["releaseChecksCandidate"]],
+  ["qa-parity", ["releaseChecksIndependent"]],
+  ["qa-live", ["releaseChecksIndependent"]],
+  ["npm-telegram", ["npmTelegram"]],
+  ["performance", ["productPerformance"]],
+]);
+
+const HISTORICAL_MANIFEST_RERUN_GROUP_CHILD_KEYS = new Map([
+  ["release-checks", ["releaseChecks"]],
+  ["qa", ["releaseChecks"]],
 ]);
 
 export function runReleaseCiGh(args, params = {}) {
@@ -115,6 +239,14 @@ function gh(args) {
   return runReleaseCiGh(args);
 }
 
+function ghAsync(args) {
+  return execGhReadAsync(args, {
+    killSignal: "SIGKILL",
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: GH_COMMAND_TIMEOUT_MS,
+  });
+}
+
 function jsonGh(args) {
   return JSON.parse(gh(args));
 }
@@ -127,23 +259,388 @@ function githubRestJson(pathSuffix, repository = DEFAULT_REPO) {
   return jsonGh(githubRestArgs(pathSuffix, repository));
 }
 
+async function githubRestJsonAsync(pathSuffix, repository = DEFAULT_REPO) {
+  return JSON.parse(await ghAsync(githubRestArgs(pathSuffix, repository)));
+}
+
 export function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
   return ["api", `repos/${repository}/actions/artifacts/${artifactId}/zip`];
 }
 
-function downloadArtifactZip(artifactId, destination, repository = DEFAULT_REPO) {
-  const output = openSync(destination, "w");
-  try {
-    execFileSync(resolvePlainGhBin(), artifactDownloadArgs(artifactId, repository), {
-      env: plainGhEnv(),
-      killSignal: "SIGKILL",
-      maxBuffer: 64 * 1024 * 1024,
-      stdio: ["ignore", output, "pipe"],
-      timeout: GH_COMMAND_TIMEOUT_MS,
-    });
-  } finally {
-    closeSync(output);
+export function artifactDownloadTimeoutMs(sizeInBytes) {
+  const size = Number(sizeInBytes);
+  if (!Number.isSafeInteger(size) || size < 1) {
+    throw new Error("artifact download size is invalid");
   }
+  return Math.min(
+    ARTIFACT_DOWNLOAD_MAX_TIMEOUT_MS,
+    Math.max(
+      GH_COMMAND_TIMEOUT_MS,
+      Math.ceil((size / ARTIFACT_DOWNLOAD_MIN_BYTES_PER_SECOND) * 1000) +
+        ARTIFACT_DOWNLOAD_OVERHEAD_MS,
+    ),
+  );
+}
+
+function downloadArtifactZip(artifactId, destination, sizeInBytes, repository = DEFAULT_REPO) {
+  const timeout = sizeInBytes ? artifactDownloadTimeoutMs(sizeInBytes) : GH_COMMAND_TIMEOUT_MS;
+  for (let attempt = 1; attempt <= ARTIFACT_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    const output = openSync(destination, "w");
+    try {
+      execFileSync(resolvePlainGhBin(), artifactDownloadArgs(artifactId, repository), {
+        env: plainGhAuthenticatedEnv(),
+        killSignal: "SIGKILL",
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", output, "pipe"],
+        timeout,
+      });
+      return;
+    } catch (error) {
+      if (
+        attempt === ARTIFACT_DOWNLOAD_ATTEMPTS ||
+        classifyReleaseGhTransportError(error) !== "transient"
+      ) {
+        throw error;
+      }
+    } finally {
+      closeSync(output);
+    }
+  }
+}
+
+function tryDownloadExecutionPlan(runId, repository = DEFAULT_REPO) {
+  const artifactName = `full-release-execution-plan-${runId}`;
+  const downloadDir = mkdtempSync(join(tmpdir(), "openclaw-release-execution-plan-"));
+  try {
+    try {
+      runReleaseCiGh(
+        [
+          "run",
+          "download",
+          String(runId),
+          "--repo",
+          repository,
+          "--name",
+          artifactName,
+          "--dir",
+          downloadDir,
+        ],
+        { stdio: ["ignore", "ignore", "pipe"] },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isReleaseGhArtifactMissingError(error)) {
+        return undefined;
+      }
+      throw new Error(`release execution plan artifact read failed: ${message}`, {
+        cause: error,
+      });
+    }
+    const path = join(downloadDir, "full-release-execution-plan.json");
+    if (!statSync(path, { throwIfNoEntry: false })) {
+      throw new Error(`release execution plan artifact ${artifactName} omitted its manifest`);
+    }
+    if (statSync(path).size > MAX_RELEASE_ARTIFACT_BYTES) {
+      throw new Error(`release execution plan artifact ${artifactName} exceeds the size limit`);
+    }
+    return JSON.parse(readFileSync(path, "utf8"));
+  } finally {
+    rmSync(downloadDir, { force: true, recursive: true });
+  }
+}
+
+function readExecutionPlanEvidence(runId, repository) {
+  const name = `full-release-execution-plan-${runId}`;
+  const artifacts = [];
+  let total;
+  for (let page = 1; page <= 10; page += 1) {
+    const response = githubRestJson(
+      `actions/runs/${runId}/artifacts?per_page=100&page=${page}`,
+      repository,
+    );
+    if (
+      !Number.isSafeInteger(response?.total_count) ||
+      response.total_count < 0 ||
+      !Array.isArray(response.artifacts) ||
+      response.artifacts.length > 100 ||
+      (total !== undefined && total !== response.total_count)
+    ) {
+      throw new Error("publication execution plan artifact enumeration is invalid");
+    }
+    total = response.total_count;
+    artifacts.push(...response.artifacts);
+    if (artifacts.length === total) {
+      break;
+    }
+    if (artifacts.length > total || response.artifacts.length < 100) {
+      throw new Error("publication execution plan artifact enumeration is incomplete");
+    }
+  }
+  if (artifacts.length !== total || new Set(artifacts.map((entry) => entry.id)).size !== total) {
+    throw new Error("publication execution plan artifact enumeration is incomplete or duplicated");
+  }
+  const matches = artifacts.filter((artifact) => artifact.name === name);
+  if (matches.length !== 1) {
+    throw new Error(
+      "publication original execution plan is missing or ambiguous; use a fresh parent",
+    );
+  }
+  const listed = matches[0];
+  const artifact = githubRestJson(`actions/artifacts/${listed.id}`, repository);
+  if (
+    String(artifact.id) !== String(listed.id) ||
+    artifact.name !== name ||
+    artifact.digest !== listed.digest ||
+    artifact.size_in_bytes !== listed.size_in_bytes ||
+    artifact.expired !== false ||
+    String(artifact.workflow_run?.id) !== String(runId) ||
+    !/^sha256:[a-f0-9]{64}$/u.test(artifact.digest) ||
+    !Number.isSafeInteger(artifact.size_in_bytes) ||
+    artifact.size_in_bytes < 1 ||
+    artifact.size_in_bytes > MAX_MANIFEST_ARTIFACT_ZIP_BYTES
+  ) {
+    throw new Error("publication execution plan artifact identity mismatch");
+  }
+  const directory = mkdtempSync(join(tmpdir(), "openclaw-publication-plan-"));
+  try {
+    const path = join(directory, "plan.zip");
+    downloadArtifactZip(String(artifact.id), path, artifact.size_in_bytes, repository);
+    const archive = readFileSync(path);
+    if (
+      archive.length !== artifact.size_in_bytes ||
+      `sha256:${createHash("sha256").update(archive).digest("hex")}` !== artifact.digest
+    ) {
+      throw new Error("publication execution plan artifact bytes differ");
+    }
+    const entry = "full-release-execution-plan.json";
+    const files = inspectActionsArtifactZip(archive, [entry], {
+      maxArchiveBytes: MAX_MANIFEST_ARTIFACT_ZIP_BYTES,
+      maxCompressedEntryBytes: MAX_MANIFEST_ARTIFACT_ZIP_BYTES,
+      maxEntryBytes: MAX_RELEASE_ARTIFACT_BYTES,
+      maxExpandedBytes: MAX_RELEASE_ARTIFACT_BYTES,
+    });
+    return {
+      artifact,
+      plan: JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(files.get(entry))),
+    };
+  } finally {
+    rmSync(directory, { force: true, recursive: true });
+  }
+}
+
+export function validatePublicationObservationArtifactIdentity(artifact, source, uploaded) {
+  if (
+    source.repository !== DEFAULT_REPO ||
+    String(artifact?.id) !== String(uploaded.id) ||
+    artifact.digest !== uploaded.digest ||
+    artifact.name !==
+      `full-release-publication-observations-${source.runId}-${source.runAttempt}` ||
+    artifact.expired !== false ||
+    String(artifact.workflow_run?.id) !== source.runId ||
+    artifact.workflow_run?.head_sha !== source.workflow.sha ||
+    artifact.workflow_run?.head_branch !==
+      source.workflow.ref.replace(/^refs\/(?:heads|tags)\//u, "") ||
+    !Number.isSafeInteger(artifact.size_in_bytes) ||
+    artifact.size_in_bytes < 1 ||
+    artifact.size_in_bytes > MAX_MANIFEST_ARTIFACT_ZIP_BYTES
+  ) {
+    throw new Error("publication observation upload identity mismatch");
+  }
+  return {
+    id: String(artifact.id),
+    name: artifact.name,
+    digest: artifact.digest,
+    sizeInBytes: artifact.size_in_bytes,
+  };
+}
+
+export function releaseExecutionPlanRestoreContract(workflow) {
+  const marker = "FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT";
+  const contracts = [
+    ...workflow.matchAll(/^ {2}FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: *([^\r\n]+)$/gmu),
+  ];
+  if (!contracts.length && !workflow.includes(marker)) {
+    return undefined;
+  }
+  if (contracts.length !== 1 || !/^(?:"1"|'1'|1)$/u.test(contracts[0][1])) {
+    throw new Error("unsupported execution plan restore contract");
+  }
+  return "1";
+}
+
+async function originalExecutionPlanDigest(workflow, sealer, upload, client) {
+  if (!releaseExecutionPlanRestoreContract(workflow)) {
+    return undefined;
+  }
+  const witnesses = sealer.steps.filter(
+    (step) => step.name === "Record immutable release execution plan digest",
+  );
+  const witness = witnesses[0];
+  const start = Date.parse(witness?.started_at);
+  const end = Date.parse(witness?.completed_at);
+  if (
+    witnesses.length !== 1 ||
+    witness.status !== "completed" ||
+    witness.conclusion !== "success" ||
+    !Number.isSafeInteger(witness.number) ||
+    witness.number <= upload.number ||
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    start < Date.parse(upload.completed_at) ||
+    end < start
+  ) {
+    throw new Error("publication original plan digest witness did not succeed");
+  }
+  const log = await client.getJobLog(sealer.id);
+  if (typeof log !== "string" || Buffer.byteLength(log) > 8 * 1024 * 1024) {
+    throw new Error("publication original plan digest log is missing or oversized");
+  }
+  const matches = [
+    ...log.matchAll(
+      /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z) FRV_EXECUTION_PLAN_SHA256=([a-f0-9]{64})\r?$/gmu,
+    ),
+  ];
+  // Job step times have second precision; log timestamps retain fractional seconds.
+  // Only the post-upload witness authenticates cache bytes, never their own digest.
+  const time = Date.parse(matches[0]?.[1]);
+  if (matches.length !== 1 || !Number.isFinite(time) || time < start || time >= end + 1000) {
+    throw new Error("publication original plan digest witness is missing or ambiguous");
+  }
+  return matches[0][2];
+}
+
+export async function restoreOriginalPublicationAdmission({ request, client, cachedPlan }) {
+  const evidenceClient = client ?? createReleaseEvidenceClient(request.repository);
+  const original = await evidenceClient.getRunAttempt(request.runId, 1);
+  const branch = request.workflow.ref.replace(/^refs\/(?:heads|tags)\//u, "");
+  if (
+    request.repository !== "openclaw/openclaw" ||
+    original.repository?.full_name !== request.repository ||
+    original.head_repository?.full_name !== request.repository ||
+    String(original.id) !== request.runId ||
+    original.run_attempt !== 1 ||
+    original.event !== "workflow_dispatch" ||
+    original.path !== ".github/workflows/full-release-validation.yml" ||
+    original.head_sha !== request.workflow.sha ||
+    original.head_branch !== branch
+  ) {
+    throw new Error("publication original parent identity mismatch");
+  }
+  const workflow = evidenceClient.getWorkflowSource(request.workflow.sha);
+  if (
+    publicationAdmissionContract(workflow) !== "1" ||
+    publicationSourceContract(workflow) !== "1"
+  ) {
+    throw new Error("publication original parent lacks the required source-qualified contract");
+  }
+  const jobs = await evidenceClient.getRunAttemptJobs(request.runId, 1, { requireComplete: true });
+  const resolutions = jobs.filter((job) => job.name === "Resolve target ref");
+  if (
+    resolutions.length !== 1 ||
+    resolutions[0].run_attempt !== 1 ||
+    resolutions[0].status !== "completed" ||
+    resolutions[0].conclusion !== "success" ||
+    resolutions[0].steps?.filter(
+      (step) => step.name === "Finalize publication admission" && step.conclusion === "success",
+    ).length !== 1
+  ) {
+    throw new Error("publication original admission did not succeed; use a fresh parent");
+  }
+  const sealers = jobs.filter((job) => job.name === "Seal release execution plan");
+  const sealer = sealers[0];
+  const seals =
+    sealer?.steps?.filter((step) => step.name === "Seal immutable release execution plan") ?? [];
+  const uploads =
+    sealer?.steps?.filter((step) => step.name === "Upload immutable release execution plan") ?? [];
+  const seal = seals[0];
+  const upload = uploads[0];
+  const sealStart = Date.parse(seal?.started_at);
+  const sealEnd = Date.parse(seal?.completed_at);
+  const uploadStart = Date.parse(upload?.started_at);
+  const uploadEnd = Date.parse(upload?.completed_at);
+  // A failed/cancelled sealer may have written its complete interruption
+  // checkpoint. The guarded successful upload, not overall job success, seals it.
+  if (
+    sealers.length !== 1 ||
+    sealer.run_attempt !== 1 ||
+    sealer.status !== "completed" ||
+    seals.length !== 1 ||
+    seal.status !== "completed" ||
+    !["success", "failure", "cancelled"].includes(seal.conclusion) ||
+    uploads.length !== 1 ||
+    upload.status !== "completed" ||
+    upload.conclusion !== "success" ||
+    !Number.isSafeInteger(seal.number) ||
+    !Number.isSafeInteger(upload.number) ||
+    upload.number <= seal.number ||
+    ![sealStart, sealEnd, uploadStart, uploadEnd].every(Number.isFinite) ||
+    sealStart > sealEnd ||
+    sealEnd > uploadStart ||
+    uploadStart > uploadEnd
+  ) {
+    throw new Error("publication original execution plan sealer/upload did not succeed");
+  }
+  const originalDigest = await originalExecutionPlanDigest(
+    workflow,
+    sealer,
+    upload,
+    evidenceClient,
+  );
+  // Frozen historical workflows have no durable digest witness. Their original
+  // artifact remains mandatory; a self-consistent cache cannot replace provenance.
+  const retained =
+    originalDigest && cachedPlan !== undefined
+      ? { plan: cachedPlan }
+      : evidenceClient.loadExecutionPlanEvidence(request.runId);
+  if (
+    !retained ||
+    (retained.artifact &&
+      (retained.artifact.workflow_run?.head_sha !== original.head_sha ||
+        retained.artifact.workflow_run?.head_branch !== original.head_branch))
+  ) {
+    throw new Error("publication original plan artifact producer mismatch");
+  }
+  if (!originalDigest) {
+    const created = Date.parse(retained?.artifact.created_at);
+    if (!Number.isFinite(created) || created < uploadStart || created > uploadEnd) {
+      throw new Error("publication original plan artifact producer mismatch");
+    }
+  }
+  const plan = validateReleaseExecutionPlanArtifact(retained.plan, {
+    publicationAdmissionContract: "1",
+    sourceAdmissionContract: "1",
+    repository: request.repository,
+    parentRunId: request.runId,
+    sourceParentRunAttempt: 1,
+    targetSha: request.candidateSha,
+    targetContextRef: request.targetContextRef,
+    trustedWorkflowFullRef: request.tooling.ref,
+    trustedWorkflowSha: request.tooling.sha,
+    workflowRef: branch,
+    workflowSha: request.workflow.sha,
+    releaseProfile: request.coverage.release_profile,
+    rerunGroup: request.coverage.rerun_group,
+  });
+  if (
+    (originalDigest && plan.sha256 !== originalDigest) ||
+    (cachedPlan !== undefined &&
+      JSON.stringify(sortJsonValueKeys(cachedPlan)) !== JSON.stringify(sortJsonValueKeys(plan)))
+  ) {
+    throw new Error("cached publication plan differs from its authenticated original");
+  }
+  const source = validatePublicationSourceBinding(plan);
+  if (
+    publicationSourceJson(source.coverage) !== publicationSourceJson(request.coverage) ||
+    publicationSourceJson(source.publicationSelection) !==
+      publicationSourceJson(request.publicationSelection) ||
+    source.validationPurpose !== request.validationPurpose
+  ) {
+    throw new Error("publication original admission operands differ from this attempt");
+  }
+  const admission = validatePublicationAdmissionBinding(plan, {
+    publicationAdmissionContract: "1",
+  });
+  return { source, admission, plan };
 }
 
 function rate() {
@@ -169,7 +666,16 @@ export function validateParentRunBinding(parentView, parentRest, expectedRunId) 
   return parentRest;
 }
 
-export function expectedChildDispatches(parentRunId, parentRunAttempt, parentWorkflowRef) {
+function childDispatchesForPhaseVersion(childPhaseVersion) {
+  return childPhaseVersion === 3 ? PHASED_CHILD_DISPATCHES : LEGACY_CHILD_DISPATCHES;
+}
+
+export function expectedChildDispatches(
+  parentRunId,
+  parentRunAttempt,
+  parentWorkflowRef,
+  childPhaseVersion = 2,
+) {
   if (!/^[1-9][0-9]*$/u.test(String(parentRunId))) {
     throw new Error("parent run ID must be a positive decimal");
   }
@@ -180,21 +686,37 @@ export function expectedChildDispatches(parentRunId, parentRunAttempt, parentWor
     throw new Error("parent workflow ref is required");
   }
   const dispatchPrefix = `full-release-validation-${parentRunId}-${parentRunAttempt}`;
-  return CHILD_DISPATCHES.map((child) => ({
-    ...child,
-    displayTitle: `${child.name} ${dispatchPrefix}${child.suffix}`,
-    headBranch: child.trustedRef === "main" ? "main" : parentWorkflowRef,
-  }));
+  return childDispatchesForPhaseVersion(childPhaseVersion).map((child) =>
+    Object.assign({}, child, {
+      displayTitle: `${child.name} ${dispatchPrefix}${child.suffix}`,
+      headBranch: child.trustedRef === "main" ? "main" : parentWorkflowRef,
+    }),
+  );
 }
 
-export function requiredChildKeysForRerunGroup(rerunGroup, validationInputs = {}) {
-  const childKeys = RERUN_GROUP_CHILD_KEYS.get(rerunGroup);
+export function requiredChildKeysForRerunGroup(
+  rerunGroup,
+  validationInputs = {},
+  childPhaseVersion = 2,
+) {
+  const childKeys = (
+    childPhaseVersion === 3 ? PHASED_RERUN_GROUP_CHILD_KEYS : RERUN_GROUP_CHILD_KEYS
+  ).get(rerunGroup);
   if (!childKeys) {
     throw new Error(`release validation manifest rerun group is invalid: ${rerunGroup}`);
   }
   const selectedKeys = new Set(childKeys);
   if (
+    childPhaseVersion === 3 &&
+    rerunGroup === "live-e2e" &&
+    typeof validationInputs.liveSuiteFilter === "string" &&
+    validationInputs.liveSuiteFilter.trim().length > 0
+  ) {
+    selectedKeys.delete("releaseChecksCandidate");
+  }
+  if (
     rerunGroup === "all" &&
+    !validationInputs.telegramWaiver &&
     ((typeof validationInputs.npmTelegramPackageSpec === "string" &&
       validationInputs.npmTelegramPackageSpec.length > 0) ||
       (typeof validationInputs.releasePackageSpec === "string" &&
@@ -205,15 +727,40 @@ export function requiredChildKeysForRerunGroup(rerunGroup, validationInputs = {}
   return selectedKeys;
 }
 
+function requiredChildKeysForManifest(manifest) {
+  if (
+    [2, 3].includes(manifest.version) &&
+    HISTORICAL_MANIFEST_RERUN_GROUP_CHILD_KEYS.has(manifest.rerunGroup)
+  ) {
+    return new Set(HISTORICAL_MANIFEST_RERUN_GROUP_CHILD_KEYS.get(manifest.rerunGroup));
+  }
+  const selectedKeys = requiredChildKeysForRerunGroup(
+    manifest.rerunGroup,
+    manifest.validationInputs,
+    manifest.version === 4 ? 3 : 2,
+  );
+  // validateParentManifest authenticates the explicit policy before selection;
+  // an older beta receipt without this marker still requires its full child set.
+  if (manifest.validationInputs?.coveragePolicy === "npm-beta-v1") {
+    selectedKeys.delete("productPerformance");
+    selectedKeys.delete("npmTelegram");
+  }
+  return selectedKeys;
+}
+
 export function expectedSelectedChildDispatches(
   parentRunId,
   parentRunAttempt,
   parentWorkflowRef,
   selectedKeys,
+  childPhaseVersion = 2,
 ) {
-  return expectedChildDispatches(parentRunId, parentRunAttempt, parentWorkflowRef).filter((child) =>
-    selectedKeys.has(child.manifestKey),
-  );
+  return expectedChildDispatches(
+    parentRunId,
+    parentRunAttempt,
+    parentWorkflowRef,
+    childPhaseVersion,
+  ).filter((child) => selectedKeys.has(child.manifestKey));
 }
 
 export function selectExactChildRun(runs, expectedDisplayTitle, expectedHeadBranch) {
@@ -270,7 +817,7 @@ function findExactChildRun(child, repository = DEFAULT_REPO) {
   return selectExactChildRunFromPages(runPages, child.displayTitle, child.headBranch);
 }
 
-function findParentJobsAll(parentRunId, repository = DEFAULT_REPO) {
+async function findParentJobsAll(parentRunId, repository = DEFAULT_REPO) {
   const jobs = [];
   for (let page = 1; page <= 10; page += 1) {
     const query = new URLSearchParams({
@@ -279,7 +826,12 @@ function findParentJobsAll(parentRunId, repository = DEFAULT_REPO) {
       per_page: "100",
     });
     const pageJobs =
-      githubRestJson(`actions/runs/${parentRunId}/jobs?${query.toString()}`, repository).jobs ?? [];
+      (
+        await githubRestJsonAsync(
+          `actions/runs/${parentRunId}/jobs?${query.toString()}`,
+          repository,
+        )
+      ).jobs ?? [];
     jobs.push(...pageJobs);
     if (pageJobs.length < 100) {
       break;
@@ -288,8 +840,76 @@ function findParentJobsAll(parentRunId, repository = DEFAULT_REPO) {
   return jobs;
 }
 
-function parentJobLog(jobId, repository = DEFAULT_REPO) {
-  return gh(["api", `repos/${repository}/actions/jobs/${jobId}/logs`]);
+async function findRunAttemptJobsAll(
+  runId,
+  runAttempt,
+  repository = DEFAULT_REPO,
+  requireComplete = false,
+) {
+  const jobs = [];
+  let total;
+  for (let page = 1; page <= 10; page += 1) {
+    const query = new URLSearchParams({
+      page: String(page),
+      per_page: "100",
+    });
+    const response = await githubRestJsonAsync(
+      `actions/runs/${runId}/attempts/${runAttempt}/jobs?${query.toString()}`,
+      repository,
+    );
+    const pageJobs = response.jobs ?? [];
+    if (
+      requireComplete &&
+      (!Array.isArray(response.jobs) ||
+        !Number.isSafeInteger(response.total_count) ||
+        response.total_count < 0 ||
+        (total !== undefined && total !== response.total_count))
+    ) {
+      throw new Error("publication original jobs enumeration is invalid");
+    }
+    total = response.total_count;
+    jobs.push(...pageJobs);
+    if (pageJobs.length < 100) {
+      break;
+    }
+  }
+  if (
+    requireComplete &&
+    (jobs.length !== total || new Set(jobs.map((job) => job.id)).size !== total)
+  ) {
+    throw new Error("publication original jobs enumeration is incomplete or duplicated");
+  }
+  return jobs;
+}
+
+function parentJobLogArgs(jobId, repository = DEFAULT_REPO, allowEscapeSequences = true) {
+  const args = ["api", `repos/${repository}/actions/jobs/${jobId}/logs`];
+  if (allowEscapeSequences) {
+    args.push("--allow-escape-sequences");
+  }
+  return args;
+}
+
+function isUnknownAllowEscapeSequencesFlag(error) {
+  if (typeof error !== "object" || error === null || !("stderr" in error)) {
+    return false;
+  }
+  const stderr = error.stderr;
+  return (
+    typeof stderr === "string" &&
+    stderr.replace(/\r\n?/gu, "\n").split("\n").includes("unknown flag: --allow-escape-sequences")
+  );
+}
+
+async function parentJobLog(jobId, repository = DEFAULT_REPO) {
+  try {
+    return await ghAsync(parentJobLogArgs(jobId, repository));
+  } catch (error) {
+    if (!isUnknownAllowEscapeSequencesFlag(error)) {
+      throw error;
+    }
+    return ghAsync(parentJobLogArgs(jobId, repository, false));
+  }
 }
 
 function normalizeOptionalRunId(value, label) {
@@ -358,22 +978,169 @@ function normalizeJsonObject(value, label) {
   return value;
 }
 
-function canonicalJson(value) {
-  if (Array.isArray(value)) {
-    return value.map(canonicalJson);
+function normalizeExpectedRunAttempts(value) {
+  if (value === undefined) {
+    return undefined;
   }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value)
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, canonicalJson(entry)]),
+  const entries = Object.entries(normalizeJsonObject(value, "expected run attempts"));
+  if (entries.length === 0 || entries.length > MAX_EXPECTED_RUN_ATTEMPTS) {
+    throw new Error(`expected run attempts must contain 1-${MAX_EXPECTED_RUN_ATTEMPTS} run IDs`);
+  }
+  return new Map(
+    entries.map(([runId, runAttempt]) => {
+      if (typeof runAttempt !== "number") {
+        throw new Error(`expected run ${runId} attempt must be a positive integer`);
+      }
+      return [
+        normalizeRequiredRunId(runId, "expected run ID"),
+        normalizePositiveInteger(runAttempt, `expected run ${runId} attempt`),
+      ];
+    }),
+  );
+}
+
+function consumeExpectedRunAttempt(expectedRunAttempts, runId, runAttempt, label) {
+  if (expectedRunAttempts === undefined) {
+    return;
+  }
+  const expected = expectedRunAttempts.get(runId);
+  if (expected === undefined) {
+    throw new Error(`expected run attempts omitted ${label} run ID: ${runId}`);
+  }
+  expectedRunAttempts.delete(runId);
+  if (runAttempt !== expected) {
+    throw new Error(
+      `${label} run attempt changed: ${runId} expected ${expected}, observed ${runAttempt}`,
     );
   }
-  return value;
+}
+
+function normalizeManifestChildEvidence(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+  const evidence = normalizeJsonObject(value, "release validation manifest child evidence");
+  return Object.fromEntries(
+    Object.entries(evidence)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, raw]) => {
+        const child = normalizeJsonObject(raw, `release validation child evidence ${key}`);
+        const plannedRunAttempt = normalizePositiveInteger(
+          child.plannedRunAttempt,
+          `${key} planned run attempt`,
+        );
+        const effectiveRunAttempt = normalizePositiveInteger(
+          child.effectiveRunAttempt,
+          `${key} effective run attempt`,
+        );
+        if (effectiveRunAttempt < plannedRunAttempt) {
+          throw new Error(`release validation child attempt regressed: ${key}`);
+        }
+        const observedRunAttempts = Array.isArray(child.observedRunAttempts)
+          ? child.observedRunAttempts.map((attempt) =>
+              normalizePositiveInteger(attempt, `${key} observed run attempt`),
+            )
+          : [];
+        const expectedAttempts = Array.from(
+          { length: effectiveRunAttempt - plannedRunAttempt + 1 },
+          (_, index) => plannedRunAttempt + index,
+        );
+        if (JSON.stringify(observedRunAttempts) !== JSON.stringify(expectedAttempts)) {
+          throw new Error(`release validation child attempt evidence is gapped: ${key}`);
+        }
+        if (!Array.isArray(child.jobs) || child.jobs.length === 0) {
+          throw new Error(`release validation child jobs are missing: ${key}`);
+        }
+        const jobs = child.jobs.map((rawJob) => {
+          const job = normalizeJsonObject(rawJob, `release validation child job ${key}`);
+          const acceptedRunAttempt = normalizePositiveInteger(
+            job.acceptedRunAttempt,
+            `${key} accepted run attempt`,
+          );
+          if (acceptedRunAttempt < plannedRunAttempt || acceptedRunAttempt > effectiveRunAttempt) {
+            throw new Error(`release validation child job attempt is invalid: ${key}`);
+          }
+          const name = String(job.name ?? "");
+          if (!name) {
+            throw new Error(`release validation child job identity is invalid: ${key}`);
+          }
+          return {
+            acceptedRunAttempt,
+            completedAt: String(job.completedAt ?? ""),
+            conclusion: String(job.conclusion ?? ""),
+            name,
+            startedAt: String(job.startedAt ?? ""),
+            status: String(job.status ?? ""),
+            url: String(job.url ?? ""),
+          };
+        });
+        if (
+          new Set(jobs.map((job) => job.name)).size !== jobs.length ||
+          jobs.some(
+            (job, index) => index > 0 && compareReleaseJobsByName(jobs[index - 1], job) >= 0,
+          )
+        ) {
+          throw new Error(`release validation child job identity is duplicated: ${key}`);
+        }
+        const composite = { effectiveRunAttempt, jobs, plannedRunAttempt };
+        const compositeJobsSha256 = String(child.compositeJobsSha256 ?? "");
+        if (
+          !/^[a-f0-9]{64}$/u.test(compositeJobsSha256) ||
+          releaseCompositeJobsSha256(composite) !== compositeJobsSha256
+        ) {
+          throw new Error(`release validation child composite digest is invalid: ${key}`);
+        }
+        const dispatchActor = String(child.dispatchActor ?? "");
+        const triggeringActor = String(child.triggeringActor ?? "");
+        const repository = String(child.repository ?? "");
+        if (
+          dispatchActor !== "github-actions[bot]" ||
+          !triggeringActor ||
+          !/^[^/]+\/[^/]+$/u.test(repository) ||
+          (effectiveRunAttempt === plannedRunAttempt && triggeringActor !== "github-actions[bot]")
+        ) {
+          throw new Error(`release validation child rerun provenance is invalid: ${key}`);
+        }
+        return [
+          key,
+          {
+            ...composite,
+            compositeJobsSha256,
+            dispatchActor,
+            observedRunAttempts,
+            repository,
+            runId: normalizeRequiredRunId(child.runId, `${key} run ID`),
+            triggeringActor,
+          },
+        ];
+      }),
+  );
+}
+
+export function releaseAdvisoryJobEvidence(childEvidence, releaseProfile, workflowRef) {
+  return Object.entries(childEvidence ?? {})
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .flatMap(([child, evidence]) =>
+      /^releaseChecks(?:Independent|Candidate)?$/u.test(child)
+        ? evidence.jobs
+            .filter((job) =>
+              isReleaseCheckJobAdvisory({ jobName: job.name, releaseProfile, workflowRef }),
+            )
+            .toSorted(compareReleaseJobsByName)
+            .map((job) => ({
+              child,
+              job: job.name,
+              status: job.status,
+              conclusion: job.conclusion,
+              policy: "advisory",
+            }))
+        : [],
+    );
 }
 
 function manifestEvidenceIdentity(manifest) {
-  return canonicalJson({
+  return sortReleaseJsonValueKeys({
+    sourceAdmission: publicationSourceReuseIdentity(manifest.sourceAdmission) ?? null,
     childRunIds: manifest.childRunIds,
     controls: manifest.controls,
     releaseProfile: manifest.releaseProfile,
@@ -387,7 +1154,7 @@ export function validateParentManifest(value, expected) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("release validation manifest must be an object");
   }
-  if (![2, 3].includes(value.version) || value.workflowName !== "Full Release Validation") {
+  if (![2, 3, 4].includes(value.version) || value.workflowName !== "Full Release Validation") {
     throw new Error("release validation manifest schema is unsupported");
   }
   if (String(value.runId) !== String(expected.runId)) {
@@ -409,7 +1176,7 @@ export function validateParentManifest(value, expected) {
   let workflowSha;
   let workflowFullRef;
   let workflowRefType;
-  if (value.version === 3) {
+  if (value.version >= 3) {
     workflowSha = normalizeSha(value.workflowSha, "release validation manifest workflow SHA");
     if (expected.workflowSha !== undefined && workflowSha !== expected.workflowSha) {
       throw new Error("release validation manifest workflow SHA mismatch");
@@ -427,17 +1194,44 @@ export function validateParentManifest(value, expected) {
     workflowSha = normalizeSha(expected.workflowSha, "release validation workflow SHA");
   }
   const rerunGroup = String(value.rerunGroup ?? "");
-  requiredChildKeysForRerunGroup(rerunGroup);
+  requiredChildKeysForManifest({ rerunGroup, version: value.version });
   const releaseProfile = String(value.releaseProfile ?? "");
   if (!["beta", "stable", "full"].includes(releaseProfile)) {
     throw new Error("release validation manifest release profile is invalid");
+  }
+  const candidateBinding =
+    value.candidateBinding === undefined || value.candidateBinding === null
+      ? null
+      : validateFullReleaseCandidateBinding(value.candidateBinding);
+  if (
+    candidateBinding !== null &&
+    (candidateBinding.request.targetSha !== targetSha ||
+      candidateBinding.request.toolingSha !== workflowSha ||
+      candidateBinding.request.releaseProfile !== releaseProfile ||
+      (expected.repository !== undefined &&
+        candidateBinding.request.repository !== expected.repository))
+  ) {
+    throw new Error("release validation manifest candidate binding is invalid");
+  }
+  if (
+    Object.hasOwn(expected, "candidateBinding") &&
+    JSON.stringify(sortReleaseJsonValueKeys(candidateBinding)) !==
+      JSON.stringify(
+        sortReleaseJsonValueKeys(
+          expected.candidateBinding === null
+            ? null
+            : validateFullReleaseCandidateBinding(expected.candidateBinding),
+        ),
+      )
+  ) {
+    throw new Error("release validation manifest candidate differs from the immutable plan");
   }
   const runReleaseSoak = String(value.runReleaseSoak ?? "");
   if (!["true", "false"].includes(runReleaseSoak)) {
     throw new Error("release validation manifest release soak value is invalid");
   }
   const controls = normalizeJsonObject(value.controls, "release validation manifest controls");
-  if (value.version === 3 && controls.performanceReportPublication !== "artifact-only") {
+  if (value.version >= 3 && controls.performanceReportPublication !== "artifact-only") {
     throw new Error("release validation manifest performance report publication mode is invalid");
   }
   const validationInputs =
@@ -447,23 +1241,98 @@ export function validateParentManifest(value, expected) {
           value.validationInputs,
           "release validation manifest validation inputs",
         );
+  const sourceAdmission = validatePublicationSourceBinding(value, expected);
+  const publicationAdmission = validatePublicationAdmissionBinding(value, expected);
+  normalizeReleaseTelegramWaiver({
+    ...validationInputs,
+    candidateVersion: candidateBinding?.package.version,
+    releaseProfile,
+    rerunGroup: value.rerunGroup,
+  });
+  if (validationInputs?.coveragePolicy !== undefined && value.version !== 4) {
+    throw new Error("release coverage policy requires a version 4 manifest");
+  }
+  const coveragePolicy = normalizeReleaseCoveragePolicy({
+    ...validationInputs,
+    candidateVersion: candidateBinding?.package.version,
+    releaseProfile,
+    rerunGroup,
+    runReleaseSoak,
+  });
+  if (
+    coveragePolicy === "npm-stable-v1" &&
+    (!resolveReleaseContextIdentity(
+      validationInputs.targetContextRef || String(value.targetRef ?? ""),
+      validationInputs.targetVersion,
+    ) ||
+      controls.performanceBlocking !== true ||
+      controls.stableSoakRequired !== true)
+  ) {
+    throw new Error(
+      "npm stable coverage policy requires release context, blocking performance, and stable soak",
+    );
+  }
+  const childEvidence = normalizeManifestChildEvidence(value.childEvidence);
+  const advisoryJobs = releaseAdvisoryJobEvidence(childEvidence, releaseProfile, value.workflowRef);
+  if (
+    value.advisoryJobs !== undefined &&
+    JSON.stringify(sortReleaseJsonValueKeys(value.advisoryJobs)) !==
+      JSON.stringify(sortReleaseJsonValueKeys(advisoryJobs))
+  ) {
+    throw new Error("release validation advisory jobs differ from canonical policy evidence");
+  }
   const childRuns = value.childRuns;
   if (!childRuns || typeof childRuns !== "object" || Array.isArray(childRuns)) {
     throw new Error("release validation manifest childRuns is invalid");
   }
-  const childRunIds = {
-    normalCi: normalizeOptionalRunId(childRuns.normalCi, "normal CI run ID"),
-    npmTelegram: normalizeOptionalRunId(childRuns.npmTelegram, "npm Telegram run ID"),
-    pluginPrerelease: normalizeOptionalRunId(
-      childRuns.pluginPrerelease,
-      "plugin prerelease run ID",
-    ),
-    productPerformance: normalizeOptionalRunId(
-      childRuns.productPerformance?.runId ?? "",
-      "performance run ID",
-    ),
-    releaseChecks: normalizeOptionalRunId(childRuns.releaseChecks, "release checks run ID"),
-  };
+  const childRunIds =
+    value.version === 4
+      ? {
+          normalCi: normalizeOptionalRunId(childRuns.normalCi, "normal CI run ID"),
+          npmTelegram: normalizeOptionalRunId(childRuns.npmTelegram, "npm Telegram run ID"),
+          pluginPrereleaseIndependent: normalizeOptionalRunId(
+            childRuns.pluginPrereleaseIndependent,
+            "plugin prerelease independent run ID",
+          ),
+          pluginPrereleaseCandidate: normalizeOptionalRunId(
+            childRuns.pluginPrereleaseCandidate,
+            "plugin prerelease candidate run ID",
+          ),
+          productPerformance: normalizeOptionalRunId(
+            childRuns.productPerformance?.runId ?? "",
+            "performance run ID",
+          ),
+          releaseChecksIndependent: normalizeOptionalRunId(
+            childRuns.releaseChecksIndependent,
+            "release checks independent run ID",
+          ),
+          releaseChecksCandidate: normalizeOptionalRunId(
+            childRuns.releaseChecksCandidate,
+            "release checks candidate run ID",
+          ),
+        }
+      : {
+          normalCi: normalizeOptionalRunId(childRuns.normalCi, "normal CI run ID"),
+          npmTelegram: normalizeOptionalRunId(childRuns.npmTelegram, "npm Telegram run ID"),
+          pluginPrerelease: normalizeOptionalRunId(
+            childRuns.pluginPrerelease,
+            "plugin prerelease run ID",
+          ),
+          productPerformance: normalizeOptionalRunId(
+            childRuns.productPerformance?.runId ?? "",
+            "performance run ID",
+          ),
+          releaseChecks: normalizeOptionalRunId(childRuns.releaseChecks, "release checks run ID"),
+        };
+  if (
+    coveragePolicy === "npm-beta-v1" &&
+    (childRunIds.productPerformance ||
+      childRunIds.npmTelegram ||
+      controls.performanceBlocking !== false ||
+      validationInputs.skipPackageTelegramE2e !== "true")
+  ) {
+    throw new Error("npm beta coverage policy requires deferred confidence children");
+  }
   let evidenceReuse;
   if (value.evidenceReuse !== undefined) {
     const reuse = normalizeJsonObject(
@@ -492,8 +1361,39 @@ export function validateParentManifest(value, expected) {
       runId: normalizeRequiredRunId(reuse.runId, "evidence reuse root run ID"),
       selectedRunId: normalizeRequiredRunId(reuse.selectedRunId, "evidence reuse selected run ID"),
     };
+    if (reuse.publication !== undefined) {
+      const publication = normalizeJsonObject(reuse.publication, "retained root publication");
+      if (
+        Object.keys(publication).toSorted().join(",") !==
+        "publicationAdmission,publicationAdmissionContract,sourceAdmission,sourceAdmissionContract"
+      ) {
+        throw new Error("retained root publication fields are invalid");
+      }
+      validatePublicationAdmissionBinding(publication, { publicationAdmissionContract: "1" });
+      if (
+        publication.sourceAdmission.runId !== evidenceReuse.runId ||
+        publication.sourceAdmission.candidateSha !== evidenceReuse.evidenceSha
+      ) {
+        throw new Error("retained root publication identity mismatch");
+      }
+      evidenceReuse.publication = publication;
+    }
   }
   return {
+    advisoryJobs,
+    ...(value.publicationAdmissionContract !== undefined
+      ? { publicationAdmissionContract: value.publicationAdmissionContract, publicationAdmission }
+      : {}),
+    ...(sourceAdmission
+      ? {
+          sourceAdmissionContract: value.sourceAdmissionContract,
+          sourceAdmission,
+          trustedWorkflow: value.trustedWorkflow,
+          sourceParentRunAttempt: value.sourceParentRunAttempt,
+        }
+      : {}),
+    candidateBinding,
+    childEvidence,
     childRunIds,
     controls,
     evidenceReuse,
@@ -548,14 +1448,37 @@ export function validateEvidenceReuseChain(
   if (selectedManifest.runId !== rootManifest.runId) {
     throw new Error("evidence reuse selected manifest is not the chain root");
   }
+  const rootPublication =
+    rootManifest.publicationAdmissionContract === "1"
+      ? {
+          sourceAdmissionContract: rootManifest.sourceAdmissionContract,
+          sourceAdmission: rootManifest.sourceAdmission,
+          publicationAdmissionContract: rootManifest.publicationAdmissionContract,
+          publicationAdmission: rootManifest.publicationAdmission,
+        }
+      : null;
+  if (
+    publicationObservationJson(reuse.publication ?? null) !==
+    publicationObservationJson(rootPublication)
+  ) {
+    throw new Error("retained root publication differs from authenticated root evidence");
+  }
   if (reuse.policy === EXACT_TARGET_EVIDENCE_REUSE_POLICY) {
     if (reuse.changedPaths.length !== 0 || currentManifest.targetSha !== reuse.evidenceSha) {
       throw new Error("exact-target release evidence reuse requires no changed paths");
     }
-  } else if (reuse.policy === CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY) {
+  } else if (
+    reuse.policy === CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY ||
+    reuse.policy === SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY
+  ) {
+    const split = reuse.policy === SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY;
+    const version =
+      currentManifest.candidateBinding?.package?.version ??
+      currentManifest.validationInputs?.targetVersion;
     if (
-      reuse.changedPaths.length !== 1 ||
-      reuse.changedPaths[0] !== "CHANGELOG.md" ||
+      (split
+        ? !isSplitChangelogEvidenceDelta(reuse.changedPaths, version)
+        : reuse.changedPaths.length !== 1 || reuse.changedPaths[0] !== "CHANGELOG.md") ||
       currentManifest.targetSha === reuse.evidenceSha
     ) {
       throw new Error("changelog-only release evidence reuse has an invalid target delta");
@@ -564,15 +1487,14 @@ export function validateEvidenceReuseChain(
       throw new Error("changelog-only release evidence reuse requires commit comparison");
     }
     const comparison = compareCommits(reuse.evidenceSha, currentManifest.targetSha);
-    const changedFiles = Array.isArray(comparison?.files) ? comparison.files : [];
-    const changelog = changedFiles[0];
+    const verified = classifyReleaseChangelogEvidenceComparison(comparison, {
+      baseSha: reuse.evidenceSha,
+      version,
+    });
     if (
-      comparison?.status !== "ahead" ||
-      comparison?.merge_base_commit?.sha !== reuse.evidenceSha ||
-      changedFiles.length !== 1 ||
-      changelog?.filename !== "CHANGELOG.md" ||
-      changelog?.status !== "modified" ||
-      changelog?.previous_filename
+      verified.policy !== reuse.policy ||
+      verified.changedPaths.length !== reuse.changedPaths.length ||
+      verified.changedPaths.some((name) => !reuse.changedPaths.includes(name))
     ) {
       throw new Error("changelog-only release evidence reuse failed commit comparison");
     }
@@ -592,18 +1514,97 @@ export function validateEvidenceReuseChain(
   return rootManifest.targetSha;
 }
 
+export function validateRequestedEvidenceReuse(
+  currentManifest,
+  selectedManifest,
+  rootManifest,
+  {
+    expectedChangedPaths,
+    expectedEvidencePolicy,
+    expectedEvidenceSha,
+    expectedRootRunId,
+    expectedSelectedRunId,
+    expectedTargetSha,
+  },
+  compareCommits,
+) {
+  if (
+    !Array.isArray(expectedChangedPaths) ||
+    expectedChangedPaths.some(
+      (changedPath) => typeof changedPath !== "string" || changedPath.length === 0,
+    ) ||
+    new Set(expectedChangedPaths).size !== expectedChangedPaths.length
+  ) {
+    throw new Error("expected evidence changed paths are invalid");
+  }
+  const requested = {
+    changedPaths: expectedChangedPaths,
+    evidenceSha: normalizeSha(expectedEvidenceSha, "expected evidence SHA"),
+    policy: String(expectedEvidencePolicy ?? ""),
+    runId: normalizeRequiredRunId(expectedRootRunId, "expected evidence root run ID"),
+    selectedRunId: normalizeRequiredRunId(
+      expectedSelectedRunId,
+      "expected evidence selected run ID",
+    ),
+  };
+  const expectedTarget = normalizeSha(expectedTargetSha, "expected target SHA");
+  const reuse = currentManifest.evidenceReuse;
+  if (!reuse) {
+    if (
+      currentManifest.runId !== requested.selectedRunId ||
+      selectedManifest.runId !== requested.selectedRunId ||
+      rootManifest.runId !== requested.runId
+    ) {
+      throw new Error("reused release evidence no longer matches the requested validation");
+    }
+    validateEvidenceReuseChain(
+      { ...currentManifest, evidenceReuse: requested, targetSha: expectedTarget },
+      selectedManifest,
+      rootManifest,
+      compareCommits,
+    );
+    return;
+  }
+  if (
+    currentManifest.targetSha !== expectedTarget ||
+    selectedManifest.runId !== requested.selectedRunId ||
+    rootManifest.runId !== requested.runId ||
+    rootManifest.targetSha !== requested.evidenceSha ||
+    reuse.evidenceSha !== requested.evidenceSha ||
+    reuse.policy !== requested.policy ||
+    reuse.runId !== requested.runId ||
+    reuse.selectedRunId !== requested.selectedRunId ||
+    JSON.stringify(reuse.changedPaths) !== JSON.stringify(requested.changedPaths)
+  ) {
+    throw new Error("reused release evidence no longer matches the requested validation");
+  }
+}
+
+function hasRequestedEvidenceReuse(options) {
+  return [
+    options.expectedTargetSha,
+    options.expectedEvidencePolicy,
+    options.expectedEvidenceSha,
+    options.expectedChangedPaths,
+    options.expectedRootRunId,
+    options.expectedSelectedRunId,
+  ].some((value) => value !== undefined);
+}
+
 export function selectedChildKeys(parentJobs) {
   return new Set(
-    CHILD_DISPATCHES.filter((child) => {
-      const parentJob = parentJobs.find((job) => job.name === child.parentJobName);
-      return parentJob && parentJob.conclusion !== "skipped";
-    }).map((child) => child.manifestKey),
+    [...LEGACY_CHILD_DISPATCHES, ...PHASED_CHILD_DISPATCHES]
+      .filter((child) => {
+        const parentJob = parentJobs.find((job) => job.name === child.parentJobName);
+        return parentJob && parentJob.conclusion !== "skipped";
+      })
+      .map((child) => child.manifestKey),
   );
 }
 
 /**
  * @template {{ manifestKey: string, name: string }} Child
- * @param {{ childRunIds: Record<string, string> }} manifest
+ * @param {{ childRunIds: Partial<Record<string, string>> }} manifest
  * @param {Child[]} children
  * @param {Set<string>} selectedKeys
  * @returns {Array<{ child: Child, runId: string }>}
@@ -639,7 +1640,7 @@ function childDispatchAttempt(displayTitle, child, parentRunId, parentRunAttempt
 }
 
 function parentJobExecutionFingerprint(job) {
-  return canonicalJson({
+  return sortReleaseJsonValueKeys({
     completedAt: job.completed_at,
     conclusion: job.conclusion,
     name: job.name,
@@ -671,11 +1672,7 @@ function selectedAttemptParentJob(parentJobs, child, parentManifest) {
   if (currentJobs.length !== 1) {
     throw new Error(`manifest parent job is not unique at the selected attempt: ${child.name}`);
   }
-  const currentJob = currentJobs[0];
-  if (currentJob.status !== "completed" || currentJob.conclusion !== "success") {
-    throw new Error(`manifest parent job is not completed/success: ${child.name}`);
-  }
-  return { currentJob, slotJobs };
+  return { currentJob: currentJobs[0], slotJobs };
 }
 
 export function resolveManifestChildOriginAttempt(run, child, parentManifest, parentJobs) {
@@ -693,6 +1690,9 @@ export function resolveManifestChildOriginAttempt(run, child, parentManifest, pa
   }
 
   const { currentJob, slotJobs } = selectedAttemptParentJob(parentJobs, child, parentManifest);
+  if (currentJob.status !== "completed" || currentJob.conclusion !== "success") {
+    throw new Error(`manifest parent job is not completed/success: ${child.name}`);
+  }
   const currentFingerprint = JSON.stringify(parentJobExecutionFingerprint(currentJob));
   const carriedOriginAttempts = slotJobs
     .filter(
@@ -708,12 +1708,14 @@ export function resolveManifestChildOriginAttempt(run, child, parentManifest, pa
     : parentManifest.runAttempt;
 }
 
-export function selectManifestParentJob(parentJobs, child, parentManifest, originAttempt) {
+export function selectManifestParentJob(
+  parentJobs,
+  child,
+  parentManifest,
+  originAttempt,
+  options = {},
+) {
   const { currentJob, slotJobs } = selectedAttemptParentJob(parentJobs, child, parentManifest);
-  if (originAttempt === parentManifest.runAttempt) {
-    return currentJob;
-  }
-
   const originJobs = slotJobs.filter((job) => Number(job.run_attempt) === originAttempt);
   if (originJobs.length !== 1) {
     throw new Error(`manifest parent job origin is not unique: ${child.name}`);
@@ -721,6 +1723,28 @@ export function selectManifestParentJob(parentJobs, child, parentManifest, origi
   const originJob = originJobs[0];
   if (originJob.status !== "completed" || originJob.conclusion !== "success") {
     throw new Error(`manifest parent job origin is not completed/success: ${child.name}`);
+  }
+  if (originAttempt === parentManifest.runAttempt) {
+    return originJob;
+  }
+  if (originAttempt > parentManifest.runAttempt) {
+    throw new Error(`manifest parent job origin attempt is invalid: ${child.name}`);
+  }
+  if (options.requireSkippedCarryForward === true) {
+    for (let attempt = originAttempt + 1; attempt <= parentManifest.runAttempt; attempt += 1) {
+      const carriedJobs = slotJobs.filter((job) => Number(job.run_attempt) === attempt);
+      if (carriedJobs.length !== 1) {
+        throw new Error(`manifest parent job carry-forward is not unique: ${child.name}`);
+      }
+      const carriedJob = carriedJobs[0];
+      if (carriedJob.status !== "completed" || carriedJob.conclusion !== "skipped") {
+        throw new Error(`manifest parent job was redispatched during recovery: ${child.name}`);
+      }
+    }
+    return originJob;
+  }
+  if (currentJob.status !== "completed" || currentJob.conclusion !== "success") {
+    throw new Error(`manifest parent job is not completed/success: ${child.name}`);
   }
   if (
     JSON.stringify(parentJobExecutionFingerprint(currentJob)) !==
@@ -731,15 +1755,6 @@ export function selectManifestParentJob(parentJobs, child, parentManifest, origi
   return currentJob;
 }
 
-function childRunIdsFromParentLog(log, repository = DEFAULT_REPO) {
-  const escapedRepo = repository.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  const pattern = new RegExp(
-    `https://github\\.com/${escapedRepo}/actions/runs/([1-9][0-9]*)`,
-    "gu",
-  );
-  return new Set(Array.from(log.matchAll(pattern), (match) => match[1]));
-}
-
 export function validateManifestChildRun(
   run,
   child,
@@ -747,13 +1762,27 @@ export function validateManifestChildRun(
   parentManifest,
   parentJobs,
   selectedParentJobLog,
-  repository = DEFAULT_REPO,
+  repository,
+  plannedRunAttempt,
+  requireSkippedCarryForward = false,
 ) {
+  const targetRepository = repository ?? DEFAULT_REPO;
   if (String(run.id) !== String(runId)) {
     throw new Error(`manifest child run ID mismatch: ${child.name}`);
   }
   const originAttempt = resolveManifestChildOriginAttempt(run, child, parentManifest, parentJobs);
-  if (
+  if (plannedRunAttempt !== undefined) {
+    validateReleaseChildRunProvenance(run, {
+      displayTitle: child.displayTitle,
+      key: child.manifestKey,
+      plannedRunAttempt,
+      repository: targetRepository,
+      runId,
+      workflow: child.workflow,
+      workflowRef: child.headBranch,
+      workflowSha: parentManifest.workflowSha,
+    });
+  } else if (
     run.event !== "workflow_dispatch" ||
     run.head_branch !== child.headBranch ||
     (child.trustedRef === "parent" && run.head_sha !== parentManifest.workflowSha) ||
@@ -761,32 +1790,31 @@ export function validateManifestChildRun(
     run.actor?.login !== "github-actions[bot]" ||
     run.triggering_actor?.login !== "github-actions[bot]" ||
     !Number.isSafeInteger(Number(run.run_attempt)) ||
-    Number(run.run_attempt) < 1 ||
-    originAttempt === undefined
+    Number(run.run_attempt) < 1
   ) {
+    throw new Error(`manifest child dispatch tuple mismatch: ${child.name}`);
+  }
+  if (originAttempt === undefined) {
     throw new Error(`manifest child dispatch tuple mismatch: ${child.name}`);
   }
   const childWorkflowPath = String(run.path ?? "").split("@", 1)[0];
   if (childWorkflowPath !== `.github/workflows/${child.workflow}`) {
     throw new Error(`manifest child workflow mismatch: ${child.name}`);
   }
-  selectManifestParentJob(parentJobs, child, parentManifest, originAttempt);
-  const emittedChildRunIds = childRunIdsFromParentLog(selectedParentJobLog, repository);
-  if (emittedChildRunIds.size !== 1 || !emittedChildRunIds.has(String(runId))) {
-    throw new Error(`manifest child run is not uniquely emitted by its parent job: ${child.name}`);
-  }
-  if (
-    child.manifestKey !== "npmTelegram" &&
-    !selectedParentJobLog.includes(`TARGET_SHA: ${parentManifest.targetSha}`)
-  ) {
-    throw new Error(`manifest parent job target SHA mismatch: ${child.name}`);
-  }
-  if (
-    child.manifestKey === "productPerformance" &&
-    !selectedParentJobLog.includes("-f publish_reports=false")
-  ) {
-    throw new Error("manifest performance child is not dispatched in artifact-only mode");
-  }
+  selectManifestParentJob(parentJobs, child, parentManifest, originAttempt, {
+    requireSkippedCarryForward,
+  });
+  validateReleaseChildDispatchBinding({
+    child: {
+      key: child.manifestKey,
+      runId,
+    },
+    log: selectedParentJobLog,
+    coveragePolicy: parentManifest.validationInputs?.coveragePolicy,
+    plannedRunAttempt: plannedRunAttempt ?? run.run_attempt,
+    repository: targetRepository,
+    targetSha: parentManifest.targetSha,
+  });
   return run;
 }
 
@@ -950,13 +1978,13 @@ export function readManifestArtifactArchive(archivePath, expectedDigest) {
   let manifestBytes;
   try {
     manifestBytes = execFileSync("unzip", ["-p", archivePath, MANIFEST_ARTIFACT_ENTRY], {
-      maxBuffer: MAX_MANIFEST_JSON_BYTES + 1,
+      maxBuffer: MAX_RELEASE_ARTIFACT_BYTES + 1,
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch {
     throw new Error("release validation manifest artifact entry could not be read safely");
   }
-  if (manifestBytes.byteLength < 1 || manifestBytes.byteLength > MAX_MANIFEST_JSON_BYTES) {
+  if (manifestBytes.byteLength < 1 || manifestBytes.byteLength > MAX_RELEASE_ARTIFACT_BYTES) {
     throw new Error("release validation manifest artifact entry size is invalid");
   }
   return JSON.parse(manifestBytes.toString("utf8"));
@@ -990,13 +2018,14 @@ function downloadParentManifestEvidence(runId, runAttempt, repository, manifestP
   const downloadDir = mkdtempSync(join(tmpdir(), "openclaw-release-ci-summary-"));
   try {
     const archivePath = join(downloadDir, "manifest.zip");
-    downloadArtifactZip(String(artifact.id), archivePath, targetRepository);
+    downloadArtifactZip(String(artifact.id), archivePath, artifact.size_in_bytes, targetRepository);
     const manifest = readManifestArtifactArchive(archivePath, artifact.digest);
     validateManifestArtifactCompatibility(artifact, manifest, runId, runAttempt);
     if (manifestPath) {
       const providedManifest = JSON.parse(readFileSync(resolve(manifestPath), "utf8"));
       if (
-        JSON.stringify(canonicalJson(providedManifest)) !== JSON.stringify(canonicalJson(manifest))
+        JSON.stringify(sortReleaseJsonValueKeys(providedManifest)) !==
+        JSON.stringify(sortReleaseJsonValueKeys(manifest))
       ) {
         throw new Error("provided release validation manifest differs from the run artifact");
       }
@@ -1052,6 +2081,31 @@ function validateCompletedParentRun(parentView, parentRest, repository, runId) {
 export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
   const normalizedRepository = normalizeRepository(repository);
   return {
+    getWorkflowSource(sha) {
+      const exactSha = normalizeSha(sha, "source admission workflow SHA");
+      const payload = githubRestJson(
+        `contents/.github/workflows/full-release-validation.yml?ref=${exactSha}`,
+        normalizedRepository,
+      );
+      if (
+        payload?.type !== "file" ||
+        payload.encoding !== "base64" ||
+        payload.path !== ".github/workflows/full-release-validation.yml" ||
+        !Number.isSafeInteger(payload.size) ||
+        payload.size < 1 ||
+        payload.size > 1024 * 1024 ||
+        typeof payload.content !== "string" ||
+        payload.content.length > 2 * 1024 * 1024
+      ) {
+        throw new Error("invalid immutable source-admission workflow response");
+      }
+      const bytes = Buffer.from(payload.content, "base64");
+      const blob = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+      if (bytes.length !== payload.size || blob !== payload.sha) {
+        throw new Error("source-admission workflow blob mismatch");
+      }
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    },
     compareCommitLineage(base, head) {
       return githubRestJson(`compare/${base}...${head}?per_page=1&page=2`, normalizedRepository);
     },
@@ -1064,8 +2118,28 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
     getParentJobs(runId) {
       return findParentJobsAll(runId, normalizedRepository);
     },
+    getRunAttemptJobs(runId, runAttempt, { requireComplete = false } = {}) {
+      return findRunAttemptJobsAll(runId, runAttempt, normalizedRepository, requireComplete);
+    },
+    getRunAttempt(runId, runAttempt) {
+      return githubRestJson(`actions/runs/${runId}/attempts/${runAttempt}`, normalizedRepository);
+    },
+    getArtifact(artifactId) {
+      if (!/^[1-9][0-9]{0,19}$/u.test(String(artifactId))) {
+        throw new Error("invalid publication artifact ID");
+      }
+      return githubRestJson(`actions/artifacts/${artifactId}`, normalizedRepository);
+    },
+    getRef(fullRef) {
+      const refPath = String(fullRef)
+        .replace(/^refs\//u, "")
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/");
+      return githubRestJson(`git/ref/${refPath}`, normalizedRepository);
+    },
     getRun(runId) {
-      return githubRestJson(`actions/runs/${runId}`, normalizedRepository);
+      return githubRestJsonAsync(`actions/runs/${runId}`, normalizedRepository);
     },
     getRunView(runId) {
       return jsonGh([
@@ -1075,23 +2149,45 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
         "--repo",
         normalizedRepository,
         "--json",
-        "status,conclusion,attempt,headBranch,headSha,url,jobs",
+        "status,conclusion,attempt,headBranch,headSha,url",
       ]);
     },
     loadManifest(runId, runAttempt, manifestPath) {
       return downloadParentManifestEvidence(runId, runAttempt, normalizedRepository, manifestPath);
     },
+    loadExecutionPlan(runId) {
+      return tryDownloadExecutionPlan(runId, normalizedRepository);
+    },
+    loadExecutionPlanEvidence(runId) {
+      return readExecutionPlanEvidence(
+        normalizeRequiredRunId(runId, "publication parent run ID"),
+        normalizedRepository,
+      );
+    },
   };
 }
 
-function loadValidatedParentEvidence({ client, manifestPath, repository, runId }) {
+async function loadValidatedParentEvidence({
+  client,
+  expectedRunAttempts,
+  manifestPath,
+  repository,
+  runId,
+}) {
   const parentView = client.getRunView(runId);
-  const parentRun = client.getRun(runId);
+  const parentRun = await client.getRun(runId);
+  const parentRunAttempt = normalizePositiveInteger(
+    parentRun.run_attempt,
+    `full release parent ${runId} run attempt`,
+  );
+  consumeExpectedRunAttempt(expectedRunAttempts, runId, parentRunAttempt, "parent");
   validateCompletedParentRun(parentView, parentRun, repository, runId);
 
-  const manifestEvidence = client.loadManifest(runId, parentRun.run_attempt, manifestPath);
+  const manifestEvidence = client.loadManifest(runId, parentRunAttempt, manifestPath);
   if (!manifestEvidence) {
-    throw new Error(`successful parent run is missing its release validation manifest: ${runId}`);
+    throw new ReleaseEvidenceRefreshRequiredError(
+      `successful parent run is missing its release validation manifest: ${runId}`,
+    );
   }
   const manifest = validateParentManifest(manifestEvidence.manifest, {
     runAttempt: parentRun.run_attempt,
@@ -1104,14 +2200,32 @@ function loadValidatedParentEvidence({ client, manifestPath, repository, runId }
   return {
     artifact: manifestEvidence.artifact,
     manifest,
-    manifestJson: canonicalJson(manifestEvidence.manifest),
+    manifestJson: sortReleaseJsonValueKeys(manifestEvidence.manifest),
     parentRun,
     parentView,
   };
 }
 
-function trustedWorkflowFullRef(workflowRef) {
-  return `refs/heads/${workflowRef}`;
+function resolveTrustedWorkflowIdentity(workflowRef, workflowFullRef, workflowSha) {
+  const fullRef = workflowFullRef ?? `refs/heads/${workflowRef}`;
+  const protectedTag = TRUSTED_RELEASE_PUBLISH_TAG_PATTERN.exec(fullRef);
+  if (protectedTag) {
+    if (workflowRef !== fullRef.slice("refs/tags/".length)) {
+      throw new Error("trusted workflow tag name does not match its full ref");
+    }
+    const sha = normalizeSha(workflowSha, "trusted workflow SHA");
+    if (sha.slice(0, 12) !== protectedTag[1]) {
+      throw new Error("trusted workflow tag does not match its workflow SHA");
+    }
+    return { fullRef, ref: workflowRef, sha, type: "tag" };
+  }
+  if (fullRef !== `refs/heads/${workflowRef}`) {
+    throw new Error("trusted workflow full ref does not match its ref");
+  }
+  if (workflowRef.startsWith("release-publish/")) {
+    throw new Error("trusted release-publish workflow ref must be a protected tag");
+  }
+  return { fullRef, ref: workflowRef, sha: undefined, type: "branch" };
 }
 
 function normalizeWorkflowPathRef(ref) {
@@ -1121,18 +2235,61 @@ function normalizeWorkflowPathRef(ref) {
   return `refs/heads/${ref}`;
 }
 
-export function validateTrustedProducerIdentity(evidence, client, verifier, trustedWorkflowRef) {
+export function validateTrustedProducerIdentity(
+  evidence,
+  client,
+  verifier,
+  trustedWorkflowRef,
+  trustedWorkflowFullRef,
+  trustedWorkflowSha,
+) {
   const { manifest, parentRun } = evidence;
-  // Keep this predicate local: verifier source identity covers this file only.
+  const trustedIdentity = resolveTrustedWorkflowIdentity(
+    trustedWorkflowRef,
+    trustedWorkflowFullRef,
+    trustedWorkflowSha,
+  );
   const shaPinned = SHA_PINNED_BRANCH_PATTERN.test(manifest.workflowRef ?? "");
-  if (manifest.workflowRef !== trustedWorkflowRef && !shaPinned) {
+  const protectedTagRoute = trustedIdentity.type === "tag";
+  let protectedTagWorkflowRefProof = "manifest-v3-protected-tag-exact-sha";
+  if (protectedTagRoute) {
+    let liveTag;
+    try {
+      liveTag = client.getRef(trustedIdentity.fullRef);
+    } catch (error) {
+      throw new Error(
+        `protected tooling tag is unavailable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error },
+      );
+    }
+    if (liveTag?.object?.sha !== trustedIdentity.sha) {
+      throw new Error("protected tooling tag moved after release validation was sealed");
+    }
+    if (!shaPinned) {
+      throw new Error("protected-tag release evidence must use a canonical release-ci branch");
+    }
+    if (manifest.workflowSha !== trustedIdentity.sha) {
+      const comparison = client.compareCommitLineage(manifest.workflowSha, trustedIdentity.sha);
+      if (
+        !["ahead", "identical"].includes(String(comparison.status)) ||
+        comparison.merge_base_commit?.sha !== manifest.workflowSha
+      ) {
+        throw new Error(
+          "protected-tag release evidence producer is not on the trusted tooling lineage",
+        );
+      }
+      protectedTagWorkflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
+    }
+  } else if (manifest.workflowRef !== trustedWorkflowRef && !shaPinned) {
     throw new Error(
       `release evidence producer must run from trusted workflow ref: ${trustedWorkflowRef}`,
     );
   }
   if (shaPinned) {
-    if (manifest.version !== 3) {
-      throw new Error("SHA-pinned release evidence requires a v3 manifest");
+    if (manifest.version < 3) {
+      throw new Error("SHA-pinned release evidence requires a v3+ manifest");
     }
     if (!manifest.workflowRef.startsWith(`release-ci/${manifest.workflowSha.slice(0, 12)}-`)) {
       throw new Error("SHA-pinned release evidence branch does not match its workflow SHA");
@@ -1141,7 +2298,7 @@ export function validateTrustedProducerIdentity(evidence, client, verifier, trus
       throw new Error("SHA-pinned release evidence target ref must equal its target SHA");
     }
   }
-  const expectedFullRef = trustedWorkflowFullRef(manifest.workflowRef);
+  const expectedFullRef = `refs/heads/${manifest.workflowRef}`;
   const runPath = String(parentRun.path ?? "");
   const [runWorkflowPath, runWorkflowFullRef] = runPath.split("@", 2);
   if (runWorkflowPath !== ".github/workflows/full-release-validation.yml") {
@@ -1152,23 +2309,29 @@ export function validateTrustedProducerIdentity(evidence, client, verifier, trus
   }
 
   let workflowRefProof = "legacy-v2-main-ancestry";
-  if (manifest.version === 3) {
+  if (manifest.version >= 3) {
     if (manifest.workflowRefType !== "branch" || manifest.workflowFullRef !== expectedFullRef) {
       throw new Error("release evidence producer workflow full ref is not trusted");
     }
-    workflowRefProof = shaPinned ? "manifest-v3-sha-pinned-main-ancestry" : "manifest-v3-branch";
+    workflowRefProof = protectedTagRoute
+      ? protectedTagWorkflowRefProof
+      : shaPinned
+        ? "manifest-v3-sha-pinned-main-ancestry"
+        : "manifest-v3-branch";
   }
 
-  const comparison = client.compareCommitLineage(manifest.workflowSha, verifier.sourceSha);
-  if (
-    !["ahead", "identical"].includes(String(comparison.status)) ||
-    comparison.merge_base_commit?.sha !== manifest.workflowSha
-  ) {
-    throw new Error("release evidence producer is not on the trusted main verifier lineage");
+  if (!protectedTagRoute) {
+    const comparison = client.compareCommitLineage(manifest.workflowSha, verifier.sourceSha);
+    if (
+      !["ahead", "identical"].includes(String(comparison.status)) ||
+      comparison.merge_base_commit?.sha !== manifest.workflowSha
+    ) {
+      throw new Error("release evidence producer is not on the trusted main verifier lineage");
+    }
   }
 
   return {
-    producerOnTrustedMainLineage: true,
+    producerOnTrustedMainLineage: !protectedTagRoute,
     workflowFullRef: expectedFullRef,
     workflowQualifiedPath: `${runWorkflowPath}@${expectedFullRef}`,
     workflowRefProof,
@@ -1250,8 +2413,35 @@ export function resolveVerifierIdentity(
   };
 }
 
-function validateStrictChildRun({ child, client, parentEvidence, parentJobs, repository, runId }) {
-  const run = client.getRun(runId);
+async function validateStrictChildRun({
+  child,
+  childEvidence,
+  client,
+  parentEvidence,
+  parentJobs,
+  plannedChild,
+  releaseProfile,
+  repository,
+  runId,
+  expectedRunAttempts,
+}) {
+  const run = await client.getRun(runId);
+  const effectiveRunAttempt = normalizePositiveInteger(
+    run.run_attempt,
+    `${child.name} run attempt`,
+  );
+  consumeExpectedRunAttempt(expectedRunAttempts, runId, effectiveRunAttempt, "child");
+  if (plannedChild) {
+    try {
+      validateReleaseChildRunProvenance(run, {
+        ...plannedChild,
+        plannedRunAttempt: plannedChild.runAttempt,
+        repository,
+      });
+    } catch {
+      throw new Error(`execution plan child dispatch tuple mismatch: ${child.name}`);
+    }
+  }
   const originAttempt = resolveManifestChildOriginAttempt(
     run,
     child,
@@ -1266,6 +2456,7 @@ function validateStrictChildRun({ child, client, parentEvidence, parentJobs, rep
     child,
     parentEvidence.manifest,
     originAttempt,
+    { requireSkippedCarryForward: plannedChild !== undefined },
   );
   validateManifestChildRun(
     run,
@@ -1273,22 +2464,105 @@ function validateStrictChildRun({ child, client, parentEvidence, parentJobs, rep
     runId,
     parentEvidence.manifest,
     parentJobs,
-    client.getJobLog(parentJob.id),
+    await client.getJobLog(parentJob.id),
     repository,
+    plannedChild?.runAttempt,
+    plannedChild !== undefined,
   );
+  let jobs;
+  let composite;
+  let currentAttemptJobs;
+  if (plannedChild && childEvidence) {
+    if (childEvidence.effectiveRunAttempt > effectiveRunAttempt) {
+      throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
+    }
+    const attempts = [];
+    for (
+      let runAttempt = plannedChild.runAttempt;
+      runAttempt <= childEvidence.effectiveRunAttempt;
+      runAttempt += 1
+    ) {
+      currentAttemptJobs = await client.getRunAttemptJobs(runId, runAttempt);
+      attempts.push({ jobs: currentAttemptJobs, runAttempt });
+    }
+    const evidence = composeReleaseChildAttemptEvidence({
+      attempts,
+      expected: {
+        ...plannedChild,
+        plannedRunAttempt: plannedChild.runAttempt,
+        repository,
+      },
+      run:
+        childEvidence.effectiveRunAttempt === effectiveRunAttempt
+          ? run
+          : {
+              ...run,
+              run_attempt: childEvidence.effectiveRunAttempt,
+              triggering_actor: { login: childEvidence.triggeringActor },
+            },
+    });
+    const expectedEvidence = {
+      ...evidence,
+    };
+    if (
+      JSON.stringify(sortReleaseJsonValueKeys(childEvidence)) !==
+      JSON.stringify(sortReleaseJsonValueKeys(expectedEvidence))
+    ) {
+      throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
+    }
+    if (childEvidence.effectiveRunAttempt < effectiveRunAttempt) {
+      throw new ReleaseEvidenceRefreshRequiredError(
+        `successful parent manifest predates ${child.name} attempt ${effectiveRunAttempt}`,
+      );
+    }
+    composite = {
+      effectiveRunAttempt: evidence.effectiveRunAttempt,
+      jobs: evidence.jobs,
+      plannedRunAttempt: evidence.plannedRunAttempt,
+      sha256: evidence.compositeJobsSha256,
+    };
+    jobs = evidence.jobs;
+  } else {
+    jobs =
+      run.conclusion === "success" && child.manifestKey !== "productPerformance"
+        ? []
+        : await client.getParentJobs(runId);
+  }
   if (
     run.repository?.full_name !== repository ||
-    run.status !== "completed" ||
-    run.conclusion !== "success" ||
-    run.head_sha !== parentEvidence.manifest.workflowSha
+    run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha) ||
+    !terminalPolicyPass(
+      {
+        conclusion: run.conclusion,
+        jobs,
+        key: child.manifestKey,
+        status: run.status,
+      },
+      releaseProfile,
+      parentEvidence.manifest.workflowRef,
+    )
   ) {
-    throw new Error(`manifest child run is not exact completed/success evidence: ${child.name}`);
+    throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
   if (child.manifestKey === "productPerformance") {
-    validatePerformanceArtifactOnlyJobs(client.getParentJobs(runId), run.run_attempt);
+    // A composite may carry earlier successes; the publication guard must pass
+    // in the current raw attempt, already fetched while composing the evidence.
+    validatePerformanceArtifactOnlyJobs(
+      composite
+        ? currentAttemptJobs.map((job) =>
+            Object.assign({}, job, { run_attempt: effectiveRunAttempt }),
+          )
+        : jobs,
+      effectiveRunAttempt,
+    );
   }
 
   return {
+    advisoryJobs: releaseAdvisoryJobEvidence(
+      { [child.manifestKey]: { jobs } },
+      releaseProfile,
+      parentEvidence.manifest.workflowRef,
+    ),
     conclusion: run.conclusion,
     dispatchNonce: `full-release-validation-${parentEvidence.manifest.runId}-${originAttempt}${child.suffix}`,
     displayTitle: run.display_title,
@@ -1296,8 +2570,17 @@ function validateStrictChildRun({ child, client, parentEvidence, parentJobs, rep
     headBranch: run.head_branch,
     parentJobId: String(parentJob.id),
     path: workflowPath(run),
+    policyPassed: true,
     role: child.manifestKey,
-    runAttempt: normalizePositiveInteger(run.run_attempt, `${child.name} run attempt`),
+    ...(composite
+      ? {
+          compositeJobsSha256: composite.sha256,
+          dispatchActor: run.actor.login,
+          plannedRunAttempt: plannedChild.runAttempt,
+          triggeringActor: run.triggering_actor.login,
+        }
+      : {}),
+    runAttempt: effectiveRunAttempt,
     runId: String(run.id),
     sourceParentAttempt: originAttempt,
     sourceParentRunId: parentEvidence.manifest.runId,
@@ -1312,18 +2595,38 @@ function validateStrictChildRun({ child, client, parentEvidence, parentJobs, rep
  * @param {{
  *   manifestPath?: string,
  *   repository?: string,
+ *   reuseRequest?: { releaseProfile: string, runReleaseSoak: string, targetSha: string, validationInputs: Record<string, unknown> },
  *   runId: string,
+ *   expectedChangedPaths?: string[],
+ *   expectedEvidencePolicy?: string,
+ *   expectedEvidenceSha?: string,
+ *   expectedRootRunId?: string,
+ *   expectedRunAttempts?: Record<string, number>,
+ *   expectedSelectedRunId?: string,
+ *   expectedTargetSha?: string,
+ *   trustedWorkflowFullRef?: string,
  *   trustedWorkflowRef?: string,
+ *   trustedWorkflowSha?: string,
  *   verifierSourceContent?: string | Uint8Array,
  *   verifierSourceSha: string,
  * }} options
  */
-export function validateReleaseRunEvidence(
+export async function validateReleaseRunEvidence(
   {
     manifestPath,
     repository = DEFAULT_REPO,
+    reuseRequest,
     runId,
+    expectedChangedPaths,
+    expectedEvidencePolicy,
+    expectedEvidenceSha,
+    expectedRootRunId,
+    expectedRunAttempts,
+    expectedSelectedRunId,
+    expectedTargetSha,
+    trustedWorkflowFullRef,
     trustedWorkflowRef = "main",
+    trustedWorkflowSha,
     verifierSourceContent,
     verifierSourceSha,
   },
@@ -1331,18 +2634,76 @@ export function validateReleaseRunEvidence(
 ) {
   const normalizedRepository = normalizeRepository(repository);
   const normalizedRunId = normalizeRequiredRunId(runId, "full release run ID");
+  const remainingExpectedRunAttempts = normalizeExpectedRunAttempts(expectedRunAttempts);
   const normalizedTrustedWorkflowRef = normalizeWorkflowRef(
     trustedWorkflowRef,
     "trusted workflow ref",
   );
+  const trustedIdentity = resolveTrustedWorkflowIdentity(
+    normalizedTrustedWorkflowRef,
+    trustedWorkflowFullRef,
+    trustedWorkflowSha,
+  );
   const evidenceClient = client ?? createReleaseEvidenceClient(normalizedRepository);
   const verifier = resolveVerifierIdentity(verifierSourceSha, verifierSourceContent);
-  const currentEvidence = loadValidatedParentEvidence({
+  const currentEvidence = await loadValidatedParentEvidence({
     client: evidenceClient,
+    expectedRunAttempts: remainingExpectedRunAttempts,
     manifestPath,
     repository: normalizedRepository,
     runId: normalizedRunId,
   });
+  const requestedReuse = {
+    expectedChangedPaths,
+    expectedEvidencePolicy,
+    expectedEvidenceSha,
+    expectedRootRunId,
+    expectedSelectedRunId,
+    expectedTargetSha,
+  };
+  if (reuseRequest !== undefined) {
+    // Reject mismatched searches before fetching root/child evidence. Matching
+    // metadata only admits a candidate to the full verifier below; it never passes it.
+    const manifest = currentEvidence.manifest;
+    if (
+      manifest.version !== 4 ||
+      manifest.evidenceReuse ||
+      manifest.rerunGroup !== "all" ||
+      manifest.releaseProfile !== reuseRequest.releaseProfile ||
+      manifest.runReleaseSoak !== reuseRequest.runReleaseSoak ||
+      JSON.stringify(sortReleaseJsonValueKeys(manifest.validationInputs)) !==
+        JSON.stringify(sortReleaseJsonValueKeys(reuseRequest.validationInputs))
+    ) {
+      throw new Error(
+        "ineligible reuse candidate: requires a direct full run with matching profile, soak, and inputs",
+      );
+    }
+    const exactTarget = manifest.targetSha === reuseRequest.targetSha;
+    const comparison = exactTarget
+      ? null
+      : evidenceClient.compareCommits(manifest.targetSha, reuseRequest.targetSha);
+    const delta = exactTarget
+      ? { changedPaths: [], policy: EXACT_TARGET_EVIDENCE_REUSE_POLICY }
+      : classifyReleaseChangelogEvidenceComparison(comparison, {
+          baseSha: manifest.targetSha,
+          version:
+            manifest.candidateBinding?.package?.version ?? manifest.validationInputs?.targetVersion,
+        });
+    validateRequestedEvidenceReuse(
+      manifest,
+      manifest,
+      manifest,
+      {
+        expectedChangedPaths: delta.changedPaths,
+        expectedEvidencePolicy: delta.policy,
+        expectedEvidenceSha: manifest.targetSha,
+        expectedRootRunId: manifest.runId,
+        expectedSelectedRunId: manifest.runId,
+        expectedTargetSha: reuseRequest.targetSha,
+      },
+      () => comparison,
+    );
+  }
   const producerIdentities = new Map([
     [
       currentEvidence.manifest.runId,
@@ -1351,6 +2712,8 @@ export function validateReleaseRunEvidence(
         evidenceClient,
         verifier,
         normalizedTrustedWorkflowRef,
+        trustedIdentity.fullRef,
+        trustedIdentity.sha,
       ),
     ],
   ]);
@@ -1359,16 +2722,18 @@ export function validateReleaseRunEvidence(
   let selectedEvidence = currentEvidence;
   const reuse = currentEvidence.manifest.evidenceReuse;
   if (reuse) {
-    rootEvidence = loadValidatedParentEvidence({
+    rootEvidence = await loadValidatedParentEvidence({
       client: evidenceClient,
+      expectedRunAttempts: remainingExpectedRunAttempts,
       repository: normalizedRepository,
       runId: reuse.runId,
     });
     selectedEvidence =
       reuse.selectedRunId === reuse.runId
         ? rootEvidence
-        : loadValidatedParentEvidence({
+        : await loadValidatedParentEvidence({
             client: evidenceClient,
+            expectedRunAttempts: remainingExpectedRunAttempts,
             repository: normalizedRepository,
             runId: reuse.selectedRunId,
           });
@@ -1379,7 +2744,18 @@ export function validateReleaseRunEvidence(
       (base, head) => evidenceClient.compareCommits(base, head),
     );
   }
+  if (hasRequestedEvidenceReuse(requestedReuse)) {
+    validateRequestedEvidenceReuse(
+      currentEvidence.manifest,
+      selectedEvidence.manifest,
+      rootEvidence.manifest,
+      requestedReuse,
+      (base, head) => evidenceClient.compareCommits(base, head),
+    );
+  }
 
+  const sourcePlans = new Map();
+  const sourceContracts = new Map();
   for (const evidence of [currentEvidence, selectedEvidence, rootEvidence]) {
     if (!producerIdentities.has(evidence.manifest.runId)) {
       producerIdentities.set(
@@ -1389,32 +2765,196 @@ export function validateReleaseRunEvidence(
           evidenceClient,
           verifier,
           normalizedTrustedWorkflowRef,
+          trustedIdentity.fullRef,
+          trustedIdentity.sha,
         ),
       );
     }
+    const manifest = evidence.manifest;
+    if (!sourceContracts.has(manifest.workflowSha)) {
+      const workflow = evidenceClient.getWorkflowSource(manifest.workflowSha);
+      sourceContracts.set(manifest.workflowSha, {
+        workflow,
+        source: publicationSourceContract(workflow),
+        publication: publicationAdmissionContract(workflow),
+      });
+    }
+    const { source: contract, publication: registryContract } = sourceContracts.get(
+      manifest.workflowSha,
+    );
+    if (manifest.sourceAdmissionContract !== contract) {
+      throw new Error("source admission differs from the exact trusted workflow contract");
+    }
+    if (manifest.publicationAdmissionContract !== registryContract) {
+      throw new Error("publication admission differs from the exact trusted workflow contract");
+    }
+    validatePublicationSourceBinding(manifest, { sourceAdmissionContract: contract });
+    validatePublicationAdmissionBinding(manifest, {
+      publicationAdmissionContract: registryContract,
+    });
+    if (contract && !sourcePlans.has(manifest.runId)) {
+      const original =
+        registryContract && manifest.sourceAdmission.validationPurpose === "publish"
+          ? await restoreOriginalPublicationAdmission({
+              request: manifest.sourceAdmission,
+              client: {
+                ...evidenceClient,
+                getWorkflowSource: (sha) =>
+                  sourceContracts.get(sha)?.workflow ?? evidenceClient.getWorkflowSource(sha),
+              },
+            })
+          : undefined;
+      const plan = validateReleaseExecutionPlanArtifact(
+        original?.plan ?? evidenceClient.loadExecutionPlan(manifest.runId),
+        {
+          sourceAdmissionContract: contract,
+          publicationAdmissionContract: registryContract,
+          parentRunId: manifest.runId,
+          repository: normalizedRepository,
+          targetSha: manifest.targetSha,
+          workflowRef: manifest.workflowRef,
+          workflowSha: manifest.workflowSha,
+          releaseProfile: manifest.releaseProfile,
+          rerunGroup: manifest.rerunGroup,
+        },
+      );
+      if (
+        publicationSourceJson(plan.sourceAdmission) !==
+          publicationSourceJson(manifest.sourceAdmission) ||
+        evidence.manifestJson.executionPlanSha256 !== plan.sha256 ||
+        Number(evidence.manifestJson.sourceParentRunAttempt) !== plan.parentRunAttempt
+      ) {
+        throw new Error("source admission manifest differs from its immutable execution plan");
+      }
+      if (
+        registryContract &&
+        publicationObservationJson(plan.publicationAdmission) !==
+          publicationObservationJson(manifest.publicationAdmission)
+      ) {
+        throw new Error("publication admission manifest differs from its original execution plan");
+      }
+      sourcePlans.set(manifest.runId, plan);
+    }
   }
-  const selectedKeys = requiredChildKeysForRerunGroup(
-    rootEvidence.manifest.rerunGroup,
-    rootEvidence.manifest.validationInputs,
+  const selectedKeys = requiredChildKeysForManifest(rootEvidence.manifest);
+  const executionPlanPayload =
+    sourcePlans.get(rootEvidence.manifest.runId) ??
+    evidenceClient.loadExecutionPlan?.(rootEvidence.manifest.runId);
+  const executionPlan = executionPlanPayload
+    ? validateReleaseExecutionPlanArtifact(executionPlanPayload, {
+        parentRunId: rootEvidence.manifest.runId,
+        repository: normalizedRepository,
+        releaseProfile: rootEvidence.manifest.releaseProfile,
+        rerunGroup: rootEvidence.manifest.rerunGroup,
+        targetSha: rootEvidence.manifest.targetSha,
+        workflowRef: rootEvidence.manifest.workflowRef,
+        workflowSha: rootEvidence.manifest.workflowSha,
+      })
+    : undefined;
+  validateReleaseTelegramWaiverBinding(executionPlan, rootEvidence.manifest.validationInputs);
+  validateReleaseCoveragePolicyBinding(executionPlan, rootEvidence.manifest.validationInputs);
+  const plannedByKey = new Map(
+    (executionPlan?.children ?? []).map((plannedChild) => [plannedChild.key, plannedChild]),
   );
-  const expectedChildren = expectedSelectedChildDispatches(
-    rootEvidence.manifest.runId,
-    rootEvidence.manifest.runAttempt,
-    rootEvidence.manifest.workflowRef,
-    selectedKeys,
-  );
-  const parentJobs = evidenceClient.getParentJobs(rootEvidence.manifest.runId);
-  const children = manifestChildEntries(rootEvidence.manifest, expectedChildren, selectedKeys).map(
-    ({ child, runId: childRunId }) =>
+  if (executionPlan?.attemptEvidenceVersion !== undefined) {
+    if (
+      rootEvidence.manifestJson.executionPlanSha256 !== executionPlan.sha256 ||
+      Number(rootEvidence.manifestJson.sourceParentRunAttempt) !== executionPlan.parentRunAttempt ||
+      JSON.stringify(sortReleaseJsonValueKeys(rootEvidence.manifest.candidateBinding)) !==
+        JSON.stringify(sortReleaseJsonValueKeys(executionPlan.candidate))
+    ) {
+      throw new Error("release validation manifest differs from its immutable execution plan");
+    }
+    if (!rootEvidence.manifest.childEvidence) {
+      throw new Error("release validation manifest omitted composite child evidence");
+    }
+    if (
+      executionPlan.coveragePolicy &&
+      JSON.stringify(
+        executionPlan.children
+          .filter((child) => child.selected)
+          .map((child) => child.key)
+          .toSorted(),
+      ) !== JSON.stringify([...selectedKeys].toSorted())
+    ) {
+      throw new Error(
+        "release validation selected child set differs from its immutable execution plan",
+      );
+    }
+  }
+  const expectedChildren = executionPlan
+    ? childDispatchesForPhaseVersion(executionPlan.attemptEvidenceVersion === 3 ? 3 : 2)
+        .filter((child) => selectedKeys.has(child.manifestKey))
+        .map((child) => {
+          const plannedChild = plannedByKey.get(child.manifestKey);
+          if (
+            !plannedChild?.selected ||
+            !plannedChild.required ||
+            !plannedChild.runId ||
+            !plannedChild.runAttempt
+          ) {
+            throw new Error(`execution plan omits required child: ${child.name}`);
+          }
+          return Object.assign({}, child, {
+            displayTitle: plannedChild.displayTitle,
+            headBranch: plannedChild.workflowRef,
+            plannedChild,
+          });
+        })
+    : expectedSelectedChildDispatches(
+        rootEvidence.manifest.runId,
+        rootEvidence.manifest.runAttempt,
+        rootEvidence.manifest.workflowRef,
+        selectedKeys,
+        rootEvidence.manifest.version === 4 ? 3 : 2,
+      );
+  if (
+    executionPlan?.attemptEvidenceVersion !== undefined &&
+    JSON.stringify(Object.keys(rootEvidence.manifest.childEvidence).toSorted()) !==
+      JSON.stringify([...selectedKeys].toSorted())
+  ) {
+    throw new Error("release validation manifest composite child set is invalid");
+  }
+  const dispatchEvidence = rootEvidence;
+  const parentJobs = await evidenceClient.getParentJobs(dispatchEvidence.manifest.runId);
+  const childEntries = executionPlan
+    ? expectedChildren.map((child) => {
+        const manifestRunId = rootEvidence.manifest.childRunIds[child.manifestKey];
+        if (manifestRunId !== child.plannedChild.runId) {
+          throw new Error(`execution plan and manifest child identity differ: ${child.name}`);
+        }
+        return { child, runId: child.plannedChild.runId };
+      })
+    : manifestChildEntries(rootEvidence.manifest, expectedChildren, selectedKeys);
+  // The fixed child set bounds concurrent reads (at most seven). Each child
+  // walks its attempts/pages serially; drain all reads before returning or failing.
+  const childResults = await Promise.allSettled(
+    childEntries.map(({ child, runId: childRunId }) =>
       validateStrictChildRun({
         child,
+        childEvidence: rootEvidence.manifest.childEvidence?.[child.manifestKey],
         client: evidenceClient,
-        parentEvidence: rootEvidence,
+        parentEvidence: dispatchEvidence,
         parentJobs,
+        plannedChild: child.plannedChild,
+        releaseProfile: rootEvidence.manifest.releaseProfile,
         repository: normalizedRepository,
         runId: childRunId,
+        expectedRunAttempts: remainingExpectedRunAttempts,
       }),
+    ),
   );
+  const children = childResults.map((result) => {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+    return result.value;
+  });
+  if (remainingExpectedRunAttempts?.size) {
+    throw new Error(
+      `expected run attempts contain unvalidated run IDs: ${[...remainingExpectedRunAttempts.keys()].join(", ")}`,
+    );
+  }
 
   const current = normalizedParentTuple(
     currentEvidence,
@@ -1427,10 +2967,10 @@ export function validateReleaseRunEvidence(
   const childConclusions = Object.fromEntries(
     children.map((child) => [child.role, child.conclusion]),
   );
-  return canonicalJson({
+  return sortReleaseJsonValueKeys({
     children,
     conclusions: {
-      allRequiredSucceeded: children.every((child) => child.conclusion === "success"),
+      allRequiredSucceeded: children.every((child) => child.policyPassed),
       children: childConclusions,
       current: current.conclusion,
       root: root.conclusion,
@@ -1447,15 +2987,24 @@ export function validateReleaseRunEvidence(
           selectedRunId: reuse.selectedRunId,
         }
       : null,
+    executionPlan: executionPlan
+      ? {
+          parentRunAttempt: executionPlan.parentRunAttempt,
+          sha256: executionPlan.sha256,
+        }
+      : null,
     manifest: rootEvidence.manifestJson,
     releaseProfile: rootEvidence.manifest.releaseProfile,
     repository: normalizedRepository,
     rerunGroup: rootEvidence.manifest.rerunGroup,
     root,
     runReleaseSoak: rootEvidence.manifest.runReleaseSoak === "true",
-    schema: RELEASE_EVIDENCE_SCHEMA,
-    producerOnTrustedMainLineage: true,
-    trustedWorkflowFullRef: trustedWorkflowFullRef(normalizedTrustedWorkflowRef),
+    schema:
+      rootEvidence.manifest.version === 4
+        ? PHASED_RELEASE_EVIDENCE_SCHEMA
+        : RELEASE_EVIDENCE_SCHEMA,
+    producerOnTrustedMainLineage: trustedIdentity.type === "branch",
+    trustedWorkflowFullRef: trustedIdentity.fullRef,
     trustedWorkflowRef: normalizedTrustedWorkflowRef,
     valid: true,
     validationInputs: rootEvidence.manifest.validationInputs ?? null,
@@ -1463,14 +3012,24 @@ export function validateReleaseRunEvidence(
   });
 }
 
-export function parseReleaseCiSummaryArgs(argv) {
+function parseReleaseCiSummaryArgs(argv) {
   const options = {
     intervalMs: 30_000,
+    expectedChangedPaths: undefined,
+    expectedEvidencePolicy: undefined,
+    expectedEvidenceSha: undefined,
+    expectedRootRunId: undefined,
+    expectedRunAttempts: undefined,
+    expectedSelectedRunId: undefined,
+    expectedTargetSha: undefined,
     json: false,
     manifestPath: undefined,
     repository: DEFAULT_REPO,
+    reuseRequest: undefined,
     runId: undefined,
+    trustedWorkflowFullRef: undefined,
     trustedWorkflowRef: "main",
+    trustedWorkflowSha: undefined,
     validate: false,
     verifierSourceFile: undefined,
     verifierSourceSha: undefined,
@@ -1485,12 +3044,55 @@ export function parseReleaseCiSummaryArgs(argv) {
       options.repository = argv[++index];
     } else if (argument === "--manifest") {
       options.manifestPath = argv[++index];
+    } else if (argument === "--reuse-request-json") {
+      options.reuseRequest = normalizeJsonObject(JSON.parse(argv[++index]), "reuse request");
     } else if (argument === "--trusted-workflow-ref") {
       options.trustedWorkflowRef = argv[++index];
+    } else if (argument === "--trusted-workflow-full-ref") {
+      options.trustedWorkflowFullRef = argv[++index];
+    } else if (argument === "--trusted-workflow-sha") {
+      options.trustedWorkflowSha = argv[++index];
     } else if (argument === "--verifier-source-sha") {
       options.verifierSourceSha = argv[++index];
     } else if (argument === "--verifier-source-file") {
       options.verifierSourceFile = argv[++index];
+    } else if (argument === "--expected-target-sha") {
+      options.expectedTargetSha = argv[++index];
+    } else if (argument === "--expected-evidence-policy") {
+      options.expectedEvidencePolicy = argv[++index];
+    } else if (argument === "--expected-evidence-sha") {
+      options.expectedEvidenceSha = argv[++index];
+    } else if (argument === "--expected-root-run-id") {
+      options.expectedRootRunId = argv[++index];
+    } else if (argument === "--expected-run-attempts-json") {
+      const value = argv[++index];
+      if (!value || Buffer.byteLength(value, "utf8") > MAX_EXPECTED_RUN_ATTEMPTS_JSON_BYTES) {
+        throw new Error("--expected-run-attempts-json requires a bounded JSON object");
+      }
+      try {
+        options.expectedRunAttempts = JSON.parse(value);
+      } catch {
+        throw new Error("--expected-run-attempts-json requires a JSON object");
+      }
+      if (!options.expectedRunAttempts || Array.isArray(options.expectedRunAttempts)) {
+        throw new Error("--expected-run-attempts-json requires a JSON object");
+      }
+      normalizeExpectedRunAttempts(options.expectedRunAttempts);
+    } else if (argument === "--expected-selected-run-id") {
+      options.expectedSelectedRunId = argv[++index];
+    } else if (argument === "--expected-changed-paths-json") {
+      const value = argv[++index];
+      try {
+        options.expectedChangedPaths = JSON.parse(value);
+      } catch {
+        throw new Error("--expected-changed-paths-json requires a JSON array");
+      }
+      if (
+        !Array.isArray(options.expectedChangedPaths) ||
+        options.expectedChangedPaths.some((entry) => typeof entry !== "string")
+      ) {
+        throw new Error("--expected-changed-paths-json requires a JSON array");
+      }
     } else if (argument === "--json") {
       options.json = true;
     } else if (argument === "--watch") {
@@ -1510,6 +3112,12 @@ export function parseReleaseCiSummaryArgs(argv) {
   if (!options.validate && options.manifestPath) {
     throw new Error("--manifest requires --validate-run");
   }
+  if (!options.validate && options.reuseRequest !== undefined) {
+    throw new Error("--reuse-request-json requires --validate-run");
+  }
+  if (!options.validate && options.expectedRunAttempts !== undefined) {
+    throw new Error("--expected-run-attempts-json requires --validate-run");
+  }
   if (options.validate && options.watch) {
     throw new Error("--watch cannot be combined with --validate-run");
   }
@@ -1527,12 +3135,12 @@ function printUsage() {
     [
       "usage: release-ci-summary.mjs <full-release-run-id>",
       "       release-ci-summary.mjs <full-release-run-id> --watch [--interval seconds]",
-      "       release-ci-summary.mjs --validate-run <id> [--repo owner/name] [--trusted-workflow-ref main] [--manifest path] [--verifier-source-sha sha --verifier-source-file path] --json",
+      "       release-ci-summary.mjs --validate-run <id> [--repo owner/name] [--trusted-workflow-ref main --trusted-workflow-full-ref refs/heads/main] [--trusted-workflow-sha sha] [--manifest path] [--verifier-source-sha sha --verifier-source-file path] [--expected-target-sha sha --expected-evidence-sha sha --expected-evidence-policy policy --expected-root-run-id id --expected-selected-run-id id --expected-changed-paths-json json] [--expected-run-attempts-json json] [--reuse-request-json json] --json",
     ].join("\n"),
   );
 }
 
-export function releaseCiWatchFingerprint(parent) {
+function releaseCiWatchFingerprint(parent) {
   return JSON.stringify({
     attempt: parent.attempt,
     conclusion: parent.conclusion ?? "",
@@ -1547,7 +3155,7 @@ export function releaseCiWatchFingerprint(parent) {
   });
 }
 
-export function terminalParentJobFailures(parent) {
+function terminalParentJobFailures(parent) {
   return (parent.jobs ?? [])
     .filter(
       (job) =>
@@ -1555,6 +3163,77 @@ export function terminalParentJobFailures(parent) {
         !SUCCESSFUL_PARENT_JOB_CONCLUSIONS.has(String(job.conclusion ?? "")),
     )
     .map((job) => String(job.name || "unnamed parent job"));
+}
+
+export function tryReadReleaseDecisionArtifact(
+  parent,
+  runId,
+  repository,
+  runReleaseCiGhImpl = runReleaseCiGh,
+) {
+  const artifactName = `full-release-decision-${runId}-${parent.attempt}`;
+  const downloadDir = mkdtempSync(join(tmpdir(), "openclaw-release-decision-watch-"));
+  try {
+    try {
+      runReleaseCiGhImpl(
+        [
+          "run",
+          "download",
+          String(runId),
+          "--repo",
+          repository,
+          "--name",
+          artifactName,
+          "--dir",
+          downloadDir,
+        ],
+        { stdio: ["ignore", "ignore", "pipe"] },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isReleaseGhArtifactMissingError(error)) {
+        return undefined;
+      }
+      if (classifyReleaseGhTransportError(error) === "transient") {
+        console.warn(`release decision artifact unavailable this poll; retrying: ${message}`);
+        return undefined;
+      }
+      throw new Error(`release decision artifact read failed: ${message}`, { cause: error });
+    }
+    const path = join(downloadDir, "full-release-decision.json");
+    if (!statSync(path, { throwIfNoEntry: false })) {
+      throw new Error(`release decision artifact ${artifactName} omitted its manifest`);
+    }
+    if (statSync(path).size > MAX_RELEASE_ARTIFACT_BYTES) {
+      throw new Error(`release decision artifact ${artifactName} exceeds the size limit`);
+    }
+    return validateReleaseStateArtifact(
+      JSON.parse(readFileSync(path, "utf8")),
+      {
+        parentRunAttempt: parent.attempt,
+        parentRunId: String(runId),
+        workflowSha: parent.headSha,
+      },
+      "decision",
+    );
+  } finally {
+    rmSync(downloadDir, { force: true, recursive: true });
+  }
+}
+
+function releaseDecisionBlockedDuringDrain(parent, runId, repository) {
+  const jobs = parent.jobs ?? [];
+  const decision = jobs.find((job) => job.name === "Release Decision");
+  const drain = jobs.find((job) => job.name === "Diagnostic Drain");
+  if (
+    decision?.status !== "completed" ||
+    SUCCESSFUL_PARENT_JOB_CONCLUSIONS.has(String(decision.conclusion ?? "")) ||
+    !drain ||
+    drain.status === "completed"
+  ) {
+    return undefined;
+  }
+  return tryReadReleaseDecisionArtifact(parent, runId, repository);
 }
 
 function summarizeReleaseCiRun(options) {
@@ -1572,33 +3251,32 @@ function summarizeReleaseCiRun(options) {
   );
 }
 
-export async function watchReleaseCiRun(options, overrides = {}) {
-  const fetchParent =
-    overrides.fetchParent ??
-    (() =>
-      jsonGh([
-        "run",
-        "view",
-        options.runId,
-        "--repo",
-        options.repository,
-        "--json",
-        "status,conclusion,attempt,jobs",
-      ]));
-  const summarize = overrides.summarize ?? (() => summarizeReleaseCiRun(options));
-  const sleep =
-    overrides.sleep ??
-    ((milliseconds) =>
-      new Promise((complete) => {
-        setTimeout(complete, milliseconds);
-      }));
+async function watchReleaseCiRun(options) {
   let previousFingerprint;
   while (true) {
-    const parent = fetchParent();
+    const parent = jsonGh([
+      "run",
+      "view",
+      options.runId,
+      "--repo",
+      options.repository,
+      "--json",
+      "status,conclusion,attempt,headSha,jobs",
+    ]);
     const fingerprint = releaseCiWatchFingerprint(parent);
     if (fingerprint !== previousFingerprint) {
-      summarize();
+      summarizeReleaseCiRun(options);
       previousFingerprint = fingerprint;
+    }
+    const blockedDuringDrain = releaseDecisionBlockedDuringDrain(
+      parent,
+      options.runId,
+      options.repository,
+    );
+    if (blockedDuringDrain) {
+      throw new Error(
+        `full release run ${options.runId} stopped at Release Decision:\n${formatReleaseStateOutcome(blockedDuringDrain)}`,
+      );
     }
     const failedJobs = terminalParentJobFailures(parent);
     if (failedJobs.length > 0) {
@@ -1614,7 +3292,9 @@ export async function watchReleaseCiRun(options, overrides = {}) {
       }
       return;
     }
-    await sleep(options.intervalMs);
+    await new Promise((complete) => {
+      setTimeout(complete, options.intervalMs);
+    });
   }
 }
 
@@ -1631,11 +3311,21 @@ async function main() {
 
   if (options.validate) {
     try {
-      const evidence = validateReleaseRunEvidence({
+      const evidence = await validateReleaseRunEvidence({
+        expectedChangedPaths: options.expectedChangedPaths,
+        expectedEvidencePolicy: options.expectedEvidencePolicy,
+        expectedEvidenceSha: options.expectedEvidenceSha,
+        expectedRootRunId: options.expectedRootRunId,
+        expectedRunAttempts: options.expectedRunAttempts,
+        expectedSelectedRunId: options.expectedSelectedRunId,
+        expectedTargetSha: options.expectedTargetSha,
         manifestPath: options.manifestPath,
         repository,
+        reuseRequest: options.reuseRequest,
         runId,
+        trustedWorkflowFullRef: options.trustedWorkflowFullRef,
         trustedWorkflowRef: options.trustedWorkflowRef,
+        trustedWorkflowSha: options.trustedWorkflowSha,
         verifierSourceContent: options.verifierSourceFile
           ? readFileSync(options.verifierSourceFile)
           : undefined,
@@ -1645,6 +3335,7 @@ async function main() {
     } catch (error) {
       const failure = {
         error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof ReleaseEvidenceRefreshRequiredError ? { refreshable: true } : {}),
         schema: RELEASE_EVIDENCE_SCHEMA,
         valid: false,
       };
@@ -1790,53 +3481,57 @@ async function main() {
       );
     }
 
-    const selectedKeys = requiredChildKeysForRerunGroup(
-      sourceManifest.rerunGroup,
-      sourceManifest.validationInputs,
-    );
+    const selectedKeys = requiredChildKeysForManifest(sourceManifest);
+    for (const job of sourceManifest.advisoryJobs) {
+      console.log(`advisory: ${job.child} ${job.status}/${job.conclusion || "none"} ${job.job}`);
+    }
     const expectedChildren = expectedSelectedChildDispatches(
       sourceManifest.runId,
       sourceManifest.runAttempt,
       sourceManifest.workflowRef,
       selectedKeys,
+      sourceManifest.version === 4 ? 3 : 2,
     );
-    const sourceParentJobs = findParentJobsAll(sourceManifest.runId, repository);
-    children = manifestChildEntries(sourceManifest, expectedChildren, selectedKeys).map(
-      ({ child, runId: childRunId }) => {
-        const run = githubRestJson(`actions/runs/${childRunId}`, repository);
-        const originAttempt = resolveManifestChildOriginAttempt(
-          run,
-          child,
-          sourceManifest,
-          sourceParentJobs,
+    const sourceParentJobs = await findParentJobsAll(sourceManifest.runId, repository);
+    children = [];
+    for (const { child, runId: childRunId } of manifestChildEntries(
+      sourceManifest,
+      expectedChildren,
+      selectedKeys,
+    )) {
+      const run = githubRestJson(`actions/runs/${childRunId}`, repository);
+      const originAttempt = resolveManifestChildOriginAttempt(
+        run,
+        child,
+        sourceManifest,
+        sourceParentJobs,
+      );
+      if (originAttempt === undefined) {
+        throw new Error(`manifest child dispatch tuple mismatch: ${child.name}`);
+      }
+      const parentJob = selectManifestParentJob(
+        sourceParentJobs,
+        child,
+        sourceManifest,
+        originAttempt,
+      );
+      const validatedRun = validateManifestChildRun(
+        run,
+        child,
+        childRunId,
+        { ...sourceManifest, workflowSha: sourceParent.headSha },
+        sourceParentJobs,
+        await parentJobLog(parentJob.id, repository),
+        repository,
+      );
+      if (child.manifestKey === "productPerformance") {
+        validatePerformanceArtifactOnlyJobs(
+          await findParentJobsAll(childRunId, repository),
+          run.run_attempt,
         );
-        if (originAttempt === undefined) {
-          throw new Error(`manifest child dispatch tuple mismatch: ${child.name}`);
-        }
-        const parentJob = selectManifestParentJob(
-          sourceParentJobs,
-          child,
-          sourceManifest,
-          originAttempt,
-        );
-        const validatedRun = validateManifestChildRun(
-          run,
-          child,
-          childRunId,
-          { ...sourceManifest, workflowSha: sourceParent.headSha },
-          sourceParentJobs,
-          parentJobLog(parentJob.id, repository),
-          repository,
-        );
-        if (child.manifestKey === "productPerformance") {
-          validatePerformanceArtifactOnlyJobs(
-            findParentJobsAll(childRunId, repository),
-            run.run_attempt,
-          );
-        }
-        return { child, run: validatedRun };
-      },
-    );
+      }
+      children.push({ child, run: validatedRun });
+    }
   } else {
     console.log("candidate-sha: unavailable (release validation manifest not uploaded)");
     if (parent.status === "completed" && parent.conclusion === "success") {
@@ -1848,6 +3543,7 @@ async function main() {
       parent.attempt,
       parent.headBranch,
       selectedKeys,
+      selectedKeys.has("releaseChecksCandidate") ? 3 : 2,
     )
       .map((child) => {
         const run = findExactChildRun(child, repository);

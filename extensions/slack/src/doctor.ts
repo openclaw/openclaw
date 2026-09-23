@@ -1,4 +1,3 @@
-// Slack plugin module implements doctor behavior.
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import {
   collectStandardAllowlistLists,
@@ -14,6 +13,7 @@ import {
 } from "./doctor-contract.js";
 import { probeSlack } from "./probe.js";
 import { isSlackMutableAllowEntry } from "./security-doctor.js";
+import { parseSlackTarget } from "./target-parsing.js";
 
 const collectSlackMutableAllowlistWarnings =
   createDangerousNameMatchingMutableAllowlistWarningCollector({
@@ -45,7 +45,9 @@ const SLACK_CHANNEL_NAME_RE = /^[\p{L}\p{M}\p{N}_-]{1,80}$/u;
 const SLACK_CHANNEL_NAME_ALPHANUMERIC_RE = /[\p{L}\p{N}]/u;
 
 function looksLikeSlackChannelId(channelKey: string): boolean {
+  const workspaceChannelId = parseWorkspaceQualifiedChannelId(channelKey);
   return (
+    (workspaceChannelId !== undefined && /^[CG]/i.test(workspaceChannelId)) ||
     SLACK_CANONICAL_CHANNEL_ID_RE.test(channelKey) ||
     SLACK_LOWERCASE_CHANNEL_ID_RE.test(channelKey) ||
     SLACK_PREFIXED_CANONICAL_CHANNEL_ID_RE.test(channelKey) ||
@@ -54,9 +56,24 @@ function looksLikeSlackChannelId(channelKey: string): boolean {
 }
 
 function looksLikeSlackDmId(channelKey: string): boolean {
+  const workspaceChannelId = parseWorkspaceQualifiedChannelId(channelKey);
   return (
-    SLACK_CANONICAL_DM_ID_RE.test(channelKey) || SLACK_PREFIXED_LOWERCASE_DM_ID_RE.test(channelKey)
+    (workspaceChannelId !== undefined && /^D/i.test(workspaceChannelId)) ||
+    SLACK_CANONICAL_DM_ID_RE.test(channelKey) ||
+    SLACK_PREFIXED_LOWERCASE_DM_ID_RE.test(channelKey)
   );
+}
+
+function parseWorkspaceQualifiedChannelId(channelKey: string): string | undefined {
+  if (!/^team:/i.test(channelKey)) {
+    return undefined;
+  }
+  try {
+    const target = parseSlackTarget(channelKey);
+    return target?.kind === "channel" && target.teamId ? target.id : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function looksLikeSlackChannelNameKey(channelKey: string): boolean {

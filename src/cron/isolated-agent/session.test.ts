@@ -1,35 +1,20 @@
 // Isolated agent session tests cover session creation and metadata for cron runs.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import type { SessionOrigin } from "../../config/sessions/types.js";
+import type { SessionEntry, SessionOrigin } from "../../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { projectSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/test-store.json"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({ sessionsDir: "/tmp" }),
-  resolveSessionFilePath: vi.fn((sessionId: string) => `/tmp/${sessionId}.jsonl`),
+  resolveSessionFilePathCore: vi.fn((sessionId: string) => `/tmp/${sessionId}.jsonl`),
 }));
 
 vi.mock("../../config/sessions/reset-policy.js", () => ({
   evaluateSessionFreshness: vi.fn().mockReturnValue({ fresh: true }),
   resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
-}));
-
-vi.mock("../../agents/bootstrap-cache.js", () => ({
-  clearBootstrapSnapshot: vi.fn(),
-  clearBootstrapSnapshotOnSessionBoundary: vi.fn(({ sessionKey, boundaryAppended }) => {
-    if (sessionKey && boundaryAppended) {
-      clearBootstrapSnapshot(sessionKey);
-    }
-  }),
-  clearBootstrapSnapshotOnSessionRollover: vi.fn(({ sessionKey, previousSessionId }) => {
-    if (sessionKey && previousSessionId) {
-      clearBootstrapSnapshot(sessionKey);
-    }
-  }),
 }));
 
 vi.mock("../../agents/sessions/reset-boundary.js", () => ({
@@ -39,7 +24,6 @@ vi.mock("../../agents/sessions/reset-boundary.js", () => ({
   })),
 }));
 
-import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
 import { resolveCronSession } from "./session.js";
 
@@ -83,6 +67,7 @@ function resolveWithStoredEntry(params?: {
     nowMs: NOW_MS,
     forceNew: params?.forceNew,
     store,
+    lifecycleTimestamps: {},
   });
   return {
     ...result,
@@ -94,10 +79,6 @@ function resolveWithStoredEntry(params?: {
 }
 
 describe("resolveCronSession", () => {
-  beforeEach(() => {
-    vi.mocked(clearBootstrapSnapshot).mockReset();
-  });
-
   it("preserves modelOverride and providerOverride from existing session entry", () => {
     const result = resolveWithStoredEntry({
       sessionKey: "agent:main:cron:test-job",
@@ -132,6 +113,25 @@ describe("resolveCronSession", () => {
     expect(result.sessionEntry.providerOverride).toBeUndefined();
   });
 
+  it("preserves an explicit configured-default selection", () => {
+    const result = resolveWithStoredEntry({
+      sessionKey: "agent:main:cron:test-job",
+      forceNew: true,
+      entry: {
+        sessionId: "old-session-id",
+        updatedAt: 1000,
+        modelOverrideSource: "default",
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "gpt-5.4",
+      },
+    });
+
+    expect(result.sessionEntry.modelOverrideSource).toBe("default");
+    expect(result.sessionEntry.modelOverride).toBeUndefined();
+  });
+
   it("handles no existing session entry", () => {
     const result = resolveWithStoredEntry({
       sessionKey: "agent:main:cron:new-job",
@@ -164,7 +164,6 @@ describe("resolveCronSession", () => {
         forceNew: true,
       }),
     ).toThrow('Session "agent:main:main" is archived. Restore it before starting new work.');
-    expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
   });
 
   it("rolls an archived isolated heartbeat session into a fresh run", () => {
@@ -202,7 +201,6 @@ describe("resolveCronSession", () => {
     ).toThrow(
       'Session "agent:main:main:heartbeat" is still initializing. Retry after initialization completes.',
     );
-    expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
   });
 
   it("keeps an archived isolated heartbeat read-only without forceNew", () => {
@@ -240,7 +238,6 @@ describe("resolveCronSession", () => {
       expect(result.isNewSession).toBe(false);
       expect(result.previousSessionId).toBeUndefined();
       expect(result.systemSent).toBe(true);
-      expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
     });
 
     it("appends a boundary without changing sessionId when session is stale", () => {
@@ -272,7 +269,30 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.sendPolicy).toBe("allow");
       expect(result.sessionEntry).not.toHaveProperty("sessionFile");
       expect(result.resetBoundaryPending).toMatchObject({ reason: "cron-stale" });
-      expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { name: "stale reset", fresh: false, forceNew: false },
+      { name: "forced rollover", fresh: true, forceNew: true },
+    ])("preserves required creation provenance across $name", ({ fresh, forceNew }) => {
+      const provenance = {
+        createdAt: NOW_MS - 86_400_000,
+        createdVia: "cron" as const,
+        createdActor: {
+          type: "human" as const,
+          source: "profile" as const,
+          id: "profile-cron-creator",
+        },
+        sandbox: "required" as const,
+      };
+      const result = resolveWithStoredEntry({
+        sessionKey: "agent:main:cron:required",
+        entry: { sessionId: "required-session", updatedAt: NOW_MS - 1_000, ...provenance },
+        fresh,
+        forceNew,
+      });
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry).toMatchObject(provenance);
     });
 
     it("creates new sessionId when forceNew is true", () => {
@@ -294,7 +314,6 @@ describe("resolveCronSession", () => {
       expect(result.systemSent).toBe(false);
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
-      expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
     });
 
     it("preserves pin state when rolling to a fresh session", () => {
@@ -417,13 +436,12 @@ describe("resolveCronSession", () => {
           totalTokens: 3,
           totalTokensFresh: true,
           estimatedCostUsd: 0.01,
-          execAsk: "always",
           execHost: "gateway",
           execNode: "node-1",
-          execSecurity: "allowlist",
           cacheRead: 4,
           cacheWrite: 5,
           contextTokens: 200_000,
+          contextTokensSource: "runtime",
           compactionCount: 9,
           memoryFlush: { kind: "succeeded", compactionCount: 9 },
           abortCutoffMessageSid: "old-message",
@@ -502,13 +520,12 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.totalTokens).toBeUndefined();
       expect(result.sessionEntry.totalTokensFresh).toBeUndefined();
       expect(result.sessionEntry.estimatedCostUsd).toBeUndefined();
-      expect(result.sessionEntry.execAsk).toBeUndefined();
       expect(result.sessionEntry.execHost).toBeUndefined();
       expect(result.sessionEntry.execNode).toBeUndefined();
-      expect(result.sessionEntry.execSecurity).toBeUndefined();
       expect(result.sessionEntry.cacheRead).toBeUndefined();
       expect(result.sessionEntry.cacheWrite).toBeUndefined();
       expect(result.sessionEntry.contextTokens).toBeUndefined();
+      expect(result.sessionEntry.contextTokensSource).toBeUndefined();
       expect(result.sessionEntry.compactionCount).toBeUndefined();
       expect(result.sessionEntry.memoryFlush).toBeUndefined();
       expect(result.sessionEntry.abortCutoffMessageSid).toBeUndefined();

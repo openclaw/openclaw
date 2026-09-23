@@ -1,4 +1,5 @@
 import path from "node:path";
+import { coerceErrorMessage as formatPackageReadFailure } from "@openclaw/normalization-core/error-coercion";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -35,9 +36,6 @@ type PluginHostLinkAudit = {
   registeredPackageReadFailures: PluginPackageReadFailure[];
 };
 
-const formatPackageReadFailure = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 function resolveRegisteredPluginExtensionsRoot(
   params: InstalledPluginIndexRecordStoreOptions,
 ): string {
@@ -47,7 +45,7 @@ function resolveRegisteredPluginExtensionsRoot(
 }
 
 /** Resolves all managed npm roots from the doctor state override or environment. */
-export function listManagedPluginNpmRoots(
+export function resolveDoctorPluginNpmRoots(
   params: InstalledPluginIndexRecordStoreOptions,
 ): string[] {
   const npmRoot = params.stateDir
@@ -56,14 +54,14 @@ export function listManagedPluginNpmRoots(
   return listManagedPluginNpmRootsSync(npmRoot);
 }
 
-/** Audits managed and registered npm plugin host links without mutating either root. */
+/** Audits managed npm and registered plugin host links without mutating either root. */
 export async function listPluginOpenClawHostLinkIssues(
   params: InstalledPluginIndexRecordStoreOptions,
 ): Promise<PluginHostLinkAudit> {
   const packageReadFailures: PluginPackageReadFailure[] = [];
   const registeredPackageReadFailures: PluginPackageReadFailure[] = [];
   const audits = await Promise.all(
-    listManagedPluginNpmRoots(params).map((npmRoot) =>
+    resolveDoctorPluginNpmRoots(params).map((npmRoot) =>
       auditOpenClawPeerDependenciesInManagedNpmRoot({
         npmRoot,
         onPackageReadError: (error, packageDir) => {
@@ -95,11 +93,11 @@ export async function listPluginOpenClawHostLinkIssues(
   };
 }
 
-/** Relinks npm-owned plugin packages to the current OpenClaw host package. */
+/** Relinks registry-owned plugin packages to the current OpenClaw host package. */
 export async function maybeRepairPluginOpenClawHostLinks(
   params: PluginHostLinkDoctorParams,
 ): Promise<boolean> {
-  const npmRoots = listManagedPluginNpmRoots(params);
+  const npmRoots = resolveDoctorPluginNpmRoots(params);
   if (!params.prompter.shouldRepair) {
     const audit = await listPluginOpenClawHostLinkIssues(params);
     if (audit.peerLinkIssues.length > 0) {
@@ -126,7 +124,7 @@ export async function maybeRepairPluginOpenClawHostLinks(
     if (audit.registeredPackageReadFailures.length > 0) {
       note(
         [
-          "Registered npm plugin packages could not be inspected:",
+          "Registered plugin packages could not be inspected:",
           ...audit.registeredPackageReadFailures.map(
             (failure) => `- ${shortenHomePath(failure.packageDir)}: ${failure.reason}`,
           ),
@@ -137,11 +135,11 @@ export async function maybeRepairPluginOpenClawHostLinks(
     if (audit.registeredPeerLinkIssues.length > 0) {
       note(
         [
-          "Registered npm plugin OpenClaw host links need repair:",
+          "Registered plugin OpenClaw host links need repair:",
           ...audit.registeredPeerLinkIssues.map(
             (issue) => `- ${issue.packageName}: ${issue.reason}`,
           ),
-          `Repair with ${formatCliCommand("openclaw doctor --fix")} to relink registered npm plugin packages.`,
+          `Repair with ${formatCliCommand("openclaw doctor --fix")} to relink registered plugin packages.`,
         ].join("\n"),
         "Plugin registry",
       );
@@ -176,7 +174,7 @@ export async function maybeRepairPluginOpenClawHostLinks(
     logger,
     onPackageReadError: (error, packageDir) => {
       logger.warn(
-        `Could not inspect registered npm package ${shortenHomePath(packageDir)}: ${formatPackageReadFailure(error)}`,
+        `Could not inspect registered package ${shortenHomePath(packageDir)}: ${formatPackageReadFailure(error)}`,
       );
     },
   });
@@ -189,7 +187,7 @@ export async function maybeRepairPluginOpenClawHostLinks(
   }
   if (registeredRepair.repaired > 0) {
     note(
-      `Repaired OpenClaw host peer link(s) for ${registeredRepair.repaired} registered npm plugin package(s).`,
+      `Repaired OpenClaw host peer link(s) for ${registeredRepair.repaired} registered plugin package(s).`,
       "Plugin registry",
     );
   }
@@ -198,7 +196,7 @@ export async function maybeRepairPluginOpenClawHostLinks(
     .map((message) => `- ${message.message}`);
   if (warnings.length > 0) {
     note(
-      ["Could not repair all managed npm OpenClaw host peer links:", ...warnings].join("\n"),
+      ["Could not repair all managed OpenClaw host peer links:", ...warnings].join("\n"),
       "Plugin registry",
     );
   }

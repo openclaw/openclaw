@@ -1,14 +1,40 @@
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
-import { resolvePluginInstallSourcePlan } from "../../cli/plugin-install-plan.js";
+import {
+  formatPluginCapabilityConsentLines,
+  resolvePluginCapabilityConsentCliOptions,
+} from "../../cli/plugin-capability-consent.js";
 import { createPluginInstallLogger } from "../../cli/plugins-command-helpers.js";
-import { CLAWHUB_INSTALL_ERROR_CODE } from "../../plugins/clawhub.js";
-import type { ConfigSnapshotForInstallPersist } from "../../plugins/install-persistence.js";
+import { resolvePendingPluginCapabilityReview } from "../../plugins/capability-consent.js";
+import type { ConfigSnapshotForInstallPersist } from "../../plugins/install-config-mutation.js";
 import {
   formatNonClawHubInstallWarning,
   NON_CLAWHUB_INSTALL_FORCE_FLAG,
   type NonClawHubInstallSourceClass,
 } from "../../plugins/install-provenance.js";
-import { installManagedPluginSource } from "../../plugins/management-service.js";
+import { resolvePluginInstallSourcePlan } from "../../plugins/install-source-plan.js";
+import type {
+  PluginLifecycleRuntimeApply,
+  PluginRuntimeApplication,
+} from "../../plugins/lifecycle.js";
+import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
+import { installManagedPlugin } from "../../plugins/management-mutations.js";
+
+export function formatPluginCommandCapabilityConsentError(
+  error: unknown,
+  retryCommand: string,
+): string | null {
+  if (!(error instanceof ManagedPluginLifecycleError) || !error.capabilityConsent) {
+    return null;
+  }
+  const review = resolvePendingPluginCapabilityReview(error.capabilityConsent.pluginId);
+  if (review?.reviewToken !== error.capabilityConsent.reviewToken) {
+    return null;
+  }
+  return [
+    ...formatPluginCapabilityConsentLines(review),
+    `Review these capabilities, then rerun ${stripAnsi(retryCommand)} --accept-capabilities to continue.`,
+  ].join("\n");
+}
 
 function resolveNonClawHubChatInstallAcknowledgement(params: {
   force: boolean;
@@ -27,10 +53,20 @@ function resolveNonClawHubChatInstallAcknowledgement(params: {
 
 export async function installPluginFromPluginsCommand(params: {
   raw: string;
+  acceptCapabilities: boolean;
   force: boolean;
   snapshot: ConfigSnapshotForInstallPersist;
+  applyRuntime?: PluginLifecycleRuntimeApply;
+  beforePersistentApply?: () => void;
+  signal?: AbortSignal;
 }): Promise<
-  { ok: true; pluginId: string; warnings?: readonly string[] } | { ok: false; error: string }
+  | {
+      ok: true;
+      pluginId: string;
+      warnings?: readonly string[];
+      application?: PluginRuntimeApplication;
+    }
+  | { ok: false; error: string }
 > {
   const installMode = params.force ? "update" : "install";
   const plan = resolvePluginInstallSourcePlan({ raw: params.raw, mode: installMode });
@@ -46,44 +82,45 @@ export async function installPluginFromPluginsCommand(params: {
   if (acknowledgement && !acknowledgement.ok) {
     return acknowledgement;
   }
-  const warnings: string[] = [];
+  const warnings: string[] = plan.warning ? [plan.warning] : [];
   const logger = createPluginInstallLogger();
-  const clawhub = plan.request.source === "clawhub";
-  const result = await installManagedPluginSource({
-    request: plan.request,
-    snapshot: params.snapshot,
-    logger: clawhub
-      ? {
-          info: logger.info,
-          warn: (message) => {
-            warnings.push(stripAnsi(message));
-            logger.warn(message);
-          },
-          terminalLinks: false,
-        }
-      : logger,
-  });
-  if (!result.ok) {
-    const warning = "warning" in result ? result.warning : warnings.join("\n");
-    const warningPrefix = warning ? `${warning} ` : "";
-    if (
-      clawhub &&
-      result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED
-    ) {
-      return {
-        ok: false,
-        error: `${warningPrefix}${result.error} The /plugins chat command cannot acknowledge ClawHub risk; run the local openclaw plugins install command with --acknowledge-clawhub-risk from a trusted shell after reviewing the warning.`,
-      };
+  let result: Awaited<ReturnType<typeof installManagedPlugin>>;
+  try {
+    result = await installManagedPlugin({
+      request: plan.request,
+      applyRuntime: params.applyRuntime,
+      beforePersistentApply: params.beforePersistentApply,
+      signal: params.signal,
+      snapshot: params.snapshot,
+      ...resolvePluginCapabilityConsentCliOptions({
+        acceptCapabilities: params.acceptCapabilities,
+        action: "install",
+        allowPrompt: false,
+      }),
+      logger: { ...logger, terminalLinks: false },
+    });
+  } catch (error) {
+    const forceFlag = params.force ? " --force" : "";
+    const consentError = formatPluginCommandCapabilityConsentError(
+      error,
+      `/plugins install ${params.raw}${forceFlag}`,
+    );
+    if (consentError) {
+      return { ok: false, error: consentError };
     }
-    return { ok: false, error: `${warningPrefix}${result.error}` };
+    if (error instanceof ManagedPluginLifecycleError && error.installRejected) {
+      return { ok: false, error: [error.warning, error.message].filter(Boolean).join(" ") };
+    }
+    throw error;
   }
-  warnings.push(...(result.warnings ?? []));
+  warnings.push(...(result.warnings ?? []).map(stripAnsi));
   if (acknowledgement?.ok) {
     warnings.push(acknowledgement.warning);
   }
   return {
     ok: true,
-    pluginId: result.pluginId,
+    pluginId: result.plugin.id,
+    ...(result.application ? { application: result.application } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
   };
 }

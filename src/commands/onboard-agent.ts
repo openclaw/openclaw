@@ -1,23 +1,35 @@
 // First-run main-agent creation through the canonical agent service.
-import { createAgent } from "../agents/agent-create.js";
+import { createAgent, validateAgentIdInput } from "../agents/agent-create.js";
 import {
   listAgentEntries,
-  resolveDefaultAgentId,
+  resolveAmbientOwnerAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
-import { readConfigFileSnapshot } from "../config/config.js";
-import { createMergePatch } from "../config/merge-patch.js";
-import { applyMergePatch } from "../config/merge-patch.js";
+import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
+import { readConfigFileSnapshot, resolveConfigSnapshotHash } from "../config/config.js";
+import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { createMergePatch, applyMergePatch } from "../config/merge-patch.js";
+import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+
+export type FirstOnboardingAgent = { name: string; team?: boolean };
+
+export function validateFirstOnboardingAgentName(value: string | undefined): string | undefined {
+  const name = value?.trim();
+  if (!name) {
+    return "Agent name is required.";
+  }
+  const validation = validateAgentIdInput(name);
+  return validation.ok ? undefined : `${validation.message}. Choose another name.`;
+}
 
 function isInjectedMainRoster(config: OpenClawConfig): boolean {
   const roster = listAgentEntries(config);
   const entry = roster[0];
+  // Authored bare main entries are distinguished by snapshot provenance below.
   return (
-    roster.length === 1 &&
-    entry?.id === "main" &&
-    entry?.default === true &&
-    Object.keys(entry).every((key) => key === "id" || key === "default")
+    roster.length === 1 && entry?.id === "main" && Object.keys(entry).every((key) => key === "id")
   );
 }
 
@@ -31,24 +43,32 @@ function mergeOnboardingCandidate(params: {
   // patch onto snapshot.parsed, preserving include ownership and env refs.
   const merged = applyMergePatch(params.currentRuntime, proposalPatch) as OpenClawConfig;
   const { list: _legacyList, ...agents } = merged.agents ?? {};
-  return {
+  return inheritLegacyDefaultAgentId(params.currentRuntime, {
     ...merged,
     agents: {
       ...agents,
       entries: toAgentEntriesRecord(listAgentEntries(params.currentRuntime)),
     },
-  };
+  });
 }
 
 export async function ensureOnboardingAgent(params: {
   config: OpenClawConfig;
   workspace: string;
+  firstAgent?: FirstOnboardingAgent;
   preserveCandidateRoster?: boolean;
   baseConfig?: OpenClawConfig;
+  expectedConfigHash?: string | null;
+  beforePersistentApply?: () => void;
 }): Promise<{
   config: OpenClawConfig;
+  /** Comparison basis for the returned proposal, including any agent-creation rebase. */
+  configBase: OpenClawConfig;
   agentId: string;
   bootstrapPending: boolean;
+  createdAgent: boolean;
+  createdAgentIds?: string[];
+  sessionMigrationWarnings?: string[];
   /**
    * Config hash observed after this helper created the first roster agent.
    * Callers that captured a hash before calling must adopt it for their own
@@ -57,68 +77,117 @@ export async function ensureOnboardingAgent(params: {
    */
   configHash?: string;
 }> {
+  if (params.firstAgent) {
+    const validationError = validateFirstOnboardingAgentName(params.firstAgent.name);
+    if (validationError) {
+      throw new Error(validationError);
+    }
+  }
+  const hasExpectedConfigHash = Object.hasOwn(params, "expectedConfigHash");
+  let before = hasExpectedConfigHash ? await readConfigFileSnapshot() : undefined;
+  if (before?.exists && !before.valid) {
+    throw new Error("Cannot create the first agent from an invalid OpenClaw config.");
+  }
+  if (before && (resolveConfigSnapshotHash(before) ?? null) !== params.expectedConfigHash) {
+    throw new Error("OpenClaw config changed before first-agent creation. Retry setup.");
+  }
+  // Provider, gateway, and hook proposals can copy config. Restore the reader's
+  // owner before returning an existing fleet to the remaining setup effects.
+  inheritLegacyDefaultAgentId(params.baseConfig ?? params.config, params.config);
   const candidateRoster = listAgentEntries(params.config);
-  if (
+  const hasCandidateRoster =
     candidateRoster.length > 0 &&
-    (params.preserveCandidateRoster || !isInjectedMainRoster(params.config))
-  ) {
+    (params.preserveCandidateRoster || !isInjectedMainRoster(params.config));
+  if (params.firstAgent?.team) {
+    before ??= await readConfigFileSnapshot();
+    if (hasCandidateRoster || hasResolvedRosterBeforeMigrations(before)) {
+      throw new Error(
+        "The requested team was not created because an agent roster already exists. Use `openclaw agents team create` to add a team.",
+      );
+    }
+  }
+  if (hasCandidateRoster) {
     return {
       config: params.config,
-      agentId: resolveDefaultAgentId(params.config),
+      configBase: params.baseConfig ?? params.config,
+      agentId: resolveAmbientOwnerAgentId(params.config),
       bootstrapPending: false,
+      createdAgent: false,
     };
   }
-  const before = await readConfigFileSnapshot();
+  before ??= await readConfigFileSnapshot();
   if (before.exists && !before.valid) {
     throw new Error("Cannot create the first agent from an invalid OpenClaw config.");
   }
   const effective = before.config;
   const candidateBase = params.baseConfig ?? effective;
-  if (before.exists && listAgentEntries(effective).length > 0) {
+  if (before.exists && hasResolvedRosterBeforeMigrations(before)) {
     return {
       config: mergeOnboardingCandidate({
         base: candidateBase,
         candidate: params.config,
         currentRuntime: effective,
       }),
-      agentId: resolveDefaultAgentId(effective),
+      configBase: effective,
+      agentId: resolveAmbientOwnerAgentId(effective),
       bootstrapPending: false,
+      createdAgent: false,
     };
   }
-  const created = await createAgent({
-    entry: {
-      id: "main",
-      name: "main",
-      default: true,
-      workspace: params.workspace,
-    },
-    skipBootstrap: params.config.agents?.defaults?.skipBootstrap,
-    skipOptionalBootstrapFiles: params.config.agents?.defaults?.skipOptionalBootstrapFiles,
-  });
+  const firstAgentName = params.firstAgent ? params.firstAgent.name.trim() : "main";
+  const createOptions = {
+    bootstrapFirstAgent: true,
+    ...(hasExpectedConfigHash ? { expectedConfigHash: params.expectedConfigHash } : {}),
+    beforePersistentApply: params.beforePersistentApply,
+  };
+  const created = params.firstAgent?.team
+    ? await (
+        await import("../agents/agent-team.js")
+      ).createAgentTeam({
+        ...createOptions,
+        coordinator: firstAgentName,
+        workspaceRoot: params.workspace,
+      })
+    : await createAgent({
+        ...createOptions,
+        entry: {
+          id: normalizeAgentId(firstAgentName),
+          name: firstAgentName,
+          workspace: params.workspace,
+        },
+        bootstrapMain: normalizeAgentId(firstAgentName) === "main",
+        skipBootstrap: params.config.agents?.defaults?.skipBootstrap,
+        skipOptionalBootstrapFiles: params.config.agents?.defaults?.skipOptionalBootstrapFiles,
+      });
   if (created.status === "error") {
     throw new Error(created.message);
   }
+  const createdTeam = "coordinatorId" in created;
   const after = await readConfigFileSnapshot();
   if (!after.valid) {
     throw new Error("Agent creation wrote an invalid OpenClaw config.");
   }
+  if (created.configHash && after.hash !== created.configHash) {
+    throw new Error("OpenClaw config changed after first-agent creation. Retry setup.");
+  }
+  const config = mergeOnboardingCandidate({
+    base: candidateBase,
+    candidate: params.config,
+    currentRuntime: after.config,
+  });
+  const sessionMigration = await migrateLegacyMainSessionKeys({
+    cfg: after.config,
+    mode: "detect",
+  });
+  const sessionMigrationWarnings = sessionMigration.warnings;
   return {
-    config: mergeOnboardingCandidate({
-      base: candidateBase,
-      candidate: params.config,
-      currentRuntime: after.config,
-    }),
-    agentId: created.agentId,
-    bootstrapPending: created.bootstrapPending,
-    ...(after.hash !== undefined ? { configHash: after.hash } : {}),
+    config,
+    configBase: after.config,
+    agentId: createdTeam ? created.coordinatorId : created.agentId,
+    bootstrapPending: createdTeam ? false : created.bootstrapPending,
+    createdAgentIds: createdTeam ? created.agents.map((agent) => agent.agentId) : [created.agentId],
+    createdAgent: created.status === "created",
+    ...(created.configHash ? { configHash: created.configHash } : {}),
+    ...(sessionMigrationWarnings.length > 0 ? { sessionMigrationWarnings } : {}),
   };
-}
-
-export function ensureOnboardingConfig(
-  config: OpenClawConfig,
-  workspace: string,
-  preserveCandidateRoster = false,
-  baseConfig?: OpenClawConfig,
-) {
-  return ensureOnboardingAgent({ config, workspace, preserveCandidateRoster, baseConfig });
 }

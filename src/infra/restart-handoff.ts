@@ -1,13 +1,13 @@
 // Persists short-lived gateway restart handoff metadata.
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { Selectable } from "kysely";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -27,21 +27,10 @@ const MAX_REASON_LENGTH = 200;
 
 const handoffLog = createSubsystemLogger("restart-handoff");
 type GatewayRestartHandoffDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_handoff">;
-type GatewayRestartHandoffRow = {
-  kind: string;
-  version: number;
-  intent_id: string;
-  pid: number;
-  process_instance_id: string | null;
-  created_at: number;
-  expires_at: number;
-  reason: string | null;
-  restart_trace_started_at: number | null;
-  restart_trace_last_at: number | null;
-  source: string;
-  restart_kind: string;
-  supervisor_mode: string;
-};
+type GatewayRestartHandoffRow = Omit<
+  Selectable<GatewayRestartHandoffDatabase["gateway_restart_handoff"]>,
+  "handoff_key" | "updated_at_ms"
+>;
 
 type GatewayRestartHandoffRestartKind = "full-process" | "update-process";
 type GatewayRestartHandoffSource =
@@ -100,22 +89,10 @@ function formatShortDuration(ms: number): string {
   return remainingSeconds === 0 ? `${minutes}m` : `${minutes}m ${remainingSeconds}s`;
 }
 
+const DIAGNOSTIC_WHITESPACE = new RegExp(String.raw`[\u0000-\u001f\u007f\s]+`, "gu");
+
 function formatDiagnosticValue(value: string): string {
-  let normalized = "";
-  let previousWasSpace = true;
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || code === 0x7f || /\s/u.test(char)) {
-      if (!previousWasSpace) {
-        normalized += " ";
-        previousWasSpace = true;
-      }
-      continue;
-    }
-    normalized += char;
-    previousWasSpace = false;
-  }
-  return normalized.trimEnd();
+  return value.replaceAll(DIAGNOSTIC_WHITESPACE, " ").trim();
 }
 
 /** Format a compact diagnostic for a recently consumed restart handoff. */
@@ -133,10 +110,6 @@ export function formatGatewayRestartHandoffDiagnostic(
     `expiresIn=${formatShortDuration(handoff.expiresAt - now)}`,
   ].filter((value): value is string => Boolean(value));
   return `Recent restart handoff: ${detail.join("; ")}`;
-}
-
-function normalizePid(pid: number | undefined): number | null {
-  return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
 
 function normalizeText(value: unknown, maxLength: number): string | undefined {
@@ -195,7 +168,7 @@ function normalizeSource(
   if (normalized === "update.run") {
     return "gateway-update";
   }
-  if (normalized === "sigusr1") {
+  if (normalized === "sigusr2" || normalized === "sigusr1") {
     return "signal";
   }
   if (normalized === "gateway.restart") {
@@ -305,8 +278,12 @@ function selectGatewayRestartHandoffRowSync(
 
 function readGatewayRestartHandoffRowSync(env: NodeJS.ProcessEnv) {
   try {
-    const { db } = openOpenClawStateDatabase({ env });
-    return selectGatewayRestartHandoffRowSync(db);
+    return (
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => selectGatewayRestartHandoffRowSync(db),
+        { env },
+      ) ?? null
+    );
   } catch {
     return null;
   }
@@ -325,7 +302,7 @@ export function writeGatewayRestartHandoffSync(opts: {
   ttlMs?: number;
   createdAt?: number;
 }): GatewayRestartHandoff | null {
-  const pid = normalizePid(opts.pid ?? process.pid);
+  const pid = asPositiveSafeInteger(opts.pid ?? process.pid) ?? null;
   if (pid === null || !isRestartKind(opts.restartKind)) {
     return null;
   }
@@ -362,45 +339,28 @@ export function writeGatewayRestartHandoffSync(opts: {
     runOpenClawStateWriteTransaction(
       ({ db }) => {
         const stateDb = getNodeSqliteKysely<GatewayRestartHandoffDatabase>(db);
+        const row = {
+          kind: payload.kind,
+          version: payload.version,
+          intent_id: payload.intentId,
+          pid: payload.pid,
+          process_instance_id: payload.processInstanceId ?? null,
+          created_at: payload.createdAt,
+          expires_at: payload.expiresAt,
+          reason: payload.reason ?? null,
+          restart_trace_started_at: payload.restartTrace?.startedAt ?? null,
+          restart_trace_last_at: payload.restartTrace?.lastAt ?? null,
+          source: payload.source,
+          restart_kind: payload.restartKind,
+          supervisor_mode: payload.supervisorMode,
+          updated_at_ms: Date.now(),
+        };
         executeSqliteQuerySync(
           db,
           stateDb
             .insertInto("gateway_restart_handoff")
-            .values({
-              handoff_key: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KEY,
-              kind: payload.kind,
-              version: payload.version,
-              intent_id: payload.intentId,
-              pid: payload.pid,
-              process_instance_id: payload.processInstanceId ?? null,
-              created_at: payload.createdAt,
-              expires_at: payload.expiresAt,
-              reason: payload.reason ?? null,
-              restart_trace_started_at: payload.restartTrace?.startedAt ?? null,
-              restart_trace_last_at: payload.restartTrace?.lastAt ?? null,
-              source: payload.source,
-              restart_kind: payload.restartKind,
-              supervisor_mode: payload.supervisorMode,
-              updated_at_ms: Date.now(),
-            })
-            .onConflict((conflict) =>
-              conflict.column("handoff_key").doUpdateSet({
-                kind: (eb) => eb.ref("excluded.kind"),
-                version: (eb) => eb.ref("excluded.version"),
-                intent_id: (eb) => eb.ref("excluded.intent_id"),
-                pid: (eb) => eb.ref("excluded.pid"),
-                process_instance_id: (eb) => eb.ref("excluded.process_instance_id"),
-                created_at: (eb) => eb.ref("excluded.created_at"),
-                expires_at: (eb) => eb.ref("excluded.expires_at"),
-                reason: (eb) => eb.ref("excluded.reason"),
-                restart_trace_started_at: (eb) => eb.ref("excluded.restart_trace_started_at"),
-                restart_trace_last_at: (eb) => eb.ref("excluded.restart_trace_last_at"),
-                source: (eb) => eb.ref("excluded.source"),
-                restart_kind: (eb) => eb.ref("excluded.restart_kind"),
-                supervisor_mode: (eb) => eb.ref("excluded.supervisor_mode"),
-                updated_at_ms: (eb) => eb.ref("excluded.updated_at_ms"),
-              }),
-            ),
+            .values({ handoff_key: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KEY, ...row })
+            .onConflict((conflict) => conflict.column("handoff_key").doUpdateSet(row)),
         );
       },
       { env },
@@ -436,7 +396,7 @@ export function consumeGatewayRestartHandoffSync(opts: {
   expectedPid: number;
   now?: number;
 }): GatewayRestartHandoffConsumeResult {
-  const expectedPid = normalizePid(opts.expectedPid);
+  const expectedPid = asPositiveSafeInteger(opts.expectedPid) ?? null;
   if (expectedPid === null) {
     throw new Error("expectedPid must be a positive safe integer");
   }

@@ -1,5 +1,10 @@
 // Coverage for registry-backed model forward-compatibility fallbacks.
-import { describe, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
 import {
   buildForwardCompatTemplate,
   expectResolvedForwardCompatFallbackWithRegistryResult,
@@ -7,13 +12,34 @@ import {
 import { resolveModelWithRegistry } from "./model.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
+let state: OpenClawTestState;
+let auth: ReturnType<typeof guardModelFixtureAuth>;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ label: "model-forward-compat" });
+  auth = guardModelFixtureAuth(state.root);
+});
+afterEach(async () => {
+  try {
+    auth.verify();
+    expect(auth.spy).toHaveBeenCalled();
+  } finally {
+    auth.spy.mockRestore();
+    await state.cleanup();
+  }
+});
+
+vi.mock("../../plugins/provider-external-auth-core.js", () => ({
+  createProviderExternalAuthResolver: () => ({
+    resolveExternalAuthProfilesWithPlugins: () => [],
+  }),
+}));
+
 vi.mock("../../plugins/provider-runtime.js", () => ({
   applyProviderResolvedTransportWithPlugin: () => undefined,
   buildProviderUnknownModelHintWithPlugin: () => undefined,
   normalizeProviderResolvedModelWithPlugin: () => undefined,
   normalizeProviderTransportWithPlugin: () => undefined,
   prepareProviderDynamicModel: async () => undefined,
-  resolveExternalAuthProfilesWithPlugins: () => [],
   runProviderDynamicModel: () => undefined,
   shouldPreferProviderRuntimeResolvedModel: () => false,
 }));
@@ -100,12 +126,12 @@ function createRegistry(
   } as never;
 }
 
-function runAnthropicOpusForwardCompatFallback() {
+async function runAnthropicOpusForwardCompatFallback() {
   expectResolvedForwardCompatFallbackWithRegistryResult({
-    result: resolveModelWithRegistry({
+    result: await resolveModelWithRegistry({
       provider: "anthropic",
       modelId: "claude-opus-4-6",
-      agentDir: "/tmp/agent",
+      agentDir: state.agentDir(),
       modelRegistry: createRegistry([
         {
           provider: "anthropic",
@@ -119,12 +145,12 @@ function runAnthropicOpusForwardCompatFallback() {
   });
 }
 
-function runAnthropicSonnetForwardCompatFallback() {
+async function runAnthropicSonnetForwardCompatFallback() {
   expectResolvedForwardCompatFallbackWithRegistryResult({
-    result: resolveModelWithRegistry({
+    result: await resolveModelWithRegistry({
       provider: "anthropic",
       modelId: "claude-sonnet-4-6",
-      agentDir: "/tmp/agent",
+      agentDir: state.agentDir(),
       modelRegistry: createRegistry([
         {
           provider: "anthropic",
@@ -138,14 +164,14 @@ function runAnthropicSonnetForwardCompatFallback() {
   });
 }
 
-function runClaudeCliSonnetForwardCompatFallback() {
+async function runClaudeCliSonnetForwardCompatFallback() {
   // claude-cli uses Anthropic templates but must preserve the requested provider
   // so downstream auth/transport stays on the CLI integration.
   expectResolvedForwardCompatFallbackWithRegistryResult({
-    result: resolveModelWithRegistry({
+    result: await resolveModelWithRegistry({
       provider: "claude-cli",
       modelId: "claude-sonnet-4-6",
-      agentDir: "/tmp/agent",
+      agentDir: state.agentDir(),
       modelRegistry: createRegistry([
         {
           provider: "anthropic",
@@ -162,11 +188,11 @@ function runClaudeCliSonnetForwardCompatFallback() {
   });
 }
 
-function runZaiForwardCompatFallback() {
-  const result = resolveModelWithRegistry({
+async function runZaiForwardCompatFallback() {
+  const result = await resolveModelWithRegistry({
     provider: ZAI_GLM5_CASE.provider,
     modelId: ZAI_GLM5_CASE.id,
-    agentDir: "/tmp/agent",
+    agentDir: state.agentDir(),
     modelRegistry: createRegistry(
       ZAI_GLM5_CASE.registryEntries.map((entry) => ({
         provider: entry.provider,

@@ -1,10 +1,5 @@
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import {
-  assertSqliteIntegrity,
-  isTerminalSqliteIntegrityError,
-} from "../infra/sqlite-integrity.js";
-import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
+import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
 const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
 
@@ -12,6 +7,7 @@ export type OpenClawDatabaseVerifyTarget = {
   path: string;
   kind: "agent" | "state";
   label: string;
+  check?: "quick";
 };
 
 export type OpenClawDatabaseVerifyResult = {
@@ -29,31 +25,47 @@ function isVerifyTarget(value: unknown): value is OpenClawDatabaseVerifyTarget {
   return (
     typeof target.path === "string" &&
     (target.kind === "agent" || target.kind === "state") &&
-    typeof target.label === "string"
+    typeof target.label === "string" &&
+    (target.check === undefined || target.check === "quick")
   );
 }
 
 function formatVerifyError(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return `${message}${formatSqliteErrorCodeSuffix(error)}`;
 }
 
 async function verifyOpenClawDatabase(
   target: OpenClawDatabaseVerifyTarget,
 ): Promise<OpenClawDatabaseVerifyResult> {
-  let cleanup: (() => boolean) | undefined;
+  const [sqlite, integrity, location, source] = await Promise.all([
+    import("../infra/node-sqlite.js"),
+    import("../infra/sqlite-integrity.js"),
+    import("../infra/sqlite-readonly-location.js"),
+    import("../infra/sqlite-source-handle.js"),
+  ]);
+  let cleanup: (() => Promise<boolean>) | undefined;
   let database: import("node:sqlite").DatabaseSync | undefined;
   let result = await (async (): Promise<OpenClawDatabaseVerifyResult> => {
     try {
-      const prepared = await prepareSqliteReadOnlyLocation(target.path);
-      cleanup = prepared.cleanup;
-      database = openNodeSqliteDatabase(prepared.location, {
+      if (target.check === "quick") {
+        source.withSqliteSourceReadDatabase(target.path, "source", (reader) => {
+          reader.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; BEGIN;`);
+          integrity.assertSqliteIntegrity(reader, target.label, "quick_check");
+          reader.exec("ROLLBACK;");
+        });
+        return { path: target.path, ok: true };
+      }
+      const prepared = await location.prepareSqliteReadOnlyLocationInProcess(target.path);
+      cleanup = prepared.cleanupAsync;
+      database = sqlite.openNodeSqliteDatabase(prepared.location, {
         readOnly: true,
       });
       database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-      assertSqliteIntegrity(database, target.label);
+      integrity.assertSqliteIntegrity(database, target.label);
       return { path: target.path, ok: true };
     } catch (error) {
-      const terminal = error instanceof Error && isTerminalSqliteIntegrityError(error);
+      const terminal = error instanceof Error && integrity.isTerminalSqliteIntegrityError(error);
       return {
         path: target.path,
         ok: false,
@@ -74,7 +86,7 @@ async function verifyOpenClawDatabase(
       };
     }
   } finally {
-    cleanup?.();
+    await cleanup?.();
   }
   return result;
 }

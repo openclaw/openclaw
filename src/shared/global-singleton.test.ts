@@ -1,5 +1,5 @@
-// Global singleton tests cover process-wide singleton creation and reset behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   drainGlobalSingletonLifecycleState,
   resolveGlobalMap,
@@ -44,18 +44,13 @@ describe("resolveGlobalSingleton", () => {
 });
 
 describe("resolveGlobalMap", () => {
-  it("reuses the same map instance", () => {
+  it("reuses the same map instance and preserves its contents", () => {
     const first = resolveGlobalMap<string, number>(TEST_MAP_KEY);
+    first.set("a", 1);
     const second = resolveGlobalMap<string, number>(TEST_MAP_KEY);
 
     expect(first).toBe(second);
-  });
-
-  it("preserves existing map contents across repeated resolution", () => {
-    const map = resolveGlobalMap<string, number>(TEST_MAP_KEY);
-    map.set("a", 1);
-
-    expect(resolveGlobalMap<string, number>(TEST_MAP_KEY).get("a")).toBe(1);
+    expect(second.get("a")).toBe(1);
   });
 
   it("reuses a prepopulated global map without creating a new one", () => {
@@ -113,10 +108,7 @@ describe("global singleton lifecycle resets", () => {
   it("awaits asynchronous resets while starting sibling owners", async () => {
     const asyncKey = Symbol("global-singleton:async-reset");
     const siblingKey = Symbol("global-singleton:async-sibling");
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: held, resolve: release } = createDeferred();
     const siblingReset = vi.fn();
     resolveGlobalSingleton(
       asyncKey,
@@ -126,12 +118,17 @@ describe("global singleton lifecycle resets", () => {
     resolveGlobalSingleton(siblingKey, () => ({}), siblingReset);
 
     const drain = drainGlobalSingletonLifecycleState();
-    expect(siblingReset).toHaveBeenCalledOnce();
-    release();
-    await drain;
-
-    delete (globalThis as Record<PropertyKey, unknown>)[asyncKey];
-    delete (globalThis as Record<PropertyKey, unknown>)[siblingKey];
+    try {
+      expect(siblingReset).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      try {
+        await drain;
+      } finally {
+        delete (globalThis as Record<PropertyKey, unknown>)[asyncKey];
+        delete (globalThis as Record<PropertyKey, unknown>)[siblingKey];
+      }
+    }
   });
 
   it("runs every registered reset before reporting failures", async () => {
@@ -150,12 +147,14 @@ describe("global singleton lifecycle resets", () => {
     );
     resolveGlobalSingleton(succeedingKey, () => ({}), succeedingReset);
 
-    await expect(drainGlobalSingletonLifecycleState()).rejects.toThrow(AggregateError);
-    shouldThrow = false;
-    expect(succeedingReset).toHaveBeenCalledOnce();
-
-    delete (globalThis as Record<PropertyKey, unknown>)[failingKey];
-    delete (globalThis as Record<PropertyKey, unknown>)[succeedingKey];
+    try {
+      await expect(drainGlobalSingletonLifecycleState()).rejects.toThrow(AggregateError);
+      expect(succeedingReset).toHaveBeenCalledOnce();
+    } finally {
+      shouldThrow = false;
+      delete (globalThis as Record<PropertyKey, unknown>)[failingKey];
+      delete (globalThis as Record<PropertyKey, unknown>)[succeedingKey];
+    }
   });
 
   it("preserves close-only state across restart drains", async () => {

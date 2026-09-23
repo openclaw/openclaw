@@ -1,11 +1,14 @@
 // Coverage for prompt-cache diagnostic tracking across turns.
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import { Type } from "typebox";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   beginPromptCacheObservation,
   collectPromptCacheTools,
   completePromptCacheObservation,
+  recordAggregateTruncation,
 } from "./prompt-cache-observability.js";
+import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
 
 let testScope = 0;
 let currentTestScope = "";
@@ -18,6 +21,83 @@ describe("prompt cache observability", () => {
   beforeEach(() => {
     currentTestScope = String(++testScope);
   });
+
+  it.each([
+    {
+      name: "three healthy calls then one",
+      turns: [[10_000, 10_000, 10_000], [10_000]],
+      misses: [],
+    },
+    {
+      name: "one call then a miss and two hits",
+      turns: [[10_000], [0, 10_000, 10_000]],
+      misses: ["2:1"],
+    },
+    { name: "a complete miss below the drop threshold", turns: [[500], [0]], misses: ["2:1"] },
+  ])("observes each request: $name", ({ turns, misses }) => {
+    const sessionId = scopedKey("request-usage");
+    const observed: Array<{ request: string; cacheRead: number | undefined; broke: boolean }> = [];
+    for (const [turnIndex, reads] of turns.entries()) {
+      const observer = createPromptCacheRequestObserver(
+        { sessionId, streamStrategy: "test" },
+        (observation) =>
+          observed.push({
+            request: `${turnIndex + 1}:${observation.requestIndex}`,
+            cacheRead: observation.cacheRead,
+            broke: observation.broke,
+          }),
+      );
+      for (const cacheRead of reads) {
+        observer.onModelRequest(
+          { provider: "anthropic", id: "claude-sonnet-4-6", api: "anthropic-messages" },
+          {
+            systemPrompt: "stable prefix",
+            tools: [{ name: "read", description: "Read text", parameters: Type.Object({}) }],
+          },
+        );
+        observer.onModelUsage({ input: 10_000 - cacheRead, cacheRead, cacheWrite: 0 });
+      }
+    }
+    expect(observed.map((entry) => entry.cacheRead)).toEqual(turns.flat());
+    expect(observed.filter((entry) => entry.broke).map((entry) => entry.request)).toEqual(misses);
+  });
+
+  it.each([false, true])(
+    "keeps small complete misses tied to the last reported fingerprint (changed=%s)",
+    (changed) => {
+      const sessionId = scopedKey("small-cache-miss");
+      const begin = (systemPrompt: string) =>
+        beginPromptCacheObservation({
+          sessionId,
+          provider: "anthropic",
+          modelId: "claude-sonnet-4-6",
+          streamStrategy: "test",
+          systemPrompt,
+          tools: [],
+        });
+      begin("prefix A");
+      completePromptCacheObservation({ sessionId, usage: { cacheRead: 500 } });
+      if (changed) {
+        begin("prefix B");
+        completePromptCacheObservation({ sessionId });
+      }
+      recordAggregateTruncation({ sessionId });
+      begin(changed ? "prefix B" : "prefix A");
+      const result = completePromptCacheObservation({
+        sessionId,
+        usage: { input: 500, cacheRead: 0 },
+      });
+      if (changed) {
+        expect(result).toBeNull();
+      } else {
+        expect(result).toMatchObject({
+          previousCacheRead: 500,
+          cacheRead: 0,
+          changes: [{ code: "aggregateToolResultTruncation" }],
+        });
+      }
+    },
+  );
 
   it("collects canonical trimmed tool snapshots", () => {
     expect(
@@ -276,7 +356,7 @@ describe("prompt cache observability", () => {
     expect(second.changes).toBeNull();
   });
 
-  it("ignores dynamic system prompt suffix changes after the cache boundary", () => {
+  it("attributes dynamic system prompt suffix changes separately from the stable prefix", () => {
     const sessionId = scopedKey("dynamic-system-suffix");
     const stablePrefix = "stable instructions and tool capability directory";
     beginPromptCacheObservation({
@@ -300,7 +380,18 @@ describe("prompt cache observability", () => {
       tools: [{ name: "read" }],
     });
 
-    expect(next.changes).toBeNull();
+    // The stable prefix digest is unchanged; only the suffix moved, which a
+    // prefix-literal cache (OpenAI Responses `instructions`) still re-caches.
+    expect(next.changes).toEqual([
+      { code: "systemPromptSuffix", detail: "system prompt suffix digest changed" },
+    ]);
+    expect(
+      completePromptCacheObservation({ sessionId, usage: { cacheRead: 2_000, input: 12_000 } }),
+    ).toEqual({
+      previousCacheRead: 8_000,
+      cacheRead: 2_000,
+      changes: [{ code: "systemPromptSuffix", detail: "system prompt suffix digest changed" }],
+    });
   });
 
   it("reports visible schema changes even when tool names and count are unchanged", () => {

@@ -1,6 +1,5 @@
 // Zai tests cover detect plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectZaiEndpoint } from "./detect.js";
 
@@ -72,6 +71,34 @@ function makeRawBodyFetch(map: Record<string, { status: number; raw: string }>) 
   }) as typeof fetch;
 }
 
+/**
+ * Builds a fetch returning a single raw byte body, keyed by `${url}::${model}`.
+ * Unlike {@link makeRawBodyFetch} this takes bytes, so it can express a body
+ * that is not valid UTF-8 at all. `calls` records the probed model ids so tests
+ * can assert how far the probe advanced.
+ */
+function makeRawBytesFetch(
+  map: Record<string, { status: number; bytes: Uint8Array }>,
+  calls?: string[],
+) {
+  return (async (url: string, init?: RequestInit) => {
+    const rawBody = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+    calls?.push(String(rawBody?.model ?? ""));
+    const entry = map[`${url}::${rawBody?.model ?? ""}`] ?? map[url];
+    if (!entry) {
+      throw new Error(`unexpected url: ${url} model=${String(rawBody?.model ?? "")}`);
+    }
+    // Copy into a fresh ArrayBuffer-backed view: BodyInit rejects the
+    // ArrayBufferLike-backed Uint8Array that Buffer/TextEncoder can produce.
+    const body = new Uint8Array(new ArrayBuffer(entry.bytes.byteLength));
+    body.set(entry.bytes);
+    return new Response(body, {
+      status: entry.status,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+}
+
 function makeFetch(map: Record<string, FetchResponse>) {
   return (async (url: string, init?: RequestInit) => {
     const rawBody = typeof init?.body === "string" ? JSON.parse(init.body) : null;
@@ -115,29 +142,14 @@ describe("detectZaiEndpoint", () => {
         responses: {
           "https://api.z.ai/api/paas/v4/chat/completions::glm-5.2": { status: 404 },
           "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.2": { status: 404 },
-          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.2": { status: 200 },
+          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.3": { status: 200 },
         },
-        expected: { endpoint: "coding-global", modelId: "glm-5.2" },
+        expected: { endpoint: "coding-global", modelId: "glm-5.3" },
       },
       {
         endpoint: "coding-global",
         responses: {
-          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.2": {
-            status: 404,
-            body: { error: { message: "glm-5.2 unavailable" } },
-          },
-          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.1": {
-            status: 404,
-            body: { error: { message: "glm-5.1 unavailable" } },
-          },
-          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-4.7": { status: 200 },
-        },
-        expected: { endpoint: "coding-global", modelId: "glm-4.7" },
-      },
-      {
-        endpoint: "coding-global",
-        responses: {
-          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.2": {
+          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.3": {
             status: 400,
             body: { code: 1311, msg: "model not included in the current plan" },
           },
@@ -152,7 +164,7 @@ describe("detectZaiEndpoint", () => {
       {
         endpoint: "coding-global",
         responses: {
-          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.2": {
+          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.3": {
             status: 429,
             body: { error: { message: "rate limited" } },
           },
@@ -162,16 +174,16 @@ describe("detectZaiEndpoint", () => {
       {
         endpoint: "coding-cn",
         responses: {
-          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.2": {
+          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.3": {
             status: 200,
           },
         },
-        expected: { endpoint: "coding-cn", modelId: "glm-5.2" },
+        expected: { endpoint: "coding-cn", modelId: "glm-5.3" },
       },
       {
         endpoint: "coding-cn",
         responses: {
-          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.2": {
+          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.3": {
             status: 404,
           },
           "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.1": {
@@ -183,9 +195,9 @@ describe("detectZaiEndpoint", () => {
       {
         endpoint: "coding-cn",
         responses: {
-          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.2": {
+          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.3": {
             status: 404,
-            body: { error: { message: "glm-5.2 unavailable" } },
+            body: { error: { message: "glm-5.3 unavailable" } },
           },
           "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.1": {
             status: 404,
@@ -201,10 +213,10 @@ describe("detectZaiEndpoint", () => {
         responses: {
           "https://api.z.ai/api/paas/v4/chat/completions::glm-5.2": { status: 401 },
           "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.2": { status: 401 },
-          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.2": { status: 401 },
+          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.3": { status: 401 },
           "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.1": { status: 401 },
           "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-4.7": { status: 401 },
-          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.2": {
+          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.3": {
             status: 401,
           },
           "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.1": {
@@ -262,7 +274,7 @@ describe("detectZaiEndpoint", () => {
       apiKey: "sk-test", // pragma: allowlist secret
       endpoint: "coding-global",
       fetchFn: makeRawBodyFetch({
-        [`${codingGlobal}::glm-5.2`]: {
+        [`${codingGlobal}::glm-5.3`]: {
           status: 400,
           raw: JSON.stringify({ error: { message: "model not found for this plan" } }),
         },
@@ -288,9 +300,72 @@ describe("detectZaiEndpoint", () => {
       apiKey: "sk-test", // pragma: allowlist secret
       endpoint: "coding-global",
       fetchFn: makeRawBodyFetch({
-        [`${codingGlobal}::glm-5.2`]: { status: 404, raw: "<html>gateway error</html>" },
+        [`${codingGlobal}::glm-5.3`]: { status: 404, raw: "<html>gateway error</html>" },
         [`${codingGlobal}::glm-5.1`]: { status: 404, raw: "" },
         [`${codingGlobal}::glm-4.7`]: { status: 200, raw: "{}" },
+      }),
+    });
+
+    expect(detected?.endpoint).toBe("coding-global");
+    expect(detected?.modelId).toBe("glm-4.7");
+  });
+
+  it("rejects sub-cap error bodies that are not valid UTF-8 instead of classifying substituted text", async () => {
+    // Regression: a non-fatal TextDecoder replaced malformed bytes with U+FFFD,
+    // so JSON.parse succeeded on a body that was never valid UTF-8 and the
+    // substituted text was consumed as a genuine error code. A corrupt body must
+    // now be swallowed by the same try/catch as a non-JSON body, so the probe
+    // can no longer treat fabricated text as an "unsupported model" signal.
+    const codingGlobal = "https://api.z.ai/api/coding/paas/v4/chat/completions";
+    // `{"code":1211,...}` with one continuation byte of a multibyte char replaced,
+    // so the body is invalid UTF-8 but becomes parseable once substituted.
+    const malformed = new TextEncoder().encode('{"code":1211,"msg":"x\u{1F99E}"}');
+    const corrupt = new Uint8Array(malformed);
+    const lobsterStart = corrupt.indexOf(0xf0);
+    expect(lobsterStart).toBeGreaterThan(-1);
+    corrupt[lobsterStart + 1] = 0x28;
+    // Prove the fixture really is rejected by a fatal decode. (Bare TextDecoder is
+    // the pre-fix behavior under test, so it is asserted via its substitution.)
+    expect(new TextDecoder().decode(corrupt)).toContain("\uFFFD");
+
+    const calls: string[] = [];
+    const detected = await detectZaiEndpoint({
+      apiKey: "sk-test", // pragma: allowlist secret
+      endpoint: "coding-global",
+      fetchFn: makeRawBytesFetch(
+        {
+          // Status 400 with a corrupt body: the code inside is NOT trustworthy, so
+          // it must not advance the probe to the next candidate model.
+          [`${codingGlobal}::glm-5.3`]: { status: 400, bytes: corrupt },
+          [`${codingGlobal}::glm-5.1`]: { status: 400, bytes: corrupt },
+          [`${codingGlobal}::glm-4.7`]: { status: 200, bytes: new TextEncoder().encode("{}") },
+        },
+        calls,
+      ),
+    });
+
+    // The corrupt body classifies nothing, so the probe stops at the first
+    // candidate instead of walking on to the GLM-4.7 fallback.
+    expect(calls).toEqual(["glm-5.3"]);
+    expect(detected).toBeNull();
+  });
+
+  it("still classifies well-formed multibyte error bodies (fatal decode does not regress valid UTF-8)", async () => {
+    // Guard for the fix above: valid multibyte content must keep decoding, so the
+    // fatal decoder cannot be rejecting legitimate non-ASCII bodies. A 400 whose
+    // message says the model does not exist must still advance to the fallback.
+    const codingGlobal = "https://api.z.ai/api/coding/paas/v4/chat/completions";
+    const valid = new TextEncoder().encode(
+      '{"error":{"code":1211,"message":"model \u4e0d\u5b58\u5728 \u{1F99E}"}}',
+    );
+
+    const detected = await detectZaiEndpoint({
+      apiKey: "sk-test", // pragma: allowlist secret
+      endpoint: "coding-global",
+      fetchFn: makeRawBytesFetch({
+        [`${codingGlobal}::glm-5.3`]: { status: 400, bytes: valid },
+        [`${codingGlobal}::glm-5.1`]: { status: 400, bytes: valid },
+        [`${codingGlobal}::glm-4.7`]: { status: 200, bytes: new TextEncoder().encode("{}") },
       }),
     });
 
@@ -321,19 +396,47 @@ describe("detectZaiEndpoint", () => {
     );
   });
 
-  it("rejects oversized bodies via the shared bounded reader the probe uses", async () => {
-    const { fetchFn } = makeOversizedStreamFetch({
-      url: "https://api.z.ai/api/paas/v4/chat/completions",
-      status: 400,
-    });
-    const res = await fetchFn("https://api.z.ai/api/paas/v4/chat/completions");
+  it.each([
+    { bodyDelayMs: 31_000, expectedModel: "glm-5.1", expectedCalls: 2 },
+    { bodyDelayMs: 41_000, expectedModel: undefined, expectedCalls: 1 },
+  ])("honors a 40s probe deadline with a $bodyDelayMs ms error body", async (scenario) => {
+    vi.useFakeTimers();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let calls = 0;
+    try {
+      const detectedPromise = detectZaiEndpoint({
+        apiKey: "sk-test", // pragma: allowlist secret
+        endpoint: "coding-global",
+        timeoutMs: 40_000,
+        fetchFn: async () => {
+          calls += 1;
+          if (calls > 1) {
+            return new Response("{}", { status: 200 });
+          }
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                timer = setTimeout(() => {
+                  controller.enqueue(new TextEncoder().encode('{"error":{"code":"1211"}}'));
+                  controller.close();
+                }, scenario.bodyDelayMs);
+              },
+              cancel() {
+                clearTimeout(timer);
+              },
+            }),
+            { status: 400 },
+          );
+        },
+      });
 
-    await expect(
-      readResponseWithLimit(res, ZAI_DETECT_ERROR_BODY_MAX_BYTES, {
-        onOverflow: ({ maxBytes }) =>
-          new Error(`Z.AI probe error body exceeded size limit (${maxBytes} bytes)`),
-      }),
-    ).rejects.toThrow(/exceeded size limit/);
+      await vi.advanceTimersByTimeAsync(41_001);
+      expect((await detectedPromise)?.modelId).toBe(scenario.expectedModel);
+      expect(calls).toBe(scenario.expectedCalls);
+    } finally {
+      clearTimeout(timer);
+      vi.useRealTimers();
+    }
   });
 
   it("fails closed when a probe error body stalls without chunks", async () => {

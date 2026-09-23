@@ -22,10 +22,10 @@ vi.mock("../../../infra/heartbeat-wake.js", async () => {
   );
 });
 
-vi.mock("../../acp-parent-stream-store.sqlite.js", async () => {
+vi.mock("./acp-parent-stream-store.sqlite.js", async () => {
   return await mergeMockedModule(
-    await vi.importActual<typeof import("../../acp-parent-stream-store.sqlite.js")>(
-      "../../acp-parent-stream-store.sqlite.js",
+    await vi.importActual<typeof import("./acp-parent-stream-store.sqlite.js")>(
+      "./acp-parent-stream-store.sqlite.js",
     ),
     () => ({
       recordAcpParentStreamEvents: (...args: unknown[]) => recordAcpParentStreamEventsMock(...args),
@@ -276,7 +276,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
       | { contextKey?: unknown; sessionKey?: unknown }
       | undefined;
     expect(progressOptions?.contextKey).toBe("acp-spawn:run-cron:progress");
-    expect(progressOptions?.sessionKey).toBe("global");
+    expect(progressOptions?.sessionKey).toBe("agent:ops:global");
     const heartbeatOptions = firstMockCall(requestHeartbeatMock, "heartbeat request")[0] as
       | { agentId?: string; reason?: string }
       | undefined;

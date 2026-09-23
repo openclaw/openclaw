@@ -24,6 +24,8 @@ export type ProviderSyntheticAuthResult = {
   source: string;
   mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
   expiresAt?: number;
+  /** Native presence authorizes only this runtime, never a provider bearer request. */
+  nativeAuth?: { runtime: string; mode: "api-key" | "oauth" | "token" };
 };
 
 /** Context for resolving external provider auth profiles. */
@@ -41,3 +43,11 @@ export type ProviderExternalAuthProfile = {
   credential: OAuthCredential;
   persistence?: "runtime-only" | "persisted";
 };
+
+/** Internal synchronous resolver shared by provider hooks and auth-store overlays. */
+export type ProviderExternalAuthProfileResolver = (params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderResolveExternalAuthProfilesContext;
+}) => ProviderExternalAuthProfile[];

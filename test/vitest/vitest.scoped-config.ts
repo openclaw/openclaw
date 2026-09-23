@@ -1,10 +1,13 @@
 // Vitest scoped config helper builds test configs for scoped file patterns.
 import path from "node:path";
-import { defineConfig } from "vitest/config";
+import { defineConfig, type ViteUserConfig } from "vitest/config";
+import { diagnosticForksPool } from "./vitest.forks-pool.ts";
+import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
-  intersectIncludePatterns,
   loadPatternListFromEnv,
+  matchesVitestGlob,
   narrowIncludePatternsForCli,
+  relativizeScopedPatterns,
 } from "./vitest.pattern-file.ts";
 import {
   nonIsolatedRunnerPath,
@@ -16,28 +19,6 @@ import { getUnitFastTestFilesForIncludePatterns } from "./vitest.unit-fast-paths
 
 function normalizePathPattern(value: string): string {
   return value.replaceAll("\\", "/");
-}
-
-function relativizeScopedPattern(value: string, dir: string): string {
-  const normalizedValue = normalizePathPattern(value);
-  const normalizedDir = normalizePathPattern(dir).replace(/\/+$/u, "");
-  if (!normalizedDir) {
-    return normalizedValue;
-  }
-  if (normalizedValue === normalizedDir) {
-    return ".";
-  }
-  const prefix = `${normalizedDir}/`;
-  return normalizedValue.startsWith(prefix)
-    ? normalizedValue.slice(prefix.length)
-    : normalizedValue;
-}
-
-function relativizeScopedPatterns(values: string[], dir?: string): string[] {
-  if (!dir) {
-    return values.map(normalizePathPattern);
-  }
-  return values.map((value) => relativizeScopedPattern(value, dir));
 }
 
 function globRoot(pattern: string): string | null {
@@ -67,7 +48,7 @@ function includePatternIsFullyExcluded(includePattern: string, excludePattern: s
   const exclude = normalizePathPattern(excludePattern);
   return (
     include === exclude ||
-    path.matchesGlob(include, exclude) ||
+    matchesVitestGlob(include, exclude) ||
     directoryPatternCoversInclude(exclude, include)
   );
 }
@@ -84,12 +65,6 @@ export function shouldPassWithNoTestsForCliIncludes(
       includePatternIsFullyExcluded(includePattern, excludePattern),
     ),
   );
-}
-
-export function resolveVitestIsolation(
-  _env: Record<string, string | undefined> = process.env,
-): boolean {
-  return false;
 }
 
 const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
@@ -136,12 +111,14 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "extension-providers",
     "extension-signal",
     "extension-slack",
+    "extension-database-workers",
     "extension-telegram",
     "extension-voice-call",
     "extension-whatsapp",
     "extension-zalo",
     "extensions",
     "gateway",
+    "gateway-methods-isolated",
     "hooks",
     "infra",
     "logging",
@@ -206,6 +183,7 @@ export function createScopedVitestConfig(
     env?: Record<string, string | undefined>;
     environment?: string;
     exclude?: string[];
+    execArgv?: string[];
     argv?: string[];
     includeOpenClawRuntimeSetup?: boolean;
     isolate?: boolean;
@@ -219,7 +197,9 @@ export function createScopedVitestConfig(
     setupFiles?: string[];
     useNonIsolatedRunner?: boolean;
   },
-) {
+  // Explicit nameable return type: inference otherwise reaches vite-internal
+  // names (TS4058/TS4082) in every downstream scoped-config creator.
+): ViteUserConfig {
   const base = sharedVitestConfig as Record<string, unknown>;
   const baseTest = sharedVitestConfig.test ?? {};
   const baseSequence = (baseTest as { sequence?: { groupOrder?: number } }).sequence;
@@ -228,7 +208,7 @@ export function createScopedVitestConfig(
   const env = options?.env;
   const externalIncludePatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
   const includeFromEnv = options?.intersectIncludeFile
-    ? intersectIncludePatterns(include, externalIncludePatterns)
+    ? intersectIncludePatterns(include, externalIncludePatterns, matchesVitestGlob)
     : externalIncludePatterns;
   const cliInclude = narrowIncludePatternsForCli(include, options?.argv, {
     scopedDir,
@@ -247,7 +227,7 @@ export function createScopedVitestConfig(
     ? relativizeScopedPatterns(includeFromEnv, scopedDir)
     : includeFromEnv;
   const scopedCliInclude = cliInclude ? relativizeScopedPatterns(cliInclude, scopedDir) : null;
-  const isolate = options?.isolate ?? resolveVitestIsolation(options?.env);
+  const isolate = options?.isolate ?? false;
   const setupFiles = [
     ...new Set([
       ...(baseTest.setupFiles ?? []),
@@ -266,13 +246,21 @@ export function createScopedVitestConfig(
       ...(options?.deps ? { deps: options.deps } : {}),
       ...(options?.name ? { name: options.name } : {}),
       ...(options?.environment ? { environment: options.environment } : {}),
+      ...(options?.execArgv ? { execArgv: options.execArgv } : {}),
       isolate,
       ...(runner ? { runner } : { runner: undefined }),
       setupFiles,
       ...(resolvedScopedDir ? { dir: resolvedScopedDir } : {}),
       include: scopedInclude,
       exclude,
-      ...(options?.pool ? { pool: options.pool } : {}),
+      ...(options?.pool
+        ? {
+            pool:
+              options.pool === "forks" && (scopedDir === "extensions" || options.name === "infra")
+                ? diagnosticForksPool
+                : options.pool,
+          }
+        : {}),
       ...(options?.fileParallelism === undefined
         ? {}
         : { fileParallelism: options.fileParallelism }),

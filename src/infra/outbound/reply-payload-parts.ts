@@ -1,4 +1,5 @@
 import { normalizeStringEntries } from "../../../packages/normalization-core/src/string-normalization.js";
+import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 
 /** Derived sendability facts for text/media outbound payload delivery. */
 export type SendableOutboundReplyParts = {
@@ -18,18 +19,25 @@ export type SendableOutboundReplyParts = {
   hasContent: boolean;
 };
 
+/** Prepared payload entry that keeps source indexing plus reusable projections. */
+export type OutboundPayloadPlan = {
+  sourceIndex: number;
+  payload: ReplyPayload;
+  parts: SendableOutboundReplyParts;
+  hasPresentation: boolean;
+  hasInteractive: boolean;
+  hasChannelData: boolean;
+};
+
 /** Prefer multi-attachment payloads, then fall back to the legacy single-media field. */
 export function resolveOutboundMediaUrls(payload: {
   mediaUrls?: string[];
   mediaUrl?: string;
 }): string[] {
-  if (payload.mediaUrls?.length) {
+  if (payload.mediaUrls?.some((mediaUrl) => mediaUrl.trim())) {
     return payload.mediaUrls;
   }
-  if (payload.mediaUrl) {
-    return [payload.mediaUrl];
-  }
-  return [];
+  return payload.mediaUrl ? [payload.mediaUrl] : [];
 }
 
 /** Count outbound media items after legacy single-media fallback normalization. */

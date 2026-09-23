@@ -3,6 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRemoteShellSandboxSession } from "../../agents/sandbox/remote-shell-transport.js";
+import {
+  registerAgentWorkspaceAccess,
+  type AgentWorkspaceAccess,
+} from "../../agents/workspace-access.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import {
   initializeGlobalHookRunner,
@@ -12,8 +18,11 @@ import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
   CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
+  applyExtractedSkillRoot,
   installExtractedSkillRoot,
 } from "./archive-install.js";
+import { resolveWorkspaceSkillInstallDir } from "./install-paths.js";
+import { digestClawHubSkillTree } from "./skill-tree-digest.js";
 
 const tempDirs = createTrackedTempDirs();
 
@@ -90,6 +99,123 @@ afterEach(async () => {
 });
 
 describe("skill archive install", () => {
+  it.runIf(process.platform !== "win32")(
+    "preserves native local links and confines remote upload links",
+    async () => {
+      const root = await fs.realpath(await tempDirs.make("openclaw-skill-links-"));
+      const source = path.join(root, "source");
+      await fs.mkdir(source);
+      await fs.writeFile(path.join(source, "SKILL.md"), "native links");
+      const links = {
+        absolute: "/opt/shared-assets",
+        relative: "../shared-assets",
+        dangling: "missing",
+      };
+      for (const [name, target] of Object.entries(links)) {
+        await fs.symlink(target, path.join(source, name));
+      }
+      const local = await applyExtractedSkillRoot({
+        workspaceDir: path.join(root, "local"),
+        slug: "links",
+        extractedRoot: source,
+        mode: "install",
+      });
+      expect(local.ok).toBe(true);
+      for (const [name, target] of Object.entries(links)) {
+        expect(await fs.readlink(path.join(root, "local/skills/links", name))).toBe(target);
+      }
+      const session = createRemoteShellSandboxSession({
+        buildCommand: ({ remoteCommand }) => ({
+          argv: ["/bin/sh", "-c", remoteCommand],
+          env: process.env,
+        }),
+      });
+      const uploaded = path.join(root, "uploaded");
+      try {
+        await expect(
+          session.uploadDirectory({ localDir: source, remoteDir: uploaded, remoteRootDir: root }),
+        ).rejects.toThrow("refuses symlink");
+        for (const name of Object.keys(links)) {
+          await fs.unlink(path.join(source, name));
+        }
+        await fs.writeFile(path.join(source, "asset.txt"), "contained asset");
+        await fs.symlink("asset.txt", path.join(source, "relative"));
+        await session.uploadDirectory({
+          localDir: source,
+          remoteDir: uploaded,
+          remoteRootDir: root,
+        });
+        const remote = await applyExtractedSkillRoot({
+          workspaceDir: path.join(root, "host"),
+          slug: "links",
+          extractedRoot: uploaded,
+          mode: "install",
+        });
+        expect(remote.ok).toBe(true);
+        expect(await fs.readlink(path.join(root, "host/skills/links/relative"))).toBe("asset.txt");
+        expect(await fs.readFile(path.join(root, "host/skills/links/relative"), "utf8")).toBe(
+          "contained asset",
+        );
+      } finally {
+        await session.dispose();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "installs a streamed native tree without Skill Library import limits",
+    async () => {
+      const root = await fs.realpath(await tempDirs.make("openclaw-skill-native-apply-"));
+      const extractedRoot = path.join(root, "extracted");
+      const assetsDir = path.join(extractedRoot, "assets");
+      await fs.mkdir(path.join(extractedRoot, "empty"), { recursive: true });
+      await fs.mkdir(assetsDir);
+      await fs.writeFile(path.join(extractedRoot, "SKILL.md"), skillFileContent("Native Tree"));
+      const binary = Buffer.alloc(9 * 1024 * 1024, 0xa5);
+      await fs.writeFile(path.join(extractedRoot, "model.bin"), binary);
+      const names = Array.from({ length: 257 }, (_, index) => `asset-${index}.txt`);
+      await Promise.all(names.map((name) => fs.writeFile(path.join(assetsDir, name), name)));
+
+      const remoteDir = path.join(root, "received");
+      const transport = createRemoteShellSandboxSession({
+        buildCommand: ({ remoteCommand }) => ({
+          argv: ["/bin/sh", "-c", remoteCommand],
+          env: { PATH: process.env.PATH },
+        }),
+      });
+      try {
+        await transport.uploadDirectory({
+          localDir: extractedRoot,
+          remoteDir,
+          remoteRootDir: root,
+        });
+      } finally {
+        await transport.dispose();
+      }
+      // Installation must use the delivered tree, not accidentally read the sender's copy.
+      await fs.rm(extractedRoot, { recursive: true });
+      const result = await applyExtractedSkillRoot({
+        workspaceDir: path.join(root, "workspace"),
+        slug: "native-tree",
+        extractedRoot: remoteDir,
+        mode: "install",
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(await fs.readdir(path.join(result.targetDir, "assets"))).toHaveLength(names.length);
+      for (const name of names) {
+        expect(await fs.readFile(path.join(result.targetDir, "assets", name), "utf8")).toBe(name);
+      }
+      expect(await fs.readdir(path.join(result.targetDir, "empty"))).toEqual([]);
+      expect((await fs.readFile(path.join(result.targetDir, "model.bin"))).equals(binary)).toBe(
+        true,
+      );
+    },
+  );
+
   it.each(["skill.md", "skills.md", "SKILL.MD"])(
     "installs a single-root ClawHub archive with legacy marker %s",
     async (marker) => {
@@ -247,6 +373,181 @@ describe("skill archive install", () => {
     expect(handler).toHaveBeenCalledTimes(1);
     const payload = handler.mock.calls[0]?.[0] as { request?: { mode?: string } } | undefined;
     expect(payload?.request?.mode).toBe("install");
+  });
+
+  it.each([false, true])(
+    "keeps Gateway policy and host installation separate (blocked=%s)",
+    async (blocked) => {
+      const root = await tempDirs.make("openclaw-skill-host-install-");
+      const workspaceDir = path.join(root, "gateway");
+      const hostWorkspace = path.join(root, "host");
+      const extractedRoot = path.join(root, "source");
+      await fs.mkdir(extractedRoot, { recursive: true });
+      await fs.writeFile(path.join(extractedRoot, "SKILL.md"), skillFileContent("Host Skill"));
+      // A stale Gateway directory must not decide install/update mode or receive the replacement.
+      const staleDir = resolveWorkspaceSkillInstallDir(workspaceDir, "host-skill");
+      await fs.mkdir(staleDir, { recursive: true });
+      await fs.writeFile(path.join(staleDir, "SKILL.md"), "stale Gateway file");
+      const handler = vi.fn((_payload: unknown) =>
+        blocked ? { block: true, blockReason: "blocked on Gateway" } : {},
+      );
+      const committed = vi.fn();
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          { hookName: "before_install", handler },
+          { hookName: "skill_changed", handler: committed },
+        ]),
+      );
+      const applySkillRoot: NonNullable<AgentWorkspaceAccess["applySkillRoot"]> = async (
+        request,
+      ) => {
+        expect(request).not.toHaveProperty("policy");
+        // Local host fixture exercises the native owner; it is not a network transport test.
+        return await applyExtractedSkillRoot({ ...request, workspaceDir: hostWorkspace });
+      };
+      const unavailable = async (): Promise<never> => {
+        throw new Error("file bridge must not install Skills");
+      };
+      const release = registerAgentWorkspaceAccess(workspaceDir, {
+        loadSkills: vi.fn(),
+        applySkillRoot,
+        bridge: { readFile: unavailable, writeFile: unavailable, stat: unavailable },
+      });
+      try {
+        const result = await installExtractedSkillRoot({
+          workspaceDir,
+          slug: "host-skill",
+          extractedRoot,
+          mode: "update",
+          policy: {
+            config: {},
+            installId: "archive",
+            origin: { type: "upload", uploadId: "host-install", sha256: "1".repeat(64) },
+            source: { kind: "upload", authority: "user", mutable: false, network: false },
+          },
+        });
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(handler.mock.calls[0]?.[0]).toMatchObject({ request: { mode: "install" } });
+        expect(await fs.readFile(path.join(staleDir, "SKILL.md"), "utf8")).toBe(
+          "stale Gateway file",
+        );
+        const targetDir = resolveWorkspaceSkillInstallDir(hostWorkspace, "host-skill");
+        if (blocked) {
+          expect(result).toMatchObject({
+            ok: false,
+            error: expect.stringContaining("blocked on Gateway"),
+          });
+          await expect(fs.stat(targetDir)).rejects.toMatchObject({ code: "ENOENT" });
+          expect(committed).not.toHaveBeenCalled();
+        } else {
+          expect(result).toEqual({ ok: true, targetDir });
+          expect(await fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).toContain(
+            "Host Skill",
+          );
+          expect(committed).toHaveBeenCalledTimes(1);
+          expect(committed.mock.calls[0]?.[0]).toMatchObject({ action: "created" });
+          expect(committed.mock.calls[0]?.[1]).toEqual({ workspaceDir });
+        }
+      } finally {
+        release();
+      }
+    },
+  );
+
+  it.each(["unchanged", "absent", "appeared", "force"] as const)(
+    "preserves native replacement behavior when the installed skill is %s",
+    async (state) => {
+      const root = await tempDirs.make("openclaw-skill-update-state-");
+      const workspaceDir = path.join(root, "workspace");
+      const extractedRoot = path.join(root, "extracted");
+      await fs.mkdir(extractedRoot, { recursive: true });
+      await fs.writeFile(path.join(extractedRoot, "SKILL.md"), "replacement");
+      const targetDir = resolveWorkspaceSkillInstallDir(workspaceDir, "weather");
+      if (state !== "absent") {
+        await fs.mkdir(targetDir, { recursive: true });
+        await fs.writeFile(path.join(targetDir, "SKILL.md"), "original");
+      }
+      const expectedClawHubState =
+        state === "unchanged"
+          ? {
+              slug: "weather",
+              skillFilePath: "SKILL.md",
+              skillFileSha256: sha256Hex("original"),
+              fileTreeSha256: await digestClawHubSkillTree(targetDir),
+            }
+          : state === "force"
+            ? undefined
+            : null;
+      const result = await installExtractedSkillRoot({
+        workspaceDir,
+        slug: "weather",
+        extractedRoot,
+        mode: "update",
+        expectedClawHubState,
+      });
+      if (state === "appeared") {
+        expect(result).toMatchObject({
+          ok: false,
+          failureKind: "invalid-request",
+          replacementBlocked:
+            'Skill "weather" appeared during update. Updating replaces the installed skill directory.',
+        });
+      } else {
+        expect(result).toEqual({ ok: true, targetDir });
+      }
+      expect(await fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).toBe(
+        state === "appeared" ? "original" : "replacement",
+      );
+    },
+  );
+
+  it("restores a skill when backup validation blocks replacement", async () => {
+    const root = await tempDirs.make("openclaw-skill-archive-install-");
+    const workspaceDir = path.join(root, "workspace");
+    const extractedRoot = path.join(root, "extracted");
+    await fs.mkdir(extractedRoot, { recursive: true });
+    await fs.writeFile(path.join(extractedRoot, "SKILL.md"), skillFileContent("Staged Update"));
+    const targetDir = resolveWorkspaceSkillInstallDir(workspaceDir, "staged-update");
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.writeFile(path.join(targetDir, "SKILL.md"), skillFileContent("Installed Skill"));
+    const skillsDir = path.dirname(targetDir);
+    const expectedClawHubState = {
+      slug: "staged-update",
+      skillFilePath: "SKILL.md",
+      skillFileSha256: sha256Hex(await fs.readFile(path.join(targetDir, "SKILL.md"))),
+      fileTreeSha256: await digestClawHubSkillTree(targetDir),
+    };
+
+    const result = await applyExtractedSkillRoot({
+      workspaceDir,
+      slug: "staged-update",
+      extractedRoot,
+      mode: "update",
+      rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
+      expectedClawHubState,
+      beforeInstall: async () => {
+        await fs.writeFile(path.join(targetDir, "notes.md"), "edited before backup", "utf8");
+        return undefined;
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error:
+        'Skill "staged-update" changed during update. Updating replaces the installed skill directory.',
+      replacementBlocked:
+        'Skill "staged-update" changed during update. Updating replaces the installed skill directory.',
+      failureKind: "invalid-request",
+    });
+    await expect(fs.readFile(path.join(targetDir, "notes.md"), "utf8")).resolves.toBe(
+      "edited before backup",
+    );
+    await expect(fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "Installed Skill",
+    );
+    await expect(
+      fs.readdir(path.join(skillsDir, ".openclaw-install-backups")),
+    ).resolves.toHaveLength(0);
   });
 
   it.each([

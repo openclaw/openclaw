@@ -22,8 +22,10 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "fs_move",
   // Patch application can rewrite arbitrary files
   "apply_patch",
-  // Agent-owned host terminal — interactive RCE surface
+  // Shared terminal input can execute commands and scrollback can expose host secrets.
   "terminal",
+  // Local HTTP exposure can publish arbitrary workspace applications.
+  "portal",
   // Session orchestration — spawning agents remotely is RCE
   "sessions_spawn",
   // Cross-session injection — message injection across sessions
@@ -36,6 +38,7 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   AUTOMATIONS_TOOL_NAME,
   // Gateway config can expose secrets and host topology
   "gateway",
+  "plugins",
   // Node command relay can reach system.run on paired hosts
   "nodes",
   // Desktop control on a paired Mac (pointer/keyboard) and screen reads
@@ -47,9 +50,9 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
 
 /**
  * Sensitive control-plane tools. `automations` can persist scheduled runs; `gateway`
- * exposes configuration and schema details even though its agent actions are read-only.
+ * exposes config and self-update; `plugins` manages executable plugin lifecycles.
  */
-export const GATEWAY_CONTROL_PLANE_TOOLS = [AUTOMATIONS_TOOL_NAME, "gateway"] as const;
+export const GATEWAY_CONTROL_PLANE_TOOLS = [AUTOMATIONS_TOOL_NAME, "gateway", "plugins"] as const;
 
 /**
  * Core tools that require sender owner identity on Gateway-scoped surfaces.
@@ -61,6 +64,7 @@ export const GATEWAY_OWNER_ONLY_CORE_TOOLS = [
   "sessions",
   "screen",
   "terminal",
+  "portal",
   "conversations_list",
   "conversations_send",
   "conversations_turn",

@@ -1,9 +1,8 @@
-import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  createMessageReceiptFromOutboundResults,
-  type MessageReceipt,
-  type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-outbound";
+  createAcceptedChannelDeliveryResult,
+  createChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
+import type { MessageReceipt, MessageReceiptPartKind } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export type FeishuReplyDeliverySource = {
@@ -28,6 +27,27 @@ export const noVisibleFeishuReplyDelivery: FeishuReplyDeliveryResult = {
   visibleReplySent: false,
 };
 
+export function shouldSendNoVisibleReplyFallback(dispatchResult: {
+  settledReceipt?: {
+    anyVisibleDelivered: boolean;
+    counts: { final: { failedBeforeSend: number } };
+  };
+  noVisibleReplyFallbackEligible?: boolean;
+  sendPolicyDenied?: boolean;
+  sourceReplyDeliveryMode?: string;
+}): boolean {
+  const emptyEligibleDispatch =
+    dispatchResult.noVisibleReplyFallbackEligible === true &&
+    dispatchResult.settledReceipt?.anyVisibleDelivered !== true;
+  const finalFailedBeforeSend =
+    (dispatchResult.settledReceipt?.counts.final.failedBeforeSend ?? 0) > 0;
+  return (
+    dispatchResult.sendPolicyDenied !== true &&
+    dispatchResult.sourceReplyDeliveryMode !== "message_tool_only" &&
+    (emptyEligibleDispatch || finalFailedBeforeSend)
+  );
+}
+
 function hasProviderIdentity(
   result: FeishuReplyDeliverySource | null | undefined,
 ): result is FeishuReplyDeliverySource {
@@ -47,25 +67,17 @@ export function createFeishuReplyDeliveryResult(params: {
   kind?: MessageReceiptPartKind;
 }): FeishuReplyDeliveryResult {
   const results = params.visibleReplySent ? (params.results ?? []).filter(hasProviderIdentity) : [];
-  const receipt =
-    results.length > 0
-      ? createMessageReceiptFromOutboundResults({
-          results,
-          ...(params.kind ? { kind: params.kind } : {}),
-        })
-      : undefined;
-  if (!receipt) {
+  if (results.length === 0) {
     return {
       visibleReplySent: params.visibleReplySent,
       ...(params.content === undefined ? {} : { content: params.content }),
     };
   }
-  return {
-    messageIds: [...receipt.platformMessageIds],
-    receipt,
-    visibleReplySent: params.visibleReplySent,
-    ...(params.content === undefined ? {} : { content: params.content }),
-  };
+  return createAcceptedChannelDeliveryResult({
+    results,
+    kind: params.kind,
+    content: params.content,
+  });
 }
 
 /** Preserves the first result's provider identity while retaining supplemental ids. */
@@ -74,12 +86,17 @@ export function mergeFeishuReplyDeliveryResults(
   content?: string,
 ): FeishuReplyDeliveryResult {
   const visible = results.filter((result) => result.visibleReplySent === true);
+  const acceptedContent = visible.flatMap((result) =>
+    result.content === undefined ? [] : [result.content],
+  );
   return createFeishuReplyDeliveryResult({
     results: visible,
     visibleReplySent: visible.length > 0,
     content:
       content === undefined
-        ? results.find((result) => result.content !== undefined)?.content
+        ? acceptedContent.length > 0
+          ? acceptedContent.join("\n\n")
+          : undefined
         : content,
   });
 }

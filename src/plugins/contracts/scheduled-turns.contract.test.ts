@@ -12,7 +12,7 @@ import type {
   GatewayRequestHandlerOptions,
 } from "../../gateway/server-methods/types.js";
 import { withEnv } from "../../test-utils/env.js";
-import { cleanupReplacedPluginHostRegistry } from "../host-hook-cleanup.js";
+import { createPluginHostRegistryRetirement } from "../host-hook-cleanup.js";
 import {
   clearPluginHostRuntimeState,
   cleanupPluginSessionSchedulerJobs,
@@ -23,7 +23,11 @@ import {
   unschedulePluginSessionTurnsByTag,
 } from "../host-hook-scheduled-turns.js";
 import { loadOpenClawPlugins } from "../loader.js";
-import { clearPluginLoaderCache, makeTempDir, writePlugin } from "../loader.test-fixtures.js";
+import {
+  clearPluginLoaderCache,
+  makePluginLoaderTempDir,
+  writePlugin,
+} from "../loader.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
@@ -89,6 +93,7 @@ function createMockCronService(): CronServiceContract {
     stop: vi.fn(),
     status: vi.fn(async () => ({
       enabled: true,
+      triggersEnabled: true,
       storePath: "/tmp/openclaw-test-cron.json",
       storage: "sqlite" as const,
       sqlitePath: "/tmp/openclaw-test-state/state/openclaw.sqlite",
@@ -587,21 +592,16 @@ describe("plugin scheduled turns", () => {
   });
 
   it("allows bundled plugins to schedule turns during real plugin registration", async () => {
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     writePlugin({
       id: "loader-scheduler",
       dir: bundledDir,
       filename: "index.cjs",
-      body: `module.exports = {
-  id: "loader-scheduler",
-  register(api) {
-    void api.session.workflow.scheduleSessionTurn({
-      sessionKey: "agent:main:main",
-      message: "wake",
-      delayMs: 1
-    });
-  }
-};`,
+      registration: `void api.session.workflow.scheduleSessionTurn({
+        sessionKey: "agent:main:main",
+        message: "wake",
+        delayMs: 1
+      });`,
     });
     workflowMocks.cronAdd.mockResolvedValue(makeCronJob({ id: "loader-scheduled-job" }));
     workflowMocks.cronRemove.mockResolvedValue({ ok: true, removed: true });
@@ -661,57 +661,52 @@ describe("plugin scheduled turns", () => {
   });
 
   it("keeps late scheduled-turn helpers callable from real plugin gateway handlers", async () => {
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     writePlugin({
       id: "loader-scheduler-runtime",
       dir: bundledDir,
       filename: "index.cjs",
-      body: `module.exports = {
-  id: "loader-scheduler-runtime",
-  register(api) {
-    const scheduleSessionTurn = api.session.workflow.scheduleSessionTurn;
-    const unscheduleSessionTurnsByTag = api.session.workflow.unscheduleSessionTurnsByTag;
-    api.registerGatewayMethod("loader-scheduler-runtime.exercise", async ({ respond }) => {
-      const first = await scheduleSessionTurn({
-        sessionKey: "agent:main:main",
-        message: "wake one",
-        delayMs: 1,
-        tag: "nudge",
-      });
-      const second = await scheduleSessionTurn({
-        sessionKey: "agent:main:main",
-        message: "wake two",
-        delayMs: 1,
-        tag: "nudge",
-        deliveryMode: "none",
-      });
-      const badTag = await scheduleSessionTurn({
-        sessionKey: "agent:main:main",
-        message: "bad tag",
-        delayMs: 1,
-        tag: "bad:tag",
-      });
-      const badDelete = await scheduleSessionTurn({
-        sessionKey: "agent:main:main",
-        message: "bad delete",
-        cron: "0 * * * *",
-        deleteAfterRun: true,
-        tag: "nudge",
-      });
-      const removed = await unscheduleSessionTurnsByTag({
-        sessionKey: "agent:main:main",
-        tag: "nudge",
-      });
-      respond(true, {
-        first,
-        second,
-        badTag: badTag ?? null,
-        badDelete: badDelete ?? null,
-        removed: removed ?? null,
-      });
-    });
-  },
-};`,
+      registration: `const scheduleSessionTurn = api.session.workflow.scheduleSessionTurn;
+      const unscheduleSessionTurnsByTag = api.session.workflow.unscheduleSessionTurnsByTag;
+      api.registerGatewayMethod("loader-scheduler-runtime.exercise", async ({ respond }) => {
+        const first = await scheduleSessionTurn({
+          sessionKey: "agent:main:main",
+          message: "wake one",
+          delayMs: 1,
+          tag: "nudge",
+        });
+        const second = await scheduleSessionTurn({
+          sessionKey: "agent:main:main",
+          message: "wake two",
+          delayMs: 1,
+          tag: "nudge",
+          deliveryMode: "none",
+        });
+        const badTag = await scheduleSessionTurn({
+          sessionKey: "agent:main:main",
+          message: "bad tag",
+          delayMs: 1,
+          tag: "bad:tag",
+        });
+        const badDelete = await scheduleSessionTurn({
+          sessionKey: "agent:main:main",
+          message: "bad delete",
+          cron: "0 * * * *",
+          deleteAfterRun: true,
+          tag: "nudge",
+        });
+        const removed = await unscheduleSessionTurnsByTag({
+          sessionKey: "agent:main:main",
+          tag: "nudge",
+        });
+        respond(true, {
+          first,
+          second,
+          badTag: badTag ?? null,
+          badDelete: badDelete ?? null,
+          removed: removed ?? null,
+        });
+      });`,
     });
     const addedJobs: Array<Record<string, unknown>> = [];
     const removedJobIds = new Set<string>();
@@ -928,11 +923,11 @@ describe("plugin scheduled turns", () => {
       },
     });
 
-    const cleanupResult = await cleanupReplacedPluginHostRegistry({
+    const cleanupResult = await createPluginHostRegistryRetirement({
       cfg: previousFixture.config,
       previousRegistry: previousFixture.registry.registry,
       nextRegistry: replacementFixture.registry.registry,
-    });
+    })();
     expect(cleanupResult.failures).toEqual([]);
     expect(removed).toEqual(["old-runtime-job"]);
     expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toEqual([
@@ -976,11 +971,11 @@ describe("plugin scheduled turns", () => {
     });
 
     await expect(
-      cleanupReplacedPluginHostRegistry({
+      createPluginHostRegistryRetirement({
         cfg: retiringFixture.config,
         previousRegistry: retiringFixture.registry.registry,
         nextRegistry: replacementFixture.registry.registry,
-      }),
+      })(),
     ).resolves.toMatchObject({ failures: [] });
     expect(removed).toEqual(["retiring-owned-job"]);
     expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toEqual([
@@ -993,11 +988,11 @@ describe("plugin scheduled turns", () => {
     ]);
 
     await expect(
-      cleanupReplacedPluginHostRegistry({
+      createPluginHostRegistryRetirement({
         cfg: gatewayFixture.config,
         previousRegistry: gatewayFixture.registry.registry,
         nextRegistry: replacementFixture.registry.registry,
-      }),
+      })(),
     ).resolves.toMatchObject({ failures: [] });
     expect(removed).toEqual(["retiring-owned-job", "gateway-owned-job"]);
     expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toEqual([]);

@@ -1,20 +1,72 @@
 // Memory Core tests cover workspace path provenance classification.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import {
-  DREAMING_DAILY_PROVENANCE_NAMESPACE,
-  writeMemoryCoreWorkspaceEntry,
-} from "../dreaming-state.js";
+import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryCoreTestHarness } from "../test-helpers.js";
+import { classifyWorkspaceMemoryPaths } from "../workspace-path-classifier.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
 
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
+
 createMemoryCoreTestHarness();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("memory path provenance", () => {
+  it("classifies loaded remote sources without probing Gateway-local decoys", async () => {
+    const workspaceDir = tempDirs.make("remote-memory-provenance-");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Gateway decoy");
+    const realpath = vi.spyOn(fs, "realpath");
+    vi.mocked(readMemoryArtifactProvenance).mockImplementation(async ({ relativePath }) =>
+      relativePath === "memory/tainted.md"
+        ? { fileHash: "0".repeat(64), originClass: "untrusted", observedAt: 1 }
+        : undefined,
+    );
+    await expect(
+      classifyWorkspaceMemoryPaths({
+        cfg: {},
+        agentId: "main",
+        workspaceDir,
+        relativePaths: ["USER.md", "MEMORY.md", "alias/MEMORY.md", "missing/MEMORY.md"],
+        readSources: [
+          { relativePath: "USER.md", canonicalRelativePath: "USER.md" },
+          { relativePath: "MEMORY.md" },
+          { relativePath: "alias/MEMORY.md", canonicalRelativePath: "memory/tainted.md" },
+        ],
+      }),
+    ).resolves.toEqual([
+      { relativePath: "USER.md", originClass: "agent" },
+      { relativePath: "MEMORY.md", originClass: "untrusted" },
+      { relativePath: "alias/MEMORY.md", originClass: "untrusted" },
+      { relativePath: "missing/MEMORY.md", originClass: "untrusted" },
+    ]);
+    expect(realpath).not.toHaveBeenCalled();
+    expect(readMemoryArtifactProvenance).toHaveBeenCalledWith({
+      workspaceDir,
+      relativePath: "memory/tainted.md",
+    });
+  });
+
+  it.each(["../USER.md", "/USER.md", "memory/../USER.md", "C:\\USER.md", "notes/USER.md"])(
+    "does not promote a remote source outside native memory paths: %s",
+    async (canonicalRelativePath) => {
+      await expect(
+        resolveMemoryPathClassification({
+          absolutePath: "/workspace/USER.md",
+          source: "memory",
+          workspaceDir: "/workspace",
+          readSource: { canonicalRelativePath },
+        }),
+      ).resolves.toEqual({ curatedRoot: false, originClass: "untrusted" });
+    },
+  );
   it("trusts canonical workspace memory while excluding system and lookalike paths", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "memory-path-provenance-"));
+    const root = tempDirs.make("memory-path-provenance-");
     const workspaceDir = path.join(root, "workspace");
     const outsideDir = path.join(root, "outside");
     await fs.mkdir(path.join(workspaceDir, "memory", "projects"), { recursive: true });
@@ -36,6 +88,21 @@ describe("memory path provenance", () => {
     await expect(classify("USER.md")).resolves.toEqual({
       curatedRoot: true,
       originClass: "agent",
+    });
+    await expect(classify("users/person/USER.md")).resolves.toEqual({
+      curatedRoot: false,
+      originClass: "agent",
+    });
+    await expect(classify("users/person/notes.md")).resolves.toMatchObject({
+      originClass: "untrusted",
+    });
+    vi.mocked(readMemoryArtifactProvenance).mockResolvedValueOnce({
+      fileHash: "0".repeat(64),
+      originClass: "untrusted",
+      observedAt: 1,
+    });
+    await expect(classify("users/person/USER.md")).resolves.toMatchObject({
+      originClass: "untrusted",
     });
     await expect(classify("memory/2026-07-27.md")).resolves.toMatchObject({
       originClass: "agent",
@@ -75,22 +142,17 @@ describe("memory path provenance", () => {
   });
 
   it("honors sticky untrusted provenance for runtime-written memory files", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-path-runtime-taint-"));
-    try {
-      const absolutePath = path.join(workspaceDir, "MEMORY.md");
-      await fs.writeFile(absolutePath, "network-authored memory", "utf8");
-      await writeMemoryCoreWorkspaceEntry({
-        namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
-        workspaceDir,
-        key: "MEMORY.md",
-        value: { originClass: "untrusted" },
-      });
+    const workspaceDir = tempDirs.make("memory-path-runtime-taint-");
+    const absolutePath = path.join(workspaceDir, "MEMORY.md");
+    await fs.writeFile(absolutePath, "network-authored memory", "utf8");
+    vi.mocked(readMemoryArtifactProvenance).mockResolvedValueOnce({
+      fileHash: "0".repeat(64),
+      originClass: "untrusted",
+      observedAt: 1,
+    });
 
-      await expect(
-        resolveMemoryPathClassification({ absolutePath, source: "memory", workspaceDir }),
-      ).resolves.toEqual({ curatedRoot: true, originClass: "untrusted" });
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+    await expect(
+      resolveMemoryPathClassification({ absolutePath, source: "memory", workspaceDir }),
+    ).resolves.toEqual({ curatedRoot: true, originClass: "untrusted" });
   });
 });

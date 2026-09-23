@@ -1,6 +1,13 @@
 // Msteams helper module supports monitor handler helpers behavior.
-import type { PreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
-import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  buildChannelInboundEventContext,
+  type runPreparedInboundReply,
+  type PreparedInboundReply,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createPluginRuntimeMock,
+  createTestInboundDebounceFlush,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
@@ -26,6 +33,7 @@ type MSTeamsTestRuntimeOptions = {
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
   resolveTextChunkLimit?: () => number;
   resolveStorePath?: () => string;
+  runPrepared?: typeof runPreparedInboundReply;
 };
 
 const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
@@ -109,7 +117,7 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
           replyResolver: turn.replyResolver,
         }),
     } as PreparedInboundReply<unknown>;
-    return await runPrepared(preparedTurn);
+    return await (options.runPrepared ?? runPrepared)(preparedTurn);
   });
   setMSTeamsRuntime({
     logging: { shouldLogVerbose: () => false },
@@ -180,6 +188,8 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
         resolveStorePath,
       },
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
+        buildContext: buildChannelInboundEventContext,
         run: run as unknown as PluginRuntime["channel"]["inbound"]["run"],
       },
     },

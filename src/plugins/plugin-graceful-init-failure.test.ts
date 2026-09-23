@@ -13,31 +13,39 @@ afterAll(() => {
   cleanupTrackedTempDirs(fixtureTempDirs);
 });
 
-function makeTempDir() {
+function makePluginLoaderTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-function writePlugin(params: { id: string; body: string; dir?: string }): {
+function writePlugin(params: {
+  id: string;
+  body: string;
+  dir?: string;
+  configSchema?: Record<string, unknown>;
+  configSchemaJson?: string;
+}): {
   id: string;
   file: string;
   dir: string;
 } {
-  const dir = params.dir ?? makeTempDir();
+  const dir = params.dir ?? makePluginLoaderTempDir();
   fs.mkdirSync(dir, { recursive: true });
   const filename = `${params.id}.cjs`;
   const file = path.join(dir, filename);
   fs.writeFileSync(file, params.body, "utf-8");
+  const manifest = JSON.stringify({
+    id: params.id,
+    name: params.id,
+    version: "1.0.0",
+    main: filename,
+  });
+  const configSchemaJson =
+    params.configSchemaJson ?? JSON.stringify(params.configSchema ?? { type: "object" });
   fs.writeFileSync(
     path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: params.id,
-      name: params.id,
-      version: "1.0.0",
-      main: filename,
-      configSchema: { type: "object" },
-    }),
+    `${manifest.slice(0, -1)},"configSchema":${configSchemaJson}}`,
     "utf-8",
   );
   return { id: params.id, file, dir };
@@ -49,11 +57,16 @@ function readPluginId(pluginPath: string): string {
   return manifest.id;
 }
 
-async function loadPlugins(pluginPaths: string[], warnings?: string[]) {
+async function loadPlugins(
+  pluginPaths: string[],
+  warnings?: string[],
+  previousRegistry?: NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>["previousRegistry"],
+) {
   clearPluginLoaderCache();
   const allow = pluginPaths.map((pluginPath) => readPluginId(pluginPath));
   return loadOpenClawPlugins({
     cache: false,
+    previousRegistry,
     config: {
       plugins: {
         enabled: true,
@@ -116,6 +129,81 @@ describe("graceful plugin initialization failure", () => {
     const registry = await loadPlugins([failing.file, working.file]);
 
     expect(registry.plugins.find((plugin) => plugin.id === "plugin-ok")?.status).toBe("loaded");
+  });
+
+  it("keeps loading other plugins when one manifest declares a malformed configSchema", async () => {
+    const broken = writePlugin({
+      id: "broken-schema-plugin",
+      body: `module.exports = { id: "broken-schema-plugin", register() {} };`,
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { mode: { $ref: "#/$defs/Mode" } },
+        definitions: { Mode: { type: "string", enum: ["fast", "slow"] } },
+      },
+    });
+    const healthy = writePlugin({
+      id: "healthy-schema-plugin",
+      body: `module.exports = { id: "healthy-schema-plugin", register() {} };`,
+    });
+
+    const registry = await loadPlugins([broken.file, healthy.file]);
+
+    expect(requirePluginEntry(registry, "healthy-schema-plugin").status).toBe("loaded");
+  });
+
+  it("records a malformed configSchema as a validation failure", async () => {
+    const broken = writePlugin({
+      id: "unresolved-ref-plugin",
+      body: `module.exports = { id: "unresolved-ref-plugin", register() {} };`,
+      configSchema: {
+        type: "object",
+        properties: { mode: { $ref: "#/$defs/Mode" } },
+      },
+    });
+
+    const registry = await loadPlugins([broken.file]);
+
+    const failed = requirePluginEntry(registry, "unresolved-ref-plugin");
+    expect(failed.status).toBe("error");
+    expect(failed.failurePhase).toBe("validation");
+    expect(failed.error).toContain("invalid schema");
+  });
+
+  it("keeps loading other plugins when a manifest schema is nested past the stack limit", async () => {
+    // Serialize the fixture without spending the stack that validation must contain.
+    const deep =
+      '{"type":"object","properties":{"nested":'.repeat(3_000) +
+      '{"type":"object"}' +
+      "}}".repeat(3_000);
+    const broken = writePlugin({
+      id: "deep-schema-plugin",
+      body: `module.exports = { id: "deep-schema-plugin", register() {} };`,
+      configSchemaJson: deep,
+    });
+    const healthy = writePlugin({
+      id: "shallow-schema-plugin",
+      body: `module.exports = { id: "shallow-schema-plugin", register() {} };`,
+    });
+
+    const registry = await loadPlugins([broken.file, healthy.file]);
+
+    expect(requirePluginEntry(registry, "shallow-schema-plugin").status).toBe("loaded");
+    expect(requirePluginEntry(registry, "deep-schema-plugin")).toMatchObject({
+      status: "error",
+      failurePhase: "validation",
+    });
+    const replacement = await loadPlugins([broken.file, healthy.file], undefined, registry);
+    expect(requirePluginEntry(replacement, "shallow-schema-plugin")).toBe(
+      requirePluginEntry(registry, "shallow-schema-plugin"),
+    );
+    expect(requirePluginEntry(replacement, "deep-schema-plugin")).toMatchObject({
+      status: "error",
+      failurePhase: "validation",
+    });
+    expect(requirePluginEntry(replacement, "deep-schema-plugin")).not.toBe(
+      requirePluginEntry(registry, "deep-schema-plugin"),
+    );
   });
 
   it("records failed register metadata", async () => {

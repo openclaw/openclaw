@@ -1,4 +1,5 @@
 // Msteams tests cover sdk plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startMSTeamsQaBotFrameworkServer } from "./qa/bot-framework-server.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
@@ -74,19 +75,6 @@ describe("createMSTeamsApp", () => {
     expect(app.tokenManager).toBeDefined();
   });
 
-  it("creates app with secret credentials", async () => {
-    const creds: MSTeamsCredentials = {
-      type: "secret",
-
-      appId: "test-app-id",
-      appPassword: "test-secret",
-      tenantId: "test-tenant",
-    };
-
-    const app = await createMSTeamsApp(creds);
-    expect(app).toBeDefined();
-  });
-
   it("keeps private QA App options absent in production", async () => {
     const app = await createMSTeamsApp({
       type: "secret",
@@ -145,9 +133,27 @@ describe("createMSTeamsApp", () => {
     expect(String(await app.tokenManager.getBotToken())).toBe(privateQaBotToken);
   });
 
-  it("routes a private QA proactive send through the loopback Connector", async () => {
+  it.each([
+    {
+      name: "routes a private QA proactive send through the loopback Connector",
+      revokeAt: "never",
+    },
+    {
+      name: "does not dispatch a private QA send when authority closes during token acquisition",
+      revokeAt: "token",
+    },
+    {
+      name: "retains a private QA accepted receipt when authority closes before the response",
+      revokeAt: "accepted",
+    },
+  ] as const)("$name", async ({ revokeAt }) => {
     vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
     vi.stubEnv("CLIENT_SECRET", "ambient-private-qa-secret");
+    const tokenStarted = createDeferred<void>();
+    const releaseToken = createDeferred<void>();
+    const onPlatformSendDispatch = vi.fn(async () => {});
+    let active = true;
+    let pendingSend: Promise<unknown> | undefined;
     const outbound: Array<{
       activity: Record<string, unknown>;
       activityId: string;
@@ -159,6 +165,9 @@ describe("createMSTeamsApp", () => {
       nonce: "qa-nonce",
       onOutbound: async (activity) => {
         outbound.push(activity);
+        if (revokeAt === "accepted") {
+          active = false;
+        }
       },
     });
     (
@@ -182,7 +191,13 @@ describe("createMSTeamsApp", () => {
         appPassword: "test-secret",
         tenantId: "test-tenant",
       });
-      const result = await sendMSTeamsActivityWithReference(
+      const getBotToken = app.tokenManager.getBotToken.bind(app.tokenManager);
+      vi.spyOn(app.tokenManager, "getBotToken").mockImplementation(async () => {
+        tokenStarted.resolve();
+        await releaseToken.promise;
+        return getBotToken();
+      });
+      const send = sendMSTeamsActivityWithReference(
         app,
         {
           serviceUrl: "https://smba.trafficmanager.net/qa",
@@ -196,10 +211,38 @@ describe("createMSTeamsApp", () => {
           channelId: "msteams",
         },
         { type: "message", text: "qa outbound" },
-        { threadActivityId: "thread-root" },
+        {
+          threadActivityId: "thread-root",
+          assertDirectAdapterHandoff: () => {
+            if (!active) {
+              throw new Error("private QA delivery authority closed");
+            }
+          },
+          onPlatformSendDispatch,
+        },
       );
+      pendingSend = send.catch(() => undefined);
+
+      await Promise.race([tokenStarted.promise, send]);
+      expect(outbound).toEqual([]);
+      expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+      if (revokeAt === "token") {
+        active = false;
+      }
+      releaseToken.resolve();
+
+      if (revokeAt === "token") {
+        await expect(send).rejects.toThrow("private QA delivery authority closed");
+        expect(outbound).toEqual([]);
+        expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+        return;
+      }
+
+      const result = await send;
 
       expect(result.id).toMatch(/^qa-outbound-/u);
+      expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+      expect(active).toBe(revokeAt === "never");
       expect(outbound).toEqual([
         {
           activity: expect.objectContaining({
@@ -212,6 +255,8 @@ describe("createMSTeamsApp", () => {
         },
       ]);
     } finally {
+      releaseToken.resolve();
+      await pendingSend;
       await connector.close();
     }
   });
@@ -229,31 +274,58 @@ describe("createMSTeamsApp", () => {
     expect(readSecretFile).toHaveBeenCalledWith("/path/to/cert.pem", "Microsoft Teams certificate");
   });
 
-  it("throws when certificate file is missing", async () => {
-    readSecretFile.mockRejectedValue(new Error("ENOENT: no such file"));
+  it.each([
+    {
+      label: "certificate",
+      credentials: {
+        type: "federated" as const,
+        appId: "test-app-id",
+        tenantId: "test-tenant",
+        certificatePath: "/path/to/cert.pem",
+      },
+      expected: { clientId: "test-app-id", token: expect.any(Function) },
+    },
+    {
+      label: "managed identity",
+      credentials: {
+        type: "federated" as const,
+        appId: "test-app-id",
+        tenantId: "test-tenant",
+        useManagedIdentity: true,
+      },
+      expected: {
+        clientId: "test-app-id",
+        managedIdentityClientId: "system",
+        managedIdentityType: "system",
+      },
+    },
+  ])("prevents ambient CLIENT_SECRET from overriding $label authentication", async (mode) => {
+    vi.stubEnv("CLIENT_SECRET", "ambient-secret-must-not-win");
 
-    const creds: MSTeamsFederatedCredentials = {
-      type: "federated",
-      appId: "test-app-id",
-      tenantId: "test-tenant",
-      certificatePath: "/bad/path.pem",
-    };
+    const app = await createMSTeamsApp(mode.credentials);
+    const credentials = (app as unknown as { credentials?: Record<string, unknown> }).credentials;
 
-    await expect(createMSTeamsApp(creds)).rejects.toThrow("Failed to read certificate file");
+    expect(credentials).toMatchObject(mode.expected);
+    expect(credentials).not.toHaveProperty("clientSecret");
   });
 
-  it("creates app with managed identity credentials", async () => {
+  it("throws when certificate file is missing", async () => {
+    const certificatePath = "/private/msteams-race-sensitive-certificate.pem";
+    readSecretFile.mockRejectedValue(new Error(`ENOENT: no such file, open '${certificatePath}'`));
+
     const creds: MSTeamsFederatedCredentials = {
       type: "federated",
-
       appId: "test-app-id",
       tenantId: "test-tenant",
-
-      useManagedIdentity: true,
+      certificatePath,
     };
 
-    const app = await createMSTeamsApp(creds);
-    expect(app).toBeDefined();
+    const error = await createMSTeamsApp(creds).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    if (error instanceof Error) {
+      expect(error.message).toContain("Failed to read certificate file");
+      expect(error.message).not.toContain(certificatePath);
+    }
   });
 
   it("creates app with user-assigned managed identity", async () => {

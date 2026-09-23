@@ -12,16 +12,33 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+// The target cwd may be outside this checkout, without our tsconfig aliases.
+import { asRecord, isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import { hasNonEmptyString } from "../../packages/normalization-core/src/string-coerce.ts";
+import { appendBoundedTail } from "../lib/bounded-output-tail.mjs";
 import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
 } from "../lib/bounded-response.mjs";
+import { toErrorObject as coerceKitchenSinkError } from "../lib/error-format.mts";
+import { readGatewayResources } from "../lib/gateway-bench-profile.ts";
 import {
   resolveWindowsPowerShellPath,
   resolveWindowsSystem32Path,
   resolveWindowsTaskkillPath,
 } from "../lib/windows-taskkill.mjs";
+import {
+  calibrateKitchenSinkResources,
+  KITCHEN_RESOURCE_CONTROLS,
+  type KitchenSinkCalibration,
+} from "./lib/kitchen-sink-calibration.mts";
+import {
+  compareResourcePhases,
+  measureResourceOperations,
+  summarizeResourcePhase,
+  type KitchenSinkResourcePhase,
+} from "./lib/kitchen-sink-resources.mts";
+import { fixtureCapabilityConsentArgs } from "./lib/package-compat.mjs";
 import { readTextFileTail } from "./lib/text-file-utils.mjs";
 
 type JsonRecord = Record<string, unknown>;
@@ -216,6 +233,10 @@ function usage() {
 
 Runs the external Kitchen Sink plugin RPC walk against a built OpenClaw entry.
 
+  --resource-profile <path>  Compare empty/conformance Gateway phase resources.
+                            Node on Linux only; requires npm-pack:<local.tgz>,
+                            built dist in cwd, and a secretless isolated runner.
+
 Environment:
   OPENCLAW_ENTRY                         Built OpenClaw entrypoint. Defaults to dist/index.mjs or dist/index.js.
   OPENCLAW_KITCHEN_SINK_NPM_SPEC         Plugin package spec. Default: npm:@openclaw/kitchen-sink@latest.
@@ -240,12 +261,23 @@ export function shouldPrintHelp(argv: string[]) {
 }
 
 export function validateCliArgs(argv: string[]) {
-  for (const arg of argv) {
+  let resourceReport: string | undefined;
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
     if (arg === "--help" || arg === "-h") {
+      continue;
+    }
+    if (arg === "--resource-profile") {
+      const value = argv[++index];
+      if (resourceReport || !value || value.startsWith("-")) {
+        throw new Error("--resource-profile requires one report path");
+      }
+      resourceReport = path.resolve(value);
       continue;
     }
     throw new Error(`Unknown argument: ${arg}`);
   }
+  return resourceReport;
 }
 
 export function readPositiveInt(raw: string | undefined, fallback: number, label = "value") {
@@ -331,7 +363,11 @@ async function findAvailableLoopbackPort(options: { createServer?: typeof net.cr
   return await new Promise<number>((resolve, reject) => {
     const fail = (error: unknown) => {
       server.close?.(() => {});
-      reject(toLintErrorObject(error, "Unable to reserve Kitchen Sink RPC loopback port"));
+      const reservationError: Error = coerceKitchenSinkError(
+        error,
+        "Unable to reserve Kitchen Sink RPC loopback port",
+      );
+      reject(reservationError);
     };
     server.once("error", fail);
     server.listen(0, "127.0.0.1", () => {
@@ -340,7 +376,11 @@ async function findAvailableLoopbackPort(options: { createServer?: typeof net.cr
       const port = typeof address === "object" && address ? address.port : 0;
       server.close((error) => {
         if (error) {
-          reject(toLintErrorObject(error, "Unable to close Kitchen Sink RPC loopback port"));
+          const closeError: Error = coerceKitchenSinkError(
+            error,
+            "Unable to close Kitchen Sink RPC loopback port",
+          );
+          reject(closeError);
           return;
         }
         if (!Number.isSafeInteger(port) || port <= 0) {
@@ -373,7 +413,7 @@ export async function resolveKitchenSinkRpcPort(
 function resolveOpenClawRunner(): OpenClawRunner {
   if (process.env.OPENCLAW_ENTRY) {
     return {
-      command: "node",
+      command: process.execPath,
       baseArgs: [process.env.OPENCLAW_ENTRY],
       label: process.env.OPENCLAW_ENTRY,
     };
@@ -381,13 +421,13 @@ function resolveOpenClawRunner(): OpenClawRunner {
   for (const candidate of ["dist/index.mjs", "dist/index.js"]) {
     const resolved = path.join(process.cwd(), candidate);
     if (fs.existsSync(resolved)) {
-      return { command: "node", baseArgs: [resolved], label: resolved };
+      return { command: process.execPath, baseArgs: [resolved], label: resolved };
     }
   }
   return { pnpm: true, baseArgs: ["openclaw"], label: "pnpm openclaw" };
 }
 
-export function makeEnv() {
+export function makeEnv(baseEnv: ProcessEnv = process.env) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-kitchen-sink-rpc-"));
   const home = path.join(root, "home");
   const stateDir = path.join(home, ".openclaw");
@@ -395,7 +435,7 @@ export function makeEnv() {
   return {
     root,
     env: {
-      ...process.env,
+      ...baseEnv,
       HOME: home,
       USERPROFILE: home,
       OPENCLAW_HOME: home,
@@ -403,8 +443,7 @@ export function makeEnv() {
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       OPENCLAW_NO_ONBOARD: "1",
       OPENCLAW_SKIP_PROVIDERS: "0",
-      OPENCLAW_KITCHEN_SINK_PERSONALITY:
-        process.env.OPENCLAW_KITCHEN_SINK_PERSONALITY || "conformance",
+      OPENCLAW_KITCHEN_SINK_PERSONALITY: baseEnv.OPENCLAW_KITCHEN_SINK_PERSONALITY || "conformance",
     },
   };
 }
@@ -449,20 +488,6 @@ function writeJson(file: string, value: unknown) {
 
 function readJson(file: string): unknown {
   return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-export function appendBoundedOutput(
-  buffer: CapturedOutput,
-  chunk: string | Uint8Array,
-  maxChars = resolveKitchenSinkRpcConfig().outputCaptureChars,
-) {
-  const text = String(chunk);
-  const combined = `${buffer.text}${text}`;
-  const overflowChars = Math.max(0, combined.length - maxChars);
-  return {
-    text: overflowChars > 0 ? combined.slice(overflowChars) : combined,
-    truncatedChars: buffer.truncatedChars + overflowChars,
-  };
 }
 
 function formatCapturedOutput(label: string, buffer: CapturedOutput) {
@@ -571,20 +596,19 @@ export function runCommand(
       );
       forceKillTimer.unref();
     }, resolvedTimeoutMs);
-    child.stdout?.on("data", (chunk) => {
-      stdout = appendBoundedOutput(stdout, chunk, outputCaptureChars);
+    child.stdout?.setEncoding("utf8").on("data", (chunk) => {
+      stdout = appendBoundedTail(stdout, chunk, outputCaptureChars);
     });
-    child.stderr?.on("data", (chunk) => {
-      stderr = appendBoundedOutput(stderr, chunk, outputCaptureChars);
+    child.stderr?.setEncoding("utf8").on("data", (chunk) => {
+      stderr = appendBoundedTail(stderr, chunk, outputCaptureChars);
     });
     child.on("error", (error) => {
       clearTimeout(timer);
       clearTimeout(forceKillTimer);
       forceKillAt = undefined;
       releaseCommandChild(child);
-      void stopResourceSampling().finally(() =>
-        reject(toLintErrorObject(error, "Command failed before exit")),
-      );
+      const commandError: Error = coerceKitchenSinkError(error, "Command failed before exit");
+      void stopResourceSampling().finally(() => reject(commandError));
     });
     child.on("close", (status, signal) => {
       clearTimeout(timer);
@@ -877,8 +901,8 @@ function createGatewayClientRequestError(requestError: unknown): GatewayRequestE
   const candidate = asRecord(requestError);
   if (
     candidate.type !== "gateway_request_error" ||
-    !isNonEmptyString(candidate.code) ||
-    !isNonEmptyString(candidate.message) ||
+    !hasNonEmptyString(candidate.code) ||
+    !hasNonEmptyString(candidate.message) ||
     typeof candidate.retryable !== "boolean" ||
     (candidate.retryAfterMs !== undefined &&
       (typeof candidate.retryAfterMs !== "number" ||
@@ -1067,6 +1091,8 @@ async function rpcCall(method: string, params: unknown, options: RpcCallOptions)
   const module = await loadCallGatewayModule(options.runner);
   const payload = module
     ? await module.callGateway({
+        // Match gateway call: plugin RPCs are unknown to the backend scope map.
+        mode: "cli",
         config: readJson(options.env.OPENCLAW_CONFIG_PATH),
         configPath: options.env.OPENCLAW_CONFIG_PATH,
         url: `ws://127.0.0.1:${options.port}`,
@@ -1146,7 +1172,7 @@ export function findDistCallGatewayModuleFiles(cwd = process.cwd()) {
   return fs.existsSync(distDir)
     ? fs
         .readdirSync(distDir)
-        .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/u.test(name))
+        .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.m?js$/u.test(name))
         .toSorted((left, right) => left.localeCompare(right))
     : [];
 }
@@ -1182,7 +1208,7 @@ async function retryRpcCall(method: string, params: unknown, options: RpcCallOpt
       await delay(500);
     }
   }
-  throw toLintErrorObject(
+  throw coerceKitchenSinkError(
     lastError ?? new Error(`gateway RPC ${method} timed out before retry`),
     "Non-Error thrown",
   );
@@ -1208,7 +1234,7 @@ function isRetryableTransientNetworkError(error: unknown, seen = new Set<unknown
   const message =
     candidate instanceof Error ? candidate.message : typeof candidate === "string" ? candidate : "";
   const code = asRecord(candidate).code;
-  const text = `${String(code ?? "")} ${message}`;
+  const text = `${typeof code === "string" ? code : ""} ${message}`;
   if (
     /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH)\b/iu.test(text) ||
     /\b(?:fetch failed|socket hang up|connection reset)\b/iu.test(text)
@@ -1297,7 +1323,7 @@ export async function fetchJson(url: string | URL, options: FetchJsonOptions = {
       }
     }
   }
-  throw toLintErrorObject(lastError ?? new Error(`fetch ${url} failed`), "Non-Error thrown");
+  throw coerceKitchenSinkError(lastError ?? new Error(`fetch ${url} failed`), "Non-Error thrown");
 }
 
 function getExternalAbortReason(signal: AbortSignal) {
@@ -1327,9 +1353,10 @@ async function delayWithAbort(delayMs: number, signal?: AbortSignal) {
   }
 }
 
-function configureKitchenSink(env: KitchenSinkEnv, port: number) {
+export function configureKitchenSink(env: KitchenSinkEnv, port: number) {
   const configPath = env.OPENCLAW_CONFIG_PATH;
   const config = asRecord(fs.existsSync(configPath) ? readJson(configPath) : {});
+  const frozenTarget = env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy";
   const gateway = asRecord(config.gateway);
   const plugins = asRecord(config.plugins);
   const pluginEntries = asRecord(plugins.entries);
@@ -1354,7 +1381,11 @@ function configureKitchenSink(env: KitchenSinkEnv, port: number) {
   config.plugins = {
     ...plugins,
     enabled: true,
-    allow: [...new Set([...(Array.isArray(plugins.allow) ? plugins.allow : []), PLUGIN_ID])],
+    ...(frozenTarget
+      ? {}
+      : {
+          allow: [...new Set([...(Array.isArray(plugins.allow) ? plugins.allow : []), PLUGIN_ID])],
+        }),
     entries: {
       ...pluginEntries,
       [PLUGIN_ID]: {
@@ -1382,8 +1413,7 @@ function configureKitchenSink(env: KitchenSinkEnv, port: number) {
       ...new Set([...(Array.isArray(tools.alsoAllow) ? tools.alsoAllow : []), ...EXPECTED_TOOLS]),
     ],
   };
-  config.tts = {
-    ...tts,
+  const ttsConfig = {
     provider: tts.provider ?? speechProvider,
     providers: {
       ...ttsProviders,
@@ -1392,6 +1422,12 @@ function configureKitchenSink(env: KitchenSinkEnv, port: number) {
       },
     },
   };
+  if (frozenTarget) {
+    const messages = asRecord(config.messages);
+    config.messages = { ...messages, tts: { ...asRecord(messages.tts), ...ttsConfig } };
+  } else {
+    config.tts = { ...tts, ...ttsConfig };
+  }
   writeJson(configPath, config);
 }
 
@@ -1400,6 +1436,7 @@ async function startGateway(
   port: number,
   env: ProcessEnv,
   logPath: string,
+  profileResources = false,
 ) {
   const log = fs.openSync(logPath, "w");
   const command = await resolveOpenClawCommand(
@@ -1407,9 +1444,15 @@ async function startGateway(
     ["gateway", "--port", String(port), "--bind", "loopback", "--allow-unconfigured"],
     env,
     {
-      stdio: ["ignore", log, log],
+      stdio: profileResources ? ["ignore", log, log, "ipc"] : ["ignore", log, log],
     },
   );
+  if (profileResources) {
+    command.args.unshift(
+      "--import",
+      new URL("../lib/gateway-bench-profile-preload.ts", import.meta.url).href,
+    );
+  }
   const child = childProcess.spawn(command.command, command.args, {
     ...command.options,
     env,
@@ -1702,7 +1745,7 @@ export function extractPluginCommandNames(payload: unknown) {
     }
   }
   return names
-    .filter(isNonEmptyString)
+    .filter(hasNonEmptyString)
     .map((name) => name.replace(/^\//u, ""))
     .filter((name, index, all) => all.indexOf(name) === index)
     .toSorted((left, right) => left.localeCompare(right));
@@ -1736,7 +1779,7 @@ export function assertExpectedKitchenSinkToolEntries(
   options: { requirePluginProvenance?: boolean } = {},
 ) {
   const { requirePluginProvenance = false } = options;
-  const ids = entries.map((entry) => asRecord(entry).id).filter(isNonEmptyString);
+  const ids = entries.map((entry) => asRecord(entry).id).filter(hasNonEmptyString);
   assertIncludesAll(ids, EXPECTED_TOOLS, label);
   if (requirePluginProvenance) {
     const wrongProvenance = entries
@@ -1764,7 +1807,7 @@ export function assertChannelAccountRunning(payload: unknown) {
   const accounts = Array.isArray(channelAccounts[CHANNEL_ID]) ? channelAccounts[CHANNEL_ID] : [];
   const account = accounts.find((entry) => asRecord(entry).accountId === CHANNEL_ACCOUNT_ID);
   if (!account) {
-    const accountIds = accounts.map((entry) => asRecord(entry).accountId).filter(isNonEmptyString);
+    const accountIds = accounts.map((entry) => asRecord(entry).accountId).filter(hasNonEmptyString);
     throw new Error(
       `Kitchen Sink channel account ${CHANNEL_ACCOUNT_ID} was not reported. Available account ids: ${boundedJsonPreview(
         accountIds,
@@ -1793,12 +1836,12 @@ export function assertTtsProviderCoverage(payload: unknown, surface: "providers"
       `tts.${surface} returned invalid provider list: ${boundedJsonPreview(payload)}`,
     );
   }
-  const ids = entries.map((entry) => asRecord(entry).id).filter(isNonEmptyString);
+  const ids = entries.map((entry) => asRecord(entry).id).filter(hasNonEmptyString);
   assertIncludesAny(ids, EXPECTED_SPEECH_PROVIDERS, `tts.${surface}`);
   const configuredEntry = entries.find((entry) => {
     const provider = asRecord(entry);
     return (
-      isNonEmptyString(provider.id) &&
+      hasNonEmptyString(provider.id) &&
       EXPECTED_SPEECH_PROVIDERS.includes(provider.id) &&
       provider.configured === true
     );
@@ -1971,7 +2014,7 @@ export async function assertOperatorRpcDenied(
   } catch (error) {
     const candidate = asRecord(error);
     const gatewayCode = candidate.gatewayCode;
-    const message = String(candidate.message ?? "");
+    const message = typeof candidate.message === "string" ? candidate.message : "";
     if (gatewayCode === "INVALID_REQUEST" && message.includes("unauthorized role: operator")) {
       return;
     }
@@ -1982,7 +2025,7 @@ export async function assertOperatorRpcDenied(
 
 export function assertCreatedKitchenSinkSession(payload: unknown, expectedKey = SESSION_KEY) {
   const created = assertObjectPayload(payload, "sessions.create");
-  if (created.ok !== true || created.key !== expectedKey || !isNonEmptyString(created.sessionId)) {
+  if (created.ok !== true || created.key !== expectedKey || !hasNonEmptyString(created.sessionId)) {
     throw new Error(
       `sessions.create did not return the requested Kitchen Sink session: ${boundedJsonPreview(
         payload,
@@ -2068,11 +2111,11 @@ export function assertGatewayHealthPayload(payload: unknown) {
     [Number.isFinite(health.durationMs), "numeric durationMs"],
     [isRecord(health.channels), "channels object"],
     [Array.isArray(health.channelOrder), "channelOrder array"],
-    [isNonEmptyString(health.defaultAgentId), "defaultAgentId"],
+    [hasNonEmptyString(health.defaultAgentId), "defaultAgentId"],
     [Array.isArray(health.agents), "agents array"],
     [
       isRecord(sessions) &&
-        isNonEmptyString(sessions.path) &&
+        hasNonEmptyString(sessions.path) &&
         Number.isFinite(sessions.count) &&
         Array.isArray(sessions.recent),
       "sessions summary",
@@ -2091,7 +2134,7 @@ export function assertGatewayStatusPayload(payload: unknown) {
   const problems = failedPayloadChecks([
     [
       isRecord(heartbeat) &&
-        isNonEmptyString(heartbeat.defaultAgentId) &&
+        hasNonEmptyString(heartbeat.defaultAgentId) &&
         Array.isArray(heartbeat.agents),
       "heartbeat summary",
     ],
@@ -2266,9 +2309,9 @@ function parsePosixProcessRows(stdout: string) {
     ) {
       continue;
     }
-    const processId = parseStrictPositiveInteger(pidRaw);
+    const processId = parsePositivePosixProcessToken(pidRaw);
     const parentProcessId = parseStrictUnsignedInteger(ppidRaw);
-    const rssKb = parseStrictPositiveInteger(rssKbRaw);
+    const rssKb = parsePositivePosixProcessToken(rssKbRaw);
     const cpuPercent = parseStrictNonNegativeDecimal(cpuRaw);
     if (
       !Number.isInteger(processId) ||
@@ -2312,7 +2355,7 @@ function parseStrictUnsignedInteger(raw: string | undefined) {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-function parseStrictPositiveInteger(raw: string | undefined) {
+function parsePositivePosixProcessToken(raw: string | undefined) {
   const parsed = parseStrictUnsignedInteger(raw);
   return parsed && parsed > 0 ? parsed : null;
 }
@@ -2722,11 +2765,429 @@ function tailText(text: string) {
   return text.split(/\r?\n/u).slice(-120).join("\n");
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
+export function kitchenSinkResourceEnv(env: ProcessEnv = process.env): ProcessEnv {
+  // The runner owns network/resource isolation. Do not carry developer secrets,
+  // loader flags, proxy credentials, or unrelated OpenClaw state into the child.
+  return {
+    PATH: env.PATH,
+    LANG: "C.UTF-8",
+    TZ: "UTC",
+    NODE_DISABLE_COMPILE_CACHE: "1",
+    OPENCLAW_NO_RESPAWN: "1",
+    OPENCLAW_KITCHEN_SINK_PERSONALITY: "conformance",
+  };
 }
 
-async function main() {
+export function assertKitchenSinkResourcePlugins(payload: unknown, enabled: boolean) {
+  const plugins = asRecord(payload).plugins;
+  if (!Array.isArray(plugins)) {
+    throw new Error("plugins.list did not report the active plugin inventory");
+  }
+  const active = plugins.filter((plugin) => asRecord(asRecord(plugin).runtime).state === "active");
+  const ids = active.map((plugin) => String(asRecord(plugin).id)).toSorted();
+  const expected = enabled ? [PLUGIN_ID] : [];
+  if (JSON.stringify(ids) !== JSON.stringify(expected)) {
+    throw new Error(`Unexpected active plugins in resource case: ${JSON.stringify(ids)}`);
+  }
+  return ids;
+}
+
+export type GatewayResourceCase = {
+  name: string;
+  status: "blocked" | "exercised" | "failed";
+  phases: KitchenSinkResourcePhase[];
+  activePlugins?: string[];
+  host?: { commit: unknown; version: unknown; buildId: unknown; entrySha256: string };
+  fixtures?: Array<{ archive: string; sha256: string }>;
+  shutdown?: { exited: boolean; signals: string[]; exitCode: number | null; signal: string | null };
+  error?: string;
+};
+
+type KitchenSinkResourceCase = GatewayResourceCase & {
+  name: "empty" | "conformance";
+  calibration?: KitchenSinkCalibration;
+};
+
+export function assertKitchenSinkResourceShutdown(
+  shutdown: NonNullable<KitchenSinkResourceCase["shutdown"]>,
+) {
+  if (
+    !shutdown.exited ||
+    shutdown.exitCode !== 0 ||
+    shutdown.signal !== null ||
+    shutdown.signals.includes("SIGKILL")
+  ) {
+    throw new Error("Owned Gateway did not exit cleanly; temporary state retained");
+  }
+}
+
+export function resolveResourceGatewayRuntime() {
+  if (
+    process.versions.bun ||
+    process.platform !== "linux" ||
+    typeof process.threadCpuUsage !== "function"
+  ) {
+    throw new Error(
+      "Resource comparison requires Linux Node with process.threadCpuUsage; normal RPC walks also support Bun",
+    );
+  }
+  const runner = resolveOpenClawRunner();
+  const allowedEntries = ["openclaw.mjs", "dist/index.mjs", "dist/index.js"].map((entry) =>
+    path.resolve(entry),
+  );
+  if (runner.pnpm || !allowedEntries.includes(path.resolve(runner.baseArgs[0] ?? ""))) {
+    throw new Error(
+      "Resource comparison requires a built OpenClaw entry in the current package root",
+    );
+  }
+  const buildInfo = asRecord(readJson(path.resolve("dist/build-info.json")));
+  if (typeof buildInfo.commit !== "string" || !/^[a-f0-9]{40}$/u.test(buildInfo.commit)) {
+    throw new Error("Resource comparison requires dist/build-info.json with a full source commit");
+  }
+  return { runner, buildInfo };
+}
+
+type ResourceGatewayPreparation = {
+  root: string;
+  env: KitchenSinkEnv;
+  port: number;
+  token: string;
+  installArchive: (
+    file: string,
+    expectedSha256: string,
+  ) => Promise<{ archive: string; sha256: string }>;
+};
+
+type ResourceGatewayWorkload = ResourceGatewayPreparation & {
+  rpc: (method: string, params: unknown) => Promise<unknown>;
+  sample: () => ReturnType<typeof readGatewayResources>;
+  measure: (
+    name: string,
+    count: number,
+    run: (index: number) => Promise<void>,
+  ) => Promise<KitchenSinkResourcePhase>;
+};
+
+/** One frozen host package root as cwd per process; callers own outer deadlines and mock cleanup. */
+export async function runResourceGatewayCase(options: {
+  result: GatewayResourceCase;
+  runtime: ReturnType<typeof resolveResourceGatewayRuntime>;
+  prepare: (context: ResourceGatewayPreparation) => Promise<void>;
+  run: (context: ResourceGatewayWorkload) => Promise<void>;
+}) {
+  const {
+    result,
+    runtime: { runner, buildInfo },
+  } = options;
+  delete result.error;
+  const { root, env }: { root: string; env: KitchenSinkEnv } = makeEnv(kitchenSinkResourceEnv());
+  // The shared host must not select a fixture personality for other workloads.
+  delete env.OPENCLAW_KITCHEN_SINK_PERSONALITY;
+  const logPath = path.join(root, "gateway.log");
+  let child: ChildProcess | undefined;
+  const fail = (error: unknown) => {
+    result.status = "failed";
+    result.error = [result.error, error instanceof Error ? error.message : String(error)]
+      .filter(Boolean)
+      .join("; ")
+      .slice(0, 2_048);
+  };
+  try {
+    result.host = {
+      commit: buildInfo.commit,
+      version: buildInfo.version,
+      buildId: buildInfo.buildId,
+      entrySha256: createHash("sha256").update(fs.readFileSync(runner.baseArgs[0]!)).digest("hex"),
+    };
+    result.fixtures = [];
+    const port = await resolveKitchenSinkRpcPort();
+    writeJson(env.OPENCLAW_CONFIG_PATH, {
+      gateway: {
+        bind: "loopback",
+        port,
+        auth: { mode: "token", token: TOKEN },
+        controlUi: { enabled: false },
+      },
+      // A memory slot can activate a plugin outside the allowlist.
+      plugins: { enabled: false, slots: { memory: "none" } },
+    });
+    const context = {
+      root,
+      env,
+      port,
+      token: TOKEN,
+      installArchive: async (file: string, expectedSha256: string) => {
+        const archive = path.resolve(file);
+        if (
+          !archive.endsWith(".tgz") ||
+          !fs.statSync(archive).isFile() ||
+          !/^[a-f0-9]{64}$/u.test(expectedSha256) ||
+          createHash("sha256").update(fs.readFileSync(archive)).digest("hex") !== expectedSha256
+        ) {
+          throw new Error("Resource fixture must be a local archive matching its SHA-256");
+        }
+        const help = await runOpenClaw(runner, ["plugins", "install", "--help"], env);
+        if (help.stdoutTruncatedChars) {
+          throw new Error("Plugin fixture help probe output was truncated");
+        }
+        await runOpenClaw(
+          runner,
+          [
+            "plugins",
+            "install",
+            `npm-pack:${archive}`,
+            "--force",
+            ...fixtureCapabilityConsentArgs(help.stdout),
+          ],
+          env,
+          { timeoutMs: resolveKitchenSinkRpcConfig(env).installTimeoutMs },
+        );
+        const receipt = { archive: path.basename(archive), sha256: expectedSha256 };
+        result.fixtures!.push(receipt);
+        return receipt;
+      },
+    };
+    await options.prepare(context);
+    child = await startGateway(runner, port, env, logPath, true);
+    await waitForGatewayReady(child, port, logPath);
+    const sample = () => readGatewayResources(child!);
+    result.phases.push(
+      summarizeResourcePhase(
+        "startup",
+        await readGatewayResources(child, { initial: true }),
+        await sample(),
+        { attempted: 0, completed: 0, failed: 0 },
+      ),
+    );
+    await options.run({
+      ...context,
+      rpc: (method, params) => rpcCall(method, params, { runner, env, port }),
+      sample,
+      measure: async (name, count, run) => {
+        const measured = await measureResourceOperations({ name, count, sample, run });
+        result.phases.push(measured);
+        if (measured.status !== "exercised") {
+          throw new Error(`${name}: ${measured.error}`);
+        }
+        return measured;
+      },
+    });
+    result.status = "exercised";
+  } catch (error) {
+    fail(error);
+  } finally {
+    if (child) {
+      const signals: string[] = [];
+      try {
+        await stopGateway(child, {
+          killProcess: (pid, signal) => {
+            if (signal !== 0) {
+              signals.push(String(signal));
+            }
+            return defaultKillProcess(pid, signal);
+          },
+        });
+        result.shutdown = {
+          exited: !isGatewayAlive(child, defaultKillProcess),
+          signals,
+          exitCode: child.exitCode,
+          signal: child.signalCode,
+        };
+        assertKitchenSinkResourceShutdown(result.shutdown);
+        // Service-stop errors arrive during shutdown; inspect only after join.
+        assertNoErrorLogs(logPath);
+      } catch (error) {
+        fail(`Shutdown failed: ${String(error)}`);
+      }
+    }
+    if (result.status === "exercised" && process.env.OPENCLAW_KITCHEN_SINK_KEEP_TMP !== "1") {
+      try {
+        await cleanupKitchenSinkEnv(root, { throwOnFailure: true });
+      } catch (error) {
+        fail(`Temporary state cleanup failed: ${String(error)}`);
+      }
+    } else {
+      console.error(`Gateway resource temp root preserved: ${root}`);
+    }
+  }
+  return result;
+}
+
+async function profileKitchenSinkResources(reportPath: string) {
+  const runtime = resolveResourceGatewayRuntime();
+  const { runner, buildInfo } = runtime;
+  const fixture = path.resolve(PLUGIN_SPEC.slice("npm-pack:".length));
+  if (
+    !PLUGIN_SPEC.startsWith("npm-pack:") ||
+    !fixture.endsWith(".tgz") ||
+    !fs.existsSync(fixture) ||
+    !fs.statSync(fixture).isFile()
+  ) {
+    throw new Error(
+      "Resource comparison requires OPENCLAW_KITCHEN_SINK_NPM_SPEC=npm-pack:<local.tgz>",
+    );
+  }
+  const sha256 = (file: string | URL) =>
+    createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  const fixtureSha256 = sha256(fixture);
+  const cases: KitchenSinkResourceCase[] = (["empty", "conformance"] as const).map((name) => ({
+    name,
+    status: "blocked",
+    phases: [],
+    error: "Not started; prior case or setup must complete first",
+  }));
+  const report = {
+    schemaVersion: 1,
+    status: "failed" as "failed" | "exercised",
+    generatedAt: new Date().toISOString(),
+    provenance: {
+      gateway: { commit: buildInfo.commit, version: buildInfo.version, buildId: buildInfo.buildId },
+      entrySha256: sha256(runner.baseArgs[0]!),
+      fixture: { sha256: fixtureSha256, personality: "conformance", pluginId: PLUGIN_ID },
+      harnessSha256: Object.fromEntries(
+        [
+          "./kitchen-sink-rpc-walk.mts",
+          "./lib/kitchen-sink-resources.mts",
+          "./lib/kitchen-sink-calibration.mts",
+          "../lib/gateway-bench-profile.ts",
+          "../lib/gateway-bench-profile-preload.ts",
+        ].map((file) => [file, sha256(new URL(file, import.meta.url))]),
+      ),
+      machine: { platform: process.platform, arch: process.arch, cpuModel: os.cpus()[0]?.model },
+      gatewayFlags: [
+        "--import",
+        "gateway-bench-profile-preload.ts",
+        "gateway",
+        "--bind",
+        "loopback",
+        "--allow-unconfigured",
+      ],
+    },
+    measurement: {
+      cpu: "Gateway process and main-thread cumulative user/system microseconds; excludes child processes",
+      memory:
+        "RSS covers Gateway process; heap/external/ArrayBuffers cover main isolate; ArrayBuffers overlaps external",
+      sampling: "phase boundaries only; no peak estimate or forced GC",
+      startup:
+        "preload-initialized to HTTP ready; excludes Node/preload imports and package installation",
+      postWork:
+        "all measured RPC responses settled, then a 250 ms observation window; not a plugin drain receipt",
+      isolation:
+        "minimal child environment; network and resource limits must be enforced by the external runner",
+      instrumentation: "same private IPC preload in both cases; includes measurement overhead",
+      activeResources:
+        "resource types keeping the event loop alive; not ownership IDs or every live object",
+      calibration: {
+        ...KITCHEN_RESOURCE_CONTROLS,
+        operations: "asserted control steps, including any timer progress probes",
+      },
+      runs: 1,
+      neutralWarmupOperations: 1,
+      pluginToolWarmupOperations: 0,
+      neutralOperations: 20,
+      pluginToolOperations: 20,
+      idleMs: 250,
+      seed: "fixed-text-v1",
+    },
+    postDisposalResidual: {
+      status: "unsupported",
+      reason: "In-process plugin retirement has not completed",
+    } as KitchenSinkCalibration["postDisposalResidual"],
+    cases,
+    comparison: [] as ReturnType<typeof compareResourcePhases>,
+  };
+  try {
+    for (const result of cases) {
+      const enabled = result.name === "conformance";
+      await runResourceGatewayCase({
+        result,
+        runtime,
+        prepare: async ({ env, port, installArchive }) => {
+          env.OPENCLAW_KITCHEN_SINK_PERSONALITY = "conformance";
+          if (enabled) {
+            if (sha256(fixture) !== fixtureSha256) {
+              throw new Error("Kitchen Sink fixture changed after profiling admission");
+            }
+            await installArchive(fixture, fixtureSha256);
+            configureKitchenSink(env, port);
+          }
+        },
+        run: async ({ rpc, sample, measure }) => {
+          result.activePlugins = assertKitchenSinkResourcePlugins(
+            await rpc("plugins.list", {}),
+            enabled,
+          );
+          // Equal warmup and neutral work isolate enabled-plugin host overhead.
+          // Never retry measured RPCs: a failed response must remain a failed operation.
+          assertGatewayHealthPayload(await rpc("health", {}));
+          const idle = async (phase: string) => {
+            const before = await sample();
+            await delay(report.measurement.idleMs);
+            result.phases.push(
+              summarizeResourcePhase(phase, before, await sample(), {
+                attempted: 0,
+                completed: 0,
+                failed: 0,
+              }),
+            );
+          };
+          await idle("idle");
+          await measure("neutral-rpc", report.measurement.neutralOperations, async () => {
+            assertGatewayHealthPayload(await rpc("health", {}));
+          });
+          await idle("post-neutral");
+          if (enabled) {
+            const session = assertCreatedKitchenSinkSession(
+              await rpc("sessions.create", {
+                key: SESSION_KEY,
+                agentId: "main",
+                label: "kitchen-sink-resources",
+              }),
+            );
+            await measure("plugin-tool", report.measurement.pluginToolOperations, async (index) => {
+              assertKitchenSinkTextInvokeResult(
+                await rpc("tools.invoke", {
+                  name: "kitchen_sink_text",
+                  args: { prompt: "explain kitchen sink resource profiling" },
+                  sessionKey: String(session.key),
+                  agentId: "main",
+                  idempotencyKey: `kitchen-sink-resources-${index}`,
+                }),
+              );
+            });
+            await idle("post-tool");
+            result.calibration = await calibrateKitchenSinkResources({
+              pluginId: PLUGIN_ID,
+              rpc,
+              sample,
+              assertDisabled: (payload) => {
+                assertKitchenSinkResourcePlugins(payload, false);
+              },
+            });
+            report.postDisposalResidual = result.calibration.postDisposalResidual;
+            if (result.calibration.status !== "exercised") {
+              throw new Error(`Resource calibration: ${result.calibration.error}`);
+            }
+          }
+        },
+      });
+      if (result.status !== "exercised") {
+        throw new Error(result.error ?? "Kitchen Sink resource case did not complete");
+      }
+    }
+    report.comparison = compareResourcePhases(cases[0]!.phases, cases[1]!.phases);
+    report.status = "exercised";
+  } finally {
+    writeJson(reportPath, report);
+    console.log(`Kitchen Sink resource report: ${reportPath}`);
+  }
+}
+
+async function main(resourceReport?: string) {
+  if (resourceReport) {
+    await profileKitchenSinkResources(resourceReport);
+    return;
+  }
   const config = resolveKitchenSinkRpcConfig();
   let runner = resolveOpenClawRunner();
   const port = await resolveKitchenSinkRpcPort();
@@ -2749,12 +3210,27 @@ async function main() {
   let sampleTimer: ReturnType<typeof setInterval> | undefined;
   try {
     console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
-    await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC, "--force"], env, {
-      ...commandResourceOptions,
-      requireResourceSample: true,
-      resourceLabel: "plugins install",
-      timeoutMs: config.installTimeoutMs,
-    });
+    const installHelp = await runOpenClaw(runner, ["plugins", "install", "--help"], env);
+    if (installHelp.stdoutTruncatedChars > 0) {
+      throw new Error("Plugin fixture help probe output was truncated");
+    }
+    await runOpenClaw(
+      runner,
+      [
+        "plugins",
+        "install",
+        PLUGIN_SPEC,
+        "--force",
+        ...fixtureCapabilityConsentArgs(installHelp.stdout),
+      ],
+      env,
+      {
+        ...commandResourceOptions,
+        requireResourceSample: true,
+        resourceLabel: "plugins install",
+        timeoutMs: config.installTimeoutMs,
+      },
+    );
     runner = resolveOpenClawRunner();
     console.log(`Kitchen Sink RPC runtime runner: ${runner.label}`);
     configureKitchenSink(env, port);
@@ -2970,13 +3446,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (shouldPrintHelp(argv)) {
     process.stdout.write(usage());
   } else {
+    let resourceReport: string | undefined;
     try {
-      validateCliArgs(argv);
+      resourceReport = validateCliArgs(argv);
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
       process.exit(1);
     }
-    await main();
+    await main(resourceReport);
   }
 }
 
@@ -2996,18 +3473,4 @@ function isGatewayChild(value: unknown): value is GatewayChild {
 
 async function settlePendingSample(pending: Promise<unknown> | null) {
   await pending?.catch(() => {});
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string) {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

@@ -1,6 +1,5 @@
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { LanguageDescription, syntaxHighlighting } from "@codemirror/language";
-import { languages } from "@codemirror/language-data";
+import { syntaxHighlighting } from "@codemirror/language";
 import { Compartment, EditorState, StateEffect, StateField } from "@codemirror/state";
 import {
   Decoration,
@@ -11,6 +10,8 @@ import {
   lineNumbers,
 } from "@codemirror/view";
 import { classHighlighter } from "@lezer/highlight";
+import { loadCodeLanguage } from "../../../components/code-language.ts";
+import { detectLineSeparator } from "./file-line-separator.ts";
 
 export type FileEditorDecorations = {
   targetLine?: number | null;
@@ -22,6 +23,7 @@ export type FileEditorViewHandle = {
   destroy: () => void;
   setContent: (content: string) => void;
   setEditable: (editable: boolean) => void;
+  setLineWrapping: (wrap: boolean) => void;
   setDecorations: (decorations: FileEditorDecorations) => void;
   scrollToLine: (line: number, center: boolean) => void;
   getContent: () => string;
@@ -43,37 +45,21 @@ const lineDecorations = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
-async function loadLanguage(name: string) {
-  const description = LanguageDescription.matchFilename(languages, name);
-  if (!description) {
-    return null;
-  }
-  try {
-    return await description.load();
-  } catch {
-    return null;
-  }
-}
-
-// Saves must round-trip the file's original bytes, so CRLF/CR files configure
-// CodeMirror's line separator instead of silently normalizing to LF on save.
-function detectLineSeparator(content: string): string | undefined {
-  const match = content.match(/\r\n|\r|\n/);
-  return match && match[0] !== "\n" ? match[0] : undefined;
-}
-
 export async function createFileEditorView(params: {
   parent: HTMLElement;
   content: string;
   name: string;
   editable?: boolean;
+  wrap?: boolean;
   onSave: () => void;
 }): Promise<FileEditorViewHandle> {
   const editable = new Compartment();
-  const language = await loadLanguage(params.name);
+  const wrapping = new Compartment();
+  const language = await loadCodeLanguage(params.name);
   let docChanged: ((content: string) => void) | null = null;
   let destroyed = false;
   let isEditable = params.editable === true;
+  let isWrapped = params.wrap === true;
   let separator = detectLineSeparator(params.content);
 
   const buildState = (content: string) =>
@@ -101,6 +87,7 @@ export async function createFileEditorView(params: {
         syntaxHighlighting(classHighlighter),
         ...(language ? [language] : []),
         editable.of([EditorState.readOnly.of(!isEditable), EditorView.editable.of(isEditable)]),
+        wrapping.of(isWrapped ? EditorView.lineWrapping : []),
         lineDecorations,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
@@ -157,6 +144,14 @@ export async function createFileEditorView(params: {
           EditorView.editable.of(nextEditable),
         ]),
       });
+    },
+    setLineWrapping: (wrap) => {
+      if (destroyed || wrap === isWrapped) {
+        return;
+      }
+      // Tracked so a setContent state rebuild keeps the current wrap mode.
+      isWrapped = wrap;
+      view.dispatch({ effects: wrapping.reconfigure(wrap ? EditorView.lineWrapping : []) });
     },
     setDecorations: ({ targetLine, matches = [], currentMatch }) => {
       if (destroyed) {

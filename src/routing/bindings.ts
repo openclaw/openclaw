@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Routing binding helpers resolve configured channel and agent route bindings.
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { listRouteBindings } from "../config/bindings.js";
+import { tryResolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
+import { isRouteBinding, listConfiguredBindings, listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -23,7 +23,9 @@ export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): str
   }
   const ids = new Set<string>();
   for (const binding of listBindings(cfg)) {
-    const resolved = resolveNormalizedRouteBindingMatch(binding);
+    const resolved = resolveNormalizedRouteBindingMatch(binding, {
+      includeImplicitDefaultAccount: true,
+    });
     if (!resolved || resolved.channelId !== normalizedChannel) {
       continue;
     }
@@ -40,8 +42,15 @@ export function resolveDefaultAgentBoundAccountId(
   if (!normalizedChannel) {
     return null;
   }
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
-  for (const binding of listBindings(cfg)) {
+  const ownerAgentId = tryResolveAgentOperationAgentId(cfg);
+  if (!ownerAgentId) {
+    return null;
+  }
+  const defaultAgentId = normalizeAgentId(ownerAgentId);
+  for (const binding of listConfiguredBindings(cfg)) {
+    if (!isRouteBinding(binding)) {
+      continue;
+    }
     const resolved = resolveNormalizedRouteBindingMatch(binding);
     if (
       !resolved ||
@@ -58,7 +67,9 @@ export function resolveDefaultAgentBoundAccountId(
 export function buildChannelAccountBindings(cfg: OpenClawConfig) {
   const map = new Map<string, Map<string, string[]>>();
   for (const binding of listBindings(cfg)) {
-    const resolved = resolveNormalizedRouteBindingMatch(binding);
+    const resolved = resolveNormalizedRouteBindingMatch(binding, {
+      includeImplicitDefaultAccount: true,
+    });
     if (!resolved) {
       continue;
     }

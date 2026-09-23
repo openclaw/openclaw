@@ -43,6 +43,8 @@ export type ClawOpenClawExtension = {
 export type ClawOpenClawProfile = {
   schemaVersion: 1;
   agent: {
+    model?: { primary: string; fallbacks?: string[] };
+    subagents?: { allowAgents?: string[]; delegationMode?: "suggest" | "prefer" };
     groupChat?: {
       mentionPatterns?: string[];
     };
@@ -241,6 +243,7 @@ export type ClawReadResult =
       clawMarkdownBody?: Buffer;
       packageBootstrap?: ClawWorkspaceSourceSnapshot;
       openClawProfile?: ClawOpenClawProfile;
+      legacyOpenClawProfile?: ClawOpenClawProfile;
       source: ClawSourceIdentity;
       snapshot: ClawSourceSnapshot;
       diagnostics: ClawDiagnostic[];

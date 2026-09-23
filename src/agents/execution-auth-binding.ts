@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 
@@ -289,12 +290,31 @@ export function fingerprintResolvedAuthProfileCredential(params: {
   });
 }
 
-/** Fingerprint an ambient/config/env credential that was actually selected. */
+/**
+ * Fingerprint an ambient/config/env credential that was actually selected.
+ *
+ * The digest covers only the credential material and its transport mode.
+ * Resolution-path facts (`source`, `profileId`) are deliberately excluded:
+ * the successful-run capture and the later owner revalidation may resolve
+ * the same key through different sources (env, models.json marker, profile
+ * fallback), and the owner gate must treat that as the same authority.
+ * A sentinel-sealed key is unwrapped first so both passes hash the same
+ * plaintext. Route and provider identity are checked separately by the
+ * binding, so a shared key remains one authority rather than two.
+ */
 export function fingerprintResolvedProviderAuth(
   auth: ResolvedProviderAuth | null | undefined,
 ): string | undefined {
   if (!auth?.apiKey) {
     return undefined;
   }
-  return hashAuthBinding(["resolved", auth.profileId ?? null, auth.source, auth.mode, auth.apiKey]);
+  // A malformed or tampered sentinel must fail closed rather than hashing the
+  // sealed blob as if it were credential material.
+  const credentialMaterial = looksLikeSecretSentinel(auth.apiKey)
+    ? resolveSecretSentinel(auth.apiKey)
+    : auth.apiKey;
+  if (!credentialMaterial) {
+    return undefined;
+  }
+  return hashAuthBinding(["resolved-v2", auth.mode, credentialMaterial]);
 }

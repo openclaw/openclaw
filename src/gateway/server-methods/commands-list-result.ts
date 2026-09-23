@@ -17,7 +17,7 @@ import {
   COMMAND_DESCRIPTION_MAX_LENGTH,
   COMMAND_LIST_MAX_ITEMS,
   COMMAND_NAME_MAX_LENGTH,
-} from "../../../packages/gateway-protocol/src/schema.js";
+} from "../../../packages/gateway-protocol/src/schema/commands.js";
 import { listChatCommandsForConfig } from "../../auto-reply/commands-registry.js";
 import type {
   ChatCommandDefinition,
@@ -25,13 +25,14 @@ import type {
   CommandArgDefinition,
 } from "../../auto-reply/commands-registry.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getPluginCommandEntrySpecs,
   getPluginCommandEntrySpecsFromRegistrations,
 } from "../../plugins/command-specs.js";
-import { getActivePluginGatewayCommandRegistry } from "../../plugins/runtime.js";
-import { listSkillCommandsForAgents } from "../../skills/discovery/chat-commands.js";
+import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
+import { prepareSkillCommandsForAgents } from "../../skills/discovery/chat-commands.js";
 
 type SerializedArg = NonNullable<CommandEntry["args"]>[number];
 type CommandNameSurface = "text" | "native";
@@ -77,10 +78,6 @@ function supportsNativeProvider(cmd: ChatCommandDefinition, provider?: string): 
   );
 }
 
-function stripLeadingSlash(value: string): string {
-  return value.startsWith("/") ? value.slice(1) : value;
-}
-
 /** Resolves normalized text aliases, preserving slash-prefixed command names. */
 function resolveTextAliases(cmd: ChatCommandDefinition): string[] {
   const seen = new Set<string>();
@@ -104,10 +101,6 @@ function resolveTextAliases(cmd: ChatCommandDefinition): string[] {
     return aliases;
   }
   return [`/${clampString(cmd.key, COMMAND_NAME_MAX_LENGTH)}`];
-}
-
-function resolvePrimaryTextName(cmd: ChatCommandDefinition): string {
-  return stripLeadingSlash(resolveTextAliases(cmd)[0] ?? `/${cmd.key}`);
 }
 
 /** Serializes a command argument into the bounded gateway protocol shape. */
@@ -149,15 +142,17 @@ function mapCommand(
 ): CommandEntry {
   const shouldIncludeArgs = includeArgs && cmd.acceptsArgs && cmd.args?.length;
   const nativeName = cmd.scope === "text" ? undefined : resolveNativeName(cmd, provider);
+  const textAliases = cmd.scope !== "native" ? resolveTextAliases(cmd) : undefined;
   return {
     name: clampString(
-      nameSurface === "text" ? resolvePrimaryTextName(cmd) : (nativeName ?? cmd.key),
+      nameSurface === "text" ? (textAliases?.[0]?.slice(1) ?? cmd.key) : (nativeName ?? cmd.key),
       COMMAND_NAME_MAX_LENGTH,
     ),
     ...(nativeName ? { nativeName: clampString(nativeName, COMMAND_NAME_MAX_LENGTH) } : {}),
-    ...(cmd.scope !== "native" ? { textAliases: resolveTextAliases(cmd) } : {}),
+    ...(textAliases ? { textAliases } : {}),
     description: clampDescription(cmd.description),
-    ...(cmd.category ? { category: cmd.category } : {}),
+    // The v2026.8.1 SDK category remains accepted, but clients use the current Tools group.
+    ...(cmd.category ? { category: cmd.category === "docks" ? "tools" : cmd.category } : {}),
     source,
     scope: cmd.scope,
     acceptsArgs: Boolean(cmd.acceptsArgs),
@@ -173,15 +168,17 @@ function buildPluginCommandEntries(params: {
   nameSurface: CommandNameSurface;
   cfg: OpenClawConfig;
 }): CommandEntry[] {
-  const gatewayRegistry = getActivePluginGatewayCommandRegistry();
+  const gatewayRegistry = getPluginRegistryForContext();
   const pluginSpecs = gatewayRegistry
     ? getPluginCommandEntrySpecsFromRegistrations(gatewayRegistry.commands, params.provider, {
         config: params.cfg,
       })
     : getPluginCommandEntrySpecs(params.provider, { config: params.cfg });
+  const eligibleSpecs =
+    params.nameSurface === "native" ? pluginSpecs.filter((spec) => spec.nativeName) : pluginSpecs;
   const entries: CommandEntry[] = [];
 
-  for (const spec of pluginSpecs) {
+  for (const spec of eligibleSpecs) {
     entries.push({
       name: clampString(
         params.nameSurface === "text" ? spec.name : (spec.nativeName ?? spec.name),
@@ -195,29 +192,34 @@ function buildPluginCommandEntries(params: {
       source: "plugin",
       scope: "both",
       acceptsArgs: spec.acceptsArgs,
+      ...(spec.clientPresentation ? { clientPresentation: spec.clientPresentation } : {}),
     });
   }
 
-  if (params.nameSurface === "native") {
-    return entries.filter((entry) => entry.nativeName);
-  }
   return entries;
 }
 
 /** Builds the public commands.list payload for an agent/provider/scope view. */
-export function buildCommandsListResult(params: {
+export async function buildCommandsListResult(params: {
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
   cfg: OpenClawConfig;
   agentId: string;
   provider?: string;
   scope?: "native" | "text" | "both";
   includeArgs?: boolean;
-}): CommandsListResult {
+}): Promise<CommandsListResult> {
   const includeArgs = params.includeArgs !== false;
   const scopeFilter = params.scope ?? "both";
   const nameSurface: CommandNameSurface = scopeFilter === "text" ? "text" : "native";
   const provider = normalizeOptionalLowercaseString(params.provider);
 
-  const skillCommands = listSkillCommandsForAgents({ cfg: params.cfg, agentIds: [params.agentId] });
+  const skillCommands = await prepareSkillCommandsForAgents({
+    cfg: params.cfg,
+    agentIds: [params.agentId],
+    sessionEntry: params.sessionEntry,
+    sessionKey: params.sessionKey,
+  });
   const chatCommands = listChatCommandsForConfig(params.cfg, { skillCommands });
   const skillsByKey = new Map(skillCommands.map((skill) => [`skill:${skill.skillName}`, skill]));
 
@@ -237,7 +239,15 @@ export function buildCommandsListResult(params: {
     const skill = skillsByKey.get(cmd.key);
     commands.push({
       ...mapCommand(cmd, skill ? "skill" : "native", includeArgs, nameSurface, provider),
-      ...(skill ? { skillModelVisible: skill.modelVisible !== false } : {}),
+      ...(skill
+        ? {
+            skillDisplayName: clampString(
+              skill.displayName ?? skill.skillName,
+              COMMAND_NAME_MAX_LENGTH,
+            ),
+            skillModelVisible: skill.modelVisible !== false,
+          }
+        : {}),
     });
   }
 

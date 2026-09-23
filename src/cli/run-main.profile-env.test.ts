@@ -1,6 +1,43 @@
 // Run-main profile env tests cover profile environment handling in the CLI entrypoint.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ExitError } from "../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+
+const startup = vi.hoisted(() => ({
+  readConfig: vi.fn(async () => ({ proxy: { selected: "synthetic" } })),
+  startProxy: vi.fn(async () => null),
+  ensurePath: vi.fn(),
+  ensureDispatcher: vi.fn(),
+  route: vi.fn(async () => true),
+  schemas: { incompatible: [], indeterminate: [] },
+  prepareDoctorDatabasePreflight: vi.fn(),
+  runDoctorHealthFlow: vi.fn(),
+}));
+
+vi.mock("../commands/doctor-database-preflight.js", () => ({
+  prepareDoctorDatabasePreflight: startup.prepareDoctorDatabasePreflight,
+}));
+vi.mock("../flows/doctor-health.js", () => ({
+  runDoctorHealthFlow: startup.runDoctorHealthFlow,
+}));
+vi.mock("./program/preaction.js", () => ({ registerPreActionHooks() {} }));
+
+vi.mock("../config/io.js", () => ({
+  readSourceConfigBestEffort: startup.readConfig,
+  readBestEffortConfig: startup.readConfig,
+}));
+
+vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
+  startProxy: startup.startProxy,
+}));
+
+vi.mock("../infra/net/proxy-env.js", () => ({
+  hasEnvHttpProxyAgentConfigured: () => true,
+}));
+
+vi.mock("../infra/net/undici-global-dispatcher.js", () => ({
+  ensureGlobalUndiciEnvProxyDispatcher: startup.ensureDispatcher,
+}));
 
 const fileState = vi.hoisted(() => ({
   hasCliDotEnv: false,
@@ -42,22 +79,22 @@ vi.mock("./dotenv.js", () => ({
   loadCliDotEnv: dotenvState.loadDotEnv,
 }));
 
-vi.mock("../infra/env.js", () => ({
-  isTruthyEnvValue: (value?: string) =>
-    typeof value === "string" && ["1", "on", "true", "yes"].includes(value.trim().toLowerCase()),
+vi.mock("../infra/env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/env.js")>()),
   normalizeEnv: vi.fn(),
 }));
 
-vi.mock("../infra/runtime-guard.js", () => ({
-  assertSupportedRuntime: vi.fn(),
+vi.mock("../infra/runtime-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/runtime-guard.js")>()),
+  assertSupportedRuntime: vi.fn(async () => {}),
 }));
 
 vi.mock("../infra/path-env.js", () => ({
-  ensureOpenClawCliOnPath: vi.fn(),
+  ensureOpenClawCliOnPath: startup.ensurePath,
 }));
 
 vi.mock("./route.js", () => ({
-  tryRouteCli: vi.fn(async () => true),
+  tryRouteCli: startup.route,
 }));
 
 vi.mock("./windows-argv.js", () => ({
@@ -75,8 +112,9 @@ vi.mock("./container-target.js", async () => {
 
 import { runCli } from "./run-main.js";
 
-describe("runCli profile env bootstrap", () => {
+describe("runCli environment and passive startup", () => {
   const envSnapshot = captureEnv([
+    "OPENCLAW_UPDATE_IN_PROGRESS",
     "OPENCLAW_PROFILE",
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_CONFIG_PATH",
@@ -88,6 +126,9 @@ describe("runCli profile env bootstrap", () => {
   ]);
 
   beforeEach(() => {
+    vi.clearAllMocks();
+    deleteTestEnvValue("OPENCLAW_UPDATE_IN_PROGRESS");
+    startup.prepareDoctorDatabasePreflight.mockResolvedValue(startup.schemas);
     deleteTestEnvValue("OPENCLAW_PROFILE");
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
     deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
@@ -106,6 +147,73 @@ describe("runCli profile env bootstrap", () => {
   afterEach(() => {
     envSnapshot.restore();
   });
+
+  it("carries the single early update preflight through Commander into Doctor", async () => {
+    setTestEnvValue("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    startup.route.mockResolvedValueOnce(false);
+    const argv = ["node", "openclaw", "doctor", "--fix", "--non-interactive"];
+    const originalArgv = process.argv;
+    const originalListeners = process.listeners("uncaughtException");
+    process.argv = argv;
+    try {
+      await expect(runCli(argv)).rejects.toEqual(new ExitError(0));
+    } finally {
+      process.argv = originalArgv;
+      for (const listener of process.listeners("uncaughtException")) {
+        if (!originalListeners.includes(listener)) {
+          process.off("uncaughtException", listener);
+        }
+      }
+    }
+
+    expect(startup.prepareDoctorDatabasePreflight).toHaveBeenCalledExactlyOnceWith();
+    expect(startup.prepareDoctorDatabasePreflight).toHaveBeenCalledBefore(startup.startProxy);
+    expect(startup.runDoctorHealthFlow).toHaveBeenCalledExactlyOnceWith(
+      expect.any(Object),
+      expect.objectContaining({ repair: true, nonInteractive: true }),
+      undefined,
+      startup.schemas,
+    );
+  });
+
+  it.each([
+    ...["--channel", "--tag", "--timeout"].flatMap((flag) =>
+      ["beta", "", "--", "--no-restart"].flatMap((value) => [
+        [flag, value, "cleanup"],
+        [`${flag}=${value}`, "cleanup"],
+      ]),
+    ),
+    ["--no-restart", "cleanup"],
+    ["--accept-capabilities", "cleanup"],
+    ["--", "cleanup"],
+    ["--channel", "beta", "--", "cleanup"],
+    ["--dry-run", "--json", "--yes", "cleanup"],
+    ["cleanup", "--dry-run", "--json", "--yes"],
+    ["cleanup", "--channel", "beta"],
+    ["cleanup", "--version"],
+  ])("keeps cleanup passive before dispatch: %j", async (...args) => {
+    const argv = ["node", "openclaw", "update", ...args];
+    await runCli(argv);
+
+    expect(startup.route).toHaveBeenCalledWith(argv);
+    expect({
+      configReads: startup.readConfig.mock.calls.length,
+      proxyStarts: startup.startProxy.mock.calls.length,
+      pathEnsures: startup.ensurePath.mock.calls.length,
+      dispatcherEnsures: startup.ensureDispatcher.mock.calls.length,
+    }).toEqual({ configReads: 0, proxyStarts: 0, pathEnsures: 0, dispatcherEnsures: 0 });
+  });
+
+  it.each(["--channel", "--tag", "--timeout"])(
+    "retains update startup when cleanup is the value of %s",
+    async (flag) => {
+      await runCli(["node", "openclaw", "update", flag, "cleanup"]);
+      expect(startup.readConfig).toHaveBeenCalledOnce();
+      expect(startup.startProxy).toHaveBeenCalledWith({ selected: "synthetic" });
+      expect(startup.ensurePath).toHaveBeenCalledOnce();
+      expect(startup.ensureDispatcher).toHaveBeenCalledOnce();
+    },
+  );
 
   it("applies --profile before dotenv loading", async () => {
     fileState.hasCliDotEnv = true;

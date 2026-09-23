@@ -2,7 +2,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  decodeUsageCostRollup,
+  encodeUsageCostRollup,
+  USAGE_COST_ROLLUP_SCOPE,
+  USAGE_COST_ROLLUP_VERSION,
+} from "../infra/session-cost-usage-rollup-codec.js";
+import { createSessionUsageRollupData } from "../infra/session-cost-usage-rollup.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -10,9 +17,15 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { maybeRepairLegacyRuntimeFiles } from "./doctor-usage-cost-cache.js";
 
+const note = vi.hoisted(() => vi.fn());
+
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
+
 let root: string | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  note.mockReset();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   if (root) {
@@ -96,37 +109,173 @@ describe("legacy usage-cost cache cleanup", () => {
     await expect(fs.readFile(path.join(external, "keep.txt"), "utf8")).resolves.toBe("keep");
   });
 
-  it("removes retired usage rows from every registered agent database", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-cost-sqlite-doctor-"));
-    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
-    const databases = ["main", "worker"].map((agentId) =>
-      openOpenClawAgentDatabase({ agentId, env }),
-    );
-    for (const database of databases) {
-      const insert = database.db.prepare(
-        "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, 1)",
+  it.each([false, true])(
+    "continues retired-row cleanup after a rejected write (rejectFirst=%s)",
+    async (rejectFirst) => {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-cost-sqlite-doctor-"));
+      const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
+      const firstDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
+      const databases = [firstDatabase, openOpenClawAgentDatabase({ agentId: "worker", env })];
+      const rollup = createSessionUsageRollupData();
+      rollup.untimestamped.totals.totalTokens = 17;
+      const current = encodeUsageCostRollup({
+        version: USAGE_COST_ROLLUP_VERSION,
+        pricingFingerprint: "synthetic",
+        checkpoint: {
+          kind: "jsonl",
+          parsedOffset: 7,
+          observedSize: 7,
+          observedMtimeMs: 1,
+          device: 1,
+          inode: 2,
+          anchorHash: "anchor",
+        },
+        scannedAt: 1,
+        parsedRecords: 1,
+        countedRecords: 0,
+        rollup,
+      });
+      for (const database of databases) {
+        const insert = database.db.prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, 1)",
+        );
+        insert.run("session-cost-usage-rollup-v1", "retired", '{"pricingFingerprint":"large"}');
+        insert.run("session-cost-usage-rollup-v2", "retired-v2", "{}");
+        database.db
+          .prepare(
+            "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, 'current', ?, ?, NULL, 1)",
+          )
+          .run(USAGE_COST_ROLLUP_SCOPE, current.valueJson, current.blob);
+        insert.run("session-cost-usage", "cache", "{}");
+        insert.run("session-cost-usage", "refresh-lock", "{}");
+        insert.run("other", "keep", "{}");
+      }
+      const before = firstDatabase.db
+        .prepare("SELECT * FROM cache_entries ORDER BY scope, key")
+        .all();
+
+      if (rejectFirst) {
+        firstDatabase.db.exec(`
+        CREATE TEMP TRIGGER reject_usage_pruning BEFORE DELETE ON cache_entries
+        BEGIN SELECT RAISE(ABORT, 'pruning rejected'); END;
+      `);
+      }
+      await maybeRepairLegacyRuntimeFiles(true, env);
+
+      if (rejectFirst) {
+        expect(note).toHaveBeenCalledWith(
+          expect.stringContaining("pruning rejected"),
+          "Doctor warnings",
+        );
+        expect(
+          firstDatabase.db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all(),
+        ).toEqual(before);
+      }
+      for (const database of rejectFirst ? databases.slice(1) : databases) {
+        expect(
+          database.db.prepare("SELECT scope, key FROM cache_entries ORDER BY scope, key").all(),
+        ).toEqual([
+          { key: "keep", scope: "other" },
+          { key: "refresh-lock", scope: "session-cost-usage" },
+          { key: "current", scope: USAGE_COST_ROLLUP_SCOPE },
+        ]);
+        const retained = database.db
+          .prepare("SELECT value_json, blob FROM cache_entries WHERE scope = ? AND key = 'current'")
+          .get(USAGE_COST_ROLLUP_SCOPE);
+        expect(retained).toEqual({ value_json: current.valueJson, blob: current.blob });
+        if (typeof retained?.value_json !== "string" || !(retained.blob instanceof Uint8Array)) {
+          throw new Error("Expected a retained current usage report");
+        }
+        expect(
+          decodeUsageCostRollup(retained.value_json, "synthetic", retained.blob)?.rollup
+            .untimestamped.totals.totalTokens,
+        ).toBe(17);
+      }
+    },
+  );
+
+  it.each([
+    [
+      "reports an unreadable agent root without claiming a complete scan",
+      "root",
+      "readdir",
+      "EACCES",
+      false,
+      true,
+    ],
+    [
+      "reports an unreadable temp entry without removing partial scan results",
+      "entry",
+      "stat",
+      "EIO",
+      true,
+      true,
+    ],
+    ["treats a missing agent root as harmless absence", "root", "readdir", "ENOENT", true, false],
+    [
+      "skips a temp entry that disappears between readdir and stat",
+      "entry",
+      "stat",
+      "ENOENT",
+      true,
+      false,
+    ],
+  ] as const)("%s", async (_name, scope, operation, code, shouldRepair, diagnostic) => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-usage-cost-${scope}-fault-`));
+    const agentsDir = path.join(root, "agents");
+    const sessionsDir =
+      scope === "root" ? path.join(root, "sessions") : path.join(agentsDir, "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    if (scope === "root") {
+      await fs.mkdir(agentsDir);
+    }
+    const cacheFile = path.join(sessionsDir, ".usage-cost-cache.json");
+    const tempFile = path.join(sessionsDir, ".usage-cost-cache.123.tmp");
+    await fs.writeFile(cacheFile, "x");
+    if (scope === "entry") {
+      await fs.writeFile(tempFile, "x");
+    }
+    const error = fsError(code);
+    if (operation === "readdir") {
+      vi.spyOn(fs, "readdir").mockRejectedValueOnce(error);
+    } else {
+      vi.spyOn(fs, "stat").mockRejectedValueOnce(error);
+    }
+
+    await maybeRepairLegacyRuntimeFiles(shouldRepair, {
+      OPENCLAW_STATE_DIR: root,
+    } as NodeJS.ProcessEnv);
+
+    if (diagnostic) {
+      const action = shouldRepair ? "scan and cleanup" : "scan";
+      expect(note).toHaveBeenCalledOnce();
+      expect(note).toHaveBeenCalledWith(
+        expect.stringMatching(
+          new RegExp(`usage-cost cache ${action} could not be completed`, "iu"),
+        ),
+        "Usage cost cache",
       );
-      insert.run("session-cost-usage-rollup-v1", "retired", '{"pricingFingerprint":"large"}');
-      insert.run("session-cost-usage-rollup-v2", "current", "{}");
-      insert.run("session-cost-usage", "cache", "{}");
-      insert.run("session-cost-usage", "refresh-lock", "{}");
-      insert.run("other", "keep", "{}");
+      expect(note.mock.calls[0]?.[0]).toContain(scope === "root" ? agentsDir : tempFile);
+      expect(note.mock.calls[0]?.[0]).toContain(code);
+      expect(note.mock.calls[0]?.[0]).toContain(
+        shouldRepair ? "openclaw doctor --fix" : "openclaw doctor",
+      );
+      expect(note.mock.calls[0]?.[0]).not.toContain("Removed");
+      await expect(fs.readFile(cacheFile, "utf8")).resolves.toBe("x");
+      return;
     }
-
-    await maybeRepairLegacyRuntimeFiles(true, env);
-
-    for (const database of databases) {
-      expect(
-        database.db.prepare("SELECT scope, key FROM cache_entries ORDER BY scope, key").all(),
-      ).toEqual([
-        { key: "keep", scope: "other" },
-        { key: "refresh-lock", scope: "session-cost-usage" },
-        { key: "current", scope: "session-cost-usage-rollup-v2" },
-      ]);
-    }
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Removed 1 rebuildable legacy usage-cost cache file"),
+      "Usage cost cache",
+    );
+    await expect(fs.stat(cacheFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 
 function randomUploadId(): string {
   return "11111111-1111-4111-8111-111111111111";
+}
+
+function fsError(code: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`${code}: injected filesystem failure`), { code });
 }

@@ -1,11 +1,13 @@
 /** Tests ACP runtime mode/config option persistence and backend control calls. */
 import { describe, expect, it, vi } from "vitest";
 import {
+  installMutableAcpSessionMetaUpsert,
   type AcpRuntime,
   AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
   createRuntime,
+  disposeAcpSessionManagerInstance,
   expectMockCallFields,
   expectNoMockCallFields,
   expectRecordFields,
@@ -57,10 +59,12 @@ describe("AcpSessionManager runtime config", () => {
       runtime: runtimeState.runtime,
     });
 
-    let currentMeta: SessionAcpMeta = {
-      ...readySessionMeta(),
-      runtimeOptions: {
-        runtimeMode: "plan",
+    const metaState: { currentMeta: SessionAcpMeta } = {
+      currentMeta: {
+        ...readySessionMeta(),
+        runtimeOptions: {
+          runtimeMode: "plan",
+        },
       },
     };
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
@@ -69,26 +73,10 @@ describe("AcpSessionManager runtime config", () => {
       return {
         sessionKey,
         storeSessionKey: sessionKey,
-        acp: currentMeta,
+        acp: metaState.currentMeta,
       };
     });
-    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        mutate: (
-          current: SessionAcpMeta | undefined,
-          entry: { acp?: SessionAcpMeta } | undefined,
-        ) => SessionAcpMeta | null | undefined;
-      };
-      const next = params.mutate(currentMeta, { acp: currentMeta });
-      if (next) {
-        currentMeta = next;
-      }
-      return {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        acp: currentMeta,
-      };
-    });
+    installMutableAcpSessionMetaUpsert(metaState);
 
     const manager = new AcpSessionManager();
     await manager.setSessionConfigOption({
@@ -133,14 +121,16 @@ describe("AcpSessionManager runtime config", () => {
       runtime: runtimeState.runtime,
     });
 
-    let currentMeta: SessionAcpMeta = {
-      ...readySessionMeta(),
-      identity: {
-        state: "resolved",
-        source: "status",
-        acpxSessionId: "acpx-stale",
-        agentSessionId: "agent-stale",
-        lastUpdatedAt: Date.now(),
+    const metaState: { currentMeta: SessionAcpMeta } = {
+      currentMeta: {
+        ...readySessionMeta(),
+        identity: {
+          state: "resolved",
+          source: "status",
+          acpxSessionId: "acpx-stale",
+          agentSessionId: "agent-stale",
+          lastUpdatedAt: Date.now(),
+        },
       },
     };
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
@@ -149,26 +139,10 @@ describe("AcpSessionManager runtime config", () => {
       return {
         sessionKey,
         storeSessionKey: sessionKey,
-        acp: currentMeta,
+        acp: metaState.currentMeta,
       };
     });
-    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        mutate: (
-          current: SessionAcpMeta | undefined,
-          entry: { acp?: SessionAcpMeta } | undefined,
-        ) => SessionAcpMeta | null | undefined;
-      };
-      const next = params.mutate(currentMeta, { acp: currentMeta });
-      if (next) {
-        currentMeta = next;
-      }
-      return {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        acp: currentMeta,
-      };
-    });
+    installMutableAcpSessionMetaUpsert(metaState);
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
@@ -181,8 +155,8 @@ describe("AcpSessionManager runtime config", () => {
     });
 
     expect(runtimeState.getStatus).toHaveBeenCalledTimes(1);
-    expect(currentMeta.identity?.acpxSessionId).toBe("acpx-fresh");
-    expect(currentMeta.identity?.agentSessionId).toBe("agent-fresh");
+    expect(metaState.currentMeta.identity?.acpxSessionId).toBe("acpx-fresh");
+    expect(metaState.currentMeta.identity?.agentSessionId).toBe("agent-fresh");
   });
 
   it("reconciles oneshot ACP identity from runtime status before closing after a turn", async () => {
@@ -204,33 +178,17 @@ describe("AcpSessionManager runtime config", () => {
       runtime: runtimeState.runtime,
     });
 
-    let currentMeta: SessionAcpMeta | undefined;
+    const metaState: { currentMeta: SessionAcpMeta | undefined } = { currentMeta: undefined };
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
       const sessionKey =
         (paramsUnknown as { sessionKey?: string }).sessionKey ?? "agent:codex:acp:session-1";
       return {
         sessionKey,
         storeSessionKey: sessionKey,
-        acp: currentMeta,
+        acp: metaState.currentMeta,
       };
     });
-    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        mutate: (
-          current: SessionAcpMeta | undefined,
-          entry: { acp?: SessionAcpMeta } | undefined,
-        ) => SessionAcpMeta | null | undefined;
-      };
-      const next = params.mutate(currentMeta, { acp: currentMeta });
-      if (next) {
-        currentMeta = next;
-      }
-      return {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        acp: currentMeta,
-      };
-    });
+    installMutableAcpSessionMetaUpsert(metaState);
 
     const manager = new AcpSessionManager();
     await manager.initializeSession({
@@ -240,7 +198,7 @@ describe("AcpSessionManager runtime config", () => {
       mode: "oneshot",
     });
 
-    expectRecordFields(currentMeta?.identity, {
+    expectRecordFields(metaState.currentMeta?.identity, {
       state: "pending",
       acpxSessionId: "acpx-oneshot",
       source: "ensure",
@@ -264,7 +222,7 @@ describe("AcpSessionManager runtime config", () => {
       backendSessionId: "acpx-oneshot",
       agentSessionId: "agent-oneshot",
     });
-    expectRecordFields(currentMeta?.identity, {
+    expectRecordFields(metaState.currentMeta?.identity, {
       state: "resolved",
       acpxSessionId: "acpx-oneshot",
       agentSessionId: "agent-oneshot",
@@ -298,14 +256,16 @@ describe("AcpSessionManager runtime config", () => {
       runtime: runtimeState.runtime,
     });
 
-    let currentMeta: SessionAcpMeta = {
-      ...readySessionMeta(),
-      agent: "gemini",
-      identity: {
-        state: "pending",
-        source: "ensure",
-        acpxSessionId: "acpx-stale",
-        lastUpdatedAt: Date.now(),
+    const metaState: { currentMeta: SessionAcpMeta } = {
+      currentMeta: {
+        ...readySessionMeta(),
+        agent: "gemini",
+        identity: {
+          state: "pending",
+          source: "ensure",
+          acpxSessionId: "acpx-stale",
+          lastUpdatedAt: Date.now(),
+        },
       },
     };
     const sessionKey = "agent:gemini:acp:session-1";
@@ -314,26 +274,10 @@ describe("AcpSessionManager runtime config", () => {
       return {
         sessionKey: key,
         storeSessionKey: key,
-        acp: currentMeta,
+        acp: metaState.currentMeta,
       };
     });
-    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        mutate: (
-          current: SessionAcpMeta | undefined,
-          entry: { acp?: SessionAcpMeta } | undefined,
-        ) => SessionAcpMeta | null | undefined;
-      };
-      const next = params.mutate(currentMeta, { acp: currentMeta });
-      if (next) {
-        currentMeta = next;
-      }
-      return {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        acp: currentMeta,
-      };
-    });
+    installMutableAcpSessionMetaUpsert(metaState);
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
@@ -345,9 +289,9 @@ describe("AcpSessionManager runtime config", () => {
       requestId: "run-prompt-learned-agent-id",
     });
 
-    expect(currentMeta.identity?.state).toBe("resolved");
-    expect(currentMeta.identity?.agentSessionId).toBe("gemini-session-1");
-    expect(currentMeta.identity?.acpxSessionId).toBe("acpx-stale");
+    expect(metaState.currentMeta.identity?.state).toBe("resolved");
+    expect(metaState.currentMeta.identity?.agentSessionId).toBe("gemini-session-1");
+    expect(metaState.currentMeta.identity?.acpxSessionId).toBe("acpx-stale");
   });
 
   it("preserves existing ACP session identifiers when ensure returns none", async () => {
@@ -668,77 +612,100 @@ describe("AcpSessionManager runtime config", () => {
     });
   });
 
-  it("re-ensures runtime handles after cwd runtime option updates", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    const sessionKey = "agent:codex:acp:session-cwd-update";
-    let currentEntry = {
-      sessionKey,
-      storeSessionKey: sessionKey,
-      acp: readySessionMeta(),
-    };
-    hoisted.readAcpSessionEntryMock.mockImplementation(() => currentEntry);
-    hoisted.upsertAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        mutate: (
-          current: SessionAcpMeta | undefined,
-          entry: { acp?: SessionAcpMeta } | undefined,
-        ) => SessionAcpMeta | null | undefined;
+  it.each(["next turn", "shutdown"])(
+    "closes the previous runtime after cwd updates before %s",
+    async (operation) => {
+      const runtimeState = createRuntime();
+      const lifecycle: string[] = [];
+      runtimeState.ensureSession.mockImplementation(async (input) => {
+        lifecycle.push(`ensure:${input.cwd ?? "default"}`);
+        return {
+          sessionKey: input.sessionKey,
+          backend: "acpx",
+          runtimeSessionName: `runtime:${input.cwd ?? "default"}`,
+          cwd: input.cwd,
+        };
+      });
+      runtimeState.close.mockImplementation(async ({ handle }) => {
+        lifecycle.push(`close:${handle.cwd ?? "default"}`);
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      const sessionKey = "agent:codex:acp:session-cwd-update";
+      let currentEntry = {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: readySessionMeta(),
       };
-      const nextMeta = params.mutate(currentEntry.acp, currentEntry);
-      if (nextMeta === null) {
-        return null;
-      }
-      currentEntry = {
-        ...currentEntry,
-        acp: nextMeta ?? currentEntry.acp,
-      };
-      return currentEntry;
-    });
+      hoisted.readAcpSessionEntryMock.mockImplementation(() => currentEntry);
+      hoisted.upsertAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+        const params = paramsUnknown as {
+          mutate: (
+            current: SessionAcpMeta | undefined,
+            entry: { acp?: SessionAcpMeta } | undefined,
+          ) => SessionAcpMeta | null | undefined;
+        };
+        const nextMeta = params.mutate(currentEntry.acp, currentEntry);
+        if (nextMeta === null) {
+          return null;
+        }
+        currentEntry = {
+          ...currentEntry,
+          acp: nextMeta ?? currentEntry.acp,
+        };
+        return currentEntry;
+      });
 
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey,
-      text: "first",
-      mode: "prompt",
-      requestId: "r1",
-    });
-
-    await expect(
-      manager.updateSessionRuntimeOptions({
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey,
-        patch: { cwd: "/workspace/next" },
-      }),
-    ).resolves.toEqual({
-      cwd: "/workspace/next",
-    });
+        text: "first",
+        mode: "prompt",
+        requestId: "r1",
+      });
 
-    expect(currentEntry.acp.runtimeOptions).toEqual({
-      cwd: "/workspace/next",
-    });
-    expect(currentEntry.acp.cwd).toBe("/workspace/next");
+      await expect(
+        manager.updateSessionRuntimeOptions({
+          cfg: baseCfg,
+          sessionKey,
+          patch: { cwd: "/workspace/next" },
+        }),
+      ).resolves.toEqual({
+        cwd: "/workspace/next",
+      });
 
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey,
-      text: "second",
-      mode: "prompt",
-      requestId: "r2",
-    });
+      expect(currentEntry.acp.runtimeOptions).toEqual({
+        cwd: "/workspace/next",
+      });
+      expect(currentEntry.acp.cwd).toBe("/workspace/next");
 
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
-    expectRecordFields(mockCallArg(runtimeState.ensureSession, 1), {
-      sessionKey,
-      cwd: "/workspace/next",
-    });
-  });
+      if (operation === "shutdown") {
+        await disposeAcpSessionManagerInstance(manager, "gateway-shutdown");
+        expect(lifecycle).toEqual(["ensure:default", "close:default"]);
+        return;
+      }
+
+      await manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey,
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+      });
+
+      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+      expectRecordFields(mockCallArg(runtimeState.ensureSession, 1), {
+        sessionKey,
+        cwd: "/workspace/next",
+      });
+      expect(lifecycle).toEqual(["ensure:default", "close:default", "ensure:/workspace/next"]);
+    },
+  );
 
   it("returns unsupported-control error when backend does not support set_config_option", async () => {
     const runtimeState = createRuntime();

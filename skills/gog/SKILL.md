@@ -26,11 +26,27 @@ metadata:
 
 Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs. Requires OAuth setup.
 
+Prefer an already-authorized host account: run the requested `gog` command first. Enter setup only after an authentication error. Never ask for passwords, client secrets, or refresh tokens in chat.
+
 Setup (once)
 
 - `gog auth credentials /path/to/client_secret.json`
 - `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets`
 - `gog auth list`
+
+Remote / headless Gateway hosts
+
+When the Gateway host has no local browser display:
+
+1. Prefer a live callback listener on the Gateway host. From the machine with the browser, forward the exact callback port (`ssh -L <port>:127.0.0.1:<port> user@gateway-host`), open the authorization URL `gog` prints, and let the redirect complete on that forwarded port.
+2. When a live listener is unavailable, the operator picks one paste-mode path in a trusted shell on the Gateway host. Callback URLs must never enter chat or agent tool input:
+   - `--manual`: the operator pastes the full redirect URL into `gog`'s interactive prompt.
+   - `--remote --step 1`: prints `auth_url` (and `state_reused`) then exits. After browser consent, the operator runs `--remote --step 2 --auth-url <callback-url>` in the trusted shell. A failed `localhost` page load after consent is expected.
+3. Keep the same resolved config context across remote steps: `GOG_CONFIG_DIR` takes precedence over `--home`, which takes precedence over `GOG_HOME`. Also preserve `--client`, services/scopes, redirect URI, and consent options. Matching unexpired manual state may be reused (`state_reused=true`).
+4. If desktop keyring is unavailable, configure the file backend (`gog auth keyring file`) and set `GOG_KEYRING_PASSWORD` in the Gateway environment so non-interactive agent/`--no-input` runs can read tokens. `gog auth doctor` reports when the password is missing.
+5. Callback received is not the same as token stored. If token exchange or identity lookup fails behind a proxy, restart from step 1 after the operator approves scoped egress or proxy exceptions for the required Google endpoints. Do not bypass host network policy or reuse failed or expired state.
+
+For diagnostics, inspect every entry reported by `gog auth list --check`; its exit status does not prove every stored token is valid. Likewise, inspect the status reported by `gog auth doctor` rather than relying only on its exit code.
 
 Common commands
 

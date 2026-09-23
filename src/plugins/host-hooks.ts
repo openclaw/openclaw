@@ -1,6 +1,7 @@
 /** Public host-hook type contracts exposed to plugin runtimes. */
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
+import type { ControlUiLinkReaderMetadata } from "../shared/control-ui-link-reader.js";
 import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -96,10 +97,15 @@ type PluginControlUiTabGroup = "control" | "agent";
 export type PluginControlUiDescriptor = {
   id: string;
   /** "tab" adds a sidebar tab; "widget" advertises a trusted dashboard renderer. */
-  surface: "session" | "tool" | "run" | "settings" | "tab" | "widget";
+  surface: "session" | "tool" | "run" | "settings" | "tab" | "widget" | "link-reader";
+  /** Required for link-reader surfaces; passive models rendered by the host, never plugin JS. */
+  linkReader?: ControlUiLinkReaderMetadata;
   label: string;
   description?: string;
+  /** Bundled plugins may claim their matching native route as `route:<pluginId>`. */
   placement?: string;
+  /** Optional single-segment Control UI address for a tab; does not register an HTTP route. */
+  slug?: string;
   schema?: PluginJsonValue;
   requiredScopes?: OperatorScope[];
   /** Icon name hint for tab descriptors; unknown names fall back to a generic icon. */
@@ -119,6 +125,7 @@ export type PluginSessionActionContext = {
   pluginId: string;
   actionId: string;
   sessionKey?: string;
+  agentId?: string;
   payload?: PluginJsonValue;
   client?: {
     connId?: string;
@@ -153,6 +160,11 @@ export type PluginSessionActionRegistration = {
 export type PluginRuntimeLifecycleRegistration = {
   id: string;
   description?: string;
+  /**
+   * Releases this registration's resources after an owned inspection or ephemeral prepared runtime.
+   * Raw loaders do not invoke this callback. Host cleanup notifications stay separate.
+   */
+  dispose?: () => void | Promise<void>;
   cleanup?: (ctx: {
     reason: PluginHostCleanupReason;
     sessionKey?: string;
@@ -334,4 +346,37 @@ export function buildPluginAgentTurnPrepareContext(params: {
     ...(prepend.length > 0 ? { prependContext: prepend.join("\n\n") } : {}),
     ...(append.length > 0 ? { appendContext: append.join("\n\n") } : {}),
   };
+}
+
+// Shared normalization keeps all host-hook registration surfaces consistent.
+export function normalizeHostHookString(value: unknown): string {
+  return typeof value === "string" ? normalizePluginHostHookId(value) : "";
+}
+
+export function normalizeOptionalHostHookString(value: unknown): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value.trim();
+}
+
+export function normalizeHostHookStringList(value: unknown): string[] | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const normalized: string[] = [];
+  for (const item of value) {
+    const text = normalizeOptionalHostHookString(item);
+    if (!text) {
+      return null;
+    }
+    normalized.push(text);
+  }
+  return normalized;
 }

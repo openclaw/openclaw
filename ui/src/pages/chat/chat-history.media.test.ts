@@ -4,7 +4,7 @@ import {
   readTranscriptMediaEntries,
 } from "../../lib/chat/message-extract.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
-import { extractTranscriptAttachments } from "./components/chat-message-media.ts";
+import { projectMessageMedia } from "./components/chat-message-media.ts";
 
 const MANAGED_UUID = "43007e90-2ade-43f2-a781-42b843e9eca3";
 
@@ -61,6 +61,30 @@ describe("chat history canonical media filtering", () => {
 });
 
 describe("chat history attachment card labels", () => {
+  it.each(["paste", "file", undefined] as const)(
+    "carries %s origin from persisted history to its displayed attachment",
+    (origin) => {
+      const { attachments } = projectMessageMedia(
+        userMessageWithMedia([
+          {
+            path: `media://inbound/pasted-text-123---${MANAGED_UUID}.txt`,
+            fileName: "pasted-text-123.txt",
+            contentType: "text/plain",
+            ...(origin ? { origin } : {}),
+          },
+        ]),
+        [],
+      );
+      expect(attachments[0]?.attachment).toMatchObject({
+        label: "pasted-text-123.txt",
+        mimeType: "text/plain",
+      });
+      expect(attachments[0]?.type === "attachment" && attachments[0].attachment.origin).toBe(
+        origin,
+      );
+    },
+  );
+
   it("carries the persisted canonical fileName through the media projection", () => {
     const entries = readTranscriptMediaEntries(
       userMessageWithMedia([
@@ -75,7 +99,7 @@ describe("chat history attachment card labels", () => {
   });
 
   it("labels a managed inbound attachment with the persisted original fileName", () => {
-    const attachments = extractTranscriptAttachments(
+    const { attachments } = projectMessageMedia(
       userMessageWithMedia([
         {
           path: `media://inbound/report---${MANAGED_UUID}.pdf`,
@@ -83,18 +107,20 @@ describe("chat history attachment card labels", () => {
           contentType: "application/pdf",
         },
       ]),
+      [],
     );
     expect(attachments[0]?.attachment.label).toBe("report.pdf");
   });
 
   it("restores the original name from a legacy managed inbound UUID suffix when fileName is absent", () => {
-    const attachments = extractTranscriptAttachments(
+    const { attachments } = projectMessageMedia(
       userMessageWithMedia([
         {
           path: `media://inbound/openclaw-attachment-test---${MANAGED_UUID}.docx`,
           contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         },
       ]),
+      [],
     );
     expect(attachments[0]?.attachment.label).toBe("openclaw-attachment-test.docx");
   });
@@ -102,25 +128,27 @@ describe("chat history attachment card labels", () => {
   it("leaves non-managed https attachment paths unchanged", () => {
     // `---old` is not a canonical managed UUID suffix, so it must not be stripped
     // from https URLs (which never carry the collision-safe managed suffix).
-    const attachments = extractTranscriptAttachments(
+    const { attachments } = projectMessageMedia(
       userMessageWithMedia([
         {
           path: "https://example.com/files/openclaw-attachment-test---old.docx",
           contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         },
       ]),
+      [],
     );
     expect(attachments[0]?.attachment.label).toBe("openclaw-attachment-test---old.docx");
   });
 
   it("does not strip a managed inbound basename that lacks a UUID suffix", () => {
-    const attachments = extractTranscriptAttachments(
+    const { attachments } = projectMessageMedia(
       userMessageWithMedia([
         {
           path: "media://inbound/plain-name.docx",
           contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         },
       ]),
+      [],
     );
     expect(attachments[0]?.attachment.label).toBe("plain-name.docx");
   });
@@ -128,13 +156,14 @@ describe("chat history attachment card labels", () => {
   it("strips only the terminal managed UUID suffix, preserving a UUID-shaped segment in the original name", () => {
     // Legacy record (no persisted fileName) whose original filename itself
     // contains a "---<uuid>"-shaped segment before the terminal managed suffix.
-    const attachments = extractTranscriptAttachments(
+    const { attachments } = projectMessageMedia(
       userMessageWithMedia([
         {
           path: `media://inbound/report---a1b2c3d4-e5f6-7890-abcd-ef1234567890-final---${MANAGED_UUID}.docx`,
           contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         },
       ]),
+      [],
     );
     expect(attachments[0]?.attachment.label).toBe(
       "report---a1b2c3d4-e5f6-7890-abcd-ef1234567890-final.docx",
@@ -143,8 +172,9 @@ describe("chat history attachment card labels", () => {
 
   it("preserves a dotted UUID-shaped segment in a legacy attachment name", () => {
     const path = `media://inbound/report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.backup---${MANAGED_UUID}.pdf`;
-    const attachments = extractTranscriptAttachments(
+    const { attachments } = projectMessageMedia(
       userMessageWithMedia([{ path, contentType: "application/pdf" }]),
+      [],
     );
 
     expect(attachments[0]?.attachment).toMatchObject({

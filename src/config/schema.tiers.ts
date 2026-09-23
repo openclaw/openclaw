@@ -1,11 +1,11 @@
-import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
+import type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { asSchemaObject, type ConfigJsonSchemaObject } from "./schema.shared.js";
 
 const ROOT_TIER_PATHS = `
 accessGroups acp agents approvals attachments auth bindings broadcast browser channels
-cloudWorkers commands cron diagnostics discovery env gateway hooks logging mcp memory messages
-meta models nodeHost plugins proxy secrets security session skills surfaces talk tools transcripts
-tts ui update wizard
+cloudWorkers commands cron desktop diagnostics discovery env gateway hooks logging mcp memory messages
+meta models nodeHost plugins proxy secrets security session skills surfaces talk telemetry tools transcripts
+tts ui update wizard worktreeAcceleration worktreeRoot
 `
   .trim()
   .split(/\s+/);
@@ -33,7 +33,7 @@ agents.defaults.subagents.model agents.defaults.subagents.model.primary
 agents.defaults.sandbox.ssh.workspaceRoot
 agents.defaults.sandbox.workspaceRoot
 agents.defaults.thinkingDefault agents.defaults.userTimezone agents.defaults.voiceModel.primary
-agents.defaults.workspace agents.entries.*.default agents.entries.*.groupChat.mentionPatterns
+agents.defaults.workspace agents.entries.*.groupChat.mentionPatterns
 agents.entries.*.groupChat.unmentionedInbound agents.entries.*.identity
 agents.entries.*.memory.search.enabled agents.entries.*.memory.search.provider
 agents.entries.*.memory.search.rememberAcrossConversations agents.entries.*.memory.search.model
@@ -43,6 +43,7 @@ agents.entries.*.runtime.acp.agent agents.entries.*.runtime.type
 agents.entries.*.sandbox.ssh.workspaceRoot agents.entries.*.sandbox.workspaceRoot
 agents.entries.*.subagents.model agents.entries.*.subagents.model.primary agents.entries.*.workspace
 agents.entries.*.tools.alsoAllow agents.entries.*.tools.deny
+agents.entries.*.tools.github
 agents.entries.*.tools.exec.applyPatch.workspaceOnly agents.entries.*.tools.exec.host
 agents.entries.*.tools.exec.mode agents.entries.*.tools.exec.strictInlineEval
 agents.entries.*.tools.exec.reviewer.model agents.entries.*.tools.exec.reviewer.model.primary
@@ -118,6 +119,7 @@ channels.telegram.accounts.*.groups.*.topics.*.groupPolicy
 channels.telegram.direct.*.topics.*.groupPolicy
 channels.whatsapp.groups.*.requireMention channels.whatsapp.selfChatMode
 cron.enabled env.vars gateway.auth.mode gateway.auth.password gateway.auth.token
+gateway.cliAgents.enabled
 gateway.auth.trustedProxy.allowUsers gateway.auth.trustedProxy.userHeader gateway.bind
 gateway.controlUi.allowedOrigins gateway.http.endpoints.chatCompletions.images.urlAllowlist
 gateway.http.endpoints.responses.files.urlAllowlist
@@ -129,6 +131,7 @@ gateway.trustedProxies hooks.allowedAgentIds hooks.enabled hooks.gmail.account h
 hooks.gmail.pushToken hooks.gmail.subscription hooks.gmail.topic
 hooks.gmail.model hooks.gmail.serve.port hooks.internal.entries.*.enabled
 hooks.mappings.*.agentId hooks.mappings.*.model hooks.token
+logging.audit.messages
 mcp.apps.enabled mcp.servers.*.args mcp.servers.*.auth mcp.servers.*.command
 mcp.servers.*.cwd mcp.servers.*.enabled mcp.servers.*.env mcp.servers.*.headers
 mcp.servers.*.oauth.authProfileId mcp.servers.*.transport mcp.servers.*.url
@@ -151,13 +154,17 @@ skills.workshop.autonomous.mode talk.provider talk.providers.*.apiKey
 talk.realtime.brain talk.realtime.mode talk.realtime.provider
 talk.realtime.model talk.realtime.providers.*.apiKey talk.realtime.speakerVoice talk.speechLocale
 tools.alsoAllow tools.deny tools.exec
+tools.github
 tools.fs tools.media.audio tools.media.image tools.media.video tools.message
 tools.exec.reviewer.model.primary tools.media.models.*.model
 tools.media.models.*.request.auth.token tools.profile tools.sessions
+tools.loopDetection.enabled tools.swarm tools.swarm.enabled
+tools.swarm.maxConcurrent tools.swarm.maxChildrenPerGroup tools.swarm.maxTotalPerGroup
+tools.swarm.waitTimeoutSecondsMax tools.swarm.defaultAgentId
 tools.web transcripts.enabled
 tts.auto tts.persona tts.personas.*.providers.*.apiKey tts.provider
 tts.providers.* tts.providers.*.apiKey
-ui.assistant.avatar ui.assistant.name ui.prefs.chatFollowUpMode
+ui.prefs.accent ui.prefs.chatFollowUpMode
 ui.prefs.chatPersistCommentary ui.prefs.chatSendShortcut ui.prefs.chatShowThinking
 ui.prefs.chatShowToolCalls ui.prefs.locale
 ui.prefs.theme ui.prefs.themeMode update.auto.enabled update.channel
@@ -166,7 +173,10 @@ wizard.accessMode wizard.appRecommendations
   .trim()
   .split(/\s+/);
 
-const ADVANCED_TUNING_PATHS = new Set(["agents.defaults.heartbeat.every"]);
+const ADVANCED_TUNING_PATHS = new Set([
+  "agents.defaults.heartbeat.every",
+  "session.maintenance.preserveRecent",
+]);
 const CHANNEL_KERNEL_TIER_PREFIXES = ["channels.defaults", "channels.modelByChannel"] as const;
 
 function isPluginOwnedChannelTierPath(path: string): boolean {
@@ -186,42 +196,71 @@ function splitPath(path: string): string[] {
     .filter(Boolean);
 }
 
-function createTierMatcher(hints: ConfigUiHints): (path: string) => boolean | undefined {
-  const exact = new Map<string, boolean>();
-  const wildcardByLength = new Map<
-    number,
-    Array<{ parts: string[]; advanced: boolean; wildcardCount: number }>
-  >();
+function createHintMatcher(
+  hints: ConfigUiHints,
+  acceptHint?: (hint: ConfigUiHint) => boolean,
+): (path: string) => ConfigUiHint | undefined {
+  type HintRule = { parts: string[]; hint: ConfigUiHint; wildcardCount: number; order: number };
+  const exact = new Map<string, ConfigUiHint>();
+  const wildcardsByPrefix = new Map<string, HintRule[]>();
+  let order = 0;
   for (const [hintPath, hint] of Object.entries(hints)) {
-    if (typeof hint.advanced !== "boolean") {
+    if (acceptHint && !acceptHint(hint)) {
       continue;
     }
     const parts = splitPath(hintPath);
     const wildcardCount = parts.filter((part) => part === "*").length;
     if (wildcardCount === 0) {
-      exact.set(parts.join("."), hint.advanced);
+      exact.set(parts.join("."), hint);
       continue;
     }
-    const bucket = wildcardByLength.get(parts.length) ?? [];
-    bucket.push({ parts, advanced: hint.advanced, wildcardCount });
-    wildcardByLength.set(parts.length, bucket);
+    const prefix = parts.slice(0, parts.indexOf("*")).join(".");
+    const key = `${parts.length}:${prefix}`;
+    const bucket = wildcardsByPrefix.get(key) ?? [];
+    bucket.push({ parts, hint, wildcardCount, order: order++ });
+    wildcardsByPrefix.set(key, bucket);
   }
-  for (const bucket of wildcardByLength.values()) {
+  for (const bucket of wildcardsByPrefix.values()) {
     bucket.sort((left, right) => left.wildcardCount - right.wildcardCount);
   }
   return (path) => {
+    const canonical = exact.get(path);
+    if (canonical !== undefined) {
+      return canonical;
+    }
     const parts = splitPath(path);
     const direct = exact.get(parts.join("."));
     if (direct !== undefined) {
       return direct;
     }
-    for (const candidate of wildcardByLength.get(parts.length) ?? []) {
-      if (candidate.parts.every((part, index) => part === "*" || part === parts[index])) {
-        return candidate.advanced;
+    let best: HintRule | undefined;
+    let prefix = parts.slice(0, -1).join(".");
+    // Prefixes narrow the search; specificity and authored order still decide
+    // precedence across buckets, including the empty prefix for leading wildcards.
+    for (;;) {
+      const candidate = wildcardsByPrefix
+        .get(`${parts.length}:${prefix}`)
+        ?.find((rule) => rule.parts.every((part, index) => part === "*" || part === parts[index]));
+      if (
+        candidate &&
+        (!best ||
+          candidate.wildcardCount < best.wildcardCount ||
+          (candidate.wildcardCount === best.wildcardCount && candidate.order < best.order))
+      ) {
+        best = candidate;
       }
+      if (!prefix) {
+        break;
+      }
+      prefix = prefix.slice(0, Math.max(0, prefix.lastIndexOf(".")));
     }
-    return undefined;
+    return best?.hint;
   };
+}
+
+function createTierMatcher(hints: ConfigUiHints): (path: string) => boolean | undefined {
+  const match = createHintMatcher(hints, (hint) => typeof hint.advanced === "boolean");
+  return (path) => match(path)?.advanced;
 }
 
 function isNumericSchema(schema: ConfigJsonSchemaObject): boolean {
@@ -229,20 +268,17 @@ function isNumericSchema(schema: ConfigJsonSchemaObject): boolean {
   return types.includes("number") || types.includes("integer");
 }
 
-function isNumericCommonException(path: string): boolean {
-  return splitPath(path).at(-1) === "port";
-}
-
-function resolveTier(params: { inheritedTier: boolean; ownTier: boolean | undefined }): boolean {
-  if (params.ownTier !== undefined) {
-    return params.ownTier;
-  }
-  return params.inheritedTier;
-}
-
-function mergeTierHint(hints: ConfigUiHints, path: string, advanced: boolean): void {
+function mergeTierHint(
+  hints: ConfigUiHints,
+  path: string,
+  advanced: boolean,
+  inherited?: ConfigUiHint,
+): void {
   const current = hints[path];
-  hints[path] = current ? { ...current, advanced } : { advanced };
+  if (current?.advanced !== advanced) {
+    // Generated exact tiers must retain the wildcard metadata they shadow in clients.
+    hints[path] = { ...(current ?? inherited), advanced };
+  }
 }
 
 function visitSchemaNodes<T>(
@@ -306,44 +342,33 @@ export function applyConfigTierHints(
   return next;
 }
 
-function applyNumericTuningTierHints(
-  schema: Record<string, unknown>,
-  hints: ConfigUiHints,
-): ConfigUiHints {
-  const next = { ...hints };
-  const authoredTier = createTierMatcher(hints);
-  visitSchemaNodes(schema, undefined, (node, path) => {
-    if (
-      path &&
-      isNumericSchema(node) &&
-      !isNumericCommonException(path) &&
-      authoredTier(path) === undefined
-    ) {
-      mergeTierHint(next, path, true);
-    }
-    return undefined;
-  });
-  return next;
-}
-
 /** Materialize the resolved tier on every schema path for RPC/UI consumers. */
 export function applyResolvedConfigTierHints(
   schema: Record<string, unknown>,
   hints: ConfigUiHints,
 ): ConfigUiHints {
-  const tierHints = applyNumericTuningTierHints(schema, hints);
-  const next = { ...tierHints };
-  const matchTier = createTierMatcher(tierHints);
+  const next = { ...hints };
+  const matchHint = createHintMatcher(hints);
+  const authoredTier = createTierMatcher(hints);
+  // Discover numeric defaults across every composition branch before resolving
+  // inheritance; generated wildcard hints participate in normal tier precedence.
+  visitSchemaNodes(schema, undefined, (node, path) => {
+    if (
+      path &&
+      isNumericSchema(node) &&
+      splitPath(path).at(-1) !== "port" &&
+      authoredTier(path) === undefined
+    ) {
+      mergeTierHint(next, path, true, matchHint(path));
+    }
+    return undefined;
+  });
+  const matchTier = createTierMatcher(next);
 
   visitSchemaNodes(schema, true, (_node, path, inheritedTier) => {
-    const advanced = path
-      ? resolveTier({
-          inheritedTier,
-          ownTier: matchTier(path),
-        })
-      : inheritedTier;
+    const advanced = path ? (matchTier(path) ?? inheritedTier) : inheritedTier;
     if (path) {
-      mergeTierHint(next, path, advanced);
+      mergeTierHint(next, path, advanced, matchHint(path));
     }
     return advanced;
   });

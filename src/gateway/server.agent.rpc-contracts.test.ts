@@ -4,7 +4,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import type { RawData, WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
-import { agentCommand, installGatewayTestHooks, onceMessage } from "./test-helpers.js";
+import {
+  agentCommandMock,
+  installGatewayTestHooks,
+  onceMessage,
+  prepareGatewayReplyRuntimeForTest,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -15,6 +20,14 @@ type AgentResponse = {
   payload?: {
     runId?: string;
     status?: string;
+    result?: {
+      payloads?: Array<{ text?: string }>;
+      deliveryStatus?: {
+        requested?: boolean;
+        attempted?: boolean;
+        reason?: string;
+      };
+    };
   };
 };
 
@@ -24,8 +37,9 @@ beforeAll(async () => {
   harness = await startGatewayServerHarness();
 });
 
-beforeEach(() => {
-  vi.mocked(agentCommand).mockReset();
+beforeEach(async () => {
+  vi.mocked(agentCommandMock).mockReset();
+  await prepareGatewayReplyRuntimeForTest();
 });
 
 afterAll(async () => {
@@ -55,14 +69,31 @@ function sendAgentRequest(params: {
 }
 
 describe("gateway agent RPC contracts", () => {
-  test("downgrades ambiguous delivery and replays one ordered run across reconnect", async () => {
+  test("preserves WebChat delivery status across ordered final response and replay", async () => {
     const runCompletion = createDeferred();
-    vi.mocked(agentCommand).mockImplementationOnce(async () => {
+    vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
       await runCompletion.promise;
+      return {
+        payloads: [{ text: "assistant reply" }],
+        meta: { durationMs: 1 },
+        deliverySucceeded: false,
+        deliveryStatus: {
+          requested: true,
+          attempted: false,
+          status: "failed",
+          succeeded: false,
+          error: true,
+          reason: "channel_resolved_to_internal",
+        },
+      };
     });
 
     const idempotencyKey = "gateway-agent-rpc-contract";
-    const first = await harness.openClient();
+    const clientOptions: Parameters<GatewayServerHarness["openClient"]>[0] = {
+      browserOrigin: `http://127.0.0.1:${harness.port}`,
+      client: { id: "webchat-ui", version: "1.0.0", platform: "test", mode: "webchat" },
+    };
+    const first = await harness.openClient(clientOptions);
     const orderedResponses: AgentResponse[] = [];
     const recordResponse = (data: RawData) => {
       const frame = JSON.parse(rawDataToString(data)) as AgentResponse;
@@ -94,12 +125,13 @@ describe("gateway agent RPC contracts", () => {
     });
 
     await acceptedPromise;
-    await vi.waitFor(() => expect(agentCommand).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(agentCommand).mock.calls[0]?.[0]).toMatchObject({
+    await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(agentCommandMock).mock.calls[0]?.[0]).toMatchObject({
       runId: idempotencyKey,
       channel: "webchat",
       messageChannel: "webchat",
-      deliver: false,
+      runContext: { messageChannel: "webchat" },
+      deliver: true,
       bestEffortDeliver: true,
     });
 
@@ -124,6 +156,14 @@ describe("gateway agent RPC contracts", () => {
       payload: {
         runId: idempotencyKey,
         status: "ok",
+        result: {
+          payloads: [{ text: "assistant reply" }],
+          deliveryStatus: {
+            requested: true,
+            attempted: false,
+            reason: "channel_resolved_to_internal",
+          },
+        },
       },
     });
 
@@ -132,7 +172,7 @@ describe("gateway agent RPC contracts", () => {
       first.ws.once("close", () => resolve());
     });
 
-    const second = await harness.openClient();
+    const second = await harness.openClient(clientOptions);
     try {
       const replayPromise = onceMessage<AgentResponse>(
         second.ws,
@@ -148,7 +188,12 @@ describe("gateway agent RPC contracts", () => {
       const replay = await replayPromise;
       expect(replay.payload).toEqual(terminal.payload);
       expect(replay.payload?.status).toBe("ok");
-      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(replay.payload?.result?.deliveryStatus).toMatchObject({
+        requested: true,
+        attempted: false,
+        reason: "channel_resolved_to_internal",
+      });
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
     } finally {
       second.ws.close();
     }

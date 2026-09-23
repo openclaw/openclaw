@@ -1,6 +1,13 @@
 import type { OpenClawConfig, TtsConfig } from "../config/types.js";
 import { mergeDeep } from "../infra/deep-merge.js";
+import {
+  resolvePluginCapabilityProvider,
+  resolvePluginCapabilityProviders,
+} from "../plugins/capability-provider-runtime.js";
+import { createLegacyPluginSdkProviderProjection } from "../plugins/legacy-sdk-provider-projection.js";
+import { getLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { parseTtsDirectives } from "./directives.js";
+import { createSpeechProviderRegistry } from "./provider-registry-core.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
 import type {
   SpeechProviderOverrides,
@@ -16,24 +23,44 @@ type PreparedTtsRequest = {
 };
 
 /** Merge a surface TTS override and resolve its inline synthesis directives. */
-export function prepareTtsRequest(params: {
+export async function prepareTtsRequest(params: {
   cfg: OpenClawConfig;
   override?: TtsConfig;
   text: string;
-}): PreparedTtsRequest {
-  const cfg = params.override
-    ? {
-        ...params.cfg,
-        tts: mergeDeep(params.cfg.tts ?? {}, params.override) as TtsConfig,
-      }
-    : params.cfg;
-  const config = resolveTtsConfig(cfg);
-  const directives = parseTtsDirectives(params.text, config.modelOverrides, {
-    cfg,
-    providerConfigs: config.providerConfigs,
-    preferredProviderId: resolveTtsProvider(config, resolveTtsPrefsPath(config)),
+}): Promise<PreparedTtsRequest> {
+  const host = getLegacyPluginSdkResourceHost();
+  return await host.track(() => {
+    using projection = createLegacyPluginSdkProviderProjection();
+    const retain = (registry: Parameters<typeof projection.select>[0]) => {
+      const project = projection.select(registry);
+      // Failed directive projections can leave tails; the host owns them before metadata runs.
+      projection.adopt();
+      return project;
+    };
+    const registry = createSpeechProviderRegistry({
+      getProvider: (providerId, cfg) =>
+        resolvePluginCapabilityProvider({ key: "speechProviders", providerId, cfg }, retain),
+      listProviders: (cfg) =>
+        resolvePluginCapabilityProviders({ key: "speechProviders", cfg }, retain),
+    });
+    const cfg = params.override
+      ? {
+          ...params.cfg,
+          tts: mergeDeep(params.cfg.tts ?? {}, params.override) as TtsConfig,
+        }
+      : params.cfg;
+    const config = resolveTtsConfig(cfg);
+    const directives = parseTtsDirectives(params.text, config.modelOverrides, {
+      cfg,
+      get providers() {
+        return registry.listSpeechProviders(cfg);
+      },
+      providerConfigs: config.providerConfigs,
+      preferredProviderId: resolveTtsProvider(config, resolveTtsPrefsPath(config), registry),
+    });
+    host.assertOpen();
+    return { cfg, directives };
   });
-  return { cfg, directives };
 }
 
 export function resolveExplicitTtsOverrides(params: {

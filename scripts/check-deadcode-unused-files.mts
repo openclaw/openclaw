@@ -3,13 +3,10 @@
 import { fileURLToPath } from "node:url";
 import {
   isLikelyRepoFilePath,
-  KNIP_MAX_BUFFER_BYTES,
-  runKnip,
+  runKnipScans,
   type KnipRunResult,
   uniqueSorted,
 } from "./deadcode-knip-runner.mts";
-
-export { KNIP_MAX_BUFFER_BYTES };
 
 const KNIP_COMMON_ARGS = ["--no-progress", "--reporter", "compact", "--files", "--no-config-hints"];
 
@@ -53,14 +50,6 @@ export function parseKnipCompactUnusedFiles(output: string) {
   return uniqueSorted(files);
 }
 
-/** Runs Knip and returns parsed unused-file results. */
-export async function runKnipUnusedFiles(params: NonNullable<Parameters<typeof runKnip>[1]> = {}) {
-  return await runKnip([...KNIP_SCANS[0].args, ...KNIP_COMMON_ARGS], {
-    ...params,
-    scanName: KNIP_SCANS[0].name,
-  });
-}
-
 /** Rejects every unused file reported by Knip. */
 export function checkUnusedFiles(output: string) {
   const files = parseKnipCompactUnusedFiles(output);
@@ -91,24 +80,6 @@ export function checkKnipUnusedFileScanResult(result: KnipRunResult) {
   return { ok: check.ok, failureReason: "", message: check.message };
 }
 
-async function main() {
-  // The scans are independent Knip child processes over separate configs;
-  // running them concurrently halves the lane's serial wall clock.
-  const results = await Promise.all(
-    KNIP_SCANS.map(async (scan) => ({
-      scan,
-      result: await runKnip([...scan.args, ...KNIP_COMMON_ARGS], { scanName: scan.name }),
-    })),
-  );
-  for (const { scan, result } of results) {
-    if (!reportUnusedFileScan(scan, result)) {
-      process.exitCode = 1;
-      return;
-    }
-  }
-  console.log("[deadcode] Knip production and full-tree unused-file checks passed with 0 entries.");
-}
-
 function reportUnusedFileScan(scan: (typeof KNIP_SCANS)[number], result: KnipRunResult) {
   const validation = checkKnipUnusedFileScanResult(result);
   if (validation.failureReason) {
@@ -133,5 +104,5 @@ function reportUnusedFileScan(scan: (typeof KNIP_SCANS)[number], result: KnipRun
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  await main();
+  await runKnipScans(KNIP_SCANS, KNIP_COMMON_ARGS, reportUnusedFileScan);
 }

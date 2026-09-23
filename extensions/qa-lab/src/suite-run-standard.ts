@@ -1,9 +1,13 @@
 import path from "node:path";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { startQaGatewayChild } from "./gateway-child.js";
-import type { QaLabLatestReport, QaLabScenarioOutcome } from "./lab-server.types.js";
-import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
+import type { QaRunnerTransportArtifacts } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { createQaGatewayChild } from "./gateway-child.js";
+import type { QaLabLatestReport } from "./lab-server.types.js";
+import {
+  formatQaScenarioFailureSuffix,
+  sanitizeQaProgressValue as sanitizeQaSuiteProgressValue,
+} from "./progress-format.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
 import {
   measureRuntimeParityCellTiming,
@@ -15,11 +19,13 @@ import {
   type QaSuiteGatewayRssSample,
   writeQaSuiteArtifacts,
 } from "./suite-artifacts.js";
+import { createQaSuiteEvidenceInvocation } from "./suite-evidence.js";
 import {
-  applyQaMergePatch,
+  applyQaSuiteGatewayConfigPatches,
   collectQaSuiteTransportPolicy,
   scenarioRequiresControlUi,
 } from "./suite-planning.js";
+import { createQaSuiteProgressController } from "./suite-progress.js";
 import { runQaSuiteRoundTripProbe } from "./suite-round-trip.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import {
@@ -65,12 +71,13 @@ export async function runQaFlowSuiteStandard(
     alternateModel,
     fastMode,
     enabledPluginIds,
-    gatewayConfigPatch,
+    gatewayConfigPatches,
     gatewayRuntimeOptions,
     concurrency,
     progressEnabled,
     gatewayHeapCheckpointsEnabled,
   } = context;
+  const recording = await createQaSuiteEvidenceInvocation(params, context);
   const ownsLab = !params?.lab;
   const startLab = params?.startLab;
   const controlUiEnabled =
@@ -90,10 +97,15 @@ export async function runQaFlowSuiteStandard(
     adapterFactories: params?.adapterFactories,
     channelDriver: params?.channelDriver,
     channelId: params?.channelId,
-    channelDriverSelection: params?.channelDriverSelection,
     adapterOptions: {
       ...params?.adapterOptions,
       scenarioIds: selectedScenarios.map((scenario) => scenario.id),
+      ...(selectedScenarios.some(
+        (scenario) =>
+          scenario.execution.kind === "flow" && scenario.execution.config?.agentE2e === true,
+      )
+        ? { agentE2e: true }
+        : {}),
     },
     cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
     outputDir,
@@ -103,14 +115,15 @@ export async function runQaFlowSuiteStandard(
   });
   const transport = transportFactoryResult.adapter;
   let mock: Awaited<ReturnType<typeof startQaProviderServer>> | undefined;
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gateway = createQaGatewayChild();
   let env: QaSuiteEnvironment | undefined;
   let preserveGatewayRuntimeDir: string | undefined;
   let runFailed = false;
   let runError: unknown;
-  let result: QaSuiteResult | undefined;
   let completionProgress: string | undefined;
-  let evidenceWritten = false;
+  let terminalScenarios: QaSuiteScenarioResult[] | undefined;
+  let transportArtifacts: QaRunnerTransportArtifacts | undefined;
+  let publishTerminalResult: (() => Promise<QaSuiteResult>) | undefined;
   const startedScenarioIds: string[] = [];
   try {
     writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
@@ -123,7 +136,8 @@ export async function runQaFlowSuiteStandard(
       `provider ready: ${sanitizeQaSuiteProgressValue(activeMock?.baseUrl ?? "live")}`,
     );
     writeQaSuiteProgress(progressEnabled, "gateway start");
-    const activeGateway = await startQaGatewayChild({
+    const runtimePreloads = transport.createRuntimePreloads?.();
+    const activeGateway = await gateway.start({
       repoRoot,
       command: params?.sutOpenClawCommand,
       providerBaseUrl: activeMock ? `${activeMock.baseUrl}/v1` : undefined,
@@ -142,10 +156,10 @@ export async function runQaFlowSuiteStandard(
       allowUnhealthyStartup: gatewayRuntimeOptions?.allowUnhealthyStartup,
       forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
       mutateConfig:
-        gatewayConfigPatch || params?.mutateConfig
+        gatewayConfigPatches.length > 0 || params?.mutateConfig
           ? (cfg) => {
-              const patchedConfig = gatewayConfigPatch
-                ? (applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig)
+              const patchedConfig = gatewayConfigPatches.length
+                ? (applyQaSuiteGatewayConfigPatches(cfg, gatewayConfigPatches) as OpenClawConfig)
                 : cfg;
               return params?.mutateConfig ? params.mutateConfig(patchedConfig) : patchedConfig;
             }
@@ -155,8 +169,8 @@ export async function runQaFlowSuiteStandard(
         transport.createRuntimeEnvPatch?.(),
         buildQaGatewayHeapCheckpointRuntimeEnvPatch(),
       ),
+      ...(runtimePreloads ? { runtimePreloads } : {}),
     });
-    gateway = activeGateway;
     writeQaSuiteProgress(
       progressEnabled,
       `gateway ready: ${sanitizeQaSuiteProgressValue(activeGateway.baseUrl)}`,
@@ -201,18 +215,12 @@ export async function runQaFlowSuiteStandard(
     }
     const scenarios: QaSuiteScenarioResult[] = [];
     let runtimeParityCellTiming: QaRuntimeParityCellTiming | undefined;
-    const liveScenarioOutcomes: QaLabScenarioOutcome[] = selectedScenarios.map((scenario) => ({
-      id: scenario.id,
-      name: scenario.title,
-      status: "pending",
-    }));
-
-    lab.setScenarioRun({
-      kind: "suite",
-      status: "running",
+    const progress = createQaSuiteProgressController({
+      lab,
+      scenarios: selectedScenarios,
       startedAt: startedAt.toISOString(),
-      scenarios: liveScenarioOutcomes,
     });
+    progress.start();
 
     const gatewayProcessRssSamples: QaSuiteGatewayRssSample[] = [];
     const sampleGatewayProcessRss = (label: string) => {
@@ -251,48 +259,88 @@ export async function runQaFlowSuiteStandard(
         `scenario start (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
       );
       sampleGatewayProcessRss(`scenario:${scenario.id}:start`);
-      liveScenarioOutcomes[index] = {
-        id: scenario.id,
-        name: scenario.title,
-        status: "running",
-        startedAt: new Date().toISOString(),
-      };
-      lab.setScenarioRun({
-        kind: "suite",
-        status: "running",
-        startedAt: startedAt.toISOString(),
-        scenarios: [...liveScenarioOutcomes],
-      });
+      progress.markRunning([index]);
 
       const scenarioBootstrapFinishedAt = new Date();
       let scenarioExecutionStartedAt = scenarioBootstrapFinishedAt;
       let scenarioExecutionFinishedAt = scenarioBootstrapFinishedAt;
-      const runSelectedScenario = async () => {
+      let previousAttempt = recording.invocation.previousFailure(index);
+      const recorded: { selected?: QaSuiteScenarioResult } = {};
+      const runObservedScenario = async () => {
         // Retry backoff and unsuccessful attempts are not part of the final
         // runtime turn, and they must not be relabeled as gateway bootstrap.
         scenarioExecutionStartedAt = new Date();
+        const id = recording.invocation.begin(index, previousAttempt);
+        let result: QaSuiteScenarioResult;
         try {
-          return await runScenarioDefinition(activeEnv, scenario);
+          result = await runScenarioDefinition(activeEnv, scenario);
+        } catch (error) {
+          await recording.record(
+            index,
+            id,
+            {
+              name: scenario.title,
+              status: "fail",
+              details: String(error),
+              steps: [],
+            },
+            { diagnostic: true, env: activeEnv, selectedId: previousAttempt ?? id },
+          );
+          throw error;
         } finally {
           scenarioExecutionFinishedAt = new Date();
         }
+        recorded.selected = await recording.record(index, id, result, {
+          env: activeEnv,
+          selectedId: previousAttempt !== null && result.status !== "pass" ? previousAttempt : id,
+        });
+        previousAttempt = id;
+        // Flake retry follows this attempt, not a retained failure from an
+        // earlier invocation. Reporting still uses the owner's selected result.
+        return { ...result, evidenceOccurrenceId: id };
       };
       const scenarioRetryCount =
         scenario.execution.kind === "flow" ? scenario.execution.retryCount : undefined;
       let scenarioResult: QaSuiteScenarioResult =
         params?.captureRuntimeParityCell || scenarioRetryCount === 0
-          ? await runSelectedScenario()
-          : await runQaScenarioWithFlakeRetry(runSelectedScenario, () =>
+          ? await runObservedScenario()
+          : await runQaScenarioWithFlakeRetry(runObservedScenario, () => {
+              // Both attempts share append-only Gateway logs. Retain the failed
+              // attempt through final cleanup even when its retry passes.
+              preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
               writeQaSuiteProgress(
                 progressEnabled,
                 `scenario retry (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
-              ),
-            );
+              );
+            });
+      if (
+        recorded.selected &&
+        recorded.selected.evidenceOccurrenceId !== scenarioResult.evidenceOccurrenceId
+      ) {
+        scenarioResult = recorded.selected;
+      }
       if (scenarioResult.status === "pass" && params?.roundTripProbe?.scenarioId === scenario.id) {
-        const probeResult = await runQaSuiteRoundTripProbe({
-          probe: params.roundTripProbe,
-          transport,
-        });
+        const probeOccurrenceId = recording.invocation.begin(index, null, { diagnostic: true });
+        let probeResult: Awaited<ReturnType<typeof runQaSuiteRoundTripProbe>>;
+        try {
+          probeResult = await runQaSuiteRoundTripProbe({
+            probe: params.roundTripProbe,
+            transport,
+          });
+        } catch (error) {
+          await recording.record(
+            index,
+            probeOccurrenceId,
+            {
+              name: scenario.title,
+              status: "fail",
+              details: String(error),
+              steps: [],
+            },
+            { diagnostic: true, env: activeEnv },
+          );
+          throw error;
+        }
         const probePassed = probeResult.passed >= params.roundTripProbe.count;
         scenarioResult = {
           ...scenarioResult,
@@ -308,6 +356,10 @@ export async function runQaFlowSuiteStandard(
             },
           ],
         };
+        scenarioResult = await recording.record(index, probeOccurrenceId, scenarioResult, {
+          diagnostic: true,
+          env: activeEnv,
+        });
       }
       if (params?.captureRuntimeParityCell && selectedScenarios.length === 1) {
         runtimeParityCellTiming = measureRuntimeParityCellTiming({
@@ -321,23 +373,9 @@ export async function runQaFlowSuiteStandard(
       scenarios.push(scenarioResult);
       writeQaSuiteProgress(
         progressEnabled,
-        `scenario ${scenarioResult.status} (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
+        `scenario ${scenarioResult.status} (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}${formatQaScenarioFailureSuffix(scenarioResult)}`,
       );
-      liveScenarioOutcomes[index] = {
-        id: scenario.id,
-        name: scenario.title,
-        status: scenarioResult.status,
-        details: scenarioResult.details,
-        steps: scenarioResult.steps,
-        startedAt: liveScenarioOutcomes[index]?.startedAt,
-        finishedAt: new Date().toISOString(),
-      };
-      lab.setScenarioRun({
-        kind: "suite",
-        status: "running",
-        startedAt: startedAt.toISOString(),
-        scenarios: [...liveScenarioOutcomes],
-      });
+      progress.recordScenarioResult(index, scenarioResult);
       if (params?.failFast === true && scenarioResult.status === "fail") {
         break;
       }
@@ -358,11 +396,11 @@ export async function runQaFlowSuiteStandard(
             mockBaseUrl: activeMock?.baseUrl,
           })
         : undefined;
-    const finishedAt = new Date();
+    const scenarioFinishedAt = new Date();
     await captureGatewayHeapCheckpoint("suite-finish");
     const metrics = buildQaSuiteRuntimeMetrics({
       startedAt,
-      finishedAt,
+      finishedAt: scenarioFinishedAt,
       gatewayProcessCpuStartMs,
       gatewayProcessCpuEndMs: activeGateway.getProcessCpuMs?.() ?? null,
       gatewayProcessRssStartBytes,
@@ -378,62 +416,61 @@ export async function runQaFlowSuiteStandard(
     ) {
       preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     }
-    lab.setScenarioRun({
-      kind: "suite",
-      status: "completed",
-      startedAt: startedAt.toISOString(),
-      finishedAt: finishedAt.toISOString(),
-      scenarios: [...liveScenarioOutcomes],
-    });
-    const { evidence, evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts(
-      {
-        repoRoot,
-        outputDir,
-        startedAt,
-        finishedAt,
-        scenarios,
-        metrics,
-        scenarioDefinitions: selectedScenarios,
-        evidenceMode: params?.evidenceMode,
-        transport,
-        providerMode,
-        primaryModel,
-        alternateModel,
-        fastMode,
-        concurrency,
-        channel: params?.channelId ?? params?.channelDriverSelection?.channel ?? transport.id,
-        channelDriver: transportFactoryResult.driver,
-        channelDriverSelection: params?.channelDriverSelection,
-        isolatedWorkers: false,
-        writeEvidenceFile: params?.writeEvidenceFile,
-        // Same "filtered → executed list, unfiltered → null" convention as
-        // the concurrent-path writeQaSuiteArtifacts call above.
-        scenarioIds:
-          params?.scenarioIds && params.scenarioIds.length > 0
-            ? selectedScenarios.map((scenario) => scenario.id)
-            : undefined,
-      },
-    );
-    const latestReport = {
-      outputPath: reportPath,
-      markdown: report,
-      generatedAt: finishedAt.toISOString(),
-    } satisfies QaLabLatestReport;
-    lab.setLatestReport(latestReport);
+    if (!isQaSuiteNestedRun(params)) {
+      transportArtifacts = await transport.captureArtifacts?.({ outputDir });
+    }
+    terminalScenarios = scenarios;
     completionProgress = `run complete: passed=${scenarios.length - failedCount - skippedCount} failed=${failedCount} skipped=${skippedCount} total=${scenarios.length}`;
-    evidenceWritten = evidence !== undefined && (params?.writeEvidenceFile ?? true);
-    result = {
-      outputDir,
-      evidence,
-      evidencePath,
-      reportPath,
-      summaryPath,
-      report,
-      scenarios,
-      startedScenarioIds,
-      watchUrl: lab.baseUrl,
-      ...(runtimeParityCell ? { runtimeParityCell } : {}),
-    } satisfies QaSuiteResult;
+    publishTerminalResult = async () => {
+      const finishedAt = new Date();
+      const { evidence, evidencePath, report, reportPath, summaryPath } =
+        await writeQaSuiteArtifacts({
+          repoRoot,
+          outputDir,
+          startedAt,
+          finishedAt,
+          scenarios,
+          metrics,
+          scenarioDefinitions: selectedScenarios,
+          evidenceMode: params?.evidenceMode,
+          recordedEvidence: recording.snapshot(),
+          transport,
+          providerMode,
+          primaryModel,
+          alternateModel,
+          fastMode,
+          concurrency,
+          channel: params?.channelId ?? transport.id,
+          channelDriver: transportFactoryResult.driver,
+          transportArtifacts,
+          isolatedWorkers: false,
+          writeEvidenceFile: params?.writeEvidenceFile,
+          // Same "filtered → executed list, unfiltered → null" convention as
+          // the concurrent-path writeQaSuiteArtifacts call above.
+          scenarioIds:
+            params?.scenarioIds && params.scenarioIds.length > 0
+              ? selectedScenarios.map((scenario) => scenario.id)
+              : undefined,
+        });
+      lab.setLatestReport({
+        outputPath: reportPath,
+        markdown: report,
+        generatedAt: finishedAt.toISOString(),
+      } satisfies QaLabLatestReport);
+      progress.complete([], finishedAt.toISOString());
+      return {
+        outputDir,
+        evidence,
+        evidencePath,
+        reportPath,
+        summaryPath,
+        report,
+        scenarios,
+        startedScenarioIds,
+        watchUrl: lab.baseUrl,
+        ...(runtimeParityCell ? { runtimeParityCell } : {}),
+      } satisfies QaSuiteResult;
+    };
   } catch (error) {
     runFailed = true;
     runError = error;
@@ -448,13 +485,12 @@ export async function runQaFlowSuiteStandard(
       closeWebSessions: activeEnv ? () => closeQaWebSessions(activeEnv.webSessionIds) : undefined,
       cleanupTransportBeforeGatewayStop: () => transportFactoryResult.cleanupBeforeGatewayStop(),
       cleanupTransportAfterGatewayStop: () => transportFactoryResult.cleanupAfterGatewayStop(),
-      stopGateway: activeGateway
-        ? () =>
-            activeGateway.stop({
-              keepTemp,
-              preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
-            })
-        : undefined,
+      stopGateway: () =>
+        activeGateway.stop({
+          keepTemp,
+          preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
+          beforeTempCleanup: transport.captureBeforeGatewayCleanup,
+        }),
       disposeAgentHarnesses: () => disposeRegisteredAgentHarnesses(),
       stopProvider: activeMock ? () => activeMock.stop() : undefined,
       finishLab: ownsLab
@@ -468,11 +504,17 @@ export async function runQaFlowSuiteStandard(
             }
           },
     });
-    throwQaSuiteCleanupErrors({ cleanupFailures, runFailed, runError, result, evidenceWritten });
+    throwQaSuiteCleanupErrors({
+      cleanupFailures,
+      runFailed,
+      runError,
+      scenarios: terminalScenarios,
+    });
   }
-  if (!result || !completionProgress) {
+  if (!publishTerminalResult || !completionProgress) {
     throw new Error("QA suite completed without terminal result metadata");
   }
+  const result = await publishTerminalResult();
   if (!params?.captureRuntimeParityCell && !isQaSuiteNestedRun(params)) {
     writeQaSuiteProgress(progressEnabled, completionProgress);
   }

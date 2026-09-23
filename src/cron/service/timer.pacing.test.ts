@@ -9,9 +9,11 @@ import { makeCronJob } from "../delivery.test-helpers.js";
 import { createNoopLogger } from "../service.test-harness.js";
 import type { CronJob, CronPacing } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
-import { createCronServiceState } from "./state.js";
+import { createCronServiceState, type DeferredCronNotifications } from "./state.js";
+import { runPostPersistCronNotifications } from "./store.js";
+import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { applyOutcomeToStoredJob, applyTriggerNoFireResult } from "./timer-outcomes.js";
-import { applyJobResult } from "./timer.js";
+import { applyJobResult, authorCronRunCompletion } from "./timer.js";
 
 const ENDED_AT = Date.parse("2026-07-18T12:00:00.000Z");
 const STARTED_AT = ENDED_AT - 1_000;
@@ -36,6 +38,15 @@ function makePacedJob(pacing: CronPacing, everyMs = 60 * 60_000): CronJob {
   });
 }
 
+function applyAuthoredOutcome(
+  state: ReturnType<typeof createCronServiceState>,
+  outcome: Omit<TimedCronRunOutcome, "completionStatus" | "deliveryState">,
+) {
+  applyOutcomeToStoredJob(state, authorCronRunCompletion(state, outcome.job, outcome), {
+    deferredNotifications: [],
+  });
+}
+
 describe("cron trigger evaluation ownership", () => {
   it("keeps a replacement once trigger armed after an obsolete fired payload", () => {
     const state = makeState();
@@ -46,7 +57,7 @@ describe("cron trigger evaluation ownership", () => {
     job.state.triggerState = { owner: "replacement" };
     state.store = { version: 1, jobs: [job] };
 
-    applyOutcomeToStoredJob(state, {
+    applyAuthoredOutcome(state, {
       jobId: job.id,
       job: admittedJob,
       status: "ok",
@@ -74,7 +85,7 @@ describe("cron trigger evaluation ownership", () => {
     job.state.scheduleErrorCount = 2;
     state.store = { version: 1, jobs: [job] };
 
-    applyOutcomeToStoredJob(state, {
+    applyAuthoredOutcome(state, {
       jobId: job.id,
       job: admittedJob,
       status: "ok",
@@ -101,7 +112,7 @@ describe("cron trigger evaluation ownership", () => {
     noteActiveCronJobTriggerMutation(job.id);
 
     try {
-      applyOutcomeToStoredJob(state, {
+      applyAuthoredOutcome(state, {
         jobId: job.id,
         job: admittedJob,
         activeJobMarker,
@@ -126,7 +137,7 @@ describe("applyJobResult dynamic cadence", () => {
     (scenario) => {
       const endedAt = MAX_DATE_TIMESTAMP_MS - 1_000;
       const state = makeState();
-      const deferredNotifications: Array<() => void> = [];
+      const deferredNotifications: DeferredCronNotifications = [];
       const job = makeCronJob({
         schedule:
           scenario === "one-shot retry"
@@ -184,7 +195,7 @@ describe("applyJobResult dynamic cadence", () => {
       expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
       expect(deferredNotifications).toHaveLength(1);
 
-      deferredNotifications[0]?.();
+      runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
       expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
       expect(state.deps.requestHeartbeat).toHaveBeenCalledOnce();
     },
@@ -197,13 +208,18 @@ describe("applyJobResult dynamic cadence", () => {
       state: { nextRunAtMs: endedAt },
     });
 
-    applyJobResult(makeState(), job, {
-      status: "error",
-      error: "permanent failure",
-      errorClassification: { kind: "permanent" },
-      startedAt: endedAt - 1_000,
-      endedAt,
-    });
+    applyJobResult(
+      makeState(),
+      job,
+      {
+        status: "error",
+        error: "permanent failure",
+        errorClassification: { kind: "permanent" },
+        startedAt: endedAt - 1_000,
+        endedAt,
+      },
+      { deferredNotifications: [] },
+    );
 
     expect(endedAt + 30_000).toBeLessThanOrEqual(MAX_DATE_TIMESTAMP_MS);
     expect(job.enabled).toBe(false);
@@ -219,12 +235,17 @@ describe("applyJobResult dynamic cadence", () => {
   ] as const)("%s", (_label, pacing, delayMs, expectedDelayMs) => {
     const job = makePacedJob(pacing);
 
-    applyJobResult(makeState(), job, {
-      status: "ok",
-      startedAt: STARTED_AT,
-      endedAt: ENDED_AT,
-      nextCheck: { delayMs },
-    });
+    applyJobResult(
+      makeState(),
+      job,
+      {
+        status: "ok",
+        startedAt: STARTED_AT,
+        endedAt: ENDED_AT,
+        nextCheck: { delayMs },
+      },
+      { deferredNotifications: [] },
+    );
 
     expect(job.state.nextRunAtMs).toBe(ENDED_AT + expectedDelayMs);
     expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + expectedDelayMs);
@@ -235,11 +256,16 @@ describe("applyJobResult dynamic cadence", () => {
     job.state.pacedNextRunAtMs = ENDED_AT + 30 * 60_000;
     job.state.forcePreservedNextRunAtMs = job.state.nextRunAtMs;
 
-    applyJobResult(makeState(), job, {
-      status: "ok",
-      startedAt: STARTED_AT,
-      endedAt: ENDED_AT,
-    });
+    applyJobResult(
+      makeState(),
+      job,
+      {
+        status: "ok",
+        startedAt: STARTED_AT,
+        endedAt: ENDED_AT,
+      },
+      { deferredNotifications: [] },
+    );
 
     expect(job.state.nextRunAtMs).toBe(STARTED_AT + 60 * 60_000);
     expect(job.state.pacedNextRunAtMs).toBeUndefined();
@@ -253,7 +279,7 @@ describe("applyJobResult dynamic cadence", () => {
     state.store = { version: 1, jobs: [job] };
     const admittedJob = structuredClone(job);
 
-    applyOutcomeToStoredJob(state, {
+    applyAuthoredOutcome(state, {
       jobId: job.id,
       job: admittedJob,
       status: "ok",
@@ -279,7 +305,7 @@ describe("applyJobResult dynamic cadence", () => {
     job.state.forcePreservedNextRunAtMs = marker;
     state.store = { version: 1, jobs: [job] };
 
-    applyOutcomeToStoredJob(state, {
+    applyAuthoredOutcome(state, {
       jobId: job.id,
       job: admittedJob,
       status: "ok",
@@ -311,7 +337,7 @@ describe("applyJobResult dynamic cadence", () => {
         endedAt: ENDED_AT,
         triggerEval: { fired: false, stateChanged: false },
       },
-      { scheduleMode: "force-preserve" },
+      { deferredNotifications: [], scheduleMode: "immediate-preserve" },
     );
 
     expect(job.state.nextRunAtMs).toBe(pendingSlot);
@@ -337,7 +363,7 @@ describe("applyJobResult dynamic cadence", () => {
         endedAt: ENDED_AT,
         ...(delayMs !== undefined ? { nextCheck: { delayMs } } : {}),
       },
-      { scheduleMode: "preserve" },
+      { deferredNotifications: [], scheduleMode: "preserve" },
     );
 
     expect(job.state.nextRunAtMs).toBe(pendingSlot);
@@ -348,12 +374,17 @@ describe("applyJobResult dynamic cadence", () => {
     const job = makePacedJob({ min: "1s", max: "2m" });
     job.trigger = { script: "return true" };
 
-    applyJobResult(makeState(), job, {
-      status: "ok",
-      startedAt: STARTED_AT,
-      endedAt: ENDED_AT,
-      nextCheck: { delayMs: 1_000 },
-    });
+    applyJobResult(
+      makeState(),
+      job,
+      {
+        status: "ok",
+        startedAt: STARTED_AT,
+        endedAt: ENDED_AT,
+        nextCheck: { delayMs: 1_000 },
+      },
+      { deferredNotifications: [] },
+    );
 
     expect(job.state.nextRunAtMs).toBe(ENDED_AT + 30_000);
     expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + 30_000);
@@ -363,13 +394,18 @@ describe("applyJobResult dynamic cadence", () => {
     const job = makePacedJob({ min: "1h", max: "2h" }, 10_000);
     job.state.pacedNextRunAtMs = ENDED_AT + 90 * 60_000;
 
-    applyJobResult(makeState(), job, {
-      status: "error",
-      error: "temporary failure",
-      startedAt: STARTED_AT,
-      endedAt: ENDED_AT,
-      nextCheck: { delayMs: 90 * 60_000 },
-    });
+    applyJobResult(
+      makeState(),
+      job,
+      {
+        status: "error",
+        error: "temporary failure",
+        startedAt: STARTED_AT,
+        endedAt: ENDED_AT,
+        nextCheck: { delayMs: 90 * 60_000 },
+      },
+      { deferredNotifications: [] },
+    );
 
     expect(job.state.nextRunAtMs).toBe(ENDED_AT + 30_000);
     expect(job.state.pacedNextRunAtMs).toBeUndefined();
@@ -384,13 +420,18 @@ describe("applyJobResult dynamic cadence", () => {
     });
     state.store = { version: 1, jobs: [job] };
 
-    applyJobResult(state, job, {
-      status: "ok",
-      startedAt: STARTED_AT,
-      endedAt: ENDED_AT,
-      nextCheck: { delayMs: 30 * 60_000 },
-    });
-    recomputeNextRunsForMaintenance(state, { nowMs: ENDED_AT + 1_000 });
+    applyJobResult(
+      state,
+      job,
+      {
+        status: "ok",
+        startedAt: STARTED_AT,
+        endedAt: ENDED_AT,
+        nextCheck: { delayMs: 30 * 60_000 },
+      },
+      { deferredNotifications: [] },
+    );
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [], nowMs: ENDED_AT + 1_000 });
 
     expect(job.state.nextRunAtMs).toBe(ENDED_AT + 30 * 60_000);
     expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + 30 * 60_000);
@@ -405,13 +446,18 @@ describe("applyJobResult dynamic cadence", () => {
     });
     state.store = { version: 1, jobs: [job] };
 
-    applyJobResult(state, job, {
-      status: "ok",
-      startedAt: STARTED_AT,
-      endedAt: ENDED_AT,
-    });
+    applyJobResult(
+      state,
+      job,
+      {
+        status: "ok",
+        startedAt: STARTED_AT,
+        endedAt: ENDED_AT,
+      },
+      { deferredNotifications: [] },
+    );
     job.state.nextRunAtMs = ENDED_AT + 30 * 60_000 + 1_234;
-    recomputeNextRunsForMaintenance(state, { nowMs: ENDED_AT + 1_000 });
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [], nowMs: ENDED_AT + 1_000 });
 
     expect(job.state.nextRunAtMs).toBe(ENDED_AT + 60_000);
   });
@@ -428,7 +474,7 @@ describe("applyJobResult dynamic cadence", () => {
     });
     state.store = { version: 1, jobs: [job] };
 
-    recomputeNextRunsForMaintenance(state, { nowMs: ENDED_AT + 1_000 });
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [], nowMs: ENDED_AT + 1_000 });
 
     expect(job.state.nextRunAtMs).toBe(ENDED_AT + 60_000);
     expect(job.state.pacedNextRunAtMs).toBeUndefined();
@@ -446,7 +492,7 @@ describe("applyJobResult dynamic cadence", () => {
     });
     state.store = { version: 1, jobs: [job] };
 
-    recomputeNextRunsForMaintenance(state, { nowMs: ENDED_AT + 1_000 });
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [], nowMs: ENDED_AT + 1_000 });
 
     expect(job.schedule).toEqual({ kind: "every", everyMs: 60 * 60_000, anchorMs: STARTED_AT });
     expect(job.state.pacedNextRunAtMs).toBeUndefined();

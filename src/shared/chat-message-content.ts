@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 // Chat message content helpers extract user-visible text from mixed message parts.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 
@@ -22,6 +23,7 @@ export function extractFirstTextBlock(message: unknown): string | undefined {
 }
 
 export type AssistantPhase = "commentary" | "final_answer";
+type AssistantTextBlock = Record<string, unknown> & { type: string; text: string };
 
 type AssistantTextSignature = { id?: string; phase?: AssistantPhase } | null;
 type AssistantTextSignatureBlock = { textSignature?: unknown };
@@ -89,7 +91,7 @@ export function resolveAssistantMessagePhase(message: unknown): AssistantPhase |
   if (!Array.isArray(entry.content)) {
     return undefined;
   }
-  const explicitPhases = new Set<AssistantPhase>();
+  let explicitPhase: AssistantPhase | undefined;
   for (const block of entry.content) {
     if (!block || typeof block !== "object") {
       continue;
@@ -100,10 +102,13 @@ export function resolveAssistantMessagePhase(message: unknown): AssistantPhase |
     }
     const phase = parseAssistantTextSignature(record)?.phase;
     if (phase) {
-      explicitPhases.add(phase);
+      if (explicitPhase && explicitPhase !== phase) {
+        return undefined;
+      }
+      explicitPhase = phase;
     }
   }
-  return explicitPhases.size === 1 ? [...explicitPhases][0] : undefined;
+  return explicitPhase;
 }
 
 /** Finds assistant phase metadata on event payloads that may wrap message-like records. */
@@ -126,6 +131,38 @@ export function resolveAssistantEventPhase(data: unknown): AssistantPhase | unde
   );
 }
 
+/** Selects original text blocks with the same explicit-phase precedence used for delivery. */
+export function readAssistantTextBlocksForPhase(
+  message: unknown,
+  phase?: AssistantPhase,
+): AssistantTextBlock[] {
+  const entry = asOptionalRecord(message);
+  if (!Array.isArray(entry?.content)) {
+    return [];
+  }
+  const hasExplicitPhases = entry.content.some((value) => {
+    const block = asOptionalRecord(value);
+    return Boolean(
+      block &&
+      isAssistantTextContentBlockType(block.type) &&
+      parseAssistantTextSignature(block)?.phase,
+    );
+  });
+  if (!phase && hasExplicitPhases) {
+    return [];
+  }
+  const messagePhase = hasExplicitPhases ? undefined : normalizeAssistantPhase(entry.phase);
+  return entry.content.filter((value): value is AssistantTextBlock => {
+    const block = asOptionalRecord(value);
+    return Boolean(
+      block &&
+      isAssistantTextContentBlockType(block.type) &&
+      typeof block.text === "string" &&
+      (parseAssistantTextSignature(block)?.phase ?? messagePhase) === phase,
+    );
+  });
+}
+
 /** Extracts assistant text for a requested phase without mixing legacy and explicitly phased text. */
 export function extractAssistantTextForPhase(
   message: unknown,
@@ -141,85 +178,41 @@ export function extractAssistantTextForPhase(
   const entry = message as { text?: unknown; content?: unknown; phase?: unknown };
   const messagePhase = normalizeAssistantPhase(entry.phase);
   const phase = options?.phase;
-  const shouldIncludeContent = (resolvedPhase?: AssistantPhase) => {
-    if (phase) {
-      return resolvedPhase === phase;
-    }
-    return resolvedPhase === undefined;
-  };
   const sanitizeText = options?.sanitizeText;
   const joinWith = options?.joinWith ?? "\n";
   const sanitizeBlockText = (text: string) => (sanitizeText ? sanitizeText(text) : text);
-  const normalizeJoinedText = (text: string) => {
-    const normalized = text.trim();
-    return normalized || undefined;
-  };
-
-  if (typeof entry.text === "string") {
-    if (!shouldIncludeContent(messagePhase)) {
-      return undefined;
-    }
-    return normalizeJoinedText(sanitizeBlockText(entry.text));
-  }
-
-  if (typeof entry.content === "string") {
-    if (!shouldIncludeContent(messagePhase)) {
-      return undefined;
-    }
-    return normalizeJoinedText(sanitizeBlockText(entry.content));
+  const inlineText = typeof entry.text === "string" ? entry.text : entry.content;
+  if (typeof inlineText === "string") {
+    const text = messagePhase === phase ? sanitizeBlockText(inlineText) : undefined;
+    return text?.trim() ? text : undefined;
   }
 
   if (!Array.isArray(entry.content)) {
     return undefined;
   }
 
-  const hasExplicitPhasedTextBlocks = entry.content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
+  const parts: string[] = [];
+  for (const block of readAssistantTextBlocksForPhase(message, phase)) {
+    const sanitized = sanitizeBlockText(block.text);
+    if (sanitized.trim()) {
+      parts.push(sanitized);
     }
-    const record = block as { type?: unknown; textSignature?: unknown };
-    if (!isAssistantTextContentBlockType(record.type)) {
-      return false;
-    }
-    return Boolean(parseAssistantTextSignature(record)?.phase);
-  });
-
-  // Once explicit phased blocks exist, unphased extraction should not revive legacy text.
-  if (!phase && hasExplicitPhasedTextBlocks) {
-    return undefined;
   }
-
-  const parts = entry.content
-    .map((block) => {
-      if (!block || typeof block !== "object") {
-        return null;
-      }
-      const record = block as { type?: unknown; text?: unknown; textSignature?: unknown };
-      if (!isAssistantTextContentBlockType(record.type) || typeof record.text !== "string") {
-        return null;
-      }
-      const signature = parseAssistantTextSignature(record);
-      const resolvedPhase =
-        signature?.phase ?? (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
-      if (!shouldIncludeContent(resolvedPhase)) {
-        return null;
-      }
-      const sanitized = sanitizeBlockText(record.text);
-      return sanitized.trim() ? sanitized : null;
-    })
-    .filter((value): value is string => typeof value === "string");
-
-  if (parts.length === 0) {
-    return undefined;
-  }
-  return normalizeJoinedText(parts.join(joinWith));
+  return parts.length ? parts.join(joinWith) : undefined;
 }
 
 /** Returns user-visible assistant text, preferring final answers over legacy unphased text. */
-export function extractAssistantVisibleText(message: unknown): string | undefined {
+export function extractAssistantPhaseText(message: unknown): string | undefined {
   const finalAnswerText = extractAssistantTextForPhase(message, { phase: "final_answer" });
   if (finalAnswerText) {
     return finalAnswerText;
   }
   return extractAssistantTextForPhase(message);
+}
+
+/** Captures authored display sources without making commentary a final reply. */
+export function extractAssistantTranscriptSourceText(message: unknown): string | undefined {
+  const commentary = extractAssistantTextForPhase(message, { phase: "commentary" });
+  const reply = extractAssistantPhaseText(message);
+  return commentary && reply ? `${commentary}\n${reply}` : (commentary ?? reply);
 }

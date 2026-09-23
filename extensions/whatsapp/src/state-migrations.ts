@@ -1,9 +1,8 @@
-// Whatsapp plugin module implements state migrations behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
-import { fileExists } from "openclaw/plugin-sdk/security-runtime";
+import { fileExists } from "openclaw/plugin-sdk/file-access-runtime";
 import { isWhatsAppBaileysAuthFileName } from "./creds-files.js";
 
 export function detectWhatsAppLegacyStateMigrations(params: {

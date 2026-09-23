@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
@@ -13,6 +14,7 @@ function projectionState(): Parameters<typeof applySelectedSessionProjection>[0]
     chatEffectiveQueueMode: "interrupt",
     chatQueueModeOverride: "interrupt",
     selectedChatSessionArchived: true,
+    selectedChatSessionIncognito: true,
   };
 }
 
@@ -25,6 +27,7 @@ describe("applySelectedSessionProjection", () => {
       chatEffectiveQueueMode: "interrupt",
       chatQueueModeOverride: "interrupt",
       selectedChatSessionArchived: true,
+      selectedChatSessionIncognito: true,
     });
   });
 
@@ -45,6 +48,7 @@ describe("applySelectedSessionProjection", () => {
       chatEffectiveQueueMode: "followup",
       chatQueueModeOverride: "followup",
       selectedChatSessionArchived: false,
+      selectedChatSessionIncognito: false,
     });
   });
 
@@ -85,6 +89,150 @@ describe("applySelectedSessionProjection", () => {
 });
 
 describe("resolveChatArtifactDownload", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const artifact = {
+    id: "artifact-1",
+    type: "image",
+    title: "image",
+    mimeType: "image/png",
+    download: { mode: "bytes" },
+  };
+  const inline = { artifact, encoding: "base64", data: "cG5n" };
+  const ticket = "/api/artifacts/download/connection/ticket";
+
+  it.each([
+    { page: "https://control.test", gateway: "wss://control.test", http: true },
+    { page: "https://control.test", gateway: "wss://remote.test", http: false },
+    { page: "http://control.test", gateway: "ws://control.test", http: false },
+  ])("uses raw HTTP bytes only for $page with $gateway", async ({ page, gateway, http }) => {
+    vi.stubGlobal("location", new URL(page));
+    const blob = new Blob(["png"], { type: "image/png" });
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      headers: new Headers({ "Content-Disposition": ' AtTaChMeNt ; filename="image.png" ' }),
+      blob: async () => blob,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const request = vi.fn().mockResolvedValue(http ? { artifact, url: ticket } : inline);
+    const result = await resolveChatArtifactDownload(
+      {
+        connected: true,
+        resourceBasePath: "/mount",
+        client: { gatewayUrl: gateway, request } as never,
+      },
+      { sessionKey: "agent:main:main", artifactId: artifact.id },
+    );
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "artifacts.download",
+      {
+        sessionKey: "agent:main:main",
+        artifactId: artifact.id,
+        ...(http ? { transport: "http" } : {}),
+      },
+      { timeoutMs: 30_000 },
+    );
+    if (http) {
+      expect(result).toEqual({ url: `/mount${ticket}`, blob });
+      expect(fetchMock).toHaveBeenCalledExactlyOnceWith(`/mount${ticket}`, {
+        credentials: "same-origin",
+        redirect: "error",
+        signal: expect.any(AbortSignal),
+      });
+    } else {
+      expect(result).toEqual({ url: "data:image/png;base64,cG5n" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["network", "missing route", "SPA fallback"])(
+    "reauthorizes inline bytes when the HTTPS proxy returns %s",
+    async (failure) => {
+      vi.stubGlobal("location", new URL("https://control.test"));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          if (failure === "network") {
+            throw new TypeError("Failed to fetch");
+          }
+          return {
+            ok: failure !== "missing route",
+            status: failure === "missing route" ? 404 : 200,
+            headers: new Headers(),
+            blob: async () => new Blob(["UI"], { type: "text/html" }),
+          };
+        }),
+      );
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({ artifact, url: ticket })
+        .mockResolvedValue(inline);
+      const result = await resolveChatArtifactDownload(
+        { connected: true, client: { gatewayUrl: "wss://control.test", request } as never },
+        { sessionKey: "agent:main:main", artifactId: artifact.id },
+      );
+      expect(result).toEqual({ url: "data:image/png;base64,cG5n" });
+      expect(request.mock.calls.map(([, params]) => params)).toEqual([
+        { sessionKey: "agent:main:main", artifactId: artifact.id, transport: "http" },
+        { sessionKey: "agent:main:main", artifactId: artifact.id },
+      ]);
+    },
+  );
+
+  it.each([
+    { mimeType: "image/svg+xml", type: "image" },
+    { mimeType: "text/html", type: "image" },
+    { mimeType: "image/png", type: "file" },
+  ])("rejects $type HTTP blobs with $mimeType at the chat boundary", async ({ mimeType, type }) => {
+    vi.stubGlobal("location", new URL("https://control.test"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        headers: new Headers({ "Content-Disposition": 'attachment; filename="artifact"' }),
+        blob: async () => new Blob(["untrusted"], { type: mimeType }),
+      })),
+    );
+    const request = vi.fn().mockResolvedValue({
+      artifact: { ...artifact, mimeType, type },
+      url: ticket,
+    });
+    const result = await resolveChatArtifactDownload(
+      { connected: true, client: { gatewayUrl: "wss://control.test", request } as never },
+      { sessionKey: "agent:main:main", artifactId: artifact.id },
+    );
+    expect(result).toBeNull();
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("discards a failed transfer after reconnect without requesting inline bytes", async () => {
+    vi.stubGlobal("location", new URL("https://control.test"));
+    const transfer = createDeferred<Response>();
+    const started = createDeferred();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        started.resolve();
+        return transfer.promise;
+      }),
+    );
+    const request = vi.fn().mockResolvedValue({ artifact, url: ticket });
+    const state = {
+      connected: true,
+      connectionEpoch: 1,
+      client: { gatewayUrl: "wss://control.test", request } as never,
+    };
+    const pending = resolveChatArtifactDownload(state, {
+      sessionKey: "main",
+      artifactId: artifact.id,
+    });
+    await started.promise;
+    state.connectionEpoch += 1;
+    transfer.reject(new TypeError("Connection changed"));
+    expect(await pending).toBeNull();
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it("returns a trimmed ticket without exposing a gateway bearer credential", async () => {
     const requests: Array<{ method: string; params: unknown; options: unknown }> = [];
     const result = await resolveChatArtifactDownload(

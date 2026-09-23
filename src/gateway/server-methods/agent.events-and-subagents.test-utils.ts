@@ -21,8 +21,8 @@ import {
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
 import {
+  getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
-  waitForActiveGatewayRootWork,
 } from "../../process/gateway-work-admission.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId } from "../../tasks/task-registry.js";
@@ -55,7 +55,6 @@ import {
   invokeAgent,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
-import type { GatewayRequestContext } from "./types.js";
 
 const mocks = getAgentTestMocks();
 
@@ -117,7 +116,7 @@ describe("gateway agent handler", () => {
         phase: "continuing",
         ownerRunId: "cron-media-release-rotates",
       });
-      await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,
         "cron-media-release-rotation-complete",
@@ -214,7 +213,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "public-provenance-accounting",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -355,7 +354,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "admin-sender-owner",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -497,7 +496,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "model-run-raw",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -654,14 +653,20 @@ describe("gateway agent handler", () => {
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     const error = expectRespondError(respond, {});
-    expectStringFieldContains(error, "message", "requires target");
+    expect(error).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
+      message: expect.stringContaining("requires target"),
+    });
+    expect(error.message).not.toMatch(/^Error:/u);
   });
 
-  it("downgrades to session-only when bestEffortDeliver=true and no external channel is configured", async () => {
+  it("preserves requested delivery without inventing a source channel", async () => {
     mocks.agentCommand.mockClear();
     primeMainAgentRun();
     const respond = vi.fn();
     const logInfo = vi.fn();
+    const context = makeContext();
+    context.logGateway.info = logInfo;
 
     await invokeAgent(
       {
@@ -675,19 +680,11 @@ describe("gateway agent handler", () => {
       {
         reqId: "best-effort-delivery-fallback",
         respond,
-        context: {
-          dedupe: new Map(),
-          addChatRun: vi.fn(),
-          chatAbortControllers: new Map(),
-          logGateway: { info: logInfo, error: vi.fn() },
-          broadcastToConnIds: vi.fn(),
-          getSessionEventSubscriberConnIds: () => new Set(),
-          getRuntimeConfig: () => mocks.loadConfigReturn,
-        } as unknown as GatewayRequestContext,
+        context,
       },
     );
 
-    await waitForAgentCommandCall();
+    const callArgs = await waitForAgentCommandCall<{ deliver?: boolean; channel?: string }>();
     const accepted = respond.mock.calls.find(
       (call: unknown[]) =>
         call[0] === true && (call[1] as Record<string, unknown>)?.status === "accepted",
@@ -697,9 +694,15 @@ describe("gateway agent handler", () => {
     });
     const rejected = respond.mock.calls.find((call: unknown[]) => call[0] === false);
     expect(rejected).toBeUndefined();
+    expect(callArgs).toMatchObject({
+      deliver: true,
+      channel: undefined,
+      messageChannel: undefined,
+      runContext: { messageChannel: undefined },
+    });
     expect(logInfo).toHaveBeenCalledTimes(1);
     expect(mockCallArg(logInfo)).toContain(
-      "agent delivery downgraded to session-only (bestEffortDeliver)",
+      "agent delivery unresolved (bestEffortDeliver); final delivery will report",
     );
   });
 
@@ -770,7 +773,13 @@ describe("gateway agent handler", () => {
     expect(rejection).toBeUndefined();
   });
 
-  it.each(["channel", "replyChannel"] as const)("rejects unknown %s hints", async (field) => {
+  it.each(
+    (["channel", "replyChannel"] as const).flatMap((field) =>
+      ["not-a-real-channel", "cron-event", "exec-event"].map(
+        (channel) => [field, channel] as const,
+      ),
+    ),
+  )("rejects unknown %s hint %s", async (field, channel) => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
     const respond = vi.fn();
@@ -780,14 +789,14 @@ describe("gateway agent handler", () => {
         message: "bogus channel",
         agentId: "main",
         sessionKey: "agent:main:main",
-        [field]: "not-a-real-channel",
+        [field]: channel,
         idempotencyKey: `unknown-${field}`,
       } as AgentParams,
       { reqId: `unknown-${field}-1`, respond },
     );
 
     const error = expectRespondError(respond, {});
-    expectStringFieldContains(error, "message", "unknown channel: not-a-real-channel");
+    expectStringFieldContains(error, "message", `unknown channel: ${channel}`);
   });
 
   it("keeps voice-originated followups on the voice message channel without delivery", async () => {
@@ -1073,6 +1082,62 @@ describe("gateway agent handler", () => {
     expect(callArgs.bashElevated).toEqual(bashElevated);
   });
 
+  it("fails closed when an exec approval handoff expires during durable admission", async () => {
+    vi.useFakeTimers();
+    const sessionKey = "agent:main:telegram:direct:123";
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    const registration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-expired-admission",
+      sessionKey,
+      bashElevated,
+    });
+    if (!registration) {
+      throw new Error("expected runtime handoff id");
+    }
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    const stagePendingInput = mocks.stageSessionPendingInput.getMockImplementation();
+    if (!stagePendingInput) {
+      throw new Error("expected pending input staging implementation");
+    }
+    mocks.stageSessionPendingInput.mockImplementationOnce(async (...args) => {
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1);
+      return await stagePendingInput(...args);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "must not dispatch" }],
+      meta: { durationMs: 100 },
+    });
+    const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
+
+    const respond = await invokeAgent(
+      {
+        message: "exec followup",
+        sessionKey,
+        channel: "telegram",
+        idempotencyKey: registration.idempotencyKey,
+        internalRuntimeHandoffId: registration.handoffId,
+      },
+      {
+        reqId: "exec-followup-expired-admission",
+        client: backendGatewayClient(),
+      },
+    );
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore);
+    expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
+      runId: registration.idempotencyKey,
+      status: "error",
+    });
+  });
+
   it("materializes approved exec output only from an authenticated runtime handoff", async () => {
     const sessionKey = "agent:main:telegram:direct:123";
     const resultText = `Exec finished (gateway id=req-output, code 0)\nfirst line\n\tindented\n${"x".repeat(17_000)}`;
@@ -1141,7 +1206,7 @@ describe("gateway agent handler", () => {
     ).toBeUndefined();
   });
 
-  it("releases an exec approval handoff when setup fails before dispatch", async () => {
+  it("releases an exec approval handoff when input admission fails", async () => {
     const sessionKey = "agent:main:telegram:direct:123";
     const registration = registerExecApprovalFollowupRuntimeHandoff({
       approvalId: "req-output-setup-failure",
@@ -1157,21 +1222,7 @@ describe("gateway agent handler", () => {
       lastChannel: "telegram",
       lastTo: "123",
     });
-    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce({
-      runId: "previous-run",
-      childSessionKey: sessionKey,
-      controllerSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      requesterDisplayKey: "main",
-      task: "old task",
-      cleanup: "keep",
-      createdAt: 1,
-      startedAt: 2,
-      endedAt: 3,
-      outcome: { status: "ok" },
-    });
-    mocks.replaceSubagentRunAfterSteer.mockRejectedValueOnce(new Error("reactivate boom"));
+    mocks.stageSessionPendingInput.mockRejectedValueOnce(new Error("input admission failed"));
 
     const respond = await invokeAgent(
       {
@@ -1192,11 +1243,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const errorCall = respond.mock.calls.find((call: unknown[]) => call[0] === false);
-    expectRecordFields(requireValue(errorCall, "error response missing")[1], {
-      runId: registration.idempotencyKey,
-      status: "error",
-    });
+    expectRespondError(respond, { message: "input admission failed" });
     expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore);
     expect(
       claimExecApprovalFollowupRuntimeHandoff({

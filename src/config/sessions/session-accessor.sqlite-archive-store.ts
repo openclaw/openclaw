@@ -1,0 +1,281 @@
+import fs from "node:fs";
+import path from "node:path";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import {
+  hasPendingSessionTranscriptArchives,
+  prepareSessionTranscriptArchivePublishPlans,
+  recordSessionTranscriptArchivePublishResults,
+  transcriptArchiveIdentityKey,
+  uniqueTranscriptArchives,
+} from "./session-accessor.sqlite-archive-store-kernel.js";
+import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
+import { runSqliteTranscriptArchivePublishWorker } from "./session-accessor.sqlite-archive.js";
+import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
+import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
+import {
+  getSessionKysely,
+  resolveSqliteTranscriptArchiveDirectory,
+  runExclusiveSqliteSessionWrite,
+  toDatabaseOptions,
+  type ResolvedSqliteReadScope,
+} from "./session-accessor.sqlite-scope.js";
+
+/** Inserts the canonical archive row inside the lifecycle deletion transaction. */
+export function persistSessionTranscriptArchive(
+  database: OpenClawAgentDatabase,
+  plan: MaterializedSessionStateDeletePlan,
+): void {
+  const archive = plan.archive;
+  const generation = plan.snapshot.generation;
+  const sessionKey = plan.snapshot.sessionKey;
+  if (!archive || !generation || !sessionKey) {
+    throw new Error(
+      `Cannot persist SQLite transcript archive without an owner generation for ${plan.sessionId}`,
+    );
+  }
+  ensureSessionTranscriptArchiveSchema(database.db);
+  const db = getSessionKysely(database.db);
+  const inserted = executeSqliteQuerySync(
+    database.db,
+    db
+      .insertInto("session_transcript_archives")
+      .values({
+        archive_blob: archive.bytes,
+        archive_name: archive.archiveName,
+        archive_sha256: archive.sha256,
+        created_at: archive.createdAt,
+        encoding: archive.encoding,
+        generation,
+        last_publish_attempt_at: null,
+        last_publish_error: null,
+        published_at: null,
+        reason: plan.reason,
+        session_id: plan.sessionId,
+        session_key: sessionKey,
+      })
+      .onConflict((conflict) => conflict.columns(["session_id", "generation"]).doNothing()),
+  );
+  if (inserted.numAffectedRows === 1n) {
+    return;
+  }
+  const persisted = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("session_transcript_archives")
+      .select([
+        "archive_blob",
+        "archive_name",
+        "archive_sha256",
+        "created_at",
+        "encoding",
+        "reason",
+        "session_key",
+      ])
+      .where("session_id", "=", plan.sessionId)
+      .where("generation", "=", generation),
+  );
+  if (
+    !persisted ||
+    persisted.archive_name !== archive.archiveName ||
+    persisted.archive_sha256 !== archive.sha256 ||
+    persisted.created_at !== archive.createdAt ||
+    persisted.encoding !== archive.encoding ||
+    persisted.reason !== plan.reason ||
+    persisted.session_key !== sessionKey ||
+    !Buffer.from(persisted.archive_blob).equals(Buffer.from(archive.bytes))
+  ) {
+    throw new Error(`Conflicting SQLite transcript archive for ${plan.sessionId}`);
+  }
+}
+
+/** Publishes derived archive files after their canonical rows and deletions commit. */
+export async function publishSessionStateArchives(
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+  requested: readonly SessionLifecycleArchivedTranscript[],
+): Promise<SessionLifecycleArchivedTranscript[]> {
+  const requestedArchives = uniqueTranscriptArchives(requested);
+  const requestedIdentitySet = new Set(
+    requestedArchives.map((archive) =>
+      transcriptArchiveIdentityKey(archive.sessionId, archive.generation),
+    ),
+  );
+  let includeRequested = true;
+  while (true) {
+    const plans = await runExclusiveSqliteSessionWrite(
+      scope,
+      async () => {
+        const databaseOptions = toDatabaseOptions(scope);
+        const requestedForPass = includeRequested ? requestedArchives : [];
+        if (requestedForPass.length === 0 && !getOpenClawAgentDatabaseIfOpen(databaseOptions)) {
+          try {
+            const pending = withOpenClawAgentDatabaseReadOnly(
+              (database) =>
+                runSqliteDeferredTransactionSync(database.db, () =>
+                  hasPendingSessionTranscriptArchives(database),
+                ),
+              databaseOptions,
+            );
+            if (!pending.found || !pending.value) {
+              return [];
+            }
+          } catch {
+            // Pending or uncertain publication still uses the canonical writable planner.
+          }
+        }
+        const database = openOpenClawAgentDatabase(databaseOptions);
+        return prepareSessionTranscriptArchivePublishPlans(database, {
+          archiveDirectory: resolveSqliteTranscriptArchiveDirectory(scope),
+          requested: requestedForPass,
+        });
+      },
+      "session.archive.publish-prepare",
+    );
+    includeRequested = false;
+    if (plans.length === 0) {
+      break;
+    }
+
+    const results = await runSqliteTranscriptArchivePublishWorker(plans);
+    await runExclusiveSqliteSessionWrite(
+      scope,
+      async () => {
+        const now = Date.now();
+        runOpenClawAgentWriteTransaction((transactionDb) => {
+          recordSessionTranscriptArchivePublishResults(transactionDb, results, now);
+        }, toDatabaseOptions(scope));
+      },
+      "session.archive.publish-commit",
+    );
+
+    const planByIdentity = new Map(
+      plans.map((plan) => [transcriptArchiveIdentityKey(plan.sessionId, plan.generation), plan]),
+    );
+    emitArchivedTranscriptUpdates(
+      results.flatMap((result) => {
+        const identity = transcriptArchiveIdentityKey(result.sessionId, result.generation);
+        if (!result.archivedPath || requestedIdentitySet.has(identity)) {
+          return [];
+        }
+        const plan = planByIdentity.get(identity);
+        return plan
+          ? [
+              {
+                archivedPath: result.archivedPath,
+                generation: result.generation,
+                sessionId: result.sessionId,
+                sourcePath: path.join(plan.archiveDirectory, `${result.sessionId}.jsonl`),
+              },
+            ]
+          : [];
+      }),
+    );
+    const failedIds = results.flatMap((result) => (result.archivedPath ? [] : [result.sessionId]));
+    if (failedIds.length > 0) {
+      throw new Error(
+        `Session deletion committed, but ${failedIds.length} transcript archive file export(s) remain pending in SQLite; retry the operation to publish them.`,
+      );
+    }
+  }
+  return [...requested];
+}
+
+const ARCHIVE_RETENTION_BATCH_SIZE = 256;
+
+/** Removes canonical rows only after retention has removed their derived files. */
+export async function prunePublishedSessionArchivesByRetention(params: {
+  nowMs?: number;
+  rules: readonly { olderThanMs: number; reason: "deleted" | "reset" }[];
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">;
+}): Promise<number> {
+  const rules = new Map(
+    params.rules
+      .filter((rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0)
+      .map((rule) => [rule.reason, rule.olderThanMs] as const),
+  );
+  if (rules.size === 0) {
+    return 0;
+  }
+  const candidates = await runExclusiveSqliteSessionWrite(
+    params.scope,
+    async () => {
+      const database = openOpenClawAgentDatabase(toDatabaseOptions(params.scope));
+      if (!tableExists(database.db, "session_transcript_archives")) {
+        return [];
+      }
+      const db = getSessionKysely(database.db);
+      return executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_transcript_archives")
+          .select([
+            "archive_name",
+            "created_at",
+            "generation",
+            "published_at",
+            "reason",
+            "session_id",
+          ])
+          .where("published_at", "is not", null)
+          .orderBy("created_at", "asc")
+          .orderBy("session_id", "asc")
+          .orderBy("generation", "asc")
+          .limit(ARCHIVE_RETENTION_BATCH_SIZE),
+      ).rows;
+    },
+    "session.archive.retention-prepare",
+  );
+  const now = params.nowMs ?? Date.now();
+  const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(params.scope);
+  const removable = candidates.filter((row) => {
+    const olderThanMs = rules.get(row.reason as "deleted" | "reset");
+    if (olderThanMs === undefined || now - row.created_at <= olderThanMs) {
+      return false;
+    }
+    const archivePath = path.resolve(archiveDirectory, row.archive_name);
+    return (
+      path.dirname(archivePath) === path.resolve(archiveDirectory) &&
+      path.basename(archivePath) === row.archive_name &&
+      !fs.existsSync(archivePath)
+    );
+  });
+  if (removable.length === 0) {
+    return 0;
+  }
+  return await runExclusiveSqliteSessionWrite(
+    params.scope,
+    async () => {
+      let removed = 0;
+      runOpenClawAgentWriteTransaction((transactionDb) => {
+        const db = getSessionKysely(transactionDb.db);
+        for (const row of removable) {
+          const result = executeSqliteQuerySync(
+            transactionDb.db,
+            db
+              .deleteFrom("session_transcript_archives")
+              .where("session_id", "=", row.session_id)
+              .where("generation", "=", row.generation)
+              .where("archive_name", "=", row.archive_name)
+              .where("created_at", "=", row.created_at)
+              .where("published_at", "=", row.published_at),
+          );
+          removed += Number(result.numAffectedRows ?? 0n);
+        }
+      }, toDatabaseOptions(params.scope));
+      return removed;
+    },
+    "session.archive.retention-commit",
+  );
+}

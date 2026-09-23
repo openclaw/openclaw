@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants, createWriteStream, type Stats } from "node:fs";
+import { createWriteStream, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,9 +12,14 @@ import {
   ArchiveSecurityError,
   extractArchive,
 } from "../infra/archive.js";
-import { createBackupLinkCache } from "../infra/backup-volatile-stat-cache.js";
+import { createBackupVolatileStatCache } from "../infra/backup-volatile-stat-cache.js";
+import {
+  getPublishFileExclusiveFailureDetails,
+  publishFileNoClobber,
+} from "../infra/directory-durability.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import { isPathInside } from "../infra/path-guards.js";
 import {
   cellAuthSecretDir,
   cellNetworkName,
@@ -28,6 +33,7 @@ import {
   assertManagedInspection,
   assertManagedNetwork,
   buildProfileBaseFromInspection,
+  canonicalizeForContainment,
   prepareCellConfig,
   prepareCellDirectories,
   requireInspectedAttemptId,
@@ -101,33 +107,6 @@ async function resolveOutputPath(out: string | undefined, basename: string): Pro
   }
 }
 
-async function canonicalizeForContainment(targetPath: string): Promise<string> {
-  const resolved = path.resolve(targetPath);
-  const suffix: string[] = [];
-  let probe = resolved;
-  for (;;) {
-    try {
-      const real = await fs.realpath(probe);
-      return path.join(real, ...suffix.toReversed());
-    } catch {
-      const parent = path.dirname(probe);
-      if (parent === probe) {
-        return resolved;
-      }
-      suffix.push(path.basename(probe));
-      probe = parent;
-    }
-  }
-}
-
-function isWithin(candidate: string, root: string): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    relative === "" ||
-    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
-  );
-}
-
 function remapArchivePath(
   entryPath: string,
   manifestPath: string,
@@ -138,11 +117,11 @@ function remapArchivePath(
   if (resolved === manifestPath) {
     return "manifest.json";
   }
-  if (isWithin(resolved, dataTarget)) {
+  if (isPathInside(dataTarget, resolved)) {
     const relative = path.relative(dataTarget, resolved).split(path.sep).join(path.posix.sep);
     return relative ? path.posix.join("data", relative) : "data";
   }
-  if (isWithin(resolved, authTarget)) {
+  if (isPathInside(authTarget, resolved)) {
     const relative = path.relative(authTarget, resolved).split(path.sep).join(path.posix.sep);
     return relative ? path.posix.join("auth", relative) : "auth";
   }
@@ -154,7 +133,7 @@ export async function backupFleetCell(params: {
   stateDir: string;
   containers: FleetContainerRuntime;
   now: () => number;
-  checkpoint: () => void;
+  checkpoint: () => Promise<void>;
   out?: string;
   maxBytes?: number;
   maxEntries?: number;
@@ -206,7 +185,7 @@ export async function backupFleetCell(params: {
   );
   const canonicalOutput = await canonicalizeForContainment(archivePath);
   const roots = [dataTarget, authTarget];
-  if (roots.some((root) => isWithin(canonicalOutput, root))) {
+  if (roots.some((root) => isPathInside(root, canonicalOutput))) {
     throw new Error(
       "Fleet backup output must not be written inside the cell data or auth directory.",
     );
@@ -241,6 +220,8 @@ export async function backupFleetCell(params: {
   let exceeded = false;
   let tooManyEntries = false;
   let leaseLost = false;
+  let pendingLeaseProbe: Promise<void> | undefined;
+  let archiveSettled = false;
   let unrestorablePath: string | undefined;
   let lastLeaseProbeMs = params.now();
   const maxBytes = params.maxBytes ?? DEFAULT_FLEET_BACKUP_MAX_BYTES;
@@ -248,21 +229,23 @@ export async function backupFleetCell(params: {
   try {
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
     const filter = (entryPath: string, stat: Stats | tar.ReadEntry): boolean => {
-      if (exceeded || tooManyEntries || leaseLost) {
+      if (archiveSettled || exceeded || tooManyEntries || leaseLost) {
         return false;
       }
       // Probe the mutation lease during long archive streams so a lost lease
       // (another operation could start the cell mid-read) aborts the backup
-      // instead of publishing a possibly-torn archive. node-tar filters run
-      // from async callbacks, so record the loss and throw after tar settles.
-      if (params.now() - lastLeaseProbeMs >= BACKUP_LEASE_PROBE_INTERVAL_MS) {
+      // instead of publishing a possibly-torn archive. The filter must return
+      // synchronously; settle its one pending probe before publication or cleanup.
+      if (!pendingLeaseProbe && params.now() - lastLeaseProbeMs >= BACKUP_LEASE_PROBE_INTERVAL_MS) {
         lastLeaseProbeMs = params.now();
-        try {
-          params.checkpoint();
-        } catch {
-          leaseLost = true;
-          return false;
-        }
+        pendingLeaseProbe = Promise.resolve()
+          .then(() => params.checkpoint())
+          .catch(() => {
+            leaseLost = true;
+          })
+          .finally(() => {
+            pendingLeaseProbe = undefined;
+          });
       }
       const type = "type" in stat ? stat.type : undefined;
       const isSymlink = "isSymbolicLink" in stat ? stat.isSymbolicLink() : type === "SymbolicLink";
@@ -305,7 +288,7 @@ export async function backupFleetCell(params: {
           gzip: true,
           portable: true,
           preservePaths: true,
-          linkCache: createBackupLinkCache(),
+          statCache: createBackupVolatileStatCache(() => false),
           filter,
           onWriteEntry: (entry) => {
             entry.path = remapArchivePath(entry.path, manifestPath, dataTarget, authTarget);
@@ -313,15 +296,17 @@ export async function backupFleetCell(params: {
         },
         [manifestPath, dataTarget, authTarget],
       ),
-      // Stream to a same-directory temp path first: a killed process must not
-      // leave a truncated file under the final archive name.
+      // Finish streaming into a same-directory temp path before publication;
+      // filesystems without hard-link support still need a non-atomic copy.
       createWriteStream(tempArchivePath, { flags: "wx", mode: 0o600 }),
     );
     // A single large file can stream past the lease TTL without a filter
     // callback, so validate lease ownership once more before the archive is
     // declared good; a lost lease means the cell may have run mid-read.
+    archiveSettled = true;
+    await pendingLeaseProbe;
     try {
-      params.checkpoint();
+      await params.checkpoint();
     } catch {
       leaseLost = true;
     }
@@ -345,7 +330,25 @@ export async function backupFleetCell(params: {
         `Fleet backup refuses a file name its restore path rules would reject: ${unrestorablePath}. Rename the file inside the cell and retry.`,
       );
     }
-    await publishArchive(tempArchivePath, archivePath);
+    try {
+      await publishFileNoClobber(tempArchivePath, archivePath, {
+        strategy: "link-or-copy",
+        durability: "degrade",
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new Error(`Refusing to overwrite existing fleet backup archive: ${archivePath}`, {
+          cause: error,
+        });
+      }
+      if (getPublishFileExclusiveFailureDetails(error)?.cleanup === "unknown") {
+        throw new Error(
+          `Fleet backup publication failed: ${errorMessage(error)}. A partial archive may remain at ${archivePath}; inspect or remove it before retrying.`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
     return {
       tenant: params.record.tenantId,
       archivePath,
@@ -355,46 +358,16 @@ export async function backupFleetCell(params: {
       note: "Archive contains tenant state and auth secrets; store it like a credential.",
     };
   } finally {
+    archiveSettled = true;
+    await pendingLeaseProbe;
     await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
-// Publish with no-overwrite semantics after every check passed: hard-link the
-// temp file to the final name when supported, else exclusive copy. EEXIST from
-// either path means another process owns the destination.
-async function publishArchive(tempArchivePath: string, archivePath: string): Promise<void> {
-  try {
-    await fs.link(tempArchivePath, archivePath);
-    return;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "EEXIST") {
-      throw new Error(`Refusing to overwrite existing fleet backup archive: ${archivePath}`, {
-        cause: error,
-      });
-    }
-    if (code !== "ENOTSUP" && code !== "EOPNOTSUPP" && code !== "EPERM") {
-      throw error;
-    }
-  }
-  try {
-    await fs.copyFile(tempArchivePath, archivePath, fsConstants.COPYFILE_EXCL);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error(`Refusing to overwrite existing fleet backup archive: ${archivePath}`, {
-        cause: error,
-      });
-    }
-    await fs.rm(archivePath, { force: true }).catch(() => undefined);
-    throw error;
-  }
-}
-
 function isAllowedRestorePath(rawPath: string): boolean {
-  // Fleet archives use POSIX separators only. A literal backslash would
-  // validate as one path but extract as another on POSIX, so it is rejected
-  // outright at both backup and restore time.
+  // Backup writes canonical POSIX names; restore receives fs-safe's canonical
+  // paths. Reject raw aliases here when validating backup source names.
   if (rawPath.includes("\\")) {
     return false;
   }
@@ -454,7 +427,7 @@ export async function restoreFleetCell(params: {
   fetchImpl: typeof fetch;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
-  checkpoint: () => void;
+  checkpoint: () => Promise<void>;
   generateToken: () => string;
   generateAttemptId: () => string;
   hostIdentity: HostIdentity | undefined;
@@ -475,7 +448,7 @@ export async function restoreFleetCell(params: {
     canonicalizeForContainment(params.record.dataDir),
     canonicalizeForContainment(cellAuthSecretDir(params.stateDir, params.record.tenantId)),
   ]);
-  if (restoreRoots.some((root) => isWithin(canonicalArchive, root))) {
+  if (restoreRoots.some((root) => isPathInside(root, canonicalArchive))) {
     throw new Error(
       "Fleet restore archive must not be stored inside the cell data or auth directory.",
     );
@@ -690,43 +663,53 @@ export async function restoreFleetCell(params: {
       ),
     );
 
+    // Restore decided to displace the generation inspected above, so every
+    // re-validation below re-inspects that identity rather than the cell name.
+    // Re-inspecting the name would let a container that claimed it in the
+    // meantime pass the ownership guard and be stopped or removed instead.
     if (wasRunning) {
-      params.checkpoint();
-      assertManagedInspection(
+      const running = assertManagedInspection(
         params.record,
-        await params.containers.inspect(params.record.runtime, params.record.containerName),
+        await params.containers.inspect(params.record.runtime, inspection.containerId),
       );
-      await params.containers.stop(params.record.runtime, params.record.containerName);
+      await params.checkpoint();
+      await params.containers.stop(params.record.runtime, running.containerId);
       stoppedForRestore = true;
     }
-    params.checkpoint();
-    assertManagedInspection(
+    const removable = assertManagedInspection(
       params.record,
-      await params.containers.inspect(params.record.runtime, params.record.containerName),
+      await params.containers.inspect(params.record.runtime, inspection.containerId),
     );
-    await params.containers.remove(params.record.runtime, params.record.containerName, false);
+    await params.checkpoint();
+    await params.containers.remove(params.record.runtime, removable.containerId, false);
     containerRemoved = true;
-    params.checkpoint();
+    await params.checkpoint();
     previousDisplaced = true;
     if (dataTarget) {
       await fs.rename(dataTarget, path.join(replacedRoot, "data"));
     }
     if (authTarget) {
+      await params.checkpoint();
       await fs.rename(authTarget, path.join(replacedRoot, "auth"));
     }
+    await params.checkpoint();
     await fs.rename(extractedData, params.record.dataDir);
+    await params.checkpoint();
     await fs.rename(extractedAuth, authSecretDir);
     stateSwapped = true;
+    await params.checkpoint();
     await prepareCellDirectories(params.record, authSecretDir, imageOwner);
     if (imageOwner) {
+      await params.checkpoint();
       await Promise.all([
         chownTree(params.record.dataDir, imageOwner),
         chownTree(authSecretDir, imageOwner),
       ]);
     }
+    await params.checkpoint();
     await prepareCellConfig(params.record, imageOwner);
 
-    params.checkpoint();
+    await params.checkpoint();
     await params.containers.run(profile, wasRunning);
     if (wasRunning) {
       await verifyReplacementHealthy({
@@ -767,7 +750,8 @@ export async function restoreFleetCell(params: {
           current.labels[FLEET_ATTEMPT_LABEL] === replacementAttemptId &&
           current.running
         ) {
-          await params.containers.stop(params.record.runtime, params.record.containerName);
+          await params.checkpoint();
+          await params.containers.stop(params.record.runtime, current.containerId);
           replacementNote =
             " The interrupted replacement container was stopped; retry fleet restore to rotate a fresh Gateway token.";
         } else if (current.kind === "unavailable") {
@@ -797,15 +781,15 @@ export async function restoreFleetCell(params: {
       // Restart the same managed generation so an aborted restore does not
       // strand a healthy tenant stopped; the original error stays primary.
       try {
+        // Same generation by identity, so no attempt-label comparison is needed:
+        // the cell name may already point at something this must not start.
         const current = assertManagedInspection(
           params.record,
-          await params.containers.inspect(params.record.runtime, params.record.containerName),
+          await params.containers.inspect(params.record.runtime, inspection.containerId),
         );
-        if (
-          !current.running &&
-          current.labels[FLEET_ATTEMPT_LABEL] === inspection.labels[FLEET_ATTEMPT_LABEL]
-        ) {
-          await params.containers.start(params.record.runtime, params.record.containerName);
+        if (!current.running) {
+          await params.checkpoint();
+          await params.containers.start(params.record.runtime, current.containerId);
         }
       } catch {
         // Best-effort recovery; the container remains stopped but intact.

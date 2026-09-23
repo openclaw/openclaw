@@ -1,22 +1,30 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
+import { repeat } from "lit/directives/repeat.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
-import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
-import type { ApplicationNavigationOptions } from "../app/context.ts";
-import type { AuthenticatedUser } from "../app/user-profile.ts";
+import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
+import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import { t } from "../i18n/index.ts";
-import { sessionHasBoard } from "../lib/board/provider.ts";
-import { formatDurationCompact } from "../lib/format.ts";
-import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
+import { formatDurationCompact } from "../lib/format-duration.ts";
+import { renderHoverMarquee } from "../lib/hover-marquee.ts";
+import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
+import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-users.ts";
+import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import { canArchiveSessionRow, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type {
   CatalogBackingSessionDisplay,
   CatalogSessionMenuRequest,
 } from "./app-sidebar-session-catalogs.ts";
+import type { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
+import type { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import {
   rowDemandsVisibility,
   sidebarSessionMetaId,
@@ -25,45 +33,44 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import { renderTeamSessionSlots } from "./session-attention-presentation.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
-import {
-  describeSessionTrailingState,
-  renderSessionLeadingState,
-} from "./session-leading-indicator.ts";
-import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
+import { describeSessionState, renderSessionLeadingState } from "./session-leading-indicator.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
+import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
-import {
-  renderSidebarSessionSubtitle,
-  resolveSidebarSessionSubtitle,
-} from "./session-row-subtitle.ts";
+import { renderSidebarSessionSubtitle } from "./session-row-subtitle.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 import "./elapsed-time.ts";
+import "./tooltip.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
 export interface SessionListHost {
+  readonly sidebarAgentsMode?: "chip" | "roster";
+  readonly basePath: string;
   readonly sessionDataContext:
-    | {
-        gateway: { snapshot: { selfUser?: AuthenticatedUser | null } };
-      }
+    | Pick<ApplicationContext, "gateway" | "agentSelection" | "agents" | "sessions">
     | undefined;
   readonly sidebarLiveActivity: boolean;
+  readonly sessionsShowPreview: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
+  readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle">;
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly connected: boolean;
   readonly sessionData: Pick<
     SessionDataController,
-    | "approvalBadgeSnapshot"
+    | "childSessionErrorsByParent"
     | "loadMoreSessionCatalog"
     | "presenceInstanceId"
     | "presencePayload"
     | "refreshSessionCatalogs"
+    | "retryChildSessions"
     | "sessionCatalogRefreshStatus"
     | "sessionMutationError"
+    | "visibleSessionLimits"
   >;
-  readonly fullyShownChildSessionKeys: ReadonlySet<string>;
   readonly sessionsGrouping: SidebarSessionsGrouping;
   readonly collapsedSessionSections: ReadonlySet<string>;
   readonly sessionOrganizer: Pick<
@@ -73,9 +80,13 @@ export interface SessionListHost {
     | "sessionDropTarget"
     | "sidebarSectionDropTarget"
     | "sessionListRemovalDrop"
+    | "setSessionsStatusFilter"
+    | "archiveSessionWithUndo"
+    | "patchSession"
   >;
   readonly sidebarMenus: Pick<
     SidebarMenusController,
+    | "catalogMenu"
     | "catalogViewMenuPosition"
     | "openCatalogViewMenu"
     | "openSessionGroupMenu"
@@ -87,28 +98,32 @@ export interface SessionListHost {
     | "toggleSessionSortMenu"
   >;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
-  readonly sessionCreatorFilterActive: boolean;
-  readonly sessionOwnershipVisible: boolean;
+  readonly sessionOwnerFilterActive: boolean;
+  readonly sessionOwnerFilterId: string | null;
+  readonly sessionInvolvingMeFilterActive: boolean;
+  readonly sessionOwnerOptions: readonly SessionOwnerOption[];
+  readonly sessionOwnershipVisibility: { filters: boolean; avatars: boolean };
   readonly onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
   readonly onNavigate?: (
     routeId: NavigationRouteId,
     options?: ApplicationNavigationOptions,
   ) => void;
 
-  sessionPullRequestIndicatorState(
-    sessionKey: string,
-    worktreeId: string,
-  ): SessionPullRequestIndicatorState;
+  readonly sessionPullRequests: Pick<SessionPullRequestIndicatorsController, "summary">;
+  mainSessionRow(): GatewaySessionRow | null;
+  setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
+  isSessionChildrenFullyShown(sessionKey: string): boolean;
   startSessionDrag(session: SidebarRecentSession): void;
   finishSessionDrag(): void;
+  sidebarSessionHref(session: SidebarRecentSession): string;
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
   toggleSessionChildren(session: SidebarRecentSession): void;
   toggleSessionPin(session: SidebarRecentSession): void;
   toggleSessionMenu(
     session: SidebarRecentSession,
-    menuSession: SidebarRecentSession,
     trigger: HTMLElement,
+    catalogMenu?: CatalogSessionMenuRequest,
   ): void;
   showMoreChildren(sessionKey: string): void;
   sectionDragOver(event: DragEvent, sectionId: string, group?: string): void;
@@ -117,7 +132,7 @@ export interface SessionListHost {
   startSidebarSectionDrag(sectionId: string): void;
   finishSidebarSectionDrag(): void;
   toggleSection(sectionId: string): void;
-  openNewSession(): void;
+  expandedAgentId(): string;
   readNewSessionAccess(): import("../lib/session-method-access.ts").SessionMethodAccess;
   readSessionMutationAccess(request: {
     method: string;
@@ -137,20 +152,175 @@ export interface SessionListHost {
     y: number,
     trigger?: HTMLElement,
   ): void;
+  retargetCatalogMenuTrigger(key: CatalogSessionKey, element: Element | undefined): void;
 }
 
 export function visibleSessionChildren(params: {
   session: SidebarRecentSession;
-  fullyShownChildSessionKeys: ReadonlySet<string>;
+  fullyShown: boolean;
 }): readonly SidebarRecentSession[] {
-  const showAllChildren = params.fullyShownChildSessionKeys.has(params.session.key);
   // Active, running, and attention-bearing branches must bypass the quiet-child cap.
-  return showAllChildren
+  return params.fullyShown
     ? params.session.children
     : params.session.children.filter(
         (child, index) =>
           index < SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT || rowDemandsVisibility(child),
       );
+}
+
+/** Compose independently owned session state and context indicators. */
+function renderSidebarSessionIndicators(
+  host: SessionListHost,
+  session: SidebarRecentSession,
+  display?: CatalogBackingSessionDisplay,
+) {
+  const team = host.sidebarAgentsMode === "roster";
+  const ownAttention = session.ownAttention ?? session.attention;
+  const childrenExpanded = host.isSessionChildrenExpanded(session);
+  const initialPullRequest = session.pullRequest ?? display?.pullRequest;
+  const pullRequest = session.worktreeId
+    ? host.sessionPullRequests.summary(session.key, session.worktreeId, initialPullRequest)
+    : initialPullRequest;
+  const ownerAttribution =
+    host.sessionsStatusFilter === "archived"
+      ? "archived"
+      : session.owner?.assignedAt !== undefined
+        ? "owned"
+        : "created";
+  const ownerActor = host.sessionOwnershipVisibility.avatars
+    ? host.sessionsStatusFilter === "archived"
+      ? session.archivedBy
+      : session.owner?.actor
+    : undefined;
+  const ownerViewing =
+    ownerActor?.identity?.type === "profile"
+      ? projectPresencePayload(host.sessionData.presencePayload).users.some(
+          (user) =>
+            presenceMatchesProfile(user, ownerActor.identity) &&
+            user.watchedSessions.includes(session.key),
+        )
+      : undefined;
+  // Person sections already own durable attribution. Restore the row avatar
+  // only for live presence; pinned and archive-attribution rows have no matching header.
+  const ownerRepeatedBySection =
+    host.sessionsGrouping === "person" && !session.pinned && ownerAttribution !== "archived";
+  // A self filter already identifies solo ownership. Keep shared rows and
+  // archive attribution visible; the participant count includes unshown faces.
+  const selfUser = host.sessionDataContext?.gateway.snapshot.selfUser;
+  const selfProfileId = selfUser?.identity?.id ?? selfUser?.id;
+  const ownerRepeatedByFilter =
+    ownerAttribution !== "archived" &&
+    ownerActor?.identity?.type === "profile" &&
+    ownerActor.identity.id === selfProfileId &&
+    (host.sessionInvolvingMeFilterActive || host.sessionOwnerFilterId === ownerActor.id) &&
+    (session.participantCount ?? session.participants?.length ?? 0) === 0;
+  const leadingOwner =
+    ownerRepeatedByFilter || (!team && ownerRepeatedBySection && ownerViewing !== true)
+      ? undefined
+      : ownerActor;
+  const gateway = host.sessionDataContext?.gateway;
+  const channelAvatarAuth = {
+    authTokens: gateway
+      ? resolveControlUiAuthCandidates({
+          hello: gateway.snapshot.hello,
+          settings: { token: gateway.connection.token },
+          password: gateway.connection.password,
+        })
+      : [],
+    authReady: Boolean(
+      gateway &&
+      (gateway.snapshot.hello ||
+        gateway.connection.token.trim() ||
+        gateway.connection.password.trim()),
+    ),
+  };
+  const { running, leadingIndicator, renderedIdentities } = renderSessionLeadingState(
+    session,
+    leadingOwner,
+    ownerAttribution,
+    ownerViewing,
+    channelAvatarAuth,
+    team,
+  );
+  const stateDescription = describeSessionState(session);
+  const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
+  const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
+  const stateId = !team && stateDescription ? sidebarSessionStateId(session.key) : undefined;
+  const persistentIndicator = html`<span class="sidebar-session-indicator"
+    >${leadingIndicator}
+    ${
+      session.visibility === "draft"
+        ? html`<span class="session-row-draft-indicator" title=${t("chat.sessionSharing.draft")}
+            >👻</span
+          >`
+        : nothing
+    }</span
+  >`;
+  const originIndicators = html`${session.archived ? html`<span class="sidebar-session__archive-glyph" role="img" aria-label=${t("sessionsView.archived")} title=${t("sessionsView.archived")}>${icons.archive}</span>` : nothing}${session.forkSource ? html`<span class="sidebar-session-fork-indicator" aria-hidden=${team || session.isChild ? nothing : "true"} role="img" aria-label=${t("sessionsView.forkedSession")}>${icons.gitFork}</span>` : nothing}`;
+  const trail = hasTrail
+    ? html`<span class="session-row-trail" id=${metaId}
+        >${
+          session.runtimeMs != null
+            ? session.hasActiveRun
+              ? html`<openclaw-elapsed-time
+                  .startMs=${session.runtimeSampledAt! - session.runtimeMs}
+                ></openclaw-elapsed-time>`
+              : (formatDurationCompact(session.runtimeMs) ?? "0ms")
+            : html`<openclaw-elapsed-time
+                .startMs=${session.startedAt!}
+                .endMs=${session.endedAt ?? null}
+              ></openclaw-elapsed-time>`
+        }</span
+      >`
+    : nothing;
+  return {
+    running,
+    stateId,
+    metaId,
+    pullRequest,
+    persistentIndicator,
+    originIndicators,
+    childrenExpanded,
+    content: html` <span class="sidebar-recent-session__details-endcap">
+      <openclaw-viewer-facepile
+        .presencePayload=${host.sessionData.presencePayload}
+        .selfUser=${host.sessionDataContext?.gateway.snapshot.selfUser}
+        .selfInstanceId=${host.sessionData.presenceInstanceId}
+        .sessionKey=${session.key}
+        .excludeIdentities=${renderedIdentities ?? []}
+        .maxVisible=${3}
+        variant="session"
+      ></openclaw-viewer-facepile>
+      ${team ? originIndicators : nothing}
+      ${team && (session.workSession || session.acpSession) && !session.workspaceKind && !pullRequest ? html`<span class="session-row-badge" role="img" aria-label=${t("chat.sidebar.coding")} title=${session.subtitle ?? t("chat.sidebar.coding")}>${icons.terminal}</span>` : nothing}
+      ${team && session.hasAutomation ? html`<span class="session-row-badge" role="img" aria-label=${t("tabs.cron")} title=${t("tabs.cron")}>${icons.clock}</span>` : nothing}
+      ${renderSessionRowBadges({
+        isChild: session.isChild,
+        incognito: session.incognito,
+        placementState: session.placementState,
+        placementProviderId: session.placementProviderId,
+        placementProfileId: session.placementProfileId,
+        placementMachine: session.placementMachine,
+        diskSpaceStatus: session.diskSpaceStatus,
+        workspaceConflictCount: session.workspaceConflictCount,
+        outboxAttentionCount: session.outboxAttentionCount,
+        hasComposerDraft: session.hasComposerDraft === true,
+        pullRequest,
+        hasApproval:
+          ownAttention.kind === "question"
+            ? ownAttention.requests.some((request) => request.kind === "approval")
+            : !team && ownAttention.kind === "approval",
+      })}
+      ${team ? trail : nothing}
+      ${
+        team
+          ? renderTeamSessionSlots([session], !childrenExpanded, session.childSessionKeys.length)
+          : nothing
+      }
+      ${!team && stateDescription ? html`<span class="sr-only" id=${stateId} aria-hidden="true">${stateDescription}</span>` : nothing}
+      ${team ? nothing : trail}
+    </span>`,
+  };
 }
 
 export function renderRecentSession(params: {
@@ -164,51 +334,64 @@ export function renderRecentSession(params: {
     method: "sessions.patch",
     params: { key: session.key, pinned: !session.pinned },
   });
-  const label = display?.label ?? session.label;
-  const { subtitle, narration } = resolveSidebarSessionSubtitle({
+  const archiveAccess = host.readSessionMutationAccess({
+    method: "sessions.patch",
+    params: { key: session.key, archived: !session.archived },
+  });
+  const archiveAllowed =
+    session.archived ||
+    canArchiveSessionRow(
+      session,
+      resolveUiConfiguredMainKey({
+        agentsList: host.sessionDataContext?.agents.state.agentsList,
+        hello: host.sessionDataContext?.gateway.snapshot.hello,
+      }),
+    );
+  const archiving = host.sessionDataContext?.sessions.archiveVisibility(session.key) === "pending";
+  const team = host.sidebarAgentsMode === "roster";
+  const ownAttention = session.ownAttention ?? session.attention;
+  const label = session.label;
+  const { subtitle, narration } = host.sessionProjection.resolveSubtitle({
     session,
     hasDisplay: display !== undefined,
     displaySubtitle: display?.subtitle,
     sidebarLiveActivity: host.sidebarLiveActivity,
+    showPreview: host.sessionsShowPreview,
     narrationLine: host.sidebarNarrationLines.get(session.key),
     observerDigest: host.sidebarObserverDigests.get(session.key) ?? null,
   });
-  const pullRequestState = session.worktreeId
-    ? host.sessionPullRequestIndicatorState(session.key, session.worktreeId)
-    : "none";
-  const ownerAttribution = host.sessionsStatusFilter === "archived" ? "archived" : "created";
-  const ownerActor = host.sessionOwnershipVisible
-    ? host.sessionsStatusFilter === "archived"
-      ? session.archivedBy
-      : session.createdActor
-    : undefined;
-  const { running, leadingIndicator, trailingIndicator } = renderSessionLeadingState(
-    session,
-    pullRequestState,
-    ownerActor,
-    ownerAttribution,
+  const indicators = renderSidebarSessionIndicators(host, session, display);
+  const { running, stateId, metaId, pullRequest, persistentIndicator, childrenExpanded } =
+    indicators;
+  const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
+    handleContextMenuEvent(
+      event,
+      (event.currentTarget as HTMLElement).querySelector(".sidebar-recent-session__link"),
+      (trigger, x, y) => {
+        if (display?.catalogMenu) {
+          host.openCatalogMenu(display.catalogMenu, x, y, trigger ?? undefined);
+          return;
+        }
+        host.sidebarMenus.openSessionMenu(session, x, y, trigger);
+      },
+    );
+  const pinLabel = t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession");
+  const archiveLabel = t(
+    session.archived ? "sessionsView.restoreSession" : "sessionsView.archiveSession",
   );
-  const trailingDescription = session.isChild
-    ? ""
-    : describeSessionTrailingState(session, pullRequestState);
-  const meta = display?.meta ?? session.meta;
-  const rowMeta = session.pinned ? "" : meta;
-  const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
-  const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
-  const stateId = trailingIndicator === nothing ? undefined : sidebarSessionStateId(session.key);
-  const menuSession = display ? { ...session, meta } : session;
-  const title = [
-    display?.title ?? [label, narration, rowMeta].filter(Boolean).join(" · "),
-    trailingDescription,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const pinLabel = `${t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession")}: ${label}`;
-  const menuLabel = `${t("chat.sidebar.openSessionMenu")}: ${label}`;
+  const menuOpen = display?.catalogMenu
+    ? host.sidebarMenus.catalogMenu.isOpenFor(display.catalogMenu.key)
+    : host.sidebarMenus.sessionMenu?.session.key === session.key;
+  const color = normalizeSessionColorValue(session.color ?? "");
   const rowClass = [
     "sidebar-recent-session",
     "session-row-host",
+    team ? "sidebar-recent-session--team" : "",
+    color ? "sidebar-recent-session--colored" : "",
     session.isChild ? "sidebar-recent-session--child" : "",
+    team || (!subtitle && !session.channelPresentation)
+      ? "sidebar-recent-session--single-line"
+      : "",
     session.archived ? "sidebar-session--archived" : "",
     session.visuallyActive ? "sidebar-recent-session--active" : "",
     host.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",
@@ -220,9 +403,10 @@ export function renderRecentSession(params: {
         ? "session-row-host--draft-owner"
         : "session-row-host--draft-other"
       : "",
-    session.attention.kind === "error"
+    (team ? ownAttention : session.attention).kind === "error"
       ? "sidebar-recent-session--attention-danger"
-      : session.attention.kind !== "none"
+      : (team ? ownAttention : session.attention).kind !== "none" &&
+          (team ? ownAttention : session.attention).kind !== "question"
         ? "sidebar-recent-session--attention-amber"
         : "",
     host.sessionOrganizer.draggingSessionKey === session.key
@@ -231,192 +415,199 @@ export function renderRecentSession(params: {
   ]
     .filter(Boolean)
     .join(" ");
-  const childrenExpanded = host.isSessionChildrenExpanded(session);
   const groupWriteAccess = host.readSessionMutationAccess({
     method: "sessions.groups.put",
     requiredScope: "operator.write",
   });
   const rowDraggable = !session.isChild && groupWriteAccess.allowed;
+  const marqueeLabelTemplate = renderHoverMarquee(
+    html`${team ? nothing : indicators.originIndicators}${label}`,
+    "sidebar-recent-session__name",
+  );
+  const marqueeLabel = display
+    ? keyed(
+        JSON.stringify([
+          label,
+          session.archived === true,
+          session.forkSource !== undefined,
+          pullRequest,
+        ]),
+        marqueeLabelTemplate,
+      )
+    : marqueeLabelTemplate;
+  // Always reserve the lead so every title shares the section-label text line.
   const row = html`
     <div
+      ${display?.rowRef ? ref(display.rowRef) : nothing}
       class=${rowClass}
+      style=${color ? `--session-color: var(--session-color-${color})` : nothing}
       data-session-key=${session.key}
+      data-catalog-session-key=${display?.catalogIdentityKey ?? nothing}
       role=${ifDefined(listItem ? "listitem" : undefined)}
       draggable=${rowDraggable ? "true" : "false"}
-      title=${!session.isChild && !groupWriteAccess.allowed ? groupWriteAccess.reason : nothing}
-      @dragstart=${!rowDraggable
-        ? nothing
-        : (event: DragEvent) => {
-            if (event.dataTransfer) {
-              writeSessionDragData(event.dataTransfer, session.key);
-              host.startSessionDrag(session);
+      @dragstart=${
+        !rowDraggable
+          ? nothing
+          : (event: DragEvent) => {
+              if (event.dataTransfer) {
+                writeSessionDragData(event.dataTransfer, session.key);
+                host.startSessionDrag(session);
+              }
             }
-          }}
-      @dragend=${!rowDraggable
-        ? nothing
-        : () => {
-            host.finishSessionDrag();
-          }}
-      @contextmenu=${session.isChild
-        ? nothing
-        : (event: MouseEvent) => {
-            event.preventDefault();
-            const rowElement = event.currentTarget as HTMLElement;
-            const trigger =
-              rowElement.querySelector<HTMLElement>("[data-session-menu]") ??
-              (event.target instanceof Element
-                ? event.target.closest<HTMLElement>("a, button, [tabindex]")
-                : null);
-            host.sidebarMenus.openSessionMenu(menuSession, event.clientX, event.clientY, trigger);
-          }}
-      @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
-      @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
+      }
+      @dragend=${
+        !rowDraggable
+          ? nothing
+          : () => {
+              host.finishSessionDrag();
+            }
+      }
+      @contextmenu=${openMenuFromEvent}
+      @keydown=${openMenuFromEvent}
     >
       <a
-        href=${session.href}
+        href=${host.sidebarSessionHref(session)}
         class="sidebar-recent-session__link"
         draggable="false"
-        title=${title}
         aria-current=${session.visuallyActive ? "page" : nothing}
         aria-describedby=${[stateId, metaId].filter(Boolean).join(" ") || nothing}
         @click=${(event: MouseEvent) => host.handleSessionRowClick(event, session)}
       >
-        <span class="sidebar-session-indicator"
-          >${leadingIndicator}
-          ${session.visibility === "draft"
-            ? html`<span class="session-row-draft-indicator" title=${t("chat.sessionSharing.draft")}
-                >👻</span
-              >`
-            : nothing}</span
-        >
+        ${persistentIndicator}
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__name hover-marquee"
-            >${session.archived
-              ? html`<span
-                  class="sidebar-session__archive-glyph"
-                  aria-label=${t("sessionsView.archived")}
-                  title=${t("sessionsView.archived")}
-                  >${icons.archive}</span
-                >`
-              : nothing}${label}</span
-          >
-          ${renderSidebarSessionSubtitle({ subtitle, narration })}
+          <span class="sidebar-recent-session__title-row"> ${marqueeLabel} </span>
+          <span class="sidebar-recent-session__details">
+            ${session.channelPresentation ? html`<span class="sidebar-recent-session__channel" aria-label=${t("sessionHovercard.linkedChannel", { channel: session.channelPresentation.channelLabel })}>${session.channelPresentation.channelLabel}</span>` : nothing}
+            ${team ? nothing : renderSidebarSessionSubtitle({ subtitle, narration })}
+            ${indicators.content}
+          </span>
         </span>
-        ${!session.isChild && sessionHasBoard(session.key)
-          ? html`<span
-              class="sidebar-board-glyph"
-              role="img"
-              aria-label=${t("sessionsView.dashboardAvailable")}
-              title=${t("sessionsView.dashboardAvailable")}
-              >${icons.layoutDashboard}</span
-            >`
-          : nothing}
-        <openclaw-viewer-facepile
-          .presencePayload=${host.sessionData.presencePayload}
-          .selfUserId=${host.sessionDataContext?.gateway.snapshot.selfUser?.id}
-          .selfInstanceId=${host.sessionData.presenceInstanceId}
-          .sessionKey=${session.key}
-          .maxVisible=${3}
-          variant="session"
-        ></openclaw-viewer-facepile>
-        ${renderSessionRowBadges({
-          ...session,
-          hasComposerDraft: session.hasComposerDraft === true && !session.visuallyActive,
-          pullRequest: session.pullRequest ?? display?.pullRequest,
-          hasApproval: sessionHasPendingApproval(
-            host.sessionData.approvalBadgeSnapshot(),
-            session.key,
-          ),
-        })}
       </a>
-      ${session.childSessionKeys.length > 0
-        ? html`<button
-            class="sidebar-child-session-toggle ${session.runningChildCount > 0
-              ? "sidebar-child-session-toggle--running"
-              : session.failedChildCount > 0
-                ? "sidebar-child-session-toggle--failed"
-                : ""}"
-            type="button"
-            data-child-session-toggle=${session.key}
-            aria-expanded=${String(childrenExpanded)}
-            aria-label=${t(
-              childrenExpanded
-                ? "sessionsView.hideChildSessions"
-                : "sessionsView.showChildSessions",
-              { count: String(session.childSessionKeys.length), session: label },
-            )}
-            @click=${() => host.toggleSessionChildren(session)}
-          >
-            <span class="sidebar-child-session-toggle__icon" aria-hidden="true"
-              >${childrenExpanded ? icons.chevronDown : icons.chevronRight}</span
+      ${
+        session.childSessionKeys.length > 0
+          ? html`<button
+              class="sidebar-child-session-toggle ${
+                !team && session.runningChildCount > 0
+                  ? "sidebar-child-session-toggle--running"
+                  : !team && session.failedChildCount > 0
+                    ? "sidebar-child-session-toggle--failed"
+                    : ""
+              }"
+              type="button"
+              data-child-session-toggle=${session.key}
+              aria-expanded=${String(childrenExpanded)}
+              aria-label=${t(
+                childrenExpanded
+                  ? "sessionsView.hideChildSessions"
+                  : "sessionsView.showChildSessions",
+                { count: String(session.childSessionKeys.length), session: label },
+              )}
+              aria-description=${
+                !team && !childrenExpanded && session.runningChildCount > 0
+                  ? t("sessionsView.activeRun")
+                  : nothing
+              }
+              @click=${() => host.toggleSessionChildren(session)}
             >
-            ${childrenExpanded
-              ? nothing
-              : html`<span class="sidebar-child-session-toggle__count"
-                  >${session.childSessionKeys.length}</span
-                >`}
-          </button>`
-        : nothing}
+              <span class="sidebar-child-session-toggle__icon" aria-hidden="true"
+                >${childrenExpanded ? icons.chevronDown : icons.chevronRight}</span
+              >
+              ${
+                childrenExpanded || team
+                  ? nothing
+                  : html`<span class="sidebar-child-session-toggle__count"
+                      >${session.childSessionKeys.length}</span
+                    >`
+              }
+            </button>`
+          : nothing
+      }
       <span class="sidebar-recent-session__aside session-row-aside">
-        ${trailingIndicator === nothing
-          ? nothing
-          : html`<span
-              class="session-row-state"
-              id=${stateId}
-              role="img"
-              aria-label=${trailingDescription}
-              >${trailingIndicator}</span
-            >`}
-        ${hasTrail
-          ? html`<span class="session-row-trail" id=${metaId}
-              >${session.runtimeMs != null
-                ? session.hasActiveRun
-                  ? html`<openclaw-elapsed-time
-                      .startMs=${session.runtimeSampledAt! - session.runtimeMs}
-                    ></openclaw-elapsed-time>`
-                  : (formatDurationCompact(session.runtimeMs, { spaced: true }) ?? "0ms")
-                : html`<openclaw-elapsed-time
-                    .startMs=${session.startedAt!}
-                    .endMs=${session.endedAt ?? null}
-                  ></openclaw-elapsed-time>`}</span
-            >`
-          : nothing}
-        ${session.isChild
-          ? nothing
-          : html`<span class="session-row-actions">
-              <button
-                class="session-action session-action--pin"
-                data-sidebar-session-pin="true"
-                type="button"
-                title=${pinAccess.allowed ? pinLabel : pinAccess.reason}
-                aria-label=${pinLabel}
-                ?disabled=${!pinAccess.allowed}
-                @click=${() => host.toggleSessionPin(session)}
-              >
-                ${icons.pin}
-              </button>
-              <button
-                class="session-action"
-                data-session-menu="true"
-                type="button"
-                title=${menuLabel}
-                aria-label=${menuLabel}
-                aria-haspopup="menu"
-                aria-expanded=${String(host.sidebarMenus.sessionMenu?.session.key === session.key)}
-                @click=${(event: MouseEvent) => {
-                  event.stopPropagation();
-                  const trigger = event.currentTarget as HTMLElement;
-                  host.toggleSessionMenu(session, menuSession, trigger);
-                }}
-              >
-                ${icons.moreHorizontal}
-              </button>
-            </span>`}
+        <span class="session-row-actions">
+          ${
+            !session.pinnable
+              ? nothing
+              : html`<button
+                  class="session-action session-action--pin"
+                  data-sidebar-session-pin="true"
+                  type="button"
+                  title=${pinAccess.allowed ? pinLabel : pinAccess.reason}
+                  aria-label=${pinLabel}
+                  ?disabled=${!pinAccess.allowed}
+                  @click=${() => host.toggleSessionPin(session)}
+                >
+                  ${icons.pin}
+                </button>`
+          }
+          <openclaw-tooltip
+            .content=${archiveAccess.allowed ? archiveLabel : archiveAccess.reason}
+            .describe=${false}
+          >
+            <button
+              class="session-action"
+              data-sidebar-session-archive="true"
+              type="button"
+              aria-label=${`${archiveLabel}: ${label}`}
+              ?disabled=${!archiveAccess.allowed || !archiveAllowed || archiving}
+              @click=${(event: MouseEvent) => {
+                event.stopPropagation();
+                if (session.archived) {
+                  void host.sessionOrganizer.patchSession(session, { archived: false });
+                } else {
+                  void host.sessionOrganizer.archiveSessionWithUndo(session);
+                }
+              }}
+            >
+              ${session.archived ? icons.archiveRestore : icons.archive}
+            </button>
+          </openclaw-tooltip>
+          <button
+            class="session-action session-action--touch-menu"
+            data-sidebar-session-menu="true"
+            type="button"
+            title=${t("chat.sidebar.openSessionMenu")}
+            aria-label=${`${t("chat.sidebar.openSessionMenu")}: ${label}`}
+            aria-haspopup="menu"
+            aria-expanded=${String(menuOpen)}
+            @click=${(event: MouseEvent) => {
+              event.stopPropagation();
+              host.toggleSessionMenu(
+                session,
+                event.currentTarget as HTMLElement,
+                display?.catalogMenu,
+              );
+            }}
+          >
+            ${icons.moreHorizontal}
+          </button>
+        </span>
       </span>
     </div>
   `;
   // Marquee state mutates the row DOM; keying prevents cross-session reuse.
   return keyed(session.key, row);
+}
+
+export function renderChildSessionLoadError(host: SessionListHost, parentKey: string) {
+  const error = host.sessionData.childSessionErrorsByParent.get(parentKey);
+  if (!error) {
+    return nothing;
+  }
+  return html`<div
+    class="sidebar-session-error callout danger"
+    data-child-session-error=${parentKey}
+    role="alert"
+  >
+    <span>${error}</span>
+    <button
+      class="sidebar-session-tree__show-more"
+      type="button"
+      data-retry-child-sessions=${parentKey}
+      @click=${() => host.sessionData.retryChildSessions(parentKey)}
+    >
+      ${t("common.retry")}
+    </button>
+  </div>`;
 }
 
 export function renderSessionTree(params: {
@@ -428,7 +619,7 @@ export function renderSessionTree(params: {
   const expanded = host.isSessionChildrenExpanded(session);
   const visibleChildren = visibleSessionChildren({
     session,
-    fullyShownChildSessionKeys: host.fullyShownChildSessionKeys,
+    fullyShown: host.isSessionChildrenFullyShown(session.key),
   });
   const hiddenChildCount = session.children.length - visibleChildren.length;
   return html`<div
@@ -437,36 +628,52 @@ export function renderSessionTree(params: {
     role=${ifDefined(listItem ? "listitem" : undefined)}
   >
     ${renderRecentSession({ host, session, listItem: false })}
-    ${expanded
-      ? html`<div class="sidebar-session-tree__children">
-          ${visibleChildren.length > 0
-            ? html`<div
-                class="sidebar-session-tree__list"
-                role=${ifDefined(listItem ? "list" : undefined)}
-                aria-label=${ifDefined(listItem ? t("sessionsView.childSessions") : undefined)}
-              >
-                ${visibleChildren.map((child) =>
-                  renderSessionTree({ host, session: child, listItem }),
-                )}
-              </div>`
-            : nothing}
-          ${hiddenChildCount > 0
-            ? html`<button
-                class="sidebar-session-tree__show-more"
-                type="button"
-                data-show-more-children=${session.key}
-                aria-label=${t("sessionsView.showMoreChildren", {
-                  count: String(hiddenChildCount),
-                })}
-                @click=${() => host.showMoreChildren(session.key)}
-              >
-                ${t("sessionsView.showMoreChildren", { count: String(hiddenChildCount) })}
-              </button>`
-            : nothing}
-          ${session.loadingChildren && session.children.length === 0
-            ? html`<span class="sidebar-session-tree__loading">${t("common.loading")}</span>`
-            : nothing}
-        </div>`
-      : nothing}
+    ${
+      expanded
+        ? html`<div class="sidebar-session-tree__children">
+            ${
+              visibleChildren.length > 0
+                ? html`<div
+                    class="sidebar-session-tree__list"
+                    role=${ifDefined(listItem ? "list" : undefined)}
+                    aria-label=${ifDefined(listItem ? t("sessionsView.childSessions") : undefined)}
+                  >
+                    ${repeat(
+                      visibleChildren,
+                      (child) => child.key,
+                      (child) => renderSessionTree({ host, session: child, listItem }),
+                    )}
+                  </div>`
+                : nothing
+            }
+            ${
+              hiddenChildCount > 0
+                ? html`<button
+                    class="sidebar-session-tree__show-more"
+                    type="button"
+                    data-show-more-children=${session.key}
+                    aria-label=${t("sessionsView.showMoreChildren", {
+                      count: String(hiddenChildCount),
+                    })}
+                    @click=${() => host.showMoreChildren(session.key)}
+                  >
+                    ${t("sessionsView.showMoreChildren", { count: String(hiddenChildCount) })}
+                  </button>`
+                : nothing
+            }
+            ${(session.childLoadParentKeys ?? [session.key]).map((key) => renderChildSessionLoadError(host, key))}
+            ${
+              session.loadingChildren && session.children.length === 0
+                ? html`<span
+                    class="sidebar-session-tree__loading skeleton skeleton-line skeleton-line--medium"
+                    role="status"
+                    aria-busy="true"
+                    aria-label=${t("common.loading")}
+                  ></span>`
+                : nothing
+            }
+          </div>`
+        : nothing
+    }
   </div>`;
 }

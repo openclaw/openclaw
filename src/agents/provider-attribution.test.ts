@@ -1,5 +1,6 @@
-// Verifies provider attribution headers and endpoint classification policies.
 import { afterEach, describe, expect, it, vi } from "vitest";
+// Verifies provider attribution headers and endpoint classification policies.
+import { makeEmptyPluginMetadataOwners } from "../plugins/current-plugin-metadata.test-support.js";
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   // Policy helpers return broad records; assertions pin only the relevant fields.
@@ -35,7 +36,14 @@ const providerEndpointPlugins = vi.hoisted(() => [
       { endpointClass: "deepseek-native", hosts: ["api.deepseek.com"] },
       { endpointClass: "github-copilot-native", hostSuffixes: [".githubcopilot.com"] },
       { endpointClass: "groq-native", hosts: ["api.groq.com"] },
-      { endpointClass: "opencode-native", hostSuffixes: ["opencode.ai"] },
+      {
+        endpointClass: "opencode-native",
+        baseUrls: ["https://opencode.ai/zen", "https://opencode.ai/zen/v1"],
+      },
+      {
+        endpointClass: "opencode-go-native",
+        baseUrls: ["https://opencode.ai/zen/go", "https://opencode.ai/zen/go/v1"],
+      },
       { endpointClass: "openrouter", hostSuffixes: ["openrouter.ai"] },
       { endpointClass: "zai-native", hosts: ["api.z.ai"] },
       { endpointClass: "google-generative-ai", hosts: ["generativelanguage.googleapis.com"] },
@@ -130,8 +138,10 @@ const loadPluginMetadataSnapshot = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
-  getCurrentPluginMetadataSnapshot: (params?: {
+vi.mock("../plugins/plugin-metadata-snapshot-required.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot-required.js")>()),
+  loadPluginMetadataSnapshotRuntime: loadPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshotRequiredRuntime: (params?: {
     allowScopedSnapshot?: boolean;
     requireDefaultDiscoveryContext?: boolean;
   }) =>
@@ -161,10 +171,7 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
         }),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot,
-}));
-
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   resolveProviderEndpoint,
@@ -190,6 +197,7 @@ function listProviderAttributionPolicies(env: ProviderAttributionTestEnv) {
     "nvidia",
     "google",
     "openai",
+    "opencode-go",
     "xai",
     "anthropic",
     "groq",
@@ -289,32 +297,37 @@ describe("provider attribution", () => {
     expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
-  it("scans plugin metadata once when falling back without a lifecycle snapshot", () => {
+  it("resolves fallback provider facts in each operation's metadata generation", () => {
     providerMetadataState.pluginIdScoped = true;
     providerMetadataState.snapshot = undefined;
-
-    for (let index = 0; index < 10; index += 1) {
-      resolveProviderRequestPolicy({ provider: "fallback-provider" });
+    try {
+      for (const family of ["before-refresh", "after-refresh"]) {
+        loadPluginMetadataSnapshot.mockReturnValue({
+          owners: {
+            providerEndpoints: [],
+            providerRequests: new Map([["fallback-provider", { family }]]),
+          },
+        });
+        expect(
+          withPluginCache(
+            createPluginCache(),
+            () =>
+              resolveProviderRequestPolicy({ provider: "fallback-provider" }).knownProviderFamily,
+          ),
+        ).toBe(family);
+      }
+    } finally {
+      loadPluginMetadataSnapshot.mockReturnValue({
+        owners: { providerEndpoints: [], providerRequests: new Map() },
+      });
     }
-    expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
-
-    clearPluginMetadataLifecycleCaches();
-    resolveProviderRequestPolicy({ provider: "fallback-provider" });
-    expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("uses explicitly prepared provider facts without reading process metadata", () => {
     providerMetadataState.pluginIdScoped = true;
     providerMetadataState.snapshot = undefined;
     const providerMetadataOwners = {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
+      ...makeEmptyPluginMetadataOwners(),
       providerEndpoints: [
         {
           endpointClass: "anthropic-public" as const,
@@ -378,7 +391,6 @@ describe("provider attribution", () => {
       OPENCLAW_VERSION: "2026.3.22",
     });
 
-    expect(policy).toBeDefined();
     expect(policy).toEqual({
       provider: "nvidia",
       enabledByDefault: true,
@@ -453,24 +465,6 @@ describe("provider attribution", () => {
     });
   });
 
-  it("maps legacy OpenAI Codex attribution to canonical OpenAI policy", () => {
-    expect(resolveProviderAttributionPolicy("openai", { OPENCLAW_VERSION: "2026.3.22" })).toEqual({
-      provider: "openai",
-      enabledByDefault: true,
-      verification: "vendor-hidden-api-spec",
-      hook: "request-headers",
-      reviewNote:
-        "OpenAI native traffic supports hidden originator/User-Agent attribution. Verified against the Codex wire contract.",
-      product: "OpenClaw",
-      version: "2026.3.22",
-      headers: {
-        originator: "openclaw",
-        version: "2026.3.22",
-        "User-Agent": "openclaw/2026.3.22",
-      },
-    });
-  });
-
   it("returns a hidden-spec xAI attribution policy", () => {
     expect(resolveProviderAttributionPolicy("xai", { OPENCLAW_VERSION: "2026.3.22" })).toEqual({
       provider: "xai",
@@ -496,6 +490,25 @@ describe("provider attribution", () => {
     });
   });
 
+  it("returns a documented OpenCode Go attribution policy", () => {
+    expect(
+      resolveProviderAttributionPolicy("opencode-go", { OPENCLAW_VERSION: "2026.3.22" }),
+    ).toEqual({
+      provider: "opencode-go",
+      enabledByDefault: true,
+      verification: "vendor-documented",
+      hook: "request-headers",
+      docsUrl: "https://opencode.ai/docs/go/",
+      reviewNote:
+        "OpenCode Go requires coding agents to identify themselves with a specific User-Agent.",
+      product: "OpenClaw",
+      version: "2026.3.22",
+      headers: {
+        "User-Agent": "openclaw/2026.3.22",
+      },
+    });
+  });
+
   it("lists the current attribution support matrix", () => {
     // Resolve every supported provider through the production request-policy path.
     expect(
@@ -510,12 +523,68 @@ describe("provider attribution", () => {
       ["nvidia", true, "vendor-documented", "request-headers"],
       ["google", true, "vendor-documented", "request-headers"],
       ["openai", true, "vendor-hidden-api-spec", "request-headers"],
+      ["opencode-go", true, "vendor-documented", "request-headers"],
       ["xai", true, "vendor-hidden-api-spec", "request-headers"],
       ["anthropic", false, "vendor-sdk-hook-only", "default-headers"],
       ["groq", false, "vendor-sdk-hook-only", "default-headers"],
       ["mistral", false, "vendor-sdk-hook-only", "custom-user-agent"],
       ["together", false, "vendor-sdk-hook-only", "default-headers"],
     ]);
+  });
+
+  it("identifies OpenClaw only on native OpenCode Go routes", () => {
+    const nativeGo = resolveProviderRequestPolicy(
+      {
+        provider: "opencode-go",
+        api: "openai-completions",
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        transport: "stream",
+        capability: "llm",
+      },
+      { OPENCLAW_VERSION: "2026.3.22" },
+    );
+
+    expectRecordFields(nativeGo, {
+      endpointClass: "opencode-go-native",
+      attributionProvider: "opencode-go",
+      allowsHiddenAttribution: false,
+    });
+    expect(nativeGo.attributionHeaders).toEqual({
+      "User-Agent": "openclaw/2026.3.22",
+    });
+
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "opencode-go",
+        api: "openai-completions",
+        baseUrl: "https://proxy.example.com/v1",
+        transport: "stream",
+        capability: "llm",
+      }).attributionHeaders,
+    ).toBeUndefined();
+    expectRecordFields(
+      resolveProviderRequestPolicy({
+        provider: "opencode-go",
+        api: "openai-completions",
+        baseUrl: "https://opencode.ai/zen/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+      {
+        endpointClass: "opencode-native",
+        attributionProvider: undefined,
+        attributionHeaders: undefined,
+      },
+    );
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "opencode",
+        api: "openai-completions",
+        baseUrl: "https://opencode.ai/zen/v1",
+        transport: "stream",
+        capability: "llm",
+      }).attributionHeaders,
+    ).toBeUndefined();
   });
 
   it("authorizes hidden xAI attribution on api.x.ai and the default xAI route", () => {
@@ -757,8 +826,16 @@ describe("provider attribution", () => {
       endpointClass: "nvidia-native",
       hostname: "integrate.api.nvidia.com",
     });
-    expectRecordFields(resolveProviderEndpoint("https://opencode.ai/api"), {
+    expectRecordFields(resolveProviderEndpoint("https://opencode.ai/zen/v1"), {
       endpointClass: "opencode-native",
+      hostname: "opencode.ai",
+    });
+    expectRecordFields(resolveProviderEndpoint("https://opencode.ai/zen/go/v1"), {
+      endpointClass: "opencode-go-native",
+      hostname: "opencode.ai",
+    });
+    expectRecordFields(resolveProviderEndpoint("https://opencode.ai/api"), {
+      endpointClass: "custom",
       hostname: "opencode.ai",
     });
     expectRecordFields(resolveProviderEndpoint("https://api.xiaomimimo.com/v1"), {

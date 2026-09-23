@@ -1,5 +1,10 @@
 // Tests for SQLite user_version pragma helper.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../version.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../version.js")>();
+  return { ...actual, resolveRuntimeServiceCommit: () => "aaaaaaa" };
+});
 import { VERSION } from "../version.js";
 import {
   createNewerSqliteSchemaVersionError,
@@ -66,6 +71,9 @@ describe("createNewerSqliteSchemaVersionError", () => {
     expect(error.message).toContain("this build supports 11");
     expect(error.message).toContain(describeRunningOpenClawBuild());
     expect(error.message).toContain("supports schema 12 or newer");
+    expect(error.message).toContain(
+      "restore your pre-update backup created with openclaw backup create.",
+    );
   });
 
   it("does not assert a downgrade the operator never performed", () => {
@@ -84,5 +92,9 @@ describe("describeRunningOpenClawBuild", () => {
 
     expect(described).toContain(VERSION);
     expect(described).toContain("installed at ");
+  });
+
+  it("reports the loaded build commit", () => {
+    expect(describeRunningOpenClawBuild()).toContain("(aaaaaaa)");
   });
 });

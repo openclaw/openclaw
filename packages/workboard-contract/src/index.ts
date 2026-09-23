@@ -81,6 +81,11 @@ export function isValidWorkboardBoardId(value: unknown): value is string {
   return typeof value === "string" && WORKBOARD_BOARD_ID_PATTERN.test(value);
 }
 
+export type WorkboardDeleteResult = {
+  deleted: boolean;
+  referenceUpdates?: Array<{ id: string; previousUpdatedAt: number; updatedAt: number }>;
+};
+
 export type WorkboardStatus = (typeof WORKBOARD_STATUSES)[number];
 export type WorkboardPriority = (typeof WORKBOARD_PRIORITIES)[number];
 export type WorkboardExecutionEngine = string;
@@ -250,6 +255,26 @@ export type WorkboardWorkspaceAccess =
   | { unrestricted: true }
   | { unrestricted: false; roots: string[]; writable: boolean };
 
+type WorkboardLaunchIdentity = {
+  requestedSessionKey: string;
+  provisionalRunId: string;
+  preparedAt: number;
+};
+
+export type WorkboardLaunchState =
+  | (WorkboardLaunchIdentity & { phase: "prepared" })
+  | (WorkboardLaunchIdentity & {
+      phase: "accepted";
+      acceptedAt: number;
+      acceptedSessionKey: string;
+      acceptedRunId?: string;
+    })
+  | (WorkboardLaunchIdentity & {
+      phase: "failed";
+      failedAt: number;
+      reason: string;
+    });
+
 export type WorkboardAutomation = {
   tenant?: string;
   boardId?: string;
@@ -265,6 +290,7 @@ export type WorkboardAutomation = {
   createdCardIds?: string[];
   dispatchCount?: number;
   lastDispatchAt?: number;
+  launch?: WorkboardLaunchState;
 };
 
 export type WorkboardBoardMetadata = {
@@ -273,6 +299,7 @@ export type WorkboardBoardMetadata = {
   description?: string;
   icon?: string;
   color?: string;
+  automationJobId?: string;
   defaultWorkspace?: WorkboardWorkspace;
   orchestration?: WorkboardOrchestrationSettings;
   createdAt: number;
@@ -286,6 +313,7 @@ export type WorkboardBoardSummary = {
   description?: string;
   icon?: string;
   color?: string;
+  automationJobId?: string;
   defaultWorkspace?: WorkboardWorkspace;
   orchestration?: WorkboardOrchestrationSettings;
   total: number;

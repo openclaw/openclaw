@@ -1,11 +1,92 @@
+import { SESSION_EXPANDED_PARTICIPANT_LIMIT } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { HookExternalContentSource } from "../../security/external-content.js";
 
 /** Kept aligned with SessionStateActorType (src/sessions/session-state-event-kinds.ts); not imported to avoid layering config/sessions onto src/sessions. */
-export type SessionCreatedActor = {
+export type SessionActor = {
   type: "human" | "agent" | "system";
   id?: string;
   label?: string;
 };
+
+/** Only trusted creation owners may stamp a Gateway profile namespace. */
+export type SessionCreatedActor = SessionActor &
+  ({ type: "human"; source: "profile" | "channel" | "unknown" } | { type: "agent" | "system" });
+
+export function sessionCreatorProfileId(
+  actor: (SessionActor & { source?: unknown }) | undefined,
+): string | undefined {
+  return actor?.type === "human" && actor.source === "profile" ? actor.id : undefined;
+}
+
+export type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+export const MAX_SESSION_PARTICIPANTS = SESSION_EXPANDED_PARTICIPANT_LIMIT;
+
+export type SessionOwnerAssignment = {
+  actor: SessionActor;
+  assignedBy?: SessionActor;
+  assignedAt?: number;
+};
+/** Personal preferences follow the assigned human, otherwise the authenticated human creator. */
+export function sessionPersonalProfileId(
+  entry: { owner?: SessionOwnerAssignment; createdActor?: SessionCreatedActor } | undefined,
+): string | undefined {
+  const assigned = entry?.owner?.actor;
+  return assigned?.type === "human" ? assigned.id : sessionCreatorProfileId(entry?.createdActor);
+}
+
+/** Visible spawns keep the matching verified human parent owner without changing creator attribution. */
+export function inheritSpawnSessionOwner(
+  source: { owner?: SessionOwnerAssignment; createdActor?: SessionCreatedActor } | undefined,
+  assignedBy: SessionActor | undefined,
+  requesterProfileId: string | undefined,
+  now = Date.now(),
+  resolveProfileId: (profileId: string) => string | undefined = (profileId) => profileId,
+): SessionOwnerAssignment | undefined {
+  const assigned = source?.owner?.actor;
+  const owner = assigned
+    ? assigned.type === "human"
+      ? assigned
+      : undefined
+    : source?.createdActor?.type === "human" && source.createdActor.source === "profile"
+      ? source.createdActor
+      : undefined;
+  const directMatch = owner?.id && requesterProfileId && owner.id === requesterProfileId;
+  const resolvedOwnerId = !directMatch && owner?.id ? resolveProfileId(owner.id) : owner?.id;
+  const resolvedRequesterId =
+    !directMatch && requesterProfileId ? resolveProfileId(requesterProfileId) : requesterProfileId;
+  const assignmentActor =
+    resolvedOwnerId && resolvedOwnerId === resolvedRequesterId
+      ? {
+          type: "human" as const,
+          id: resolvedRequesterId,
+          ...(owner?.label ? { label: owner.label } : {}),
+        }
+      : assignedBy?.type === "agent" && assignedBy.id
+        ? {
+            type: "agent" as const,
+            id: assignedBy.id,
+            ...(assignedBy.label ? { label: assignedBy.label } : {}),
+          }
+        : undefined;
+  if (!assignmentActor) {
+    return undefined;
+  }
+  return {
+    actor: assignmentActor,
+    ...(assignedBy?.id
+      ? {
+          assignedBy: {
+            type: assignedBy.type,
+            id: assignedBy.id,
+            ...(assignedBy.label ? { label: assignedBy.label } : {}),
+          },
+        }
+      : {}),
+    assignedAt: now,
+  };
+}
+
 export type SessionCreatedVia =
   | "operator" // gateway sessions.create (Control UI / operator clients)
   | "spawn" // sessions_spawn native or ACP subagent spawn
@@ -22,11 +103,71 @@ export function buildSessionCreationStamp(params: {
   via: SessionCreatedVia;
   actor?: SessionCreatedActor;
   now?: number;
-}): { createdVia: SessionCreatedVia; createdActor?: SessionCreatedActor; createdAt: number } {
+  sandbox?: "required";
+  skillLibrarySelections?: SkillLibrarySelection[];
+}): {
+  createdVia: SessionCreatedVia;
+  createdActor?: SessionCreatedActor;
+  createdAt: number;
+  sandbox?: "required";
+  skillLibrarySelections?: SkillLibrarySelection[];
+} {
   return {
     createdVia: params.via,
     ...(params.actor ? { createdActor: params.actor } : {}),
     createdAt: params.now ?? Date.now(),
+    ...(params.sandbox === "required" ? { sandbox: "required" as const } : {}),
+    ...(params.skillLibrarySelections
+      ? {
+          skillLibrarySelections: params.skillLibrarySelections.map((selection) => ({
+            ...selection,
+          })),
+        }
+      : {}),
+  };
+}
+
+/** Logical nodes retain creation attribution and isolation across writes and rollovers. */
+export function preserveCreationStamp<
+  T extends Partial<ReturnType<typeof buildSessionCreationStamp>>,
+>(entry: T, authoritative: Partial<ReturnType<typeof buildSessionCreationStamp>> | undefined): T {
+  return authoritative
+    ? {
+        ...entry,
+        createdVia: authoritative.createdVia,
+        createdActor: authoritative.createdActor,
+        createdAt: authoritative.createdAt,
+        ...(authoritative.sandbox === "required" ? { sandbox: authoritative.sandbox } : {}),
+      }
+    : entry;
+}
+
+/** Delegation keeps a required parent's human isolation identity, regardless of current roles. */
+export function inheritSessionCreationPolicy(
+  source:
+    | {
+        createdActor?: SessionCreatedActor;
+        sandbox?: "required";
+        skillLibrarySelections?: SkillLibrarySelection[];
+      }
+    | undefined,
+  actor?: SessionCreatedActor,
+): {
+  actor?: SessionCreatedActor;
+  sandbox?: "required";
+  skillLibrarySelections?: SkillLibrarySelection[];
+} {
+  return {
+    ...(source?.sandbox === "required"
+      ? { actor: source.createdActor, sandbox: "required" as const }
+      : { actor }),
+    ...(source?.skillLibrarySelections
+      ? {
+          skillLibrarySelections: source.skillLibrarySelections.map((selection) => ({
+            ...selection,
+          })),
+        }
+      : {}),
   };
 }
 

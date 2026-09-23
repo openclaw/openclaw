@@ -1,5 +1,8 @@
+import {
+  normalizeSortedUniqueTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import type { CronJob } from "../../api/types.ts";
-import { sortUniqueStrings } from "../../lib/string-coerce.ts";
 
 function resolveBrowserTimezone(): string {
   try {
@@ -17,19 +20,6 @@ function resolveSupportedTimezones(): string[] {
   }
 }
 
-function uniqueInOrder(values: string[]): string[] {
-  const seen = new Set<string>();
-  return values
-    .map((value) => value.trim())
-    .filter((value) => {
-      if (!value || seen.has(value)) {
-        return false;
-      }
-      seen.add(value);
-      return true;
-    });
-}
-
 export function resolveCronTimezoneSuggestions(
   cronJobs: CronJob[],
   browserTimezone = resolveBrowserTimezone(),
@@ -38,10 +28,10 @@ export function resolveCronTimezoneSuggestions(
   const configuredTimezones = cronJobs.map((job) =>
     job.schedule.kind === "cron" && typeof job.schedule.tz === "string" ? job.schedule.tz : "",
   );
-  return uniqueInOrder([
+  return normalizeUniqueTrimmedStringList([
     browserTimezone,
     "UTC",
     ...configuredTimezones,
-    ...sortUniqueStrings(supportedTimezones.map((value) => value.trim()).filter(Boolean)),
+    ...normalizeSortedUniqueTrimmedStringList(supportedTimezones),
   ]);
 }

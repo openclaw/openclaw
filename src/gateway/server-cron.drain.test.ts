@@ -6,7 +6,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const { getRuntimeConfigMock, stopAllMock } = vi.hoisted(() => ({
+const { cancelAllMock, getRuntimeConfigMock, stopAllMock } = vi.hoisted(() => ({
+  cancelAllMock: vi.fn<() => Promise<void>>(),
   getRuntimeConfigMock: vi.fn(),
   stopAllMock: vi.fn<() => Promise<void>>(),
 }));
@@ -14,6 +15,17 @@ const { getRuntimeConfigMock, stopAllMock } = vi.hoisted(() => ({
 vi.mock("../config/io.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/io.js")>()),
   getRuntimeConfig: getRuntimeConfigMock,
+}));
+
+vi.mock("./cron-exit-watchers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./cron-exit-watchers.js")>()),
+  createCronExitWatchers: () => ({
+    reconcile: vi.fn(),
+    cancel: vi.fn(),
+    cancelAll: cancelAllMock,
+    activeJobIds: () => [],
+    updateHandlers: vi.fn(),
+  }),
 }));
 
 vi.mock("./cron-stream-watchers.js", async (importOriginal) => ({
@@ -29,6 +41,7 @@ vi.mock("./cron-stream-watchers.js", async (importOriginal) => ({
   }),
 }));
 
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 
@@ -38,11 +51,11 @@ type StartedGatewayCron = {
   stateDir: string;
 };
 
-async function startGatewayCron(label: string): Promise<StartedGatewayCron> {
+async function startGatewayCron(label: string, enabled = true): Promise<StartedGatewayCron> {
   const stateDir = await mkdtemp(path.join(os.tmpdir(), `openclaw-cron-drain-${label}-`));
   const cfg: OpenClawConfig = {
     session: { mainKey: "main" },
-    cron: { triggers: { enabled: true } },
+    cron: { enabled, triggers: { enabled: true } },
   };
   getRuntimeConfigMock.mockReturnValue(cfg);
   const state = buildGatewayCronService({
@@ -73,8 +86,131 @@ async function cleanGatewayCron({ state, stateDir }: StartedGatewayCron): Promis
 
 describe("gateway cron stop-and-drain automation ownership", () => {
   beforeEach(() => {
+    cancelAllMock.mockReset();
+    cancelAllMock.mockResolvedValue(undefined);
     getRuntimeConfigMock.mockReset();
     stopAllMock.mockReset();
+  });
+
+  it.each([false, true])(
+    "publishes a one-shot binding removal after completion (delete=%s)",
+    async (deleteAfterRun) => {
+      stopAllMock.mockResolvedValue(undefined);
+      const original = await startGatewayCron(`one-shot-${deleteAfterRun}`, false);
+      const changed = vi.fn();
+      let stop = () => {};
+      try {
+        const job = await original.state.cron.add({
+          name: "one-shot binding",
+          enabled: true,
+          schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
+          payload: { kind: "command", argv: [process.execPath, "-e", "process.exit(0)"] },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          delivery: { mode: "none" },
+          deleteAfterRun,
+        });
+        const key = `agent:main:cron:${job.id}`;
+        expect(sessionHasAutomation(key, original.cfg)).toBe(true);
+        stop = sessionChanges.subscribe(changed);
+        expect(await original.state.cron.run(job.id, "force")).toMatchObject({
+          ok: true,
+          ran: true,
+        });
+        expect(original.state.cron.getJob(job.id)?.state.lastError).toBeUndefined();
+        expect(sessionHasAutomation(key, original.cfg)).toBe(false);
+        const automation = changed.mock.calls
+          .map(([change]) => change)
+          .filter((change) => change.scope === "automation");
+        expect(automation).toEqual([{ sessionKey: key, scope: "automation" }]);
+        expect(original.state.cron.getJob(job.id)?.enabled).toBe(
+          deleteAfterRun ? undefined : false,
+        );
+      } finally {
+        stop();
+        await cleanGatewayCron(original);
+      }
+    },
+  );
+
+  it("waits for cancelled exit watchers to settle before completing the drain", async () => {
+    const exitWatcherDrain = createDeferred();
+    cancelAllMock.mockReturnValue(exitWatcherDrain.promise);
+    stopAllMock.mockResolvedValue(undefined);
+    const original = await startGatewayCron("exit-watcher");
+
+    try {
+      let drained = false;
+      const drain = original.state.cron.stopAndDrain?.().then(() => {
+        drained = true;
+      });
+      if (!drain) {
+        throw new Error("expected cron stop-and-drain");
+      }
+
+      await vi.waitFor(() => expect(cancelAllMock).toHaveBeenCalledOnce());
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(drained).toBe(false);
+
+      exitWatcherDrain.resolve(undefined);
+      await drain;
+      expect(drained).toBe(true);
+    } finally {
+      exitWatcherDrain.resolve(undefined);
+      await cleanGatewayCron(original);
+    }
+  });
+
+  it("waits for prior exit watchers to settle before restarting the scheduler", async () => {
+    const exitWatcherDrain = createDeferred();
+    cancelAllMock.mockReturnValue(exitWatcherDrain.promise);
+    stopAllMock.mockResolvedValue(undefined);
+    const original = await startGatewayCron("exit-watcher-restart");
+
+    try {
+      original.state.cron.stop();
+      let restarted = false;
+      const restart = original.state.cron.start().then(() => {
+        restarted = true;
+      });
+
+      await vi.waitFor(() => expect(cancelAllMock).toHaveBeenCalledOnce());
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(restarted).toBe(false);
+
+      exitWatcherDrain.resolve(undefined);
+      await restart;
+      expect(restarted).toBe(true);
+    } finally {
+      exitWatcherDrain.resolve(undefined);
+      await cleanGatewayCron(original);
+    }
+  });
+
+  it("does not reopen the scheduler when a later stop wins a pending restart", async () => {
+    const exitWatcherDrain = createDeferred();
+    cancelAllMock.mockReturnValue(exitWatcherDrain.promise);
+    stopAllMock.mockResolvedValue(undefined);
+    const original = await startGatewayCron("exit-watcher-restart-cancelled");
+
+    try {
+      original.state.cron.stop();
+      const restart = original.state.cron.start();
+      await vi.waitFor(() => expect(cancelAllMock).toHaveBeenCalledOnce());
+
+      original.state.cron.stop();
+      exitWatcherDrain.resolve(undefined);
+      await restart;
+
+      expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(false);
+    } finally {
+      exitWatcherDrain.resolve(undefined);
+      await cleanGatewayCron(original);
+    }
   });
 
   it("unregisters a stopped scheduler when stream draining fails and permits retry", async () => {

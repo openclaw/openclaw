@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
@@ -16,6 +17,7 @@ import {
   type SecretResolutionResult,
 } from "./runtime-web-tools-selection.types.js";
 import type { RuntimeWebDiagnostic } from "./runtime-web-tools.types.js";
+import { isRecord } from "./shared.js";
 export { isRecord } from "./shared.js";
 export {
   type RuntimeWebProviderSelectionResult,
@@ -23,8 +25,6 @@ export {
   type RuntimeWebUnavailableProvider,
   type SecretResolutionResult,
 } from "./runtime-web-tools-selection.types.js";
-import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "./shared.js";
 
 const loadResolveManifestContractOwnerPluginId = createLazyRuntimeNamedExport(
   () => import("./runtime-web-tools-manifest.runtime.js"),
@@ -260,6 +260,7 @@ export async function resolveRuntimeWebProviderSurface<
       origin: "bundled",
       config: params.sourceConfig,
       env: { ...process.env, ...params.context.env },
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
   }
   let allProviders = params.sortProviders(
@@ -287,6 +288,7 @@ export async function resolveRuntimeWebProviderSurface<
       origin: "bundled",
       config: params.sourceConfig,
       env: { ...process.env, ...params.context.env },
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
     allProviders = params.sortProviders(
       await params.resolveProviders({
@@ -503,26 +505,7 @@ export async function resolveRuntimeWebProviderSelection<
         continue;
       }
 
-      if (params.configuredProvider) {
-        selectedProvider = provider.id;
-        selectedPath = selectedCandidatePath;
-        selectedResolution = selectedCandidateResolution;
-        if (selectedCandidateResolution.value) {
-          setResolvedCredentialPath({
-            resolvedConfig: params.resolvedConfig,
-            path: selectedCandidatePath,
-            value: selectedCandidateResolution.value,
-          });
-          params.setResolvedCredential({
-            resolvedConfig: params.resolvedConfig,
-            provider,
-            value: selectedCandidateResolution.value,
-          });
-        }
-        break;
-      }
-
-      if (isKeyless) {
+      if (params.configuredProvider || isKeyless) {
         selectedProvider = provider.id;
         selectedPath = selectedCandidatePath;
         selectedResolution = selectedCandidateResolution;

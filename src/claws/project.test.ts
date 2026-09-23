@@ -1,13 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { lstat, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import fs, { lstat, mkdir, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import { dirname, join, sep } from "node:path";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { configureFsSafeNative, getFsSafeNativeConfig } from "../infra/fs-safe-defaults.js";
 import { buildClawProject } from "./project-build.js";
 import { ClawProjectError, createClawProject, validateClawProject } from "./project.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const GOLDEN_ARTIFACT_INTEGRITY =
+  "sha256:10b8890c5e5b062c94ff79b1d424859c6a5572548535eec6e31ee0c6d7c08a3b";
 
 async function writeRichProject(root: string): Promise<void> {
   await mkdir(join(root, "workspace"), { recursive: true });
@@ -50,9 +53,7 @@ describe("Claw projects", () => {
       output,
     );
 
-    expect(result.integrity).toBe(
-      "sha256:f7377ae66679a8d1088ac2d259b8567d19f584dbc4357949d3d4e0cc09d05874",
-    );
+    expect(result.integrity).toBe(GOLDEN_ARTIFACT_INTEGRITY);
   });
 
   it("matches the golden artifact digest under a restrictive umask", () => {
@@ -85,9 +86,42 @@ describe("Claw projects", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      "sha256:f7377ae66679a8d1088ac2d259b8567d19f584dbc4357949d3d4e0cc09d05874",
-    );
+    expect(result.stdout).toBe(GOLDEN_ARTIFACT_INTEGRITY);
+  });
+
+  it("refuses to publish and removes staging when a completed file fails to close", async () => {
+    const nativeConfig = getFsSafeNativeConfig();
+    const outputDirectory = tempDirs.make("openclaw-claw-close-failure-");
+    const output = join(outputDirectory, "claw.tgz");
+    const closeError = Object.assign(new Error("staged file close failed"), { code: "EIO" });
+    const open = fs.open;
+    let closeAttempts = 0;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (
+        String(args[0]).startsWith(`${outputDirectory}${sep}`) &&
+        (await handle.stat()).isFile()
+      ) {
+        const close = handle.close.bind(handle);
+        vi.spyOn(handle, "close").mockImplementation(async () => {
+          await close();
+          closeAttempts += 1;
+          throw closeError;
+        });
+      }
+      return handle;
+    });
+    try {
+      configureFsSafeNative({ mode: "off" });
+      await expect(
+        buildClawProject(join(process.cwd(), "test", "fixtures", "claws", "project-v1"), output),
+      ).rejects.toBe(closeError);
+      expect(closeAttempts).toBe(1);
+      await expect(readdir(outputDirectory)).resolves.toEqual([]);
+    } finally {
+      configureFsSafeNative(nativeConfig);
+      vi.restoreAllMocks();
+    }
   });
 
   it("creates a minimal project that validates through the canonical reader", async () => {
@@ -434,11 +468,11 @@ describe("Claw projects", () => {
       const project = tempDirs.make("openclaw-claw-manifest-case-collision-");
       await writeRichProject(project);
       const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+      await writeFile(join(project, "claw.md"), "# Conflicting source\n");
       await writeFile(
         join(project, "CLAW.md"),
         manifest.replace("workspace/reference.md", "claw.md"),
       );
-      await writeFile(join(project, "claw.md"), "# Conflicting source\n");
 
       await expect(validateClawProject(project)).resolves.toMatchObject({
         ok: false,

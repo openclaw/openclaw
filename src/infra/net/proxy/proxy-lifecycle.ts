@@ -1,15 +1,14 @@
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import { isHttpUrl, isWebSocketUrl } from "@openclaw/net-policy/url-protocol";
 // Managed proxy lifecycle installs Proxyline, injects process proxy env, and
 // restores inherited/direct routing when owner handles stop.
 import {
   installGlobalProxy,
+  type ProxylineBypassPolicy,
   type ProxylineHandle,
   type ProxylineUndiciOptions,
 } from "@openclaw/proxyline";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
-
-type ProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
-import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
-import { isHttpUrl, isWebSocketUrl } from "@openclaw/net-policy/url-protocol";
 import { logInfo, logWarn } from "../../../logger.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 import {
@@ -25,6 +24,8 @@ import {
   resolveManagedProxyCaFileForUrl,
 } from "./proxy-tls.js";
 
+type ProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
+
 /** Process-wide managed proxy handle returned to CLI/gateway startup owners. */
 export type ProxyHandle = {
   /** The operator-managed proxy URL injected into process.env. */
@@ -37,6 +38,9 @@ export type ProxyHandle = {
 
 const PROXY_ENV_KEYS = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"] as const;
 const NO_PROXY_ENV_KEYS = ["no_proxy", "NO_PROXY"] as const;
+const LOOPBACK_NO_PROXY = "127.0.0.1,localhost,localhost.,::1,[::1],127.0.0.0/8";
+const managedLoopbackBypassPolicy: ProxylineBypassPolicy = ({ url }) =>
+  getActiveManagedProxyLoopbackMode() === "gateway-only" && isLoopbackProxyUrl(url);
 const PROXY_ACTIVE_KEYS = [
   "OPENCLAW_PROXY_ACTIVE",
   "OPENCLAW_PROXY_LOOPBACK_MODE",
@@ -99,7 +103,7 @@ function applyProxyEnv(
     delete process.env["OPENCLAW_PROXY_CA_FILE"];
   }
   for (const key of NO_PROXY_ENV_KEYS) {
-    process.env[key] = "";
+    process.env[key] = loopbackMode === "gateway-only" ? LOOPBACK_NO_PROXY : "";
   }
 }
 
@@ -187,11 +191,13 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
     caFileOverride: process.env["OPENCLAW_PROXY_CA_FILE"],
   });
   const proxyTls = loadManagedProxyTlsOptionsSync(proxyCaFile);
+  applyProxyEnv(proxyUrl, getActiveManagedProxyLoopbackMode() ?? "gateway-only", proxyCaFile);
   proxylineHandle = installGlobalProxy({
     mode: "managed",
     proxyUrl,
     ...(proxyTls ? { proxyTls } : {}),
     ifActive: "reuse-compatible",
+    bypassPolicy: managedLoopbackBypassPolicy,
     undici: MANAGED_PROXY_UNDICI_OPTIONS,
   });
   forceResetGlobalDispatcher({ preserveProxylineManaged: true });
@@ -240,6 +246,7 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
       proxyUrl,
       ...(proxyTls ? { proxyTls } : {}),
       ifActive: "replace",
+      bypassPolicy: managedLoopbackBypassPolicy,
       undici: MANAGED_PROXY_UNDICI_OPTIONS,
     });
     forceResetGlobalDispatcher({ preserveProxylineManaged: true });
@@ -286,87 +293,36 @@ export async function stopProxy(handle: ProxyHandle | null): Promise<void> {
   await handle.stop();
 }
 
-function parseGatewayControlPlaneUrl(value: string): URL | null {
+function isLoopbackProxyUrl(value: string): boolean {
   try {
-    return new URL(value);
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase().replace(/\.+$/, "");
+    return (
+      (isHttpUrl(url) || isWebSocketUrl(url)) &&
+      (hostname === "localhost" || isLoopbackIpAddress(hostname))
+    );
   } catch {
-    return null;
+    return false;
   }
 }
 
-function getGatewayControlPlaneBypassAuthority(value: string): string | null {
-  const url = parseGatewayControlPlaneUrl(value);
-  if (
-    url === null ||
-    (!isHttpUrl(url) && !isWebSocketUrl(url)) ||
-    !isGatewayControlPlaneLoopbackHost(url.hostname)
-  ) {
-    return null;
-  }
-  return url.port ? `${url.hostname}:${url.port}` : url.hostname;
-}
-
-/** Registers a temporary direct route for trusted Gateway loopback control-plane URLs. */
-export function registerManagedProxyGatewayLoopbackBypass(url: string): (() => void) | undefined {
-  const authority = getGatewayControlPlaneBypassAuthority(url);
-  if (!authority) {
-    return undefined;
-  }
-  const loopbackMode = getActiveManagedProxyLoopbackMode();
-  if (loopbackMode === "block") {
+function assertManagedProxyAllowsLoopback(url: string, surface: string): void {
+  if (isLoopbackProxyUrl(url) && getActiveManagedProxyLoopbackMode() === "block") {
     throw new Error(
-      "proxy: Gateway loopback control-plane connections are blocked by proxy.loopbackMode",
+      `proxy: ${surface} connections are blocked by proxy.loopbackMode; ` +
+        "run openclaw config set proxy.loopbackMode gateway-only to allow local runtime traffic.",
     );
   }
-  if (loopbackMode === "proxy") {
-    return undefined;
-  }
-
-  return proxylineHandle?.registerBypass({ url });
 }
 
-function isGatewayControlPlaneLoopbackHost(hostname: string): boolean {
-  const normalizedHost = hostname.trim().toLowerCase().replace(/\.+$/, "");
-  return normalizedHost === "localhost" || isLoopbackIpAddress(hostname);
+// Keep the existing Gateway client and plugin SDK callback contracts for explicit
+// block policy. Default loopback routing no longer needs per-request registration.
+export function registerManagedProxyGatewayLoopbackBypass(url: string): (() => void) | undefined {
+  assertManagedProxyAllowsLoopback(url, "Gateway loopback control-plane");
+  return undefined;
 }
 
-/**
- * Carve out the operator-managed external proxy for the Browser plugin's
- * loopback CDP probe to a Chromium instance OpenClaw spawned itself.
- *
- * The managed proxy installs a process-wide undici dispatcher that would
- * otherwise route `http://127.0.0.1:<cdpPort>/json/version` and the
- * `ws://127.0.0.1:<cdpPort>/devtools/...` upgrade through the external
- * forward proxy, which returns 502 because nothing on the proxy listens for
- * the loopback CDP port. The bypass restores direct loopback delivery for
- * the duration the caller holds the returned `unregister` callback.
- *
- * Loopback-gated by structure: non-loopback authorities (e.g. an `attachOnly`
- * profile pointing at a remote CDP service like Browserless/Browserbase) are
- * not bypassed and continue to traverse the external proxy as configured.
- *
- * Honors `proxy.loopbackMode`:
- * - `gateway-only` (default): register the bypass.
- * - `proxy`: do not bypass — operator opted into proxy-everything routing.
- * - `block`: throw — operator forbids loopback IPC under managed proxy.
- *
- * Note: A loopback `attachOnly` profile whose `cdpUrl` is e.g.
- * `http://127.0.0.1:<port>` would also satisfy this gate. This mirrors the
- * structural semantics of `registerManagedProxyGatewayLoopbackBypass` —
- * loopback IPC on this host is assumed to be operator-trusted.
- */
 export function registerManagedProxyBrowserCdpBypass(url: string): (() => void) | undefined {
-  const authority = getGatewayControlPlaneBypassAuthority(url);
-  if (!authority) {
-    return undefined;
-  }
-  const loopbackMode = getActiveManagedProxyLoopbackMode();
-  if (loopbackMode === "block") {
-    throw new Error("proxy: Browser loopback CDP connections are blocked by proxy.loopbackMode");
-  }
-  if (loopbackMode === "proxy") {
-    return undefined;
-  }
-
-  return proxylineHandle?.registerBypass({ url });
+  assertManagedProxyAllowsLoopback(url, "Browser loopback CDP");
+  return undefined;
 }

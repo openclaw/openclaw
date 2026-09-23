@@ -5,19 +5,8 @@
  * from OpenClaw core.
  */
 
-import type {
-  ChannelAccountSnapshot,
-  ChannelLogSink,
-  ChannelMessageActionAdapter,
-  ChannelMessageActionContext,
-  ChannelOutboundAdapter,
-  ChannelOutboundContext,
-  ChannelPlugin,
-  ChannelResolveKind,
-  ChannelResolveResult,
-  OutboundDeliveryResult,
-} from "../runtime-api.js";
-
+import type { z } from "zod";
+import type { TwitchAccountSchema, TwitchRoleSchema } from "./config-schema.js";
 // ============================================================================
 // Twitch-Specific Types
 // ============================================================================
@@ -25,39 +14,12 @@ import type {
 /**
  * Twitch user roles that can be allowed to interact with the bot
  */
-export type TwitchRole = "moderator" | "owner" | "vip" | "subscriber" | "all";
+export type TwitchRole = z.input<typeof TwitchRoleSchema>;
 
 /**
  * Account configuration for a Twitch channel
  */
-export interface TwitchAccountConfig {
-  /** Twitch username */
-  username: string;
-  /** Twitch OAuth access token (requires chat:read and chat:write scopes) */
-  accessToken: string;
-  /** Twitch client ID (from Twitch Developer Portal or twitchtokengenerator.com) */
-  clientId: string;
-  /** Channel name to join (required) */
-  channel: string;
-  /** Enable this account */
-  enabled?: boolean;
-  /** Allowlist of Twitch user IDs who can interact with the bot (use IDs for safety, not usernames) */
-  allowFrom?: Array<string>;
-  /** Roles allowed to interact with the bot (e.g., ["mod", "vip", "sub"]) */
-  allowedRoles?: TwitchRole[];
-  /** Require @mention to trigger bot responses */
-  requireMention?: boolean;
-  /** Outbound response prefix override for this channel/account. */
-  responsePrefix?: string;
-  /** Twitch client secret (required for token refresh via RefreshingAuthProvider) */
-  clientSecret?: string;
-  /** Refresh token (required for automatic token refresh) */
-  refreshToken?: string;
-  /** Token expiry time in seconds (optional, for token refresh tracking) */
-  expiresIn?: number | null;
-  /** Timestamp when token was obtained (optional, for token refresh tracking) */
-  obtainmentTimestamp?: number;
-}
+export type TwitchAccountConfig = z.input<typeof TwitchAccountSchema>;
 
 /**
  * Twitch message from chat
@@ -94,11 +56,10 @@ export type {
   ChannelAccountSnapshot,
   ChannelLogSink,
   ChannelMessageActionAdapter,
-  ChannelMessageActionContext,
   ChannelOutboundAdapter,
   ChannelResolveKind,
   ChannelResolveResult,
   ChannelPlugin,
   ChannelOutboundContext,
   OutboundDeliveryResult,
-};
+} from "../runtime-api.js";

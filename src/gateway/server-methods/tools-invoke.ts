@@ -9,6 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { invokeGatewayTool } from "../tools-invoke-shared.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -37,7 +38,8 @@ function resolveRpcErrorCode(params: {
 
 /** Handles `tools.invoke` with protocol-shaped success and failure payloads. */
 export const toolsInvokeHandlers: GatewayRequestHandlers = {
-  "tools.invoke": async ({ params, respond, context, client }) => {
+  "tools.invoke": async (options) => {
+    const { params, respond, context, client, signal } = options;
     if (!assertValidParams(params, validateToolsInvokeParams, "tools.invoke", respond)) {
       return;
     }
@@ -54,6 +56,9 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
     const outcome = await invokeGatewayTool({
       cfg: context.getRuntimeConfig(),
       input: params,
+      authenticatedUserProfile: client?.authenticatedUserProfile,
+      operatorRoleActor: client?.internal?.operatorRoleActor,
+      operatorScopes: client?.connect.scopes,
       senderIsOwner: client?.connect?.scopes?.includes("operator.admin"),
       clientCaps: client?.connect?.caps,
       conversationReadOrigin: resolveGatewayConversationReadOrigin({
@@ -62,6 +67,8 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       }),
       toolCallIdPrefix: "rpc",
       approvalMode: params.confirm === true ? "request" : "report",
+      signal,
+      assertInvocationCurrent: readGatewayRequestMutationAuthority(options).assertCurrent,
     });
 
     if (outcome.ok) {

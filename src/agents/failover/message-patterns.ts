@@ -1,5 +1,48 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 type ErrorPattern = RegExp | string;
+
+// Both figures must be denominated in tokens and come from one clause. A message can state an RPM
+// limit and mention TPM elsewhere, and reading the pair on its own would compare a request count
+// against a token budget; requiring the unit to lead the clause keeps the numbers commensurable.
+const STATED_TOKEN_SIZES_RE =
+  /(?:\btpm\b|tokens per minute)[^.\n]*?\blimit\s+([\d,]+)[^.\n]*?\brequested\s+([\d,]+)/i;
+
+function readStatedTokenCount(digits: string | undefined): number | undefined {
+  const parsed = Number(digits?.replaceAll(",", ""));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+// A request larger than the provider's entire TPM bucket cannot succeed by waiting;
+// it needs reset guidance or a differently provisioned fallback, not context compaction.
+export function isProviderRequestSizeCeilingError(errorMessage?: string): boolean {
+  if (!errorMessage) {
+    return false;
+  }
+  const stated = STATED_TOKEN_SIZES_RE.exec(errorMessage);
+  const limit = readStatedTokenCount(stated?.[1]);
+  const requested = readStatedTokenCount(stated?.[2]);
+  return limit !== undefined && requested !== undefined && requested > limit;
+}
+
+// Match model-transport EOF contracts, not plugin lifecycle stream failures.
+// Unresolved calls at EOF differ from an inconsistent completed response.
+export const INCOMPLETE_ASSISTANT_STREAM_RE =
+  /^(?:[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason)|Responses stream ended with unresolved tool calls)[.!]?$/i;
+// Undici ends a stream body with this exact bare transport message. Keep it
+// anchored so unrelated failures that merely contain the word do not match.
+export const TERMINATED_TRANSPORT_MESSAGE_RE = /^terminated$/i;
+// These exact transport diagnostics identify rejection, not whether replay is safe.
+const PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES = new Set([
+  "Provider completed tool call with malformed JSON arguments",
+  "Provider completed stream with an incomplete tool call",
+  "Provider returned an incomplete or malformed tool call",
+  "Mistral completed tool call has invalid JSON arguments",
+  "Responses stream completed tool call with invalid JSON arguments",
+]);
+
+export function isPreDispatchToolCallRejectionMessage(errorMessage?: string): boolean {
+  return errorMessage !== undefined && PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES.has(errorMessage);
+}
 const PERIODIC_USAGE_LIMIT_RE =
   /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
 
@@ -34,7 +77,6 @@ const COMMON_AUTH_ERROR_PATTERNS = [
   "insufficient permission",
   /missing scopes?:/i,
   "expired",
-  "token has expired",
   /\b401\b/,
   /\b403\b/,
   "no credentials found",
@@ -66,14 +108,6 @@ const BILLING_ERROR_HARD_402_RE =
 // standalone status token, HTTP/status context, or a structured status/code shape.
 const RATE_LIMIT_429_RE =
   /^\s*429\b|\b(?:https?|status(?:[ _-]?code)?|response(?:[ _-]?code)?|http(?:[ _-]?status)?)\b[\s:=#"'(]{0,6}429\b|["'](?:status|code)["']\s*:\s*429\b|\b429\b[\s:)\].,-]*(?:rate[_ -]?limit(?:ed|ing)?|too many requests|resource has been exhausted|quota(?:\s+(?:exceeded|exhausted|depleted|reached))?)\b/i;
-// Catches provider "model X not found" wording; the legacy provider table
-// only covers Groq's deactivated-model forms.
-export const GENERIC_MODEL_NOT_FOUND_RE = /\bmodel\b.{0,60}?\bnot (?:found|available)\b/i;
-const ZAI_AUTH_ERROR_PATTERNS = [
-  // Z.ai: error 1113 = wrong endpoint or invalid credentials (#48988)
-  ZAI_AUTH_CODE_1113_RE,
-] as const satisfies readonly ErrorPattern[];
-
 const ERROR_PATTERNS = {
   rateLimit: [
     /rate[_ ]limit|too many requests/i,
@@ -85,9 +119,8 @@ const ERROR_PATTERNS = {
     /\bconcurrency limit\b.*\b(?:breached|reached)\b/i,
     "model_cooldown",
     "exceeded your current quota",
-    "resource has been exhausted",
-    "quota exceeded",
-    "resource_exhausted",
+    /\bresource[_ -]?exhausted\b/i,
+    /\bquota[_ -]?exceeded\b/i,
     "usage limit",
     /\btpm\b/i,
     "tokens per minute",
@@ -102,7 +135,6 @@ const ERROR_PATTERNS = {
     "额度已用尽",
   ],
   overloaded: [
-    /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
     "overloaded",
     /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i,
     /\bservice(?:[_ ]temporarily)?[_ ]unavailable\b/i,
@@ -126,7 +158,6 @@ const ERROR_PATTERNS = {
     // Chinese provider server error messages
     "内部错误",
     "服务器错误",
-    "服务器内部错误",
     "系统错误",
     "系统繁忙",
     "系统异常",
@@ -135,7 +166,6 @@ const ERROR_PATTERNS = {
     "timeout",
     "timed out",
     "deadline exceeded",
-    "context deadline exceeded",
     /^(?=[\s\S]*\bgot status:\s*internal\b)(?=[\s\S]*\bcode["']?\s*[:=]\s*500\b)/i,
     /^(?=[\s\S]*["']status["']\s*:\s*["']internal["'])(?=[\s\S]*["']code["']\s*:\s*500\b)/i,
     "connection error",
@@ -147,6 +177,7 @@ const ERROR_PATTERNS = {
     // Keep them anchored so unrelated local stream failures do not trigger model failover.
     /^stream disconnected before completion(?::[\s\S]*)?$/i,
     /^premature close of server response while trying to fetch\b/i,
+    INCOMPLETE_ASSISTANT_STREAM_RE,
     // Chinese provider error messages (ZhipuAI/GLM, Bailian, Kimi/Moonshot, DeepSeek, etc.)
     "网络错误",
     "网络异常",
@@ -155,54 +186,22 @@ const ERROR_PATTERNS = {
     "请求超时",
     "连接超时",
     "连接错误",
-    /\beconn(?:refused|reset|aborted)\b/i,
-    /\benetunreach\b/i,
-    /\behostunreach\b/i,
-    /\behostdown\b/i,
-    /\benetreset\b/i,
-    /\betimedout\b/i,
-    /\besockettimedout\b/i,
-    /\bepipe\b/i,
-    /\benotfound\b/i,
-    /\beai_again\b/i,
+    /\b(?:econn(?:refused|reset|aborted)|enet(?:unreach|reset)|ehost(?:unreach|down)|e(?:socket)?timedout|epipe|enotfound|eai_again)\b/i,
     /without sending (?:any )?chunks?/i,
-    // Bare `error` is a provider-completed failure, not a hang — classified as
-    // server_error separately so diagnostics stay accurate while fallback still
-    // runs (#109218). Keep abort / network / malformed as timeout-like transients.
-    /\bstop reason:\s*(?:abort|malformed_response|network_error)\b/i,
+    // Completed `error` reasons are server errors; these reasons describe transport failure.
     /\breason:\s*(?:abort|malformed_response|network_error)\b/i,
-    /\bunhandled stop reason:\s*(?:abort|malformed_response|network_error)\b/i,
     // `\breason:` does not match provider payloads like `finish_reason: network_error` (#61281).
     /\bfinish_reason:\s*(?:abort|malformed_response|network_error)\b/i,
-    // AbortError messages from fetch/stream aborts (Ollama NDJSON stream
-    // timeouts, signal aborts, etc.) — without these the flattened message
-    // falls through to reason=unknown (#58315).
     /\boperation was aborted\b/i,
     /\bstream (?:was )?(?:closed|aborted)\b/i,
-    // Undici transport-level failures during CDN/provider outages (Cloudflare
-    // 502 served with an empty body, socket reset mid-response, body-stream
-    // aborted). These arrive as bare strings on the outer error and, without
-    // an explicit match, the fallback chain is never attempted (#69368).
-    /^terminated$/i,
+    // Undici and SDK wrappers sometimes preserve only these transport diagnostics.
+    TERMINATED_TRANSPORT_MESSAGE_RE,
     /^stream_read_error$/i,
     /\bund_err_(?:socket|connect|headers?|body|req_content_length_mismatch|aborted|closed)\b/i,
-    // shared model runtime's openai provider surfaces `Request failed` when the HTTP
-    // response has no body and no status text (typical of Cloudflare 502s
-    // from the upstream Codex service). Treat it as a transport failure so
-    // the configured fallback chain runs instead of surfacing the error.
     /^request failed$/i,
     /\brequest failed after repeated internal retries\b/i,
-    // The generic assistant error text "LLM request failed." is produced by
-    // formatUserFacingAssistantErrorText when the underlying provider error
-    // cannot be formatted into a specific category. For local providers (LM
-    // Studio, Ollama) this wraps connection/availability failures when the
-    // model is not loaded or the endpoint is unreachable. Without this match,
-    // cron retry and payload.fallbacks never engage because the error is not
-    // classified as any transient type (#93931).
-    // Use a strict exact-match regex so variants like
-    // "LLM request failed: provider rejected the request schema or tool payload."
-    // (a format/schema error, not transient) are NOT caught here — they
-    // fall through to their own pattern classifications.
+    // Local-provider availability failures can carry this fallback copy. Keep it
+    // exact so schema rejections beginning with "LLM request failed:" stay terminal.
     /^llm request failed\.$/i,
   ],
   billing: [
@@ -213,6 +212,9 @@ const ERROR_PATTERNS = {
     /used\s+all\s+available\s+credits/i,
     /(?:monthly\s+)?spend(?:ing)?\s+limit/i,
     /insufficient[_ ]quota/i,
+    /\b(?:go|free)usagelimiterror\b/i,
+    "available balance",
+    "out of budget",
     "credit balance",
     "plans & billing",
     /insufficient[_ ]balance/i,
@@ -227,9 +229,7 @@ const ERROR_PATTERNS = {
     /extra usage is required(?: for long context requests)?/i,
     // Chinese provider billing messages
     "余额不足",
-    "账户余额不足",
     "欠费",
-    "账户已欠费",
     // Volcengine Coding Plan entitlement failure. Official Ark error code:
     // HTTP 400 + InvalidSubscription means the plan is missing or expired.
     VOLCENGINE_INVALID_SUBSCRIPTION_RE,
@@ -243,14 +243,13 @@ const ERROR_PATTERNS = {
   auth: [
     ...AMBIGUOUS_AUTH_ERROR_PATTERNS,
     ...COMMON_AUTH_ERROR_PATTERNS,
-    ...ZAI_AUTH_ERROR_PATTERNS,
+    ZAI_AUTH_CODE_1113_RE,
     ...CJK_AUTH_ERROR_PATTERNS,
   ],
   format: [
     "string should match pattern",
     "tool_use.id",
     "tool_use_id",
-    "messages.1.content.1.tool_use.id",
     "invalid request format",
     /tool call id was.*must be/i,
     // Prefill-strict models (e.g. claude-opus-4-7) reject requests that end
@@ -279,14 +278,11 @@ function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): b
   );
 }
 
-function matchesErrorPatternGroups(
-  raw: string,
-  groups: readonly (readonly ErrorPattern[])[],
-): boolean {
-  return groups.some((patterns) => matchesErrorPatterns(raw, patterns));
-}
 export function matchesFormatErrorPattern(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.format);
+}
+export function isSessionTranscriptValidationErrorMessage(raw: string): boolean {
+  return /\binvalid session transcript entry\b/i.test(raw);
 }
 export function isRateLimitErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.rateLimit);
@@ -295,15 +291,9 @@ export function isTimeoutErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.timeout);
 }
 
-/**
- * Provider stream completed with an explicit error finish/stop reason.
- * These are not request timeouts: the transport finished quickly with a
- * provider-side error. Keep them failover-eligible as server_error (#109218).
- */
+// Provider-completed errors stay failover-eligible without claiming a timeout.
 const PROVIDER_COMPLETED_ERROR_FINISH_REASON_PATTERNS = [
   /\bfinish_reason:\s*error\b/i,
-  /\bstop reason:\s*error\b/i,
-  /\bunhandled stop reason:\s*error\b/i,
   // Symmetric with the timeout stop-reason family; scoped to the word `error`
   // only so `reason: network_error` stays in the timeout lane.
   /\breason:\s*error\b/i,
@@ -340,15 +330,10 @@ export function isBillingErrorMessage(raw: string): boolean {
   );
 }
 export function isAuthPermanentErrorMessage(raw: string): boolean {
-  return matchesErrorPatternGroups(raw, [HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS]);
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.authPermanent);
 }
 export function isAuthErrorMessage(raw: string): boolean {
-  return matchesErrorPatternGroups(raw, [
-    AMBIGUOUS_AUTH_ERROR_PATTERNS,
-    COMMON_AUTH_ERROR_PATTERNS,
-    ZAI_AUTH_ERROR_PATTERNS,
-    CJK_AUTH_ERROR_PATTERNS,
-  ]);
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.auth);
 }
 export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);

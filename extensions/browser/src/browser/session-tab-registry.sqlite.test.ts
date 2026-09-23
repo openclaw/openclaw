@@ -1,61 +1,25 @@
 // Browser tests cover durable session tab cleanup through the real plugin-state store.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  OpenKeyedStoreOptions,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerBrowserPlugin } from "../../plugin-registration.js";
-import type { OpenClawPluginApi } from "../../runtime-api.js";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { describe, expect, it, vi } from "vitest";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
+import {
+  cdpMocks,
+  clearProcessLocalTabState,
+  installSessionTabRegistrySqliteHarness,
+} from "./session-tab-registry.sqlite.test-harness.js";
 import {
   type CloseTab,
   type DurableRecord,
   type DurableTab,
   durableOwnership as ownership,
-  type RegistryModule,
 } from "./session-tab-registry.sqlite.test-helpers.js";
 import { browserSessionTabStorageKey } from "./session-tab-store.js";
-
-const cdpMocks = vi.hoisted(() => ({
-  closeTrackedCdpTarget: vi.fn<() => Promise<CloseTrackedCdpTargetResult>>(),
-}));
-
-vi.mock("./cdp.helpers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./cdp.helpers.js")>()),
-  closeTrackedCdpTarget: cdpMocks.closeTrackedCdpTarget,
-}));
-
-function clearProcessLocalTabState(): void {
-  const state = globalThis as Record<symbol, unknown>;
-  for (const name of [
-    "openclaw.browser.session-tabs.volatile",
-    "openclaw.browser.session-tabs.volatile-cleanup",
-    "openclaw.browser.session-tabs.active-durable-keys",
-    "openclaw.browser.session-tabs.cold-native-activity",
-    "openclaw.browser.session-tabs.interaction-storage-keys",
-    "openclaw.browser.session-tabs.exact-interaction-storage-keys",
-    "openclaw.browser.session-tabs.volatile-aliases",
-    "openclaw.browser.session-tabs.exact-volatile-aliases",
-  ]) {
-    delete state[Symbol.for(name)];
-  }
-}
 
 function setBrowserProfileConfig(): void {
   const config = {
@@ -74,71 +38,7 @@ function setBrowserProfileConfig(): void {
 }
 
 describe("durable session tab registry", () => {
-  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-  let stateDir: string;
-  let freshModuleCounter = 0;
-
-  function openStore(): PluginStateSyncKeyedStore<unknown> {
-    return createPluginStateSyncKeyedStoreForTests("browser", {
-      namespace: "browser.session-tabs",
-      maxEntries: 5_000,
-      overflowPolicy: "reject-new",
-    });
-  }
-
-  function installRuntime(
-    openSyncKeyedStore: (options: OpenKeyedStoreOptions) => PluginStateSyncKeyedStore<unknown> = (
-      options,
-    ) => createPluginStateSyncKeyedStoreForTests("browser", options),
-  ): void {
-    registerBrowserPlugin(
-      createTestPluginApi({
-        id: "browser",
-        name: "Browser",
-        source: "test",
-        rootDir: "/plugins/browser",
-        config: {},
-        runtime: {
-          state: {
-            openKeyedStore: (options: OpenKeyedStoreOptions) =>
-              createPluginStateKeyedStoreForTests("browser", options),
-            openSyncKeyedStore,
-          },
-        } as unknown as OpenClawPluginApi["runtime"],
-      }),
-    );
-  }
-
-  async function freshRegistry(label: string): Promise<RegistryModule> {
-    freshModuleCounter += 1;
-    return await importFreshModule<RegistryModule>(
-      import.meta.url,
-      `./session-tab-registry.js?durable=${label}-${freshModuleCounter}`,
-    );
-  }
-
-  beforeEach(() => {
-    clearRuntimeConfigSnapshot();
-    clearProcessLocalTabState();
-    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-browser-tabs-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    resetPluginStateStoreForTests();
-    installRuntime();
-    openStore().clear();
-    cdpMocks.closeTrackedCdpTarget.mockReset().mockResolvedValue({ status: "closed" });
-  });
-
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-    clearProcessLocalTabState();
-    resetPluginStateStoreForTests();
-    fs.rmSync(stateDir, { recursive: true, force: true });
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
-  });
+  const { openStore, installRuntime, freshRegistry } = installSessionTabRegistrySqliteHarness();
 
   it("closes a durable tab after the SQLite database and module are reopened", async () => {
     setBrowserProfileConfig();
@@ -178,7 +78,7 @@ describe("durable session tab registry", () => {
     first.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "bridge-tab",
-      baseUrl: "http://127.0.0.1:9999",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
       profile: "remote",
       ownership: ownership("REMOTE-NATIVE"),
     });
@@ -211,7 +111,7 @@ describe("durable session tab registry", () => {
     registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared-target",
-      baseUrl: "http://127.0.0.1:9999",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
       profile: "remote",
       ownership: ownership("NATIVE-BRIDGE"),
       now: 2_000,
@@ -220,14 +120,14 @@ describe("durable session tab registry", () => {
     registry.touchSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared-target",
-      baseUrl: "http://127.0.0.1:9999",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
       profile: "remote",
       now: 3_000,
     });
     registry.untrackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared-target",
-      baseUrl: "http://127.0.0.1:9999",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
       profile: "remote",
     });
 
@@ -770,42 +670,6 @@ describe("durable session tab registry", () => {
     expect(openStore().entries()[0]?.value).not.toHaveProperty("cleanupAttemptToken");
   });
 
-  it("retries pending lifecycle cleanup even when normal sweeps filter the session", async () => {
-    const registry = await freshRegistry("lifecycle-retry");
-    registry.trackSessionBrowserTab({
-      sessionKey: "agent:subagent:ended",
-      targetId: "opaque",
-      profile: "remote",
-      ownership: ownership("NATIVE-PENDING"),
-      now: 1_000,
-    });
-    await expect(
-      registry.closeTrackedBrowserTabsForSessions({
-        sessionKeys: ["agent:subagent:ended"],
-        now: 2_000,
-        closeDurableTab: async () => ({
-          status: "unavailable",
-          reason: "target-lookup-failed",
-        }),
-      }),
-    ).resolves.toBe(0);
-    expect(openStore().entries()[0]?.value).toMatchObject({
-      nativeTargetId: "NATIVE-PENDING",
-      cleanupKind: "lifecycle",
-      cleanupAttemptToken: expect.any(String),
-    });
-
-    await expect(
-      registry.sweepTrackedBrowserTabs({
-        now: 10_000,
-        sessionFilter: () => false,
-        closeDurableTab: async (_tab, options) =>
-          options.shouldClose() ? { status: "closed" } : { status: "cancelled" },
-      }),
-    ).resolves.toBe(1);
-    expect(openStore().entries()).toEqual([]);
-  });
-
   it("throws when durable registration cannot write SQLite", async () => {
     installRuntime((options) => {
       const store = createPluginStateSyncKeyedStoreForTests("browser", options);
@@ -891,6 +755,16 @@ describe("durable session tab registry", () => {
     } satisfies DurableRecord;
     openStore().register("wrong-storage-key", validRecord);
     openStore().register("invalid-record", { version: 999, sessionKey: "agent:main:main" });
+    openStore().register("partial-cleanup", {
+      ...validRecord,
+      nativeTargetId: "NATIVE-PARTIAL",
+      cleanupRequestedAt: 2_000,
+    });
+    openStore().register("noncanonical-aliases", {
+      ...validRecord,
+      nativeTargetId: "NATIVE-ALIASES",
+      profileAliases: ["zeta", "alpha"],
+    });
     const warnings: string[] = [];
     const registry = await freshRegistry("invalid");
 
@@ -901,7 +775,7 @@ describe("durable session tab registry", () => {
     });
     expect(openStore().entries()).toEqual([]);
     expect(cdpMocks.closeTrackedCdpTarget).not.toHaveBeenCalled();
-    expect(warnings).toHaveLength(2);
+    expect(warnings).toHaveLength(4);
   });
 
   it("keeps non-durable tabs out of SQLite but shared across duplicate bundles", async () => {

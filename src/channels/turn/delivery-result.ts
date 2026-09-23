@@ -1,51 +1,65 @@
 // Delivery-result adapters for channel turn receipts.
-import { formatErrorMessage } from "../../infra/errors.js";
-import { listMessageReceiptPlatformIds } from "../message/receipt.js";
+import {
+  createMessageReceiptFromOutboundResults,
+  listMessageReceiptPlatformIds,
+  resolveMessageReceiptThreadId,
+} from "../message/receipt.js";
 import type { MessageReceipt } from "../message/types.js";
 import type {
   ChannelDeliveryIntent,
   ChannelDeliveryOutcome,
   ChannelDeliveryResult,
-} from "./types.js";
+} from "./delivery-outcome.js";
 
-const CHANNEL_PARTIAL_DELIVERY_ERROR_CODE = "CHANNEL_PARTIAL_DELIVERY";
+type ReceiptParams = Parameters<typeof createMessageReceiptFromOutboundResults>[0];
 
-type ChannelPartialDeliveryEnvelope = {
-  code: typeof CHANNEL_PARTIAL_DELIVERY_ERROR_CODE;
-  deliveryResult: ChannelDeliveryOutcome & { visibleReplySent: true };
-};
-
-export type ChannelPartialDeliveryError = Error & ChannelPartialDeliveryEnvelope;
-
-/** Preserves provider-visible delivery facts when a later native operation fails. */
-export function createChannelPartialDeliveryError(
-  cause: unknown,
-  deliveryResult: ChannelDeliveryOutcome & { visibleReplySent: true },
-): ChannelPartialDeliveryError & { sentBeforeError: true; visibleReplySent: true } {
-  return Object.assign(new Error(formatErrorMessage(cause), { cause }), {
-    code: "CHANNEL_PARTIAL_DELIVERY" as const,
-    deliveryResult,
-    sentBeforeError: true as const,
-    visibleReplySent: true as const,
-  });
+/** Aggregates caller-confirmed sends, preserving nested receipts before legacy message IDs. */
+export function createAcceptedChannelDeliveryResult(
+  params: Pick<ReceiptParams, "kind" | "replyToId"> & {
+    results?: ReceiptParams["results"];
+    deliveryResults?: readonly ChannelDeliveryOutcome[];
+    content?: string;
+  },
+): {
+  messageIds: string[];
+  receipt: MessageReceipt;
+  visibleReplySent: true;
+  content?: string;
+} {
+  const { deliveryResults, content, ...receiptParams } = params;
+  const results = deliveryResults
+    ? [
+        ...(receiptParams.results ?? []),
+        ...deliveryResults.flatMap((result): ReceiptParams["results"] =>
+          result.receipt
+            ? [{ receipt: result.receipt }]
+            : (result.messageIds ?? []).map((messageId) => ({ messageId })),
+        ),
+      ]
+    : (receiptParams.results ?? []);
+  const receipt = createMessageReceiptFromOutboundResults({ ...receiptParams, results });
+  return {
+    messageIds: listMessageReceiptPlatformIds(receipt),
+    receipt,
+    visibleReplySent: true,
+    ...(content === undefined ? {} : { content }),
+  };
 }
 
-export function isChannelPartialDeliveryError(
-  error: unknown,
-): error is ChannelPartialDeliveryEnvelope {
-  if (!error || typeof error !== "object" || Array.isArray(error)) {
-    return false;
-  }
-  const candidate = error as { code?: unknown; deliveryResult?: unknown };
-  return (
-    candidate.code === CHANNEL_PARTIAL_DELIVERY_ERROR_CODE &&
-    Boolean(
-      candidate.deliveryResult &&
-      typeof candidate.deliveryResult === "object" &&
-      !Array.isArray(candidate.deliveryResult) &&
-      (candidate.deliveryResult as { visibleReplySent?: unknown }).visibleReplySent === true,
-    )
-  );
+/** Builds a typed non-visible channel outcome without transport identity. */
+export function createSuppressedChannelDeliveryResult(params: {
+  reason: NonNullable<ChannelDeliveryResult["suppression"]>["reason"];
+  cancelReason?: string;
+  metadata?: Record<string, unknown>;
+}): ChannelDeliveryResult {
+  return {
+    visibleReplySent: false,
+    suppression: {
+      reason: params.reason,
+      ...(params.cancelReason ? { cancelReason: params.cancelReason } : {}),
+      ...(params.metadata ? { metadata: params.metadata } : {}),
+    },
+  };
 }
 
 /** Converts a normalized message receipt into the delivery result shape used by channel turns. */
@@ -58,13 +72,20 @@ export function createChannelDeliveryResultFromReceipt(params: {
   deliveryIntent?: ChannelDeliveryIntent;
 }): ChannelDeliveryResult {
   const messageIds = listMessageReceiptPlatformIds(params.receipt);
+  const threadId = resolveMessageReceiptThreadId(params.receipt, params.threadId);
   return {
     ...(messageIds.length > 0 ? { messageIds } : {}),
     receipt: params.receipt,
-    ...(params.threadId ? { threadId: params.threadId } : {}),
+    ...(threadId ? { threadId } : {}),
     ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     ...(params.visibleReplySent === undefined ? {} : { visibleReplySent: params.visibleReplySent }),
     ...(params.content === undefined ? {} : { content: params.content }),
     ...(params.deliveryIntent ? { deliveryIntent: params.deliveryIntent } : {}),
   };
 }
+
+export {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+  type ChannelPartialDeliveryError,
+} from "./partial-delivery-error.js";

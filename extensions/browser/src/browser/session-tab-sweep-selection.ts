@@ -1,6 +1,9 @@
 import {
   activeDurableStorageKeys,
+  normalizeBrowserSessionKey,
   readColdNativeActivity,
+  volatileSessionTabTargetKey,
+  volatileTabsBySession,
   type VolatileSessionTab,
 } from "./session-tab-process-state.js";
 import {
@@ -18,7 +21,23 @@ type TrackedTab = VolatileSessionTab | DurableTab;
 function trackedTabIdentity(tab: TrackedTab): string {
   return tab.kind === "durable"
     ? `durable:${tab.storageKey}`
-    : `volatile:${tab.sessionKey}:${tab.targetId}\u0000${tab.baseUrl ?? ""}\u0000${tab.profile ?? ""}`;
+    : `volatile:${tab.sessionKey}:${volatileSessionTabTargetKey(tab)}`;
+}
+
+export function selectTrackedTabsForSessions(params: {
+  durable: DurableTab[];
+  sessionKeys: Array<string | undefined>;
+}): TrackedTab[] {
+  const sessionKeys = new Set(
+    params.sessionKeys
+      .map((key) => normalizeBrowserSessionKey(key))
+      .filter((key) => key !== undefined),
+  );
+  const volatile: VolatileSessionTab[] = [];
+  for (const sessionKey of sessionKeys) {
+    volatile.push(...(volatileTabsBySession().get(sessionKey)?.values() ?? []));
+  }
+  return [...params.durable.filter((tab) => sessionKeys.has(tab.sessionKey)), ...volatile];
 }
 
 export function selectStaleTrackedTabs(params: {
@@ -49,6 +68,10 @@ export function selectStaleTrackedTabs(params: {
       : tab.lastUsedAt;
 
   for (const tab of params.tabs) {
+    if (tab.kind === "durable" && tab.dashboard) {
+      // The dashboard lifetime reconciler owns these targets, including pending closes.
+      continue;
+    }
     const observedAt =
       tab.kind === "durable" ? observedNativeActivity.get(tab.storageKey) : undefined;
     const isActiveDurable =

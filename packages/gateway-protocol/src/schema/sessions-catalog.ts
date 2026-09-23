@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString } from "./primitives.js";
+import { SessionParticipantSchema } from "./session-participant.js";
 import { SessionCreatedActorSchema } from "./sessions-row.js";
 
 const SessionCatalogErrorSchema = closedObject({ code: NonEmptyString, message: NonEmptyString });
@@ -11,6 +12,8 @@ export const SessionCatalogLocatorSchema = closedObject({
   catalogId: NonEmptyString,
   hostId: NonEmptyString,
   threadId: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sourceHomeId: Type.Optional(NonEmptyString),
 });
 
 export const SessionCatalogCapabilitiesSchema = closedObject({
@@ -23,6 +26,18 @@ export const SessionCatalogCapabilitiesSchema = closedObject({
     }),
   ),
   openTerminal: Type.Optional(Type.Boolean()),
+  startTerminal: Type.Optional(Type.Boolean()),
+});
+
+export const SessionCatalogShareRouteSchema = closedObject({
+  kind: Type.Literal("thread-id-prefix"),
+  routeSegment: Type.String({ pattern: "^[a-z][a-z0-9-]*$" }),
+  hostId: NonEmptyString,
+  identifierAlphabet: Type.Literal("lowercase-hex"),
+  fullLength: Type.Literal(32),
+  minPrefixLength: Type.Literal(12),
+  lookup: Type.Literal("catalog-list-search-by-thread-id-prefix"),
+  ambiguity: Type.Literal("multiple-results-or-next-cursor"),
 });
 
 export const SessionCatalogDescriptorSchema = closedObject({
@@ -47,7 +62,10 @@ export const SessionCatalogPullRequestSummarySchema = closedObject({
 
 export const SessionCatalogSessionSchema = closedObject({
   threadId: NonEmptyString,
+  sourceHomeId: Type.Optional(NonEmptyString),
   name: Type.Optional(Type.String()),
+  /** Named tint imported from the source CLI session (SESSION_COLOR_IDS). */
+  color: Type.Optional(Type.String()),
   cwd: Type.Optional(Type.String()),
   status: NonEmptyString,
   createdAt: Type.Optional(Type.Number()),
@@ -72,7 +90,10 @@ export const SessionCatalogHostSchema = closedObject({
   label: NonEmptyString,
   kind: Type.Union([Type.Literal("gateway"), Type.Literal("node")]),
   connected: Type.Boolean(),
+  /** First snapshot is still loading; retain prior rows until the host publication arrives. */
+  pending: Type.Optional(Type.Boolean()),
   nodeId: Type.Optional(NonEmptyString),
+  canStartTerminal: Type.Optional(Type.Boolean()),
   sessions: Type.Array(SessionCatalogSessionSchema),
   nextCursor: Type.Optional(Type.String()),
   error: Type.Optional(SessionCatalogErrorSchema),
@@ -82,6 +103,7 @@ export const SessionCatalogSchema = closedObject({
   id: NonEmptyString,
   label: NonEmptyString,
   capabilities: SessionCatalogCapabilitiesSchema,
+  shareRoute: Type.Optional(SessionCatalogShareRouteSchema),
   hosts: Type.Array(SessionCatalogHostSchema),
   error: Type.Optional(SessionCatalogErrorSchema),
 });
@@ -89,6 +111,8 @@ export const SessionCatalogSchema = closedObject({
 const SessionsCatalogListCommonProperties = {
   agentId: Type.Optional(NonEmptyString),
   progressId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  /** Opt into pending hosts completed by incremental publications for this progressId. */
+  allowPartialResults: Type.Optional(Type.Boolean()),
   search: Type.Optional(Type.String()),
   limitPerHost: Type.Optional(Type.Integer({ minimum: 1 })),
   hostIds: Type.Optional(Type.Array(NonEmptyString)),
@@ -96,6 +120,8 @@ const SessionsCatalogListCommonProperties = {
 
 export const SessionsCatalogListParamsSchema = closedObject({
   catalogId: Type.Optional(NonEmptyString),
+  /** Return catalog labels and capabilities with empty hosts, without listing sessions. */
+  metadataOnly: Type.Optional(Type.Boolean()),
   cursors: Type.Optional(Type.Record(NonEmptyString, Type.String())),
   ...SessionsCatalogListCommonProperties,
 });
@@ -128,6 +154,8 @@ export const SessionCatalogTranscriptItemSchema = closedObject({
   text: Type.Optional(Type.String()),
   timestamp: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
+  /** Source-supplied attribution, independent of the viewer and session adopter. */
+  sender: Type.Optional(SessionParticipantSchema),
   truncated: Type.Optional(Type.Boolean()),
   raw: Type.Optional(PluginJsonValueSchema),
 });
@@ -146,9 +174,7 @@ export const SessionsCatalogReadResultSchema = closedObject({
   nextCursor: Type.Optional(Type.String()),
 });
 
-export const SessionsCatalogContinueParamsSchema = closedObject({
-  ...SessionCatalogLocatorSchema.properties,
-});
+export const SessionsCatalogContinueParamsSchema = SessionCatalogLocatorSchema;
 
 export const SessionsCatalogContinueResultSchema = closedObject({ sessionKey: NonEmptyString });
 
@@ -163,8 +189,8 @@ export const SessionsCatalogStartTerminalParamsSchema = closedObject({
   catalogId: NonEmptyString,
   hostId: Type.Optional(NonEmptyString),
   agentId: NonEmptyString,
-  cwd: NonEmptyString,
-  initialMessage: Type.Optional(Type.String()),
+  cwd: Type.String({ minLength: 1, maxLength: 4096 }),
+  initialMessage: Type.Optional(Type.String({ maxLength: 16384 })),
 });
 
 // Mirrors terminal.open so callers can hand the new session to the same terminal UI.
@@ -178,6 +204,7 @@ export const SessionsCatalogStartTerminalResultSchema = closedObject({
 });
 
 export type SessionCatalogCapabilities = Static<typeof SessionCatalogCapabilitiesSchema>;
+export type SessionCatalogShareRoute = Static<typeof SessionCatalogShareRouteSchema>;
 export type SessionCatalogLocator = Static<typeof SessionCatalogLocatorSchema>;
 export type SessionCatalogDescriptor = Static<typeof SessionCatalogDescriptorSchema>;
 export type SessionCatalogPullRequestSummary = Static<

@@ -63,15 +63,6 @@ describe("Codex plugin activation", () => {
           });
           return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
         }
-        if (method === "skills/list") {
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
-        }
         throw new Error(`unexpected request ${method}`);
       },
     });
@@ -81,14 +72,7 @@ describe("Codex plugin activation", () => {
       reason: "already_active",
       installAttempted: true,
     });
-    expect(calls).toEqual([
-      "plugin/list",
-      "plugin/install",
-      "plugin/list",
-      "skills/list",
-      "hooks/list",
-      "config/mcpServer/reload",
-    ]);
+    expect(calls).toEqual(["plugin/list", "plugin/install", "plugin/list"]);
   });
 
   it("installs a migration-authorized local curated plugin and refreshes runtime state", async () => {
@@ -120,16 +104,6 @@ describe("Codex plugin activation", () => {
           });
           return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
         }
-        if (method === "skills/list") {
-          expectBooleanParam(params, "forceReload", true);
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
-        }
         if (method === "app/installed") {
           expectBooleanParam(params, "forceRefresh", true);
           return { apps: [] } satisfies v2.AppsInstalledResponse;
@@ -147,9 +121,6 @@ describe("Codex plugin activation", () => {
       "plugin/list",
       "plugin/install",
       "plugin/list",
-      "skills/list",
-      "hooks/list",
-      "config/mcpServer/reload",
       "app/installed",
     ]);
     expect(pluginListCalls).toBe(2);
@@ -157,6 +128,43 @@ describe("Codex plugin activation", () => {
       metadataCache.read("runtime", "curated-global")?.response.marketplaces[0]?.plugins[0],
     ).toMatchObject({ installed: true, enabled: true });
     expect(appCache.getRevision()).toBeGreaterThan(0);
+  });
+
+  it("keeps curated catalog refresh scoped to the active repository", async () => {
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const result = await ensureCodexPluginActivation({
+      identity: identity("google-calendar"),
+      configCwd: "/repo/project",
+      request: async (method, params) => {
+        requests.push({ method, params });
+        if (method === "plugin/list") {
+          return pluginList([
+            pluginSummary("google-calendar", {
+              installed: requests.filter((request) => request.method === "plugin/list").length > 1,
+              enabled: requests.filter((request) => request.method === "plugin/list").length > 1,
+            }),
+          ]);
+        }
+        if (method === "plugin/install") {
+          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expectActivationResult(result, {
+      ok: true,
+      reason: "installed",
+      installAttempted: true,
+    });
+    expect(requests).toContainEqual({
+      method: "plugin/list",
+      params: { cwds: ["/repo/project"] },
+    });
+    expect(requests).toContainEqual({
+      method: "plugin/list",
+      params: { cwds: ["/repo/project"], forceRefetch: true },
+    });
   });
 
   it("keeps activation fail-closed when post-install app inventory refresh fails", async () => {
@@ -173,15 +181,6 @@ describe("Codex plugin activation", () => {
         }
         if (method === "plugin/install") {
           return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-        }
-        if (method === "skills/list") {
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
         }
         if (method === "app/installed") {
           throw new Error("app/installed unavailable");
@@ -203,7 +202,7 @@ describe("Codex plugin activation", () => {
     expect(appCache.getRevision()).toBeGreaterThan(0);
   });
 
-  it("reports post-install runtime refresh failures without hiding the install attempt", async () => {
+  it("keeps a successful install usable when unrelated native refreshes fail", async () => {
     const result = await ensureCodexPluginActivation({
       identity: identity("google-calendar"),
       request: async (method) => {
@@ -223,15 +222,11 @@ describe("Codex plugin activation", () => {
     });
 
     expectActivationResult(result, {
-      ok: false,
-      reason: "refresh_failed",
+      ok: true,
+      reason: "installed",
       installAttempted: true,
     });
-    expect(result.diagnostics).toEqual([
-      {
-        message: "Codex plugin runtime refresh failed after install: skills/list unavailable",
-      },
-    ]);
+    expect(result.diagnostics).toEqual([]);
   });
 
   it("installs a disabled remote curated plugin by its resolved remote id", async () => {
@@ -272,15 +267,6 @@ describe("Codex plugin activation", () => {
           });
           return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
         }
-        if (method === "skills/list") {
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
-        }
         throw new Error(`unexpected request ${method}`);
       },
     });
@@ -294,9 +280,6 @@ describe("Codex plugin activation", () => {
       "plugin/list",
       "plugin/install",
       "plugin/list",
-      "skills/list",
-      "hooks/list",
-      "config/mcpServer/reload",
     ]);
   });
 
@@ -382,8 +365,8 @@ describe("Codex plugin activation", () => {
       remotePluginId: "plugin_connector_google_calendar",
       installed: false,
       enabled: false,
-      availability: "DISABLED_BY_ADMIN",
-      installPolicy: "NOT_AVAILABLE",
+      availability: "AVAILABLE",
+      installPolicy: "AVAILABLE",
     });
 
     await expect(
@@ -411,6 +394,49 @@ describe("Codex plugin activation", () => {
         },
       }),
     ).rejects.toBe(error);
+  });
+
+  it.each([
+    { availability: "DISABLED_BY_ADMIN", installPolicy: "AVAILABLE" },
+    { availability: "AVAILABLE", installPolicy: "NOT_AVAILABLE" },
+  ] as const)("never installs a curated plugin rejected by marketplace policy", async (policy) => {
+    const calls: string[] = [];
+    const summary = pluginSummary("google-calendar@openai-curated-remote", {
+      name: "google-calendar",
+      remotePluginId: "plugin_connector_google_calendar",
+      installed: false,
+      enabled: false,
+      ...policy,
+    });
+
+    const result = await ensureCodexPluginActivation({
+      identity: identity("google-calendar"),
+      request: async (method) => {
+        calls.push(method);
+        if (method === "plugin/list") {
+          return {
+            marketplaces: [
+              {
+                name: "openai-curated-remote",
+                path: null,
+                interface: null,
+                plugins: [summary],
+              },
+            ],
+            marketplaceLoadErrors: [],
+            featuredPluginIds: [],
+          } satisfies v2.PluginListResponse;
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expectActivationResult(result, {
+      ok: false,
+      reason: "disabled",
+      installAttempted: false,
+    });
+    expect(calls).toEqual(["plugin/list"]);
   });
 
   it("does not hide non-RPC plugin install failures", async () => {
@@ -522,6 +548,30 @@ describe("Codex plugin activation", () => {
     expect(result.diagnostics[0]?.message).toContain("installed and enabled outside OpenClaw");
     expect(request).not.toHaveBeenCalled();
   });
+
+  it.each(["company-tools", "openai-bundled", "workspace-shared-with-me"])(
+    "never installs a non-curated %s plugin during thread startup",
+    async (marketplaceName) => {
+      const request = vi.fn(async () => {
+        throw new Error("non-curated activation must not call app-server");
+      });
+      const result = await ensureCodexPluginActivation({
+        identity: { ...identity("security-review"), marketplaceName },
+        configCwd: "/repo/company",
+        request,
+      });
+
+      expectActivationResult(result, {
+        ok: false,
+        reason: "disabled",
+        installAttempted: false,
+      });
+      expect(result.diagnostics[0]?.message).toContain(
+        `/codex plugins install security-review@${marketplaceName}`,
+      );
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
 });
 
 function identity(pluginName: string): ResolvedCodexPluginPolicy {

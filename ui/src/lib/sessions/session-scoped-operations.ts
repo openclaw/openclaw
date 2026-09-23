@@ -1,4 +1,5 @@
 import {
+  GatewayProtocolRequestTimeoutError,
   getGatewaySessionMessageSubscriptionCoordinator,
   releaseGatewaySessionMessageSubscription,
   resetGatewaySessionMessageSubscriptionCoordinator,
@@ -6,51 +7,65 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SessionBranch,
-  SessionCompactionCheckpoint,
   SessionsBranchesSwitchResult,
-  SessionsCompactionBranchResult,
-  SessionsCompactionRestoreResult,
   SessionsForkResult,
   SessionsRewindResult,
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
   SessionWorkspaceSetResult,
 } from "../../api/types.ts";
+import { requestSessionRecovery } from "./recover.ts";
 import type {
   SessionCompactResult,
   SessionConnectionOwner,
   SessionConnectionScope,
   SessionMessageSubscription,
-  SessionSteerResult,
+  SessionRefreshOutcome,
 } from "./session-capability.ts";
-import {
-  areUiSessionKeysEquivalent,
-  isUiGlobalSessionKey,
-  normalizeAgentId,
-} from "./session-key.ts";
+import { areUiSessionKeysEquivalent, normalizeAgentId } from "./session-key.ts";
 import {
   requestSessionBranchSwitch,
   requestSessionBranches,
-  requestSessionCheckpointBranch,
-  requestSessionCheckpointRestore,
-  requestSessionCheckpoints,
   requestSessionCompact,
   requestSessionFile,
   requestSessionFilesList,
   requestSessionFileSet,
   requestSessionFork,
   requestSessionRewind,
-  requestSessionSteer,
 } from "./session-requests.ts";
 
 type SessionScopedOperationsHost = {
   connection: SessionConnectionOwner;
-  agentId: () => string | null;
-  refreshReplacement: (agentId?: string | null) => Promise<void>;
+  reconcileMutation: (agentId?: string | null) => Promise<SessionRefreshOutcome>;
+  notifyCreated: (key: string) => void;
+  reportError: (error: unknown) => void;
 };
+
+const retiredFailedSubscriptionRecoveries = new WeakSet<AggregateError>();
 
 export function createSessionScopedOperations(host: SessionScopedOperationsHost) {
   const ownedSubscriptions = new Set<SessionMessageSubscription>();
+
+  const recover = async (params: { key: string; agentId?: string }) => {
+    const scope = host.connection.capture();
+    if (!scope) {
+      return null;
+    }
+    try {
+      const result = await requestSessionRecovery(scope.client, params);
+      if (!host.connection.isCurrent(scope)) {
+        return null;
+      }
+      host.notifyCreated(result.key);
+      await host.reconcileMutation(params.agentId);
+      return host.connection.isCurrent(scope) ? result : null;
+    } catch (error) {
+      if (host.connection.isCurrent(scope)) {
+        host.reportError(error);
+      }
+      return null;
+    }
+  };
 
   const compact = async (
     key: string,
@@ -63,22 +78,6 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     const result = await requestSessionCompact(scope.client, key, options);
     if (!host.connection.isCurrent(scope)) {
       throw new Error("Session compaction completed on a replaced Gateway connection");
-    }
-    return result;
-  };
-
-  const steer = async (
-    key: string,
-    message: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionSteerResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      throw new Error("Session steering requires an active Gateway connection");
-    }
-    const result = await requestSessionSteer(scope.client, key, message, options);
-    if (!host.connection.isCurrent(scope)) {
-      throw new Error("Session steering completed on a replaced Gateway connection");
     }
     return result;
   };
@@ -136,16 +135,29 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       throw new Error("Session message subscription requires an active Gateway connection");
     }
     const normalizedKey = key.trim();
-    const agentId =
-      isUiGlobalSessionKey(normalizedKey) && options.agentId?.trim()
-        ? normalizeAgentId(options.agentId)
-        : null;
+    const agentId = options.agentId?.trim() ? normalizeAgentId(options.agentId) : null;
     const subscription = await getGatewaySessionMessageSubscriptionCoordinator(scope.client, {
       keysEquivalent: areUiSessionKeysEquivalent,
-    }).acquire(normalizedKey, {
-      agentId,
-      ...(options.includeApprovals ? { includeApprovals: true } : {}),
-    });
+    })
+      .acquire(normalizedKey, {
+        agentId,
+        ...(options.includeApprovals ? { includeApprovals: true } : {}),
+      })
+      .catch((error: unknown) => {
+        if (
+          error instanceof AggregateError &&
+          error.errors[0] instanceof GatewayProtocolRequestTimeoutError &&
+          error.errors[0].requestSent &&
+          host.connection.isCurrent(scope) &&
+          !retiredFailedSubscriptionRecoveries.has(error)
+        ) {
+          // Failed compensation cannot prove privileged observers were removed;
+          // closing their owning socket invokes authoritative Gateway cleanup.
+          retiredFailedSubscriptionRecoveries.add(error);
+          scope.client.forceReconnect("session subscription recovery failed");
+        }
+        throw error;
+      });
     ownedSubscriptions.add(subscription);
     if (!host.connection.isCurrent(scope)) {
       await unsubscribeMessages(subscription).catch(() => undefined);
@@ -154,58 +166,6 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     return subscription;
   };
 
-  const listCheckpoints = async (
-    key: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionCompactionCheckpoint[]> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return [];
-    }
-    const result = await requestSessionCheckpoints(scope.client, key, options);
-    return host.connection.isCurrent(scope) ? (result.checkpoints ?? []) : [];
-  };
-
-  const checkpointMutation = async <T>(
-    key: string,
-    checkpointId: string,
-    options: { agentId?: string | null },
-    request: (
-      client: GatewayBrowserClient,
-      key: string,
-      checkpointId: string,
-      options: { agentId?: string | null },
-    ) => Promise<T>,
-  ): Promise<T> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      throw new Error("Session checkpoint operation requires an active Gateway connection");
-    }
-    const result = await request(scope.client, key, checkpointId, options);
-    if (!host.connection.isCurrent(scope)) {
-      throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
-    }
-    await host.refreshReplacement(options.agentId ?? host.agentId() ?? undefined);
-    if (!host.connection.isCurrent(scope)) {
-      throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
-    }
-    return result;
-  };
-
-  const branchCheckpoint = (
-    key: string,
-    checkpointId: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionsCompactionBranchResult> =>
-    checkpointMutation(key, checkpointId, options, requestSessionCheckpointBranch);
-
-  const restoreCheckpoint = (
-    key: string,
-    checkpointId: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionsCompactionRestoreResult> =>
-    checkpointMutation(key, checkpointId, options, requestSessionCheckpointRestore);
-
   const reconcileCommittedMutation = async (
     scope: SessionConnectionScope,
     agentId?: string | null,
@@ -213,7 +173,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     // The gateway response commits destructive work; refresh is connection-scoped
     // best effort and must never turn that commit into uncertainty or a retry.
     if (host.connection.isCurrent(scope)) {
-      await host.refreshReplacement(agentId ?? host.agentId() ?? undefined).catch(() => {});
+      await host.reconcileMutation(agentId).catch(() => {});
     }
   };
 
@@ -272,27 +232,24 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
   };
 
   return {
-    branchCheckpoint,
     compact,
     forkAtMessage,
     getFile,
     listBranches,
-    listCheckpoints,
     listFiles,
-    restoreCheckpoint,
+    recover,
     rewind,
     setFile,
-    steer,
     subscribeMessages,
     switchBranch,
     unsubscribeMessages,
-    retireConnection(previousClient: GatewayBrowserClient | null) {
+    retireConnection: (previousClient: GatewayBrowserClient | null) => {
       if (previousClient) {
         resetGatewaySessionMessageSubscriptionCoordinator(previousClient);
       }
       ownedSubscriptions.clear();
     },
-    dispose() {
+    dispose: () => {
       for (const subscription of ownedSubscriptions) {
         void unsubscribeMessages(subscription).catch(() => undefined);
       }

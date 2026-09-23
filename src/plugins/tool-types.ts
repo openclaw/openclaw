@@ -13,8 +13,13 @@ export type OpenClawPluginActiveModelContext = {
   modelRef?: string;
 };
 
+/** Current-turn outbound delivery capability bound to the host-selected route and media policy. */
+export type OpenClawPluginToolDelivery = {
+  send: (params: { text?: string; mediaUrl?: string }) => Promise<void>;
+};
+
 /** Trusted execution context passed to plugin-owned agent tool factories. */
-export type OpenClawPluginToolContext = {
+type OpenClawPluginToolContextBase = {
   config?: OpenClawConfig;
   /** Active runtime-resolved config snapshot when one is available. */
   runtimeConfig?: OpenClawConfig;
@@ -52,12 +57,16 @@ export type OpenClawPluginToolContext = {
   resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
   /** Trusted ambient delivery route for the active agent/session. */
   deliveryContext?: DeliveryContext;
+  /** Host-bound current-route delivery. Retained copies fail after the owning turn closes. */
+  delivery?: OpenClawPluginToolDelivery;
   /** Trusted platform-native conversation id for the active inbound turn. */
   nativeChannelId?: string;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
   /** Trusted owner bit from inbound context (runtime-provided, not tool args). */
   senderIsOwner?: boolean;
+  /** Live host-bound authority. Recheck inside the final synchronous effect/write guard. */
+  assertInvocationCurrent?: () => void;
   /**
    * Server-owned origin for this operation. Missing values are delegated.
    * Plugins must use it only for conversation-read visibility policy.
@@ -71,9 +80,18 @@ export type OpenClawPluginToolContext = {
   oneShotCliRun?: boolean;
 };
 
-export type OpenClawPluginToolFactory = (
-  ctx: OpenClawPluginToolContext,
-) => AnyAgentTool | AnyAgentTool[] | null | undefined;
+/** Version 1 is the source-compatible direct-turn context; version 2 requires final-effect authority. */
+export type OpenClawPluginToolContext<Version extends 1 | 2 = 1> = Version extends 2
+  ? OpenClawPluginToolContextBase & { assertInvocationCurrent: () => void }
+  : OpenClawPluginToolContextBase;
+
+/** A version 2 descriptor explicitly opts into owner-authorized continuations. */
+export type OpenClawPluginToolFactory<Version extends 1 | 2 = 1> = Version extends 2
+  ? {
+      contextVersion: 2;
+      create: (ctx: OpenClawPluginToolContext<2>) => ReturnType<OpenClawPluginToolFactory>;
+    }
+  : (ctx: OpenClawPluginToolContext) => AnyAgentTool | AnyAgentTool[] | null | undefined;
 
 export type OpenClawPluginToolOptions = {
   name?: string;

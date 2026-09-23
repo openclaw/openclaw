@@ -164,8 +164,8 @@ describe("meeting node host audio backend", () => {
     const prepareAudio = vi.fn(async () => ({
       backend: "pipewire-pulse" as const,
       deviceLabel: "OpenClaw Meeting Audio",
-      inputCommand: ["parec", "--node-default"],
-      outputCommand: ["pacat", "--node-default"],
+      inputCommand: ["parec", "--device", "input name", ""],
+      outputCommand: ["pacat", "--device", "output name", ""],
     }));
     const host = createHost({ prepareAudio });
 
@@ -192,12 +192,22 @@ describe("meeting node host audio backend", () => {
       },
       10_000,
     );
-    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(1, "pacat", ["--node-default"], {
-      stdio: ["pipe", "ignore", "pipe"],
-    });
-    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(2, "parec", ["--node-default"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(
+      1,
+      "pacat",
+      ["--device", "output name", ""],
+      {
+        stdio: ["pipe", "ignore", "pipe"],
+      },
+    );
+    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(
+      2,
+      "parec",
+      ["--device", "input name", ""],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     expect(started).toMatchObject({
       audioBackend: "pipewire-pulse",
       audioDeviceLabel: "OpenClaw Meeting Audio",
@@ -262,6 +272,25 @@ describe("meeting node host audio backend", () => {
     });
     expect(childProcessMocks.spawn).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { name: "input", inputCommand: [], outputCommand: ["play"] },
+    { name: "output", inputCommand: ["capture"], outputCommand: [] },
+  ])("rejects an empty $name command before spawning", async ({ inputCommand, outputCommand }) => {
+    const host = createHost({
+      prepareAudio: vi.fn(async () => ({
+        backend: "pipewire-pulse" as const,
+        deviceLabel: "OpenClaw Meeting Audio",
+        inputCommand,
+        outputCommand,
+      })),
+    });
+
+    await expect(invokeHost(host, { ...AUDIO_START_PARAMS, launch: false })).rejects.toThrow(
+      "audio command must not be empty",
+    );
+    expect(childProcessMocks.spawn).not.toHaveBeenCalled();
+  });
 });
 
 describe("meeting node host audio output", () => {
@@ -271,6 +300,16 @@ describe("meeting node host audio output", () => {
 
   afterEach(() => {
     vi.resetAllMocks();
+  });
+
+  it("retains update ownership between RPCs and through child stream cleanup", async () => {
+    const bridge = await startAudioBridge({ inputAutoClose: false });
+    expect(bridge.host.hasActiveWork()).toBe(true);
+
+    await invokeBridge(bridge, "stop");
+    expect(bridge.host.hasActiveWork()).toBe(true);
+    bridge.inputProcess.emit("close", null, "SIGTERM");
+    expect(bridge.host.hasActiveWork()).toBe(false);
   });
 
   it("copies retained input buffers", async () => {
@@ -562,7 +601,7 @@ describe("meeting node host audio output", () => {
   });
 
   it("terminates output when input process construction throws", async () => {
-    const outputProcess = createProcess({ stdin: createStdin(true) });
+    const outputProcess = createProcess({ stdin: createStdin(true), autoClose: false });
     const spawnError = new Error("input spawn failed");
     childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockImplementationOnce(() => {
       throw spawnError;
@@ -573,6 +612,9 @@ describe("meeting node host audio output", () => {
       spawnError,
     );
     expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(host.hasActiveWork()).toBe(true);
+    outputProcess.emit("close", null, "SIGTERM");
+    expect(host.hasActiveWork()).toBe(false);
   });
 
   it("deletes a hidden audio session after browser launch fails", async () => {

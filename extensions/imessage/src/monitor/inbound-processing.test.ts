@@ -441,6 +441,26 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(decision.contextKey).toContain("imessage:reaction:added");
   });
 
+  it.each([
+    { text: "Loved “Dune” and the soundtrack was incredible" },
+    { text: 'Liked "your plan" but Wednesday works better' },
+    { text: "Removed a heart from “the old post” yesterday", mode: "off" as const },
+    { text: 'Removed a like from "that post" yesterday', mode: "all" as const },
+    { text: 'Loved “Dune"', mode: "own" as const },
+  ])(
+    "dispatches ordinary quoted prose instead of dropping it as a tapback: $text",
+    async ({ text, mode }) => {
+      const decision = await resolveDecision({
+        message: { text },
+        messageText: text,
+        bodyText: text,
+        ...(mode ? { reactionNotifications: mode } : {}),
+      });
+
+      expect(decision.kind).toBe("dispatch");
+    },
+  );
+
   it("uses the iMessage reply cache to recognize tool-sent messages as bot-authored reaction targets", async () => {
     const decision = await resolveDecision({
       message: {
@@ -555,7 +575,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
   });
 
   it("uses the production reply-cache lookup for bot-authored reaction targets", async () => {
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "p:0/imsg-production",
       chatGuid: "any;-;+15555550123",
@@ -691,6 +711,40 @@ describe("resolveIMessageReactionContext", () => {
     expect(resolveIMessageReactionContext({}, "Loved the movie")).toBeNull();
   });
 
+  it.each([
+    ["Loved", "added", "❤️"],
+    ["Liked", "added", "👍"],
+    ["Disliked", "added", "👎"],
+    ["Laughed at", "added", "😂"],
+    ["Emphasized", "added", "‼️"],
+    ["Questioned", "added", "❓"],
+    ["Removed a heart from", "removed", "❤️"],
+    ["Removed a like from", "removed", "👍"],
+    ["Removed a dislike from", "removed", "👎"],
+    ["Removed a laugh from", "removed", "😂"],
+    ["Removed an emphasis from", "removed", "‼️"],
+    ["Removed a question from", "removed", "❓"],
+  ])("preserves complete legacy %s tapback wrappers", (prefix, action, emoji) => {
+    for (const [open, close] of [
+      ['"', '"'],
+      ["“", "”"],
+    ]) {
+      expect(resolveIMessageReactionContext({}, `${prefix} ${open}Hello${close}`)).toStrictEqual({
+        action,
+        emoji,
+        targetText: "Hello",
+      });
+    }
+  });
+
+  it("preserves complete multiline and nested legacy tapback wrappers", () => {
+    expect(resolveIMessageReactionContext({}, "Loved “  she said “hello”\nand left  ”")).toEqual({
+      action: "added",
+      emoji: "❤️",
+      targetText: "she said “hello”\nand left",
+    });
+  });
+
   it("detects imsg tapback flags and associated message types", async () => {
     expect(
       resolveIMessageReactionContext(
@@ -732,7 +786,7 @@ describe("resolveIMessageReactionContext", () => {
 });
 
 describe("buildIMessageInboundContext", () => {
-  it("keeps numeric row id and provider GUID separately for action tooling", async () => {
+  it("keeps provider IDs separate and projects from-me identity", async () => {
     const message = {
       id: 12345,
       guid: "p:0/GUID-current",
@@ -747,17 +801,23 @@ describe("buildIMessageInboundContext", () => {
       return;
     }
 
-    const { ctxPayload } = await buildIMessageInboundContext({
+    const contextParams = {
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision,
-      message,
       historyLimit: 0,
       groupHistories: new Map(),
-    });
+    } satisfies Omit<Parameters<typeof buildIMessageInboundContext>[0], "message">;
+    const { ctxPayload } = await buildIMessageInboundContext({ ...contextParams, message });
 
     expect(ctxPayload.MessageSid).toMatch(/^\d+$/u);
     expect(ctxPayload.MessageSid).not.toBe("12345");
     expect(ctxPayload.MessageSidFull).toBe("p:0/GUID-current");
+    const selfContext = await buildIMessageInboundContext({
+      ...contextParams,
+      message: { ...message, is_from_me: true },
+    });
+    expect(selfContext.ctxPayload.SenderIsSelf).toBe(true);
   });
 
   it("keeps generated media notices out of command input", async () => {
@@ -777,6 +837,7 @@ describe("buildIMessageInboundContext", () => {
 
     const { ctxPayload } = await buildIMessageInboundContext({
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision: {
         ...decision,
         agentBodyText: "/reset\n\n[imessage attachment unavailable]",
@@ -809,6 +870,7 @@ describe("buildIMessageInboundContext", () => {
 
     const { ctxPayload, inboundHistory } = await buildIMessageInboundContext({
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision,
       message,
       historyLimit: 0,
@@ -824,163 +886,70 @@ describe("buildIMessageInboundContext", () => {
     expect(ctxPayload.InboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
     expect(inboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
   });
-});
 
-describe("resolveIMessageInboundDecision command auth", () => {
-  const resolveDmCommandDecision = (params: {
-    messageId: number;
-    storeAllowFrom: string[];
-    dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
-    allowFrom?: string[];
-    text?: string;
-  }) =>
-    resolveDecision({
-      message: {
-        id: params.messageId,
-        sender: "+15555550123",
-        text: params.text ?? "/status",
-        is_from_me: false,
-        is_group: false,
+  it("uses the monitor's prepared account service without re-reading channel config", async () => {
+    const message = {
+      id: 12348,
+      sender: "+15555550123",
+      text: "current",
+      is_from_me: false,
+      is_group: false,
+    };
+    const decision = await resolveDecision({ message });
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+
+    let channelConfigReads = 0;
+    const projectionCfg = Object.defineProperty({}, "channels", {
+      enumerable: true,
+      get: () => {
+        channelConfigReads += 1;
+        return { imessage: { service: "imessage" } };
       },
-      allowFrom: params.allowFrom ?? [],
-      dmPolicy: params.dmPolicy ?? "open",
-      storeAllowFrom: params.storeAllowFrom,
-    });
-
-  it("does not auto-authorize DM commands in open mode without allowlists", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 100,
-      storeAllowFrom: [],
-    });
-
-    expect(decision).toEqual({ kind: "drop", reason: "dmPolicy blocked" });
-  });
-
-  it("authorizes DM commands for senders in pairing-mode store allowlist", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 101,
-      dmPolicy: "pairing",
-      storeAllowFrom: ["+15555550123"],
-    });
-
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-    expect(decision.commandAuthorized).toBe(true);
-    expect(decision.hasControlCommand).toBe(true);
-  });
-
-  it("marks authorized iMessage control commands as text command turns", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 102,
-      dmPolicy: "pairing",
-      storeAllowFrom: ["+15555550123"],
-      text: "/new",
-    });
-
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-
-    const { ctxPayload } = await buildIMessageInboundContext({
-      cfg,
+    }) as OpenClawConfig;
+    const { imessageTo } = await buildIMessageInboundContext({
+      cfg: projectionCfg,
+      accountService: "sms",
       decision,
-      message: {
-        id: 102,
-        guid: "p:0/GUID-command",
-        sender: "+15555550123",
-        text: "/new",
-        is_from_me: false,
-        is_group: false,
-      },
+      message,
       historyLimit: 0,
       groupHistories: new Map(),
     });
 
-    expect(ctxPayload.CommandAuthorized).toBe(true);
-    expect(ctxPayload.CommandSource).toBe("text");
-    expect(ctxPayload.CommandTurn).toMatchObject({
-      kind: "text-slash",
-      source: "text",
-      authorized: true,
-      commandName: "new",
-    });
-  });
-
-  it("does not mark authorized non-command iMessage DMs as text command turns", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 103,
-      dmPolicy: "pairing",
-      storeAllowFrom: ["+15555550123"],
-      text: "hello there",
-    });
-
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-    expect(decision.commandAuthorized).toBe(true);
-    expect(decision.hasControlCommand).toBe(false);
-
-    const { ctxPayload } = await buildIMessageInboundContext({
-      cfg,
-      decision,
-      message: {
-        id: 103,
-        guid: "p:0/GUID-non-command",
-        sender: "+15555550123",
-        text: "hello there",
-        is_from_me: false,
-        is_group: false,
-      },
-      historyLimit: 0,
-      groupHistories: new Map(),
-    });
-
-    expect(ctxPayload.CommandAuthorized).toBe(true);
-    expect(ctxPayload.CommandSource).toBeUndefined();
-    expect(ctxPayload.CommandTurn).toMatchObject({
-      kind: "normal",
-      source: "message",
-      commandName: undefined,
-    });
+    expect(imessageTo).toBe("sms:+15555550123");
+    expect(channelConfigReads).toBe(0);
   });
 });
 
 describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression)", () => {
-  function buildParams(messageOverrides: Partial<{ id: number; guid: string }>) {
-    const decision = {
-      kind: "dispatch" as const,
-      route: { accountId: "default", agentId: "lobster", sessionKey: "k", mainSessionKey: "mk" },
-      isGroup: false,
+  async function buildParams(messageOverrides: Partial<{ id: number; guid: string }>) {
+    const message = {
       sender: "+15555550123",
-      senderId: "+15555550123",
-      senderNormalized: "+15555550123",
-      historyKey: "h",
-      chatId: 3,
-      chatGuid: "any;-;+15555550123",
-      chatIdentifier: "+15555550123",
-      replyContext: undefined,
-      isCommand: false,
-      commandAuthorized: false,
-      hasControlCommand: false,
+      text: "hi",
+      chat_id: 3,
+      chat_guid: "any;-;+15555550123",
+      chat_identifier: "+15555550123",
+      ...messageOverrides,
     };
+    const decision = await resolveDecision({ message });
+    if (decision.kind !== "dispatch") {
+      throw new Error("expected message dispatch");
+    }
     return {
       cfg: {} as OpenClawConfig,
-      decision: decision as unknown as Parameters<
-        typeof buildIMessageInboundContext
-      >[0]["decision"],
-      message: { sender: "+15555550123", text: "hi", ...messageOverrides },
+      accountService: undefined,
+      decision,
+      message,
       historyLimit: 0,
       groupHistories: new Map(),
-    } as unknown as Parameters<typeof buildIMessageInboundContext>[0];
+    } satisfies Parameters<typeof buildIMessageInboundContext>[0];
   }
 
   it("uses the gateway-allocated shortId when the inbound has a guid", async () => {
     const { ctxPayload } = await buildIMessageInboundContext(
-      buildParams({ id: 999, guid: "FAB-INBOUND-1" }),
+      await buildParams({ id: 999, guid: "FAB-INBOUND-1" }),
     );
     // The gateway-allocated short id must not leak the chat.db rowid.
     expect(ctxPayload.MessageSid).toMatch(/^\d+$/u);
@@ -993,7 +962,7 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
     // short-id namespace. Agent then tried to react to a phantom shortId
     // that the resolver couldn't find ("13 is no longer available").
     const { ctxPayload } = await buildIMessageInboundContext(
-      buildParams({ id: 13, guid: undefined }),
+      await buildParams({ id: 13, guid: undefined }),
     );
     expect(ctxPayload.MessageSid).toBeUndefined();
     // Critically: never the rowid as a string.
@@ -1001,7 +970,9 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
   });
 
   it("does not leak chat.db ROWIDs even when the guid is whitespace", async () => {
-    const { ctxPayload } = await buildIMessageInboundContext(buildParams({ id: 13, guid: "   " }));
+    const { ctxPayload } = await buildIMessageInboundContext(
+      await buildParams({ id: 13, guid: "   " }),
+    );
     expect(ctxPayload.MessageSid).toBeUndefined();
   });
 });

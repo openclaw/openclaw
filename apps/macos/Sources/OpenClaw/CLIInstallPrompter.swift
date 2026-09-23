@@ -1,30 +1,42 @@
 import AppKit
 import Foundation
+import Observation
 import OSLog
 
 @MainActor
+@Observable
 final class CLIInstallPrompter {
     static let shared = CLIInstallPrompter()
     private let logger = Logger(subsystem: "ai.openclaw", category: "cli.prompt")
-    private var isPrompting = false
+    private(set) var isPrompting = false
+    private(set) var installStatus: String?
 
-    func checkAndPromptIfNeeded(reason: String) {
+    func checkAndPromptIfNeeded(reason: String, userInitiated: Bool = false) {
         guard !self.isPrompting else { return }
         self.isPrompting = true
+        self.installStatus = nil
         Task { @MainActor in
-            await self.checkAndPromptIfNeededAsync(reason: reason)
-            self.isPrompting = false
+            defer {
+                self.isPrompting = false
+                GatewayProcessManager.shared.refreshEnvironmentStatus(force: true)
+            }
+            await self.checkAndPromptIfNeededAsync(reason: reason, userInitiated: userInitiated)
         }
     }
 
-    private func checkAndPromptIfNeededAsync(reason: String) async {
-        guard AppStateStore.shared.onboardingSeen else { return }
+    private func checkAndPromptIfNeededAsync(reason: String, userInitiated: Bool) async {
+        guard userInitiated || AppStateStore.shared.onboardingSeen else { return }
         let connectionMode = AppStateStore.shared.connectionMode
-        guard Self.shouldManageCLI(connectionMode: connectionMode) else { return }
+        guard connectionMode == .local else { return }
+        await GatewayProcessManager.shared.waitForStartupAttempt()
+        guard GatewayProcessManager.shared.installation == .managed else { return }
         guard let version = Self.appVersion() else { return }
         let status = await CLIInstaller.status()
         let managedStatus = await CLIInstaller.managedStatus()
-        guard AppStateStore.shared.onboardingSeen else { return }
+        guard userInitiated || AppStateStore.shared.onboardingSeen,
+              AppStateStore.shared.connectionMode == .local,
+              GatewayProcessManager.shared.installation == .managed
+        else { return }
         let shouldRepairManaged = Self.shouldAutomaticallyRepair(
             status: managedStatus,
             launchAgentUsesManagedCLI: Self.launchAgentUsesManagedCLI(
@@ -33,9 +45,10 @@ final class CLIInstallPrompter {
             installPolicy: CLIInstallPolicy.storedPolicy(),
             launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled())
         if await self.completePendingManagedRestartIfNeeded(managedStatus: managedStatus) {
+            self.installStatus = String(localized: "OpenClaw Gateway is ready.")
             return
         }
-        if shouldRepairManaged {
+        if shouldRepairManaged, !userInitiated {
             // Only repair the app-owned install; external package-manager installs
             // remain under their owner's control. Repair restores the exact pin
             // that produced the incompatible status (channel policies never pin,
@@ -45,9 +58,7 @@ final class CLIInstallPrompter {
             if await self.installCLI(
                 target: .exact(version),
                 showCompletionAlert: false,
-                restartManagedGateway: Self.shouldRestartManagedGateway(
-                    requested: !AppStateStore.shared.isPaused,
-                    connectionMode: connectionMode))
+                restartManagedGateway: !AppStateStore.shared.isPaused)
             {
                 return
             }
@@ -55,19 +66,40 @@ final class CLIInstallPrompter {
             // the next trigger; the stale pre-install status must not prompt again.
             if Self.hasPendingManagedRestart() { return }
         }
-        guard !status.isReady else { return }
+        if status.isReady {
+            if userInitiated {
+                self.installStatus = String(localized: "Starting OpenClaw Gateway…")
+                self.installStatus = await Self.activationMessage(CLIInstaller.activateLocalGateway())
+            }
+            return
+        }
         let lastPrompt = AppDefaults.standard.string(forKey: cliInstallPromptedVersionKey)
-        guard lastPrompt != version else { return }
+        guard Self.shouldPrompt(version: version, lastPrompt: lastPrompt, userInitiated: userInitiated) else { return }
         AppDefaults.standard.set(version, forKey: cliInstallPromptedVersionKey)
 
-        if let target = self.installTargetForCurrentBuild(confirmStable: true) {
-            Task { _ = await self.installCLI(target: target) }
+        if let target = await self.installTargetForCurrentBuild(confirmStable: true, presentingSheetOn: nil) {
+            // Keep the shared busy guard through installation and activation, including manual retries.
+            _ = await self.installCLI(
+                target: target,
+                showCompletionAlert: !userInitiated,
+                restartManagedGateway: userInitiated && !AppStateStore.shared.isPaused &&
+                    Self.launchAgentUsesManagedCLI(
+                        programArguments: GatewayLaunchAgentManager.launchdConfigSnapshot()?.programArguments ?? []))
+        } else if userInitiated {
+            self.installStatus = String(localized: "Gateway setup cancelled. You can retry when ready.")
         }
 
         self.logger.debug("cli install prompt handled reason=\(reason, privacy: .public)")
     }
 
-    func installTargetForCurrentBuild(confirmStable: Bool = false) -> CLIInstaller.InstallTarget? {
+    static func shouldPrompt(version: String, lastPrompt: String?, userInitiated: Bool) -> Bool {
+        userInitiated || lastPrompt != version
+    }
+
+    func installTargetForCurrentBuild(
+        confirmStable: Bool = false,
+        presentingSheetOn window: NSWindow?) async -> CLIInstaller.InstallTarget?
+    {
         let appVersion = Self.appVersion()
         if let target = CLIInstaller.automaticInstallTarget(
             appVersion: appVersion,
@@ -76,29 +108,33 @@ final class CLIInstallPrompter {
             guard confirmStable else { return target }
             let alert = NSAlert()
             alert.messageText = "Install OpenClaw CLI?"
-            alert.informativeText = "The Mac node needs the matching CLI runtime."
+            alert.informativeText = "The app-managed local Gateway needs an external CLI runtime."
             alert.addButton(withTitle: "Install CLI")
             alert.addButton(withTitle: "Not Now")
             alert.addButton(withTitle: "Open Settings")
-            switch alert.runModal() {
+            switch await self.present(alert, presentingSheetOn: window) {
             case .alertFirstButtonReturn:
                 return target
             case .alertThirdButtonReturn:
-                self.openSettings(tab: .connection)
+                AppNavigationActions.openConnection()
                 return nil
             default:
                 return nil
             }
         }
 
-        return self.chooseChannel(
+        return await self.chooseChannel(
             suggested: CLIInstaller.suggestedChannel(
                 appVersion: appVersion,
-                isDebug: CLIInstallBuild.isDebug))
+                isDebug: CLIInstallBuild.isDebug),
+            presentingSheetOn: window)
             .map(CLIInstaller.InstallTarget.channel)
     }
 
-    private func chooseChannel(suggested: CLIInstaller.Channel) -> CLIInstaller.Channel? {
+    private func chooseChannel(
+        suggested: CLIInstaller.Channel,
+        presentingSheetOn window: NSWindow?) async -> CLIInstaller.Channel?
+    {
         let channels = [suggested] + CLIInstaller.Channel.allCases.filter { $0 != suggested }
         let alert = NSAlert()
         alert.messageText = "Choose OpenClaw CLI channel"
@@ -111,10 +147,16 @@ final class CLIInstallPrompter {
             alert.addButton(withTitle: channel.label)
         }
         alert.addButton(withTitle: "Not Now")
-        let response = alert.runModal()
+        let response = await self.present(alert, presentingSheetOn: window)
         let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
         guard channels.indices.contains(index) else { return nil }
         return channels[index]
+    }
+
+    private func present(_ alert: NSAlert, presentingSheetOn window: NSWindow?) async -> NSApplication.ModalResponse {
+        // Attaching onboarding alerts preserves their AX visibility and window-relative z-order.
+        guard let window else { return alert.runModal() }
+        return await alert.beginSheetModal(for: window)
     }
 
     private func installCLI(
@@ -122,11 +164,14 @@ final class CLIInstallPrompter {
         showCompletionAlert: Bool = true,
         restartManagedGateway: Bool = false) async -> Bool
     {
-        let status = StatusBox()
-        let usesLocalGateway = AppStateStore.shared.connectionMode == .local
-        let shouldRestartManagedGateway = Self.shouldRestartManagedGateway(
-            requested: restartManagedGateway,
-            connectionMode: AppStateStore.shared.connectionMode)
+        guard AppStateStore.shared.connectionMode == .local,
+              GatewayProcessManager.shared.installation == .managed
+        else { return false }
+        let status = StatusBox { [weak self] message in
+            self?.installStatus = message
+        }
+        let port = GatewayEnvironment.gatewayPort()
+        let shouldRestartManagedGateway = restartManagedGateway
         let previousPID = shouldRestartManagedGateway
             ? await GatewayLaunchAgentManager.runningGatewayPID()
             : nil
@@ -138,6 +183,15 @@ final class CLIInstallPrompter {
         }
         var activated = false
         if installed {
+            // A user can change the selected Gateway while the installer is running.
+            // Installing files does not authorize restarting the newly selected service.
+            guard AppStateStore.shared.connectionMode == .local,
+                  GatewayEnvironment.gatewayPort() == port,
+                  GatewayProcessManager.shared.installation == .managed
+            else {
+                await status.set("OpenClaw is installed. Gateway selection changed; reconnect to continue setup.")
+                return false
+            }
             if shouldRestartManagedGateway {
                 let restarted = await self.ensureManagedGatewayRestarted(
                     previousPID: previousPID,
@@ -151,17 +205,12 @@ final class CLIInstallPrompter {
                     return false
                 }
             }
-            let activation: CLIInstaller.LocalGatewayActivation?
-            if usesLocalGateway {
-                await status.set("Starting OpenClaw Gateway…")
-                if !showCompletionAlert {
-                    self.logger.info("managed CLI repair: Starting OpenClaw Gateway…")
-                }
-                activation = await CLIInstaller.activateLocalGateway()
-            } else {
-                activation = nil
+            await status.set("Starting OpenClaw Gateway…")
+            if !showCompletionAlert {
+                self.logger.info("managed CLI repair: Starting OpenClaw Gateway…")
             }
-            activated = activation != .failed
+            let activation = await CLIInstaller.activateLocalGateway()
+            if case .failed = activation { activated = false } else { activated = true }
             if shouldRestartManagedGateway {
                 // Only proven gateway health closes the recovery loop; the
                 // on-disk CLI already reads ready, so a lost marker here means
@@ -172,16 +221,7 @@ final class CLIInstallPrompter {
                     Self.setPendingManagedRestart()
                 }
             }
-            let message = switch activation {
-            case .ready:
-                "OpenClaw Gateway is ready."
-            case .deferred:
-                "OpenClaw is installed. The Gateway will start when This Mac is active and resumed."
-            case .failed:
-                "OpenClaw was installed, but the Gateway did not start. Open Settings to retry."
-            case nil:
-                "OpenClaw CLI is ready for the Mac node."
-            }
+            let message = Self.activationMessage(activation)
             await status.set(message)
             if !showCompletionAlert {
                 self.logger.info("managed CLI repair: \(message, privacy: .public)")
@@ -194,6 +234,19 @@ final class CLIInstallPrompter {
             alert.runModal()
         }
         return installed && activated
+    }
+
+    private static func activationMessage(_ activation: CLIInstaller.LocalGatewayActivation) -> String {
+        switch activation {
+        case .ready:
+            "OpenClaw Gateway is ready."
+        case .deferred:
+            "OpenClaw is installed. The Gateway will start when This Mac is active and resumed."
+        case let .failed(reason):
+            OnboardingView.gatewayStartFailureMessage(
+                prefix: "OpenClaw was installed, but the Gateway did not start. Open Settings to retry.",
+                reason: reason)
+        }
     }
 
     /// Finishes an update whose install succeeded but whose gateway restart did
@@ -217,7 +270,7 @@ final class CLIInstallPrompter {
             return false
         }
         await GatewayConnection.shared.shutdown()
-        guard await CLIInstaller.activateLocalGateway() != .failed else { return false }
+        if case .failed = await CLIInstaller.activateLocalGateway() { return false }
         Self.clearPendingManagedRestart()
         self.logger.info("pending managed Gateway restart completed")
         return true
@@ -233,17 +286,6 @@ final class CLIInstallPrompter {
 
     static func clearPendingManagedRestart() {
         AppDefaults.standard.removeObject(forKey: cliManagedRestartPendingKey)
-    }
-
-    static func shouldManageCLI(connectionMode: AppState.ConnectionMode) -> Bool {
-        connectionMode == .local || connectionMode == .remote
-    }
-
-    static func shouldRestartManagedGateway(
-        requested: Bool,
-        connectionMode: AppState.ConnectionMode) -> Bool
-    {
-        requested && connectionMode == .local
     }
 
     private func ensureManagedGatewayRestarted(previousPID: Int32?, status: StatusBox) async -> Bool {
@@ -280,14 +322,6 @@ final class CLIInstallPrompter {
             try? await Task.sleep(nanoseconds: 150_000_000)
         }
         return false
-    }
-
-    private func openSettings(tab: SettingsTab) {
-        SettingsTabRouter.request(tab)
-        SettingsWindowOpener.shared.open()
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)
-        }
     }
 
     private static func appVersion() -> String? {
@@ -375,13 +409,20 @@ final class CLIInstallPrompter {
             .deletingLastPathComponent()
             .standardizedFileURL.path + "/"
         guard let executable = command.first else { return false }
-        let executablePath = URL(fileURLWithPath: executable).standardizedFileURL.path
+        let executableURL = URL(fileURLWithPath: executable).standardizedFileURL
         let managedRuntimeRoot = managedRoot + "tools/node/"
-        if executablePath.hasPrefix(managedRoot), !executablePath.hasPrefix(managedRuntimeRoot) {
+        if executableURL.path.hasPrefix(managedRoot), !executableURL.path.hasPrefix(managedRuntimeRoot) {
             return true
         }
-        guard command.count >= 2 else { return false }
-        let entrypoint = command[command.index(after: command.startIndex)]
+        guard ["node", "bun"].contains(executableURL.lastPathComponent) else { return false }
+        // Skip only the joined heap controls emitted by the service installer.
+        // Other native options may consume paths; those values never prove CLI ownership.
+        let entrypoint = command.dropFirst().drop(while: {
+            $0.hasPrefix("--max-old-space-size=") ||
+                $0.hasPrefix("--max-old-space-size-percentage=") ||
+                $0.hasPrefix("--max-heap-size=")
+        }).first
+        guard let entrypoint, !entrypoint.hasPrefix("-") else { return false }
         return URL(fileURLWithPath: entrypoint).standardizedFileURL.path.hasPrefix(managedRoot)
     }
 
@@ -394,9 +435,15 @@ final class CLIInstallPrompter {
 
 private actor StatusBox {
     private var value: String?
+    private let onChange: @MainActor @Sendable (String) -> Void
 
-    func set(_ value: String) {
+    init(onChange: @escaping @MainActor @Sendable (String) -> Void) {
+        self.onChange = onChange
+    }
+
+    func set(_ value: String) async {
         self.value = value
+        await self.onChange(value)
     }
 
     func get() -> String? {

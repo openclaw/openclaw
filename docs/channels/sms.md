@@ -218,7 +218,7 @@ Then enable the channel in config:
 
 ### SecretRef auth token
 
-`authToken` can be a SecretRef (`source: "env" | "file" | "exec" | "store"`). Use this when the Gateway should resolve the Twilio Auth Token from the OpenClaw secrets runtime instead of storing plaintext config:
+`authToken` can be a [SecretRef](/gateway/secrets) (`source: "env" | "file" | "exec" | "store"`). Use this when the Gateway should resolve the Twilio Auth Token from the OpenClaw secrets runtime instead of storing plaintext config:
 
 ```json5
 {
@@ -338,6 +338,12 @@ openclaw message send \
 
 OpenClaw loads the attachment through the shared outbound-media policy, stores it temporarily in plugin-scoped SQLite state, and gives Twilio a tokenized HTTPS URL on the configured `publicWebhookUrl` path. Media-only sends are supported.
 
+`channels.sms.mediaMaxMb` limits each inbound and outbound attachment in MiB.
+The selected account's `mediaMaxMb` overrides the channel root, then
+`agents.defaults.mediaMaxMb` supplies the fallback. This per-attachment setting
+does not replace Twilio's total-message or media-type ceilings below. Outbound
+images may be optimized before sending.
+
 The generated media URL is a bearer capability that expires after 10 minutes. Treat its full query string as a secret: configure reverse-proxy and access logs to omit the query string or redact every query value. OpenClaw Gateway route diagnostics record only the pathname, but cannot control upstream proxy logs.
 
 Outbound OpenClaw deliveries attach one media item. OpenClaw caps JPEG, JPG, PNG, and GIF attachments at 5,000,000 bytes; other supported media types are capped at 500,000 bytes. `application/vcard` attachments must be media-only; Twilio does not accept them with a caption. Destination carriers may enforce smaller limits or reject unsupported formats. Twilio must be able to fetch the generated URL without HTTP authentication, so `publicWebhookUrl` cannot contain embedded userinfo; query-based reverse-proxy tokens are preserved.
@@ -397,7 +403,7 @@ The webhook route also enforces, independent of signature validation:
 - Signed delivery callbacks are classified before inbound sender quotas and commit to bounded, plugin-scoped SQLite state before HTTP 200. They do not consume inbound dispatch quotas: those quotas protect raw inbound message admission and downstream agent dispatch. Delivery persistence instead has a separate 3,000-callback-per-minute safety fuse per SMS account route and returns HTTP 503 without the durable-acceptance marker above that limit. This is fail-closed overload protection, not lossless backpressure. With signature validation disabled, delivery callbacks first use the stricter 30/minute resolved-client-address cap before persistence.
 - Dispatchable callback rate limit of 30 accepted callbacks per minute per SMS account, webhook route, and validated sender after body parsing and signature validation pass (HTTP 429 above that). The sender key is the canonicalized, signature-covered `From` value, so equivalent SMS/RCS address forms share one budget, one flooding sender exhausts only its own budget, and callbacks from other senders behind Twilio's shared egress addresses remain dispatchable. Invalid or missing sender values share a separate empty-sender budget.
 - Aggregate validated-callback ceiling of 300 accepted callbacks per minute per SMS account and webhook route. This bounds durable-ingress pressure from many distinct signed senders without recreating shared-egress cross-throttling. If signature validation is disabled, nothing authenticates `From`; the stricter 30/min resolved-client-address dispatch cap applies instead of the validated sender and aggregate policy.
-- Client addresses are resolved through the shared Gateway trusted-proxy rules. If `gateway.trustedProxies` contains the reverse proxy that forwards Twilio callbacks, OpenClaw keys the address-based limits from the forwarded client address; otherwise it falls back to the direct socket address.
+- Client addresses are resolved through the shared Gateway trusted-proxy rules. If [`gateway.trustedProxies`](/gateway/config-gateway) contains the reverse proxy that forwards Twilio callbacks, OpenClaw keys the address-based limits from the forwarded client address; otherwise it falls back to the direct socket address.
 - Inbound payloads must carry a nonempty `AccountSid` that exactly matches the configured `accountSid`. Direct-number callbacks must target the configured `fromNumber`; Messaging Service callbacks must carry the configured `MessagingServiceSid`. The raw callback is first committed to the durable ingress queue and acknowledged; an identity mismatch is then marked as a permanent invalid-payload failure during drain and is never dispatched or allowed to download media.
 - Delivery callbacks with a missing or different `AccountSid` are acknowledged, logged, and intentionally not stored.
 - Replayed `MessageSid` values are deduplicated by the durable ingress queue. Completed-message tombstones are retained for 24 hours (up to 20,000 entries per account); permanent-failure tombstones are retained for 30 days (up to 1,000 entries).
@@ -487,3 +493,9 @@ If the recent outbound status is `failed` or `undelivered`, use its `messageSid`
 ### Messages arrive but the agent does not answer
 
 Check `dmPolicy` and `allowFrom`. With the default `pairing` policy, the sender must be approved before normal agent turns are processed.
+
+## Related
+
+- [Channels overview](/channels)
+- [Secrets management](/gateway/secrets) — resolving the Twilio auth token from a SecretRef
+- [Configuration — gateway](/gateway/config-gateway) — `gateway.trustedProxies` and the other Gateway settings used above

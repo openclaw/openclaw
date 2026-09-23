@@ -1,7 +1,7 @@
-// Feishu plugin module implements send result behavior.
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
+  type ChannelMessageSendResult,
   type MessageReceipt,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -21,6 +21,7 @@ export function resolveFeishuReceiptKind(msgType?: string): MessageReceiptPartKi
     case "image":
     case "media":
     case "file":
+    case "sticker":
       return "media";
     case "interactive":
       return "card";
@@ -32,10 +33,11 @@ export function resolveFeishuReceiptKind(msgType?: string): MessageReceiptPartKi
   }
 }
 
-export function createFeishuSendReceipt(params: {
+function createFeishuSendReceipt(params: {
   messageId?: string;
   chatId: string;
   kind?: MessageReceiptPartKind;
+  replyToId?: string;
 }): MessageReceipt {
   const messageId = params.messageId?.trim();
   const chatId = params.chatId.trim();
@@ -50,18 +52,9 @@ export function createFeishuSendReceipt(params: {
           },
         ]
       : [],
-    ...(chatId ? { threadId: chatId } : {}),
+    ...(params.replyToId?.trim() ? { replyToId: params.replyToId.trim() } : {}),
     kind: params.kind ?? "unknown",
   });
-}
-
-export function assertFeishuMessageApiSuccess(
-  response: FeishuMessageApiResponse,
-  errorPrefix: string,
-) {
-  if (response.code !== 0) {
-    throw new Error(`${errorPrefix}: ${response.msg || `code ${response.code}`}`);
-  }
 }
 
 export function toFeishuSendResult(
@@ -69,6 +62,7 @@ export function toFeishuSendResult(
   chatId: string,
   kind?: MessageReceiptPartKind,
   errorPrefix = "Feishu send failed",
+  replyToId?: string,
 ): {
   messageId: string;
   chatId: string;
@@ -85,6 +79,23 @@ export function toFeishuSendResult(
   return {
     messageId,
     chatId,
-    receipt: createFeishuSendReceipt({ messageId, chatId, kind }),
+    receipt: createFeishuSendReceipt({ messageId, chatId, kind, replyToId }),
+  };
+}
+
+export function toFeishuMessageSendResult(
+  result: { messageId?: string; chatId?: string; receipt?: ChannelMessageSendResult["receipt"] },
+  kind: MessageReceiptPartKind,
+): ChannelMessageSendResult {
+  const receipt =
+    result.receipt ??
+    createFeishuSendReceipt({
+      messageId: result.messageId,
+      chatId: result.chatId ?? "",
+      kind,
+    });
+  return {
+    messageId: result.messageId || receipt.primaryPlatformMessageId,
+    receipt,
   };
 }

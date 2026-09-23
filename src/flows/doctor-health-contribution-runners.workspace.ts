@@ -1,45 +1,22 @@
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
+import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
-type PluginVersionDriftReport =
-  import("../plugins/plugin-version-drift.js").PluginVersionDriftReport;
+type PluginVersionRestartReadiness =
+  import("../plugins/plugin-version-drift.js").PluginVersionRestartReadiness;
 
 const loadDoctorStateIntegrityModule = async () =>
   await import("../commands/doctor-state-integrity.js");
-
-export async function runActiveToolSchemaWarningsHealth(
-  ctx: DoctorHealthFlowContext,
-): Promise<void> {
-  // Preview mode already collects these while deciding whether to apply repairs.
-  // Repair mode defers the runtime-backed diagnostic until migrations are durable.
-  if (!ctx.prompter.shouldRepair) {
-    return;
-  }
-  const { collectActiveToolSchemaProjectionWarnings } =
-    await import("../commands/doctor/shared/active-tool-schema-warnings.js");
-  const warnings = await collectActiveToolSchemaProjectionWarnings({
-    cfg: ctx.cfg,
-    env: ctx.env ?? process.env,
-    ...(ctx.runWithPluginMetadataSnapshot
-      ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
-      : {}),
-  });
-  if (warnings.length === 0) {
-    return;
-  }
-  const { note } = await import("../../packages/terminal-core/src/note.js");
-  note(warnings.join("\n"), "Doctor warnings");
-}
 
 export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (!ctx.cfg.hooks?.gmail?.model?.trim()) {
     return;
   }
   const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
-  const { loadPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
+  const { readPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
   const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
     await import("../agents/model-selection.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
@@ -53,13 +30,17 @@ export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const catalog = await loadPreparedModelCatalog({ config: ctx.cfg, readOnly: true });
+  const catalog = await readPreparedModelCatalog({
+    config: ctx.cfg,
+    readOnly: true,
+    providerDiscoveryProviderIds: [],
+  });
   const status = getModelRefStatus({
     cfg: ctx.cfg,
     catalog,
     ref: hooksModelRef,
     defaultProvider,
-    defaultModel,
+    defaultModel: { provider: defaultProvider, model: defaultModel },
   });
   const warnings: string[] = [];
   if (!status.allowed) {
@@ -77,11 +58,11 @@ export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise
   }
 }
 
-export async function collectWorkspaceStatusPluginVersionDrift(params: {
+export async function collectWorkspaceStatusPluginVersionReadiness(params: {
   cfg: OpenClawConfig;
   options?: Pick<DoctorOptions, "allowExec" | "deep" | "nonInteractive">;
-}): Promise<PluginVersionDriftReport | undefined> {
-  if (params.cfg.gateway?.mode === "remote") {
+}): Promise<PluginVersionRestartReadiness | undefined> {
+  if (params.cfg.gateway?.mode === "remote" || !(await shouldManageGatewayService())) {
     return undefined;
   }
   try {
@@ -92,30 +73,49 @@ export async function collectWorkspaceStatusPluginVersionDrift(params: {
       requireRpc: false,
       deep: params.options?.deep === true,
       allowExecSecretRefs: params.options?.allowExec === true,
+      pluginVersionTarget: "restart",
     });
-    const hasProbedGatewayVersion =
-      typeof status.gateway?.version === "string" && status.gateway.version.trim() !== "";
-    if (status.pluginVersionDrift && hasProbedGatewayVersion && !status.rpc?.authWarning) {
-      return status.pluginVersionDrift;
+    if (status.pluginVersionRestartReadiness?.status === "resolved") {
+      const { resolvePluginVersionDriftTargets } =
+        await import("../plugins/plugin-version-drift.js");
+      return {
+        ...status.pluginVersionRestartReadiness,
+        report: await resolvePluginVersionDriftTargets(status.pluginVersionRestartReadiness.report),
+      };
     }
+    return status.pluginVersionRestartReadiness;
   } catch {
-    // Best-effort diagnostic: doctor should keep running if daemon status is unavailable.
+    // The core Gateway health check owns general collection failures. Without status we
+    // cannot establish that a managed service and version-bound plugin make this check apply.
+    return undefined;
   }
-  return undefined;
 }
 
 export async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const pluginVersionDrift = await collectWorkspaceStatusPluginVersionDrift({
+  const pluginVersionReadiness = await collectWorkspaceStatusPluginVersionReadiness({
     cfg: ctx.cfg,
     options: ctx.options,
   });
   const { noteWorkspaceStatus } = await import("../commands/doctor-workspace-status.js");
   noteWorkspaceStatus(ctx.cfg, {
-    pluginVersionDrift,
+    pluginVersionReadiness,
     ...(ctx.runWithPluginMetadataSnapshot
       ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
       : {}),
   });
+}
+
+export async function runWorkspaceAliasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { collectRepointedWorkspaceAliasFindings } =
+    await import("../commands/doctor-workspace-alias.js");
+  const findings = await collectRepointedWorkspaceAliasFindings(ctx.cfg);
+  if (findings.length > 0) {
+    const { note } = await import("../../packages/terminal-core/src/note.js");
+    note(
+      findings.map((finding) => `${finding.message} ${finding.fixHint}`).join("\n"),
+      "Workspace",
+    );
+  }
 }
 
 export async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -186,6 +186,7 @@ export async function runMemorySearchHealthContribution(
     await maybeRepairMemoryRecallHealth({ cfg: ctx.cfg, prompter: ctx.prompter });
   }
   await noteMemorySearchHealth(ctx.cfg, {
+    env: ctx.env,
     gatewayMemoryProbe: ctx.gatewayMemoryProbe ?? { checked: false, ready: false, skipped: false },
   });
   if (ctx.options.deep === true) {
@@ -227,6 +228,7 @@ export async function collectMemorySearchHealthFindings(
   const { noteMemorySearchHealth } = await import("../commands/doctor-memory-search.js");
   const notes: string[] = [];
   await noteMemorySearchHealth(ctx.cfg, {
+    env: ctx.env,
     includeWorkspaceMemoryHealth: false,
     skipAuthProfileResolution: true,
     gatewayMemoryProbe: { checked: false, ready: false, skipped: true },

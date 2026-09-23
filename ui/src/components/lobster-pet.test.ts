@@ -4,54 +4,35 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
+import { resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet-contract.ts";
+import {
+  canonicalLobsterLook,
+  createLobsterPetLook,
+  renderLobsterSvg,
+} from "./lobster-pet-look.ts";
+import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 import {
   LOBSTER_BOTTLE_FORTUNES,
   pickLobsterEntrance,
   planLobsterBottle,
-  planLobsterPasser,
   resolveLobsterLoadIdentity,
 } from "./lobster-pet-plans.ts";
 import {
-  LOBSTER_PET_PALETTES,
-  canonicalLobsterLook,
-  createLobsterPetLook,
-  renderLobsterSvg,
-  resolveLobsterPetMode,
-  resolveLobsterRunOutcome,
-} from "./lobster-pet.ts";
-
-type LobsterPetMode = ReturnType<typeof resolveLobsterPetMode>;
-
-type LobsterPetElement = HTMLElement & {
-  gatewayVersion: string | null;
-  mode: LobsterPetMode;
-  runOutcome: "ok" | "error" | "aborted";
-  seed: number;
-  soundsEnabled: boolean;
-  updateComplete: Promise<boolean>;
-  visitsEnabled: boolean;
-};
-
-function createPet(seed: number, mode: LobsterPetMode = "idle"): LobsterPetElement {
-  const element = document.createElement("openclaw-lobster-pet") as LobsterPetElement;
-  element.seed = seed;
-  element.mode = mode;
-  document.body.append(element);
-  return element;
-}
+  advanceUntil,
+  arrive,
+  createPet,
+  spritePresent,
+  type LobsterPetElement,
+} from "./lobster-pet.test-support.ts";
 
 function poke(element: LobsterPetElement): void {
   const sprite = element.querySelector(".lobster-pet");
-  sprite?.dispatchEvent(new Event("pointerdown"));
-  sprite?.dispatchEvent(new Event("pointerup"));
+  sprite?.dispatchEvent(new MouseEvent("pointerdown", { button: 0 }));
+  sprite?.dispatchEvent(new MouseEvent("pointerup", { button: 0 }));
 }
 
 function spriteClasses(element: LobsterPetElement): string {
   return element.querySelector(".lobster-pet")?.className ?? "";
-}
-
-function spritePresent(element: LobsterPetElement): boolean {
-  return element.querySelector(".lobster-pet") !== null;
 }
 
 async function advanceUntilAct(element: LobsterPetElement, maxMs: number): Promise<string | null> {
@@ -66,30 +47,6 @@ async function advanceUntilAct(element: LobsterPetElement, maxMs: number): Promi
     }
   }
   return null;
-}
-
-async function advanceUntil(
-  element: LobsterPetElement,
-  predicate: () => boolean,
-  maxMs: number,
-  stepMs = 1000,
-): Promise<boolean> {
-  let elapsed = 0;
-  while (elapsed < maxMs) {
-    await vi.advanceTimersByTimeAsync(stepMs);
-    elapsed += stepMs;
-    await element.updateComplete;
-    if (predicate()) {
-      return true;
-    }
-  }
-  return predicate();
-}
-
-// Seed 42's visit schedule is not shy and first arrives at ~89s; jump past
-// the maximum first-arrival delay so tests start with a perched pet.
-async function arrive(element: LobsterPetElement): Promise<void> {
-  await advanceUntil(element, () => spritePresent(element), 200_000);
 }
 
 async function startVigilOnlyRun(
@@ -169,6 +126,11 @@ describe("resolveLobsterPetMode", () => {
       "busy",
     );
   });
+
+  it("stops looking busy after a registry-active run reaches a terminal status", () => {
+    expect(resolveLobsterPetMode(true, [{ status: "done", hasActiveRun: true }])).toBe("idle");
+    expect(resolveLobsterPetMode(true, [{ status: "running", hasActiveRun: true }])).toBe("busy");
+  });
 });
 
 describe("resolveLobsterRunOutcome", () => {
@@ -201,24 +163,50 @@ describe("resolveLobsterRunOutcome", () => {
 });
 
 describe("lobster pet element", () => {
+  it("hides a shed floor shell when resized controls consume its lane", async () => {
+    vi.useFakeTimers();
+    const element = createPet(42, "offline") as LobsterPetElement & {
+      floorEnabled: boolean;
+      anchor: "top" | "floor";
+      performAct: (act: "molt") => void;
+    };
+    element.floorEnabled = true;
+    await element.updateComplete;
+    await element.updateComplete;
+    element.anchor = "floor";
+    element.performAct("molt");
+    await vi.advanceTimersByTimeAsync(2600);
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet--shell")).not.toBeNull();
+    const lead = element.parentElement!.querySelector(".agent-chat__composer-lead")!;
+    lead.getBoundingClientRect().width = 720;
+    window.dispatchEvent(new Event("resize"));
+    await vi.advanceTimersByTimeAsync(0);
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet--shell")).toBeNull();
+  });
+
   it("starts hidden and arrives on its seeded visit schedule", async () => {
     vi.useFakeTimers();
     const element = createPet(42);
     await element.updateComplete;
 
     expect(spritePresent(element)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await element.updateComplete;
+    expect(spritePresent(element)).toBe(false);
     await arrive(element);
     expect(element.querySelector(".lobster-pet__svg")).not.toBeNull();
     expect(spriteClasses(element)).toContain("lobster-pet--idle");
-    expect(["ledge", "bar"]).toContain(element.getAttribute("data-spot"));
+    expect(["top", "floor"]).toContain(element.getAttribute("data-spot"));
   });
 
-  it("shy seeds never visit on their own", async () => {
+  it.each([7, 191])("shy seed %s never visits on its own", async (seed) => {
     vi.useFakeTimers();
-    const element = createPet(7);
+    const element = createPet(seed);
     await element.updateComplete;
 
-    const arrived = await advanceUntil(element, () => spritePresent(element), 600_000);
+    const arrived = await advanceUntil(element, () => spritePresent(element), 12_000);
     expect(arrived).toBe(false);
   });
 
@@ -230,7 +218,8 @@ describe("lobster pet element", () => {
     const departed = await advanceUntil(element, () => !spritePresent(element), 400_000);
     expect(departed).toBe(true);
 
-    const returned = await advanceUntil(element, () => spritePresent(element), 1_300_000);
+    expect(await advanceUntil(element, () => spritePresent(element), 1_200_000)).toBe(false);
+    const returned = await advanceUntil(element, () => spritePresent(element), 2_500_000);
     expect(returned).toBe(true);
   });
 
@@ -274,6 +263,7 @@ describe("lobster pet element", () => {
 
     const offline = createPet(7, "offline");
     await offline.updateComplete;
+    await offline.updateComplete;
     expect(spritePresent(offline)).toBe(true);
     expect(spriteClasses(offline)).toContain("lobster-pet--offline");
   });
@@ -311,25 +301,86 @@ describe("lobster pet element", () => {
     expect(getLobsterdexEntries().get(look.palette.id)?.name).toBeTruthy();
   });
 
-  it("right-click shoos it away for the rest of the load", async () => {
+  it("anchors the dismiss menu at the raw pointer position with a top-start placement", async () => {
     vi.useFakeTimers();
     const element = createPet(42);
     await arrive(element);
 
-    const shoo = new Event("contextmenu", { cancelable: true });
-    element.querySelector(".lobster-pet")?.dispatchEvent(shoo);
+    // Coordinates deliberately exceed a guessed 264x80 pre-clamp: a
+    // reintroduced clamp would move the trigger away from these exact values.
+    const clientX = 1200;
+    const clientY = 850;
+    element
+      .querySelector(".lobster-pet")
+      ?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX, clientY }),
+      );
+    await element.updateComplete;
+
+    const dropdown = element.querySelector(".lobster-pet-dismiss-menu");
+    expect(dropdown?.getAttribute("placement")).toBe("top-start");
+    const trigger = element.querySelector<HTMLElement>('[slot="trigger"]');
+    expect(trigger?.style.left).toBe(`${clientX}px`);
+    expect(trigger?.style.top).toBe(`${clientY}px`);
+  });
+
+  it("offers a temporary dismissal from the right-click menu", async () => {
+    vi.useFakeTimers();
+    const element = createPet(42);
+    await arrive(element);
+
+    const sprite = element.querySelector(".lobster-pet");
+    sprite?.dispatchEvent(new MouseEvent("pointerdown", { button: 2 }));
+    const shoo = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    sprite?.dispatchEvent(shoo);
+    sprite?.dispatchEvent(new MouseEvent("pointerup", { button: 2 }));
     await element.updateComplete;
     expect(shoo.defaultPrevented).toBe(true);
+    expect(spritePresent(element)).toBe(true);
+    expect(spriteClasses(element)).not.toContain("lobster-pet--act-startle");
+    expect(
+      [...element.querySelectorAll(".lobster-pet-dismiss-menu wa-dropdown-item")].map((item) =>
+        item.textContent?.trim(),
+      ),
+    ).toEqual(["Dismiss", "Dismiss and don't show again"]);
+
+    element.querySelector<HTMLElement>('wa-dropdown-item[value="dismiss"]')?.click();
+    await element.updateComplete;
 
     const gone = await advanceUntil(element, () => !spritePresent(element), 5_000);
     expect(gone).toBe(true);
 
     // Dismissal outlasts later scheduled visits and even offline summons.
-    const revisited = await advanceUntil(element, () => spritePresent(element), 2_400_000);
+    const revisited = await advanceUntil(element, () => spritePresent(element), 3_700_000);
     expect(revisited).toBe(false);
     element.mode = "offline";
     await element.updateComplete;
     expect(spritePresent(element)).toBe(false);
+  });
+
+  it("persists permanent dismissal in browser storage", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("localStorage", window.localStorage);
+    const element = createPet(42);
+    await arrive(element);
+
+    element
+      .querySelector(".lobster-pet")
+      ?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await element.updateComplete;
+    element.querySelector<HTMLElement>('wa-dropdown-item[value="dismiss-permanently"]')?.click();
+    await element.updateComplete;
+
+    const persistedSettings = Array.from({ length: localStorage.length }, (_, index) => {
+      const raw = localStorage.getItem(localStorage.key(index) ?? "");
+      try {
+        return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+      } catch {
+        return {};
+      }
+    });
+    expect(persistedSettings).toContainEqual(expect.objectContaining({ lobsterPetVisits: false }));
+    expect(await advanceUntil(element, () => !spritePresent(element), 5_000)).toBe(true);
   });
 
   it("never shows when visits are disabled, offline included", async () => {
@@ -382,7 +433,7 @@ describe("lobster pet element", () => {
     const gone = await advanceUntil(element, () => !spritePresent(element), 5_000);
     expect(gone).toBe(true);
 
-    const returned = await advanceUntil(element, () => spritePresent(element), 1_300_000);
+    const returned = await advanceUntil(element, () => spritePresent(element), 3_700_000);
     expect(returned).toBe(true);
   });
 
@@ -413,6 +464,8 @@ describe("lobster pet element", () => {
     element
       .querySelector(".lobster-pet:not(.lobster-pet--shell)")
       ?.dispatchEvent(new Event("contextmenu", { cancelable: true }));
+    await element.updateComplete;
+    element.querySelector<HTMLElement>('wa-dropdown-item[value="dismiss"]')?.click();
     await element.updateComplete;
     const raw = JSON.parse(
       localStorage.getItem("openclaw.control.lobsterpet.familiarity.v1") ?? "{}",
@@ -550,20 +603,6 @@ describe("lobster pet element", () => {
     document.dispatchEvent(new MouseEvent("pointermove", { clientX: -400 }));
     await element.updateComplete;
     expect(element.querySelector(".lobster-pet")?.getAttribute("style")).toContain("--lob-face:-1");
-  });
-
-  it("carries a bindle on the first load after a gateway upgrade", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    vi.stubGlobal("localStorage", window.localStorage);
-    localStorage.setItem("openclaw.control.lobsterpet.gatewayVersion.v1", "2026.6.1");
-    const element = createPet(42);
-    element.gatewayVersion = "2026.7.1";
-    await arrive(element);
-
-    expect(element.querySelector(".lob-bindle")).not.toBeNull();
-    expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toContain("just moved in");
-    expect(localStorage.getItem("openclaw.control.lobsterpet.gatewayVersion.v1")).toBe("2026.7.1");
   });
 
   it("travels light on first sighting and on same-version reloads", async () => {
@@ -800,30 +839,6 @@ describe("lobster pet element", () => {
 });
 
 describe("lobster plans", () => {
-  it("keeps the passer gate near 9.5% while widening the traffic", () => {
-    const counts = new Map<string, number>();
-    const total = 20_000;
-    for (let seed = 0; seed < total; seed++) {
-      const plan = planLobsterPasser(seed);
-      if (!plan) {
-        continue;
-      }
-      counts.set(plan.kind, (counts.get(plan.kind) ?? 0) + 1);
-      expect(plan.atMs).toBeGreaterThanOrEqual(60_000);
-      expect(plan.atMs).toBeLessThanOrEqual(900_000);
-    }
-    for (const kind of ["stranger", "crab", "snail", "duck", "jellyfish"]) {
-      expect(counts.get(kind) ?? 0).toBeGreaterThan(0);
-    }
-    const passers = [...counts.values()].reduce((sum, count) => sum + count, 0);
-    expect(passers).toBeGreaterThan(total * 0.07);
-    expect(passers).toBeLessThan(total * 0.12);
-    // Strangers stay the most common traffic.
-    for (const kind of ["crab", "snail", "duck", "jellyfish"]) {
-      expect(counts.get("stranger") ?? 0).toBeGreaterThan(counts.get(kind) ?? 0);
-    }
-  });
-
   it("maps entrance rolls to their rarity bands", () => {
     expect(pickLobsterEntrance(0.01)).toBe("balloon");
     expect(pickLobsterEntrance(0.06)).toBe("bubble");
@@ -915,7 +930,8 @@ describe("lobster plans", () => {
         continue;
       }
       bottles++;
-      expect(plan.atMs).toBeGreaterThanOrEqual(45_000);
+      expect(plan.atMs).toBeGreaterThanOrEqual(3500);
+      expect(plan.atMs).toBeLessThanOrEqual(10_000);
       expect(plan.spotPct).toBeGreaterThanOrEqual(15);
       expect(plan.spotPct).toBeLessThanOrEqual(85);
       expect(LOBSTER_BOTTLE_FORTUNES[plan.fortuneIndex]).toBeTruthy();
@@ -926,7 +942,7 @@ describe("lobster plans", () => {
 });
 
 describe("rare lobster loads", () => {
-  // Probe seeds (deterministic per stream): 644 hosts the Elder; 191 rolls
+  // Probe seeds (deterministic per stream): 644 hosts the Elder; 636 rolls
   // an old-friend return plus a balloon entrance; 4689 hatches a shiny variant;
   // 104 is a shy load that beaches a bottle at ~194s; 37 is a shy load with
   // a snail crossing at ~407s.
@@ -951,15 +967,14 @@ describe("rare lobster loads", () => {
       "openclaw.control.lobsterdex.v1",
       JSON.stringify({
         gold: { firstSeenAt: 1, name: "Goldenrod" },
-        // Sorts after "gold" (as retired tangerine did) so probe seed 191 keeps
-        // picking index 0 = gold from the sorted candidate list.
+        // Sorts after "gold" so seed 636 picks gold from the sorted candidates.
         watermelon: { firstSeenAt: 2, name: "Pips" },
       }),
     );
-    const element = createPet(191);
+    const element = createPet(636);
     await arrive(element);
 
-    // The seeded crimson look is repainted as the remembered gold visitor.
+    // The seeded look is repainted as the remembered gold visitor.
     expect(spriteClasses(element)).toContain("lobster-pet--palette-gold");
     expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toBe(
       "Goldenrod · an old friend",
@@ -1050,27 +1065,5 @@ describe("rare lobster loads", () => {
       40_000,
     );
     expect(gone).toBe(true);
-  });
-
-  it("earns the golden ledge trim once the Lobsterdex is complete", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    vi.stubGlobal("localStorage", window.localStorage);
-    localStorage.setItem(
-      "openclaw.control.lobsterdex.v1",
-      JSON.stringify(
-        Object.fromEntries(
-          LOBSTER_PET_PALETTES.map((palette) => [palette.id, { firstSeenAt: 1, name: "First" }]),
-        ),
-      ),
-    );
-    const element = createPet(42);
-    await element.updateComplete;
-    expect(element.hasAttribute("data-dex-complete")).toBe(true);
-
-    // The visits setting silences the trim like everything else.
-    element.visitsEnabled = false;
-    await element.updateComplete;
-    expect(element.hasAttribute("data-dex-complete")).toBe(false);
   });
 });

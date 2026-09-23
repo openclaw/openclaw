@@ -5,6 +5,40 @@ import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.norma
 
 const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
 
+it("projects nested actions without leaking caller control fields or dropping false and empty values", () => {
+  expect(
+    normalizeActRequest({
+      kind: "batch",
+      targetId: 123,
+      stopOnError: false,
+      signal: "caller-signal",
+      actions: [
+        {
+          kind: "click",
+          ref: " e1 ",
+          doubleClick: false,
+          delayMs: 0,
+          resolvedPage: { targetId: "other-page" },
+          assertCurrent: "caller-authority",
+        },
+        { kind: "type", selector: " input ", text: "", submit: false, slowly: false },
+        { kind: "select", ref: "e2", values: ["", " spaced "] },
+        { kind: "close", timeoutMs: "ignored-for-close" },
+      ],
+    }),
+  ).toStrictEqual({
+    kind: "batch",
+    targetId: "123",
+    stopOnError: false,
+    actions: [
+      { kind: "click", ref: "e1", doubleClick: false, delayMs: 0 },
+      { kind: "type", selector: "input", text: "", submit: false, slowly: false },
+      { kind: "select", ref: "e2", values: ["", " spaced "] },
+      { kind: "close" },
+    ],
+  });
+});
+
 describe("canonicalizeActTargetIds", () => {
   const canonical = "abcd1234";
   const tab = { targetId: canonical, suggestedTargetId: "sg-1", tabId: "tab-7", label: "Inbox" };
@@ -62,6 +96,73 @@ describe("canonicalizeActTargetIds", () => {
         [tab, { targetId: "abcd9999" }],
       ),
     ).toBe("batched action targetId must match request targetId");
+  });
+});
+
+describe("normalizeActRequest keyboard keys", () => {
+  it.each(["  pasted 🦞\nsecond line  ", "", "\t\n"])(
+    "preserves focused text insertion without an element ref: %j",
+    (text) => {
+      expect(normalizeActRequest({ kind: "insertText", text, targetId: "tab-1" })).toEqual({
+        kind: "insertText",
+        text,
+        targetId: "tab-1",
+      });
+    },
+  );
+
+  it("rejects non-text insertion payloads without echoing content", () => {
+    expect(() =>
+      normalizeActRequest({ kind: "insertText", text: { secret: "synthetic" } }),
+    ).toThrow("insertText requires text");
+  });
+
+  it.each([
+    ["Esc", "Escape"],
+    ["ESC", "Escape"],
+    ["Return", "Enter"],
+    ["Del", "Delete"],
+    ["Ctrl+a", "Control+a"],
+    ["Cmd+A", "Meta+A"],
+    ["Ctrl+Shift+Esc", "Control+Shift+Escape"],
+    ["Ctrl++", "Control++"],
+    [" ", "Space"],
+    ["Space", "Space"],
+    ["space", "Space"],
+    ["Ctrl+Space", "Control+Space"],
+  ])("normalizes the keyboard alias %s", (key, expected) => {
+    expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key: expected });
+  });
+
+  it.each(["a", "A", "+", "Control++", "ControlOrMeta+a", "__proto__", "constructor"])(
+    "preserves the existing keyboard contract for %s",
+    (key) => {
+      expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key });
+    },
+  );
+
+  it.each([
+    [" + ", "+"],
+    ["+ ", "+"],
+  ])("keeps trim-first Plus-key handling for %j", (key, expected) => {
+    expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key: expected });
+  });
+
+  it("still rejects an empty press key after trimming", () => {
+    expect(() => normalizeActRequest({ kind: "press", key: "" })).toThrow("press requires key");
+    expect(() => normalizeActRequest({ kind: "press", key: "\t" })).toThrow("press requires key");
+  });
+
+  it("normalizes keyboard aliases inside nested batch actions", () => {
+    expect(
+      normalizeActRequest({
+        kind: "batch",
+        actions: [{ kind: "batch", actions: [{ kind: "press", key: "Ctrl+Esc" }] }],
+      }),
+    ).toMatchObject({
+      kind: "batch",
+      actions: [{ kind: "batch", actions: [{ kind: "press", key: "Control+Escape" }] }],
+    });
   });
 });
 
@@ -143,6 +244,17 @@ describe("normalizeActRequest numeric fields", () => {
         height: 600,
       }),
     ).toThrow("resize requires positive width and height");
+  });
+});
+
+describe("normalizeActRequest fill fields", () => {
+  it("validates fill fields inside batch sub-actions", () => {
+    expect(() =>
+      normalizeActRequest({
+        kind: "batch",
+        actions: [{ kind: "fill", fields: [{ ref: "e1", value: "Neo", text: "unsupported" }] }],
+      }),
+    ).toThrow('fields[0] unsupported field key "text"');
   });
 });
 

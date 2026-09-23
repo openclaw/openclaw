@@ -5,20 +5,27 @@ import type {
   Tool as OpenAIResponsesTool,
 } from "openai/resources/responses/responses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { configureAiTransportHost } from "../host.js";
+import {
+  createInterleavedResponsesToolEvents,
+  createResponsesDoneArgumentEvents,
+} from "../../../../test/helpers/openai-responses-events.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
 } from "../transports/openai-responses-compaction-replay.js";
+import { isInvalidEncryptedContentError } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
+import { resolveOpenAISimpleReasoningEffort } from "./openai-request-reasoning.js";
 import {
   applyCommonResponsesParams,
   createResponsesAssistantOutput,
   convertResponsesMessages,
-  resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
@@ -99,23 +106,7 @@ const testAllowedToolCallProviders = new Set(["openai", "openai-codex", "opencod
 const reasoningReplayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
 
 function createAssistantOutput(): AssistantMessage {
-  return {
-    role: "assistant",
-    api: nativeOpenAIModel.api,
-    provider: nativeOpenAIModel.provider,
-    model: nativeOpenAIModel.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: 0,
-    content: [],
-  };
+  return { ...createResponsesAssistantOutput(nativeOpenAIModel), timestamp: 0 };
 }
 
 async function* responseEvents(events: Array<Record<string, unknown>>) {
@@ -127,8 +118,13 @@ async function* responseEvents(events: Array<Record<string, unknown>>) {
 describe("convertResponsesToolPayload", () => {
   beforeEach(() => {
     // Mimic the OpenClaw host strict-tool policy: native OpenAI routes force
-    // strict=true, proxy-like routes leave the flag unset.
+    // strict=true; compatible routes opt in to sending strict=false.
+    const capabilities = getAiTransportHost().resolveProviderRequestCapabilities({});
     configureAiTransportHost({
+      resolveProviderRequestCapabilities: ({ baseUrl }) => ({
+        ...capabilities,
+        endpointClass: baseUrl === nativeOpenAIModel.baseUrl ? "openai-public" : "custom",
+      }),
       resolveOpenAIStrictToolSetting: (model, options) => {
         if (model.provider === "openai" && model.baseUrl === "https://api.openai.com/v1") {
           return true;
@@ -151,7 +147,7 @@ describe("convertResponsesToolPayload", () => {
       },
     ] satisfies Tool[];
 
-    const converted = convertResponsesToolPayload(tools, { model: nativeOpenAIModel }).tools;
+    const converted = convertResponsesToolPayload(tools, { model: nativeOpenAIModel });
 
     expect(converted).toEqual([
       {
@@ -184,7 +180,7 @@ describe("convertResponsesToolPayload", () => {
         },
       ],
       { model: nativeOpenAIModel },
-    ).tools;
+    );
 
     const tool = expectResponsesFunctionTool(converted[0]);
     expect(tool.strict).toBe(false);
@@ -206,7 +202,7 @@ describe("convertResponsesToolPayload", () => {
         },
       ],
       { model: proxyOpenAIModel },
-    ).tools;
+    );
 
     const tool = expectResponsesFunctionTool(converted[0]);
     expect(tool).not.toHaveProperty("strict");
@@ -229,7 +225,7 @@ describe("convertResponsesToolPayload", () => {
     } satisfies Tool;
 
     expect(
-      convertResponsesToolPayload([zeta, alpha]).tools.map(
+      convertResponsesToolPayload([zeta, alpha]).map(
         (tool) => expectResponsesFunctionTool(tool).name,
       ),
     ).toEqual(["alpha", "zeta"]);
@@ -255,7 +251,7 @@ describe("convertResponsesToolPayload", () => {
         },
       ],
       { model: nativeOpenAIModel },
-    ).tools;
+    );
 
     expect(converted).toEqual([
       {
@@ -332,7 +328,7 @@ describe("Responses reasoning effort", () => {
   });
 
   it("passes max through for GPT-5.6 Sol", () => {
-    expect(resolveResponsesReasoningEffort(gpt56SolModel, "max")).toBe("max");
+    expect(resolveOpenAISimpleReasoningEffort(gpt56SolModel, "max")).toBe("max");
 
     const params = {} as never;
     applyCommonResponsesParams(
@@ -346,9 +342,32 @@ describe("Responses reasoning effort", () => {
     expect(params).toMatchObject({ reasoning: { effort: "max", summary: "auto" } });
   });
 
-  it("raises unsupported minimal reasoning to low for GPT-5.6 Sol", () => {
-    expect(resolveResponsesReasoningEffort(gpt56SolModel, "minimal")).toBe("low");
-  });
+  it.each<{
+    model: Model<"openai-responses">;
+    reasoning: "minimal" | "high";
+    expected: string;
+  }>([
+    { model: gpt56SolModel, reasoning: "minimal", expected: "low" },
+    {
+      model: { ...proxyOpenAIModel, compat: { supportedReasoningEfforts: ["ProviderHigh"] } },
+      reasoning: "high",
+      expected: "ProviderHigh",
+    },
+  ])(
+    "normalizes $reasoning to $expected at the request boundary",
+    ({ model, reasoning, expected }) => {
+      const params = {} as ResponseCreateParamsStreaming;
+      applyCommonResponsesParams(
+        params,
+        model,
+        { messages: [] },
+        {
+          reasoningEffort: resolveOpenAISimpleReasoningEffort(model, reasoning),
+        },
+      );
+      expect(params.reasoning).toEqual({ effort: expected, summary: "auto" });
+    },
+  );
 
   it("keeps max clamped to xhigh for earlier models", () => {
     const gpt55WithXHigh = {
@@ -356,7 +375,7 @@ describe("Responses reasoning effort", () => {
       thinkingLevelMap: { xhigh: "xhigh" },
     } satisfies Model<"openai-responses">;
 
-    expect(resolveResponsesReasoningEffort(gpt55WithXHigh, "max")).toBe("xhigh");
+    expect(resolveOpenAISimpleReasoningEffort(gpt55WithXHigh, "max")).toBe("xhigh");
   });
 });
 
@@ -429,14 +448,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "stop",
             timestamp: 1,
             content: [
@@ -494,14 +506,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "stop",
             timestamp: 1,
             content: [
@@ -541,14 +546,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             timestamp: 1,
             content: [
@@ -578,14 +576,7 @@ describe("convertResponsesMessages", () => {
               },
             ],
           },
-          {
-            role: "toolResult",
-            toolCallId: "call_abc|fc_prior",
-            toolName: "price_lookup",
-            content: [{ type: "text", text: "$83.95" }],
-            isError: false,
-            timestamp: 2,
-          },
+          makeTextToolResult("call_abc|fc_prior", "price_lookup", "$83.95", false, 2),
         ],
       } satisfies Context,
       allowedToolCallProviders,
@@ -629,14 +620,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             timestamp: 1,
             content: [{ type: "toolCall", id: "call_plan", name: "update_plan", arguments: {} }],
@@ -674,14 +658,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             timestamp: 1,
             content: [
@@ -723,14 +700,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             timestamp: 1,
             content: [{ type: "toolCall", id: "call_audio", name: "audio", arguments: {} }],
@@ -796,14 +766,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "stop",
             timestamp: 1,
             content: [
@@ -898,6 +861,10 @@ describe("convertResponsesMessages", () => {
       ) as unknown as Array<Record<string, unknown>>;
 
       const reasoningItem = input.find((item) => item.type === "reasoning");
+      if (!preservesCiphertext) {
+        expect(reasoningItem).toBeUndefined();
+        return;
+      }
       expect(reasoningItem).toMatchObject({
         type: "reasoning",
         id: "rs_route_fenced",
@@ -905,11 +872,7 @@ describe("convertResponsesMessages", () => {
         content: [{ type: "reasoning_text", text: "safe content" }],
       });
       expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
-      if (preservesCiphertext) {
-        expect(reasoningItem).toHaveProperty("encrypted_content", "route-bound-ciphertext");
-      } else {
-        expect(reasoningItem).not.toHaveProperty("encrypted_content");
-      }
+      expect(reasoningItem).toHaveProperty("encrypted_content", "route-bound-ciphertext");
     },
   );
 
@@ -946,6 +909,46 @@ describe("convertResponsesMessages", () => {
 });
 
 describe("processResponsesStream", () => {
+  it.each([
+    {
+      message: "400 The encrypted content could not be verified.",
+      status: undefined,
+      expected: true,
+    },
+    {
+      message: "The encrypted content could not be decrypted or parsed.",
+      status: 400,
+      expected: true,
+    },
+    {
+      message: "400 The encrypted content could not be verified.",
+      status: 500,
+      expected: false,
+    },
+    {
+      message: "Could not decrypt the provided encrypted_content.",
+      status: 400,
+      expected: true,
+    },
+    {
+      message: "Could not decrypt the provided encrypted_content.",
+      status: 500,
+      expected: false,
+    },
+    {
+      message: "Could not decrypt encrypted_content metadata for the OAuth sidecar.",
+      status: 400,
+      expected: false,
+    },
+    { message: "400 The certificate could not be verified.", status: undefined, expected: false },
+    { message: "400 The upload could not be decrypted.", status: undefined, expected: false },
+  ])(
+    "classifies encrypted replay rejection $expected: $message",
+    ({ message, status, expected }) => {
+      expect(isInvalidEncryptedContentError({ message, status })).toBe(expected);
+    },
+  );
+
   it("aborts the Responses request signal when the first SSE event never arrives", async () => {
     vi.useFakeTimers();
     try {
@@ -972,7 +975,6 @@ describe("processResponsesStream", () => {
           },
         }),
         buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
-        formatError: (error) => (error instanceof Error ? error.message : String(error)),
       });
 
       await vi.advanceTimersByTimeAsync(5);
@@ -1015,10 +1017,7 @@ describe("processResponsesStream", () => {
     }
   });
 
-  it.each([
-    [undefined, 0],
-    [2, 2],
-  ])("passes SDK maxRetries %s as %i", async (maxRetries, expected) => {
+  it("pins SDK maxRetries to zero", async () => {
     let requestMaxRetries: number | undefined;
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
@@ -1027,7 +1026,6 @@ describe("processResponsesStream", () => {
       stream,
       model: nativeOpenAIModel,
       output,
-      options: maxRetries === undefined ? undefined : { maxRetries },
       createClient: () => ({
         responses: {
           create: (_params, requestOptions) => {
@@ -1048,11 +1046,235 @@ describe("processResponsesStream", () => {
         },
       }),
       buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
-      formatError: (error) => (error instanceof Error ? error.message : String(error)),
     });
 
-    expect(requestMaxRetries).toBe(expected);
+    expect(requestMaxRetries).toBe(0);
     expect(output.stopReason).toBe("stop");
+  });
+
+  it.each([
+    "create",
+    "iterator",
+    "response.failed",
+    "response.failed-status",
+    "error",
+    "nested-error",
+  ] as const)(
+    "recovers code-less encrypted reasoning rejected during %s stream drain",
+    async (failureShape) => {
+      const failureMessage =
+        "400 The encrypted content [REDACTED] could not be verified. " +
+        "Reason: Encrypted content could not be decrypted or parsed.";
+      const requests: ResponseCreateParamsStreaming[] = [];
+      const output = createAssistantOutput();
+      const { stream, events } = createCapturedAssistantMessageEventStream();
+
+      await runResponsesStreamLifecycle({
+        stream,
+        model: nativeOpenAIModel,
+        output,
+        createClient: () => ({
+          responses: {
+            create: (request) => {
+              requests.push(structuredClone(request));
+              const attempt = requests.length;
+              return {
+                withResponse: async () => {
+                  if (attempt === 1 && failureShape === "create") {
+                    throw Object.assign(new Error(failureMessage), { status: 400 });
+                  }
+                  return {
+                    data: (async function* () {
+                      if (attempt === 1) {
+                        yield {
+                          type: "response.created",
+                          sequence_number: 0,
+                          response: { id: "resp_rejected" },
+                        } as ResponseStreamEvent;
+                        if (failureShape === "iterator") {
+                          throw new Error(failureMessage);
+                        }
+                        yield (
+                          failureShape === "response.failed" ||
+                          failureShape === "response.failed-status"
+                            ? {
+                                type: "response.failed",
+                                sequence_number: 1,
+                                response: {
+                                  id: "resp_rejected",
+                                  status: "failed",
+                                  error:
+                                    failureShape === "response.failed-status"
+                                      ? {
+                                          code: null,
+                                          status: 400,
+                                          message: "The encrypted content could not be verified.",
+                                        }
+                                      : { code: null, message: failureMessage },
+                                },
+                              }
+                            : failureShape === "nested-error"
+                              ? {
+                                  type: "error",
+                                  sequence_number: 1,
+                                  error: { code: null, message: failureMessage },
+                                }
+                              : {
+                                  type: "error",
+                                  sequence_number: 1,
+                                  code: null,
+                                  message: failureMessage,
+                                  param: null,
+                                }
+                        ) as ResponseStreamEvent;
+                        return;
+                      }
+                      yield {
+                        type: "response.completed",
+                        sequence_number: 1,
+                        response: { id: "resp_recovered", status: "completed" },
+                      } as ResponseStreamEvent;
+                    })(),
+                    response: new Response(null, { status: 200 }),
+                  };
+                },
+              };
+            },
+          },
+        }),
+        buildParams: () => ({
+          model: nativeOpenAIModel.id,
+          stream: true,
+          input: [
+            {
+              type: "reasoning",
+              id: "rs_replay",
+              encrypted_content: "stale-reasoning",
+              summary: [],
+            },
+            { type: "compaction", id: "cmp_keep", encrypted_content: "valid-compaction" },
+          ],
+        }),
+      });
+
+      expect(requests).toHaveLength(2);
+      expect(requests[0]?.input).toEqual(
+        expect.arrayContaining([expect.objectContaining({ encrypted_content: "stale-reasoning" })]),
+      );
+      expect(requests[1]?.input).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "reasoning", id: "rs_replay" }),
+          expect.objectContaining({ type: "compaction", encrypted_content: "valid-compaction" }),
+        ]),
+      );
+      expect(JSON.stringify(requests[1]?.input)).not.toContain("stale-reasoning");
+      expect(events.map((event) => event.type)).toEqual(["start", "done"]);
+      expect(output.stopReason).toBe("stop");
+      expect(output.responseId).toBe("resp_recovered");
+    },
+  );
+
+  it("never retries an encrypted-looking response hook rejection", async () => {
+    let requests = 0;
+    const output = createAssistantOutput();
+    const onResponse = vi.fn(() => {
+      throw new Error("400 The encrypted content could not be verified.");
+    });
+
+    await runResponsesStreamLifecycle({
+      stream: new AssistantMessageEventStream(),
+      model: nativeOpenAIModel,
+      output,
+      options: { onResponse },
+      createClient: () => ({
+        responses: {
+          create: () => {
+            requests += 1;
+            return {
+              withResponse: async () => ({
+                data: streamResponsesEvents([]),
+                response: new Response(null, { status: 200 }),
+              }),
+            };
+          },
+        },
+      }),
+      buildParams: () => ({
+        model: nativeOpenAIModel.id,
+        stream: true,
+        input: [{ type: "reasoning", id: "rs_replay", encrypted_content: "stale", summary: [] }],
+      }),
+    });
+
+    expect(requests).toBe(1);
+    expect(onResponse).toHaveBeenCalledOnce();
+    expect(output.errorMessage).toBe("400 The encrypted content could not be verified.");
+  });
+
+  it.each([
+    { name: "thinking", item: { type: "reasoning", id: "rs_started", summary: [] } },
+    {
+      name: "text",
+      item: {
+        type: "message",
+        id: "msg_started",
+        role: "assistant",
+        status: "in_progress",
+        content: [],
+      },
+    },
+    {
+      name: "tool",
+      item: {
+        type: "function_call",
+        id: "fc_started",
+        call_id: "call_started",
+        name: "lookup",
+        arguments: "",
+      },
+    },
+  ])("never retries encrypted replay after $name output starts", async ({ item }) => {
+    const requests: ResponseCreateParamsStreaming[] = [];
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await runResponsesStreamLifecycle({
+      stream,
+      model: nativeOpenAIModel,
+      output,
+      createClient: () => ({
+        responses: {
+          create: (request) => {
+            requests.push(request);
+            return {
+              withResponse: async () => ({
+                data: (async function* () {
+                  yield {
+                    type: "response.output_item.added",
+                    output_index: 0,
+                    sequence_number: 0,
+                    item,
+                  } as ResponseStreamEvent;
+                  throw new Error("400 The encrypted content could not be verified.");
+                })(),
+                response: new Response(null, { status: 200 }),
+              }),
+            };
+          },
+        },
+      }),
+      buildParams: () => ({
+        model: nativeOpenAIModel.id,
+        stream: true,
+        input: [{ type: "reasoning", id: "rs_replay", encrypted_content: "stale", summary: [] }],
+      }),
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(output.content).toHaveLength(1);
+    expect(output.stopReason).toBe("error");
+    expect(events[0]?.type).toBe("start");
+    expect(events.at(-1)?.type).toBe("error");
   });
 
   it("suppresses rejected persisted compaction state on the following turn", async () => {
@@ -1079,12 +1301,13 @@ describe("processResponsesStream", () => {
     const requests: ResponseCreateParamsStreaming[] = [];
     const output = createAssistantOutput();
     const onPayload = vi.fn((request: unknown) => request);
+    const onCompactionRejected = vi.fn();
 
     await runResponsesStreamLifecycle({
       stream: new AssistantMessageEventStream(),
       model: nativeOpenAIModel,
       output,
-      options: { ...replayIdentity, onPayload },
+      options: { ...replayIdentity, onCompactionRejected, onPayload },
       createClient: () => ({
         responses: {
           create: (request) => {
@@ -1121,7 +1344,6 @@ describe("processResponsesStream", () => {
         }),
         stream: true,
       }),
-      formatError: (error) => (error instanceof Error ? error.message : String(error)),
     });
 
     expect(requests).toHaveLength(2);
@@ -1135,6 +1357,7 @@ describe("processResponsesStream", () => {
     expect(retryItems.some((item) => item.type === "compaction")).toBe(false);
     expect(JSON.stringify(retryInput)).toContain("full history prefix");
     expect(onPayload).toHaveBeenCalledTimes(2);
+    expect(onCompactionRejected).toHaveBeenCalledOnce();
     expect(output.stopReason).toBe("stop");
     expect(output.providerReplay).toMatchObject({
       type: "openai-responses-compaction-suppression",
@@ -1604,7 +1827,6 @@ describe("processResponsesStream", () => {
         },
       }),
       buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
-      formatError: (error) => (error instanceof Error ? error.message : String(error)),
     });
 
     expect(lifecycleOutput.stopReason).toBe("error");
@@ -1801,10 +2023,12 @@ describe("processResponsesStream", () => {
         responseEvents([
           {
             type: "response.output_item.added",
+            output_index: 0,
             item: { type: "function_call", name: "computer", arguments: "" },
           },
           {
             type: "response.output_item.done",
+            output_index: 0,
             item: { type: "function_call", name: "computer", arguments: "{}" },
           },
           { type: "response.completed", response: { id: "resp_idless", status: "completed" } },
@@ -1954,14 +2178,7 @@ describe("processResponsesStream", () => {
         systemPrompt: "",
         messages: [
           output,
-          {
-            role: "toolResult",
-            toolCallId: "call_weather|fc_weather",
-            toolName: "weather",
-            content: [{ type: "text", text: "Rain" }],
-            isError: false,
-            timestamp: 1,
-          },
+          makeTextToolResult("call_weather|fc_weather", "weather", "Rain", false, 1),
         ],
       } satisfies Context,
       testAllowedToolCallProviders,
@@ -1983,72 +2200,7 @@ describe("processResponsesStream", () => {
 
   it("keeps interleaved Responses function calls bound to their output indices", async () => {
     const responseStream: ResponseStreamEvent[] = [
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        sequence_number: 1,
-        item: {
-          type: "function_call",
-          id: "fc_click",
-          call_id: "call_click",
-          name: "computer",
-          arguments: "",
-          status: "in_progress",
-        },
-      },
-      {
-        type: "response.output_item.added",
-        output_index: 1,
-        sequence_number: 2,
-        item: {
-          type: "function_call",
-          id: "fc_type",
-          call_id: "call_type",
-          name: "computer",
-          arguments: "",
-          status: "in_progress",
-        },
-      },
-      {
-        type: "response.function_call_arguments.delta",
-        output_index: 1,
-        item_id: "fc_type",
-        sequence_number: 3,
-        delta: '{"action":"type","text":"hello"}',
-      },
-      {
-        type: "response.function_call_arguments.delta",
-        output_index: 0,
-        item_id: "fc_click",
-        sequence_number: 4,
-        delta: '{"action":"left_click","coordinate":[10,20]}',
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        sequence_number: 5,
-        item: {
-          type: "function_call",
-          id: "fc_click",
-          call_id: "call_click",
-          name: "computer",
-          arguments: '{"action":"left_click","coordinate":[10,20]}',
-          status: "completed",
-        },
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 1,
-        sequence_number: 6,
-        item: {
-          type: "function_call",
-          id: "fc_type",
-          call_id: "call_type",
-          name: "computer",
-          arguments: '{"action":"type","text":"hello"}',
-          status: "completed",
-        },
-      },
+      ...createInterleavedResponsesToolEvents(),
       {
         type: "response.completed",
         sequence_number: 7,
@@ -2209,7 +2361,7 @@ describe("processResponsesStream", () => {
         stream,
         nativeOpenAIModel,
       ),
-    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
+    ).rejects.toThrow("Responses stream changed output item identity");
     expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
   });
 
@@ -2388,67 +2540,8 @@ describe("processResponsesStream", () => {
   it("recovers parallel arguments from authoritative done events and preserves opening names", async () => {
     const output = createAssistantOutput();
     const { stream, events } = createCapturedAssistantMessageEventStream();
-    const firstItem = {
-      type: "function_call",
-      id: "fc_recovered_first",
-      call_id: "call_recovered_first",
-      name: "read",
-    };
-    const secondItem = {
-      type: "function_call",
-      id: "fc_recovered_second",
-      call_id: "call_recovered_second",
-      name: "write",
-    };
-
     await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: { ...firstItem, arguments: "" },
-        },
-        {
-          type: "response.output_item.added",
-          output_index: 1,
-          item: { ...secondItem, arguments: "" },
-        },
-        { type: "response.function_call_arguments.delta", delta: '{"ambiguous":true}' },
-        {
-          type: "response.function_call_arguments.done",
-          output_index: 0,
-          item_id: firstItem.id,
-          arguments: '{"path":"README.md"}',
-        },
-        {
-          type: "response.function_call_arguments.done",
-          output_index: 1,
-          item_id: secondItem.id,
-          arguments: '{"path":"README.md","text":"ok"}',
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: {
-            type: "function_call",
-            id: firstItem.id,
-            call_id: firstItem.call_id,
-          },
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 1,
-          item: {
-            type: "function_call",
-            id: secondItem.id,
-            call_id: secondItem.call_id,
-          },
-        },
-        {
-          type: "response.completed",
-          response: { id: "resp_recovered_parallel", status: "completed" },
-        },
-      ]),
+      responseEvents(createResponsesDoneArgumentEvents()),
       output,
       stream,
       nativeOpenAIModel,
@@ -3288,14 +3381,7 @@ describe("Azure OpenAI Responses content type support", () => {
             api: azureModel.api,
             provider: azureModel.provider,
             model: azureModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "stop",
             timestamp: 1,
             content: [

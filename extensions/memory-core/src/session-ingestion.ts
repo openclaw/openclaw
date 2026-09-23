@@ -4,7 +4,8 @@ import path from "node:path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
-  parseUsageCountedSessionIdFromFileName,
+  loadMemorySessionMetadata,
+  matchesSessionEntryPrefixHash,
   sessionPathForFile,
   statSessionEntrySync,
   type SessionTranscriptCorpusEntry,
@@ -12,6 +13,10 @@ import {
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import {
+  asNullableRecord,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeSessionIngestionState,
   SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION,
@@ -25,6 +30,8 @@ import {
   SESSION_SEEN_HASHES_PER_CHUNK,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
+import { listMemorySessionTombstones } from "./memory-entry-origins.js";
+import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 
 export type { SessionIngestionState } from "./dreaming-ingestion-state.js";
 
@@ -38,11 +45,24 @@ const SESSION_INGESTION_MAX_SNIPPET_CHARS = 280;
 const SESSION_INGESTION_MAX_TRACKED_SCOPES = 2048;
 type BuildSessionEntryOptions = NonNullable<Parameters<typeof buildSessionEntry>[1]>;
 
+export type SessionEntryOrigin = {
+  agentId: string;
+  sessionId: string;
+  sessionKey?: string;
+};
+
+export type SessionAdmissionPolicy = {
+  hookExternalContentSources: string[];
+  channels: string[];
+  chatTypes: string[];
+};
+
 export type SessionIngestionMessage = {
   day: string;
   snippet: string;
   rendered: string;
   provenance: NonNullable<MemorySearchResult["provenance"]>;
+  sessionOrigin?: SessionEntryOrigin;
 };
 
 export type SessionIngestionSource = {
@@ -54,6 +74,7 @@ export type SessionIngestionSource = {
   scope: string;
   legacyScope?: string;
   buildOptions: BuildSessionEntryOptions;
+  sessionOrigin?: SessionEntryOrigin;
 };
 
 export type SessionIngestionCandidate = SessionIngestionMessage & {
@@ -75,11 +96,7 @@ type SessionIngestionScan = {
 type DayDisposition = "include" | "skip" | "block";
 
 function buildSessionScope(agentId: string, sessionId: string): string {
-  const logicalId =
-    parseUsageCountedSessionIdFromFileName(sessionId) ??
-    parseUsageCountedSessionIdFromFileName(`${sessionId}.jsonl`) ??
-    sessionId;
-  return `${agentId}:${logicalId}`;
+  return `${agentId}:${sessionId}`;
 }
 
 function sessionPathFromCorpus(entry: SessionTranscriptCorpusEntry): string {
@@ -98,7 +115,7 @@ export function sessionIngestionSourceFromCorpus(
   const scope =
     entry.transcriptSource === "sqlite"
       ? `${entry.agentId}:${sessionPath}`
-      : buildSessionScope(entry.agentId, path.basename(entry.sessionFile));
+      : buildSessionScope(entry.agentId, entry.sessionId);
   return {
     agentId: entry.agentId,
     absolutePath: entry.sessionFile,
@@ -106,6 +123,11 @@ export function sessionIngestionSourceFromCorpus(
     sessionPath,
     stateKey: `${entry.agentId}:${sessionPath}`,
     scope,
+    sessionOrigin: {
+      agentId: entry.agentId,
+      sessionId: entry.sessionId,
+      ...(entry.sessionKey ? { sessionKey: entry.sessionKey } : {}),
+    },
     ...(entry.transcriptSource === "sqlite"
       ? {
           legacyScope: buildSessionScope(entry.agentId, entry.sessionId),
@@ -123,6 +145,68 @@ export function sessionIngestionSourceFromCorpus(
       ...(entry.generatedByCronRun ? { generatedByCronRun: true } : {}),
     },
   };
+}
+
+export function resolveAdmissionPolicy(
+  pluginConfig?: Record<string, unknown>,
+): SessionAdmissionPolicy | undefined {
+  const exclusions = asNullableRecord(
+    asNullableRecord(pluginConfig?.memoryPolicy)?.excludeSessions,
+  );
+  if (!exclusions) {
+    return undefined;
+  }
+  const values = (key: keyof SessionAdmissionPolicy): string[] =>
+    Array.isArray(exclusions[key])
+      ? normalizeStringEntries(
+          exclusions[key].filter((value): value is string => typeof value === "string"),
+        )
+      : [];
+  const policy = {
+    hookExternalContentSources: values("hookExternalContentSources"),
+    channels: values("channels"),
+    chatTypes: values("chatTypes"),
+  };
+  return Object.values(policy).some((entries) => entries.length > 0) ? policy : undefined;
+}
+
+export function sessionExclusionReason(
+  source: SessionIngestionSource,
+  policy?: SessionAdmissionPolicy,
+  forgottenSessionIds?: ReadonlySet<string>,
+): string | undefined {
+  if (!source.sessionOrigin) {
+    return undefined;
+  }
+  const { agentId, sessionId } = source.sessionOrigin;
+  const forgotten = forgottenSessionIds
+    ? forgottenSessionIds.has(sessionId)
+    : listMemorySessionTombstones({ agentId, sessionIds: [sessionId] }).length > 0;
+  if (forgotten) {
+    return "forgotten";
+  }
+  if (!policy) {
+    return undefined;
+  }
+  const metadata = loadMemorySessionMetadata({
+    ...source.sessionOrigin,
+    storePath: source.buildOptions.storePath,
+  });
+  if (!metadata) {
+    return undefined;
+  }
+  if (
+    metadata.hookExternalContentSource &&
+    policy.hookExternalContentSources.includes(metadata.hookExternalContentSource)
+  ) {
+    return `hookExternalContentSource:${metadata.hookExternalContentSource}`;
+  }
+  if (metadata.channel && policy.channels.includes(metadata.channel)) {
+    return `channel:${metadata.channel}`;
+  }
+  return metadata.chatType && policy.chatTypes.includes(metadata.chatType)
+    ? `chatType:${metadata.chatType}`
+    : undefined;
 }
 
 export function sessionIngestionStateKeyFromCorpus(entry: SessionTranscriptCorpusEntry): string {
@@ -159,7 +243,10 @@ async function statSessionSource(source: SessionIngestionSource) {
     try {
       const stat = statSessionEntrySync(source.absolutePath, source.buildOptions);
       return stat
-        ? { mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)), size: Math.floor(stat.size) }
+        ? {
+            mtimeMs: Math.floor(Math.max(0, stat.revisionMs ?? stat.mtimeMs)),
+            size: Math.floor(stat.size),
+          }
         : null;
     } catch {
       return undefined;
@@ -216,7 +303,7 @@ export async function scanSessionIngestionSource(params: {
     return emptyScan("unavailable", params.previous);
   }
   const fileFingerprint = {
-    mtimeMs: Math.floor(Math.max(0, entry.mtimeMs)),
+    mtimeMs: Math.floor(Math.max(0, entry.revisionMs ?? entry.mtimeMs)),
     size: Math.floor(Math.max(0, entry.size)),
   };
   const lines = entry.content ? entry.content.split("\n") : [];
@@ -238,12 +325,19 @@ export async function scanSessionIngestionSource(params: {
   ) {
     return emptyScan("unchanged", params.previous);
   }
-  const sameContent =
-    params.previous?.mtimeMs === fileFingerprint.mtimeMs &&
-    params.previous.size === fileFingerprint.size &&
-    params.previous.contentHash === terminalState.contentHash &&
-    params.previous.lineCount === lines.length;
-  const startIndex = sameContent
+  // Reuse the full hash for unchanged capped scans; only appends need a prefix hash.
+  const previousSnapshotMatches =
+    params.previous !== undefined &&
+    params.previous.contentHash.length > 0 &&
+    ((params.previous.lineCount === lines.length &&
+      params.previous.contentHash === terminalState.contentHash) ||
+      (params.previous.lineCount < lines.length &&
+        matchesSessionEntryPrefixHash(
+          entry,
+          params.previous.lineCount,
+          params.previous.contentHash,
+        )));
+  const startIndex = previousSnapshotMatches
     ? Math.max(0, Math.min(params.previous?.lastContentLine ?? 0, lines.length))
     : 0;
   const seen = new Set(params.seenMessages[params.source.scope] ?? []);
@@ -305,6 +399,7 @@ export async function scanSessionIngestionSource(params: {
       scope: params.source.scope,
       stateKey: params.source.stateKey,
       snippet,
+      ...(params.source.sessionOrigin ? { sessionOrigin: params.source.sessionOrigin } : {}),
     });
     seen.add(hash);
   }
@@ -394,7 +489,7 @@ export async function appendSessionCorpusLines(params: {
   workspaceDir: string;
   day: string;
   lines: SessionIngestionMessage[];
-}): Promise<MemorySearchResult[]> {
+}): Promise<Array<MemorySearchResult & { sessionOrigin?: SessionEntryOrigin }>> {
   if (params.lines.length === 0) {
     return [];
   }
@@ -404,8 +499,27 @@ export async function appendSessionCorpusLines(params: {
     SESSION_CORPUS_RELATIVE_DIR,
     `${params.day}.txt`,
   );
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  const existing = await fs.readFile(absolutePath, "utf-8").catch((error: unknown) => {
+  const content = `${params.lines.map((entry) => entry.rendered).join("\n")}\n`;
+  const files = getMemoryWorkspaceMaintenance(params.workspaceDir);
+  const existingLines = files
+    ? await files.appendCorpus(absolutePath, content)
+    : await appendSessionCorpusText(absolutePath, content);
+  return params.lines.map((entry, index) => ({
+    path: relativePath,
+    startLine: existingLines + index + 1,
+    endLine: existingLines + index + 1,
+    score: SESSION_INGESTION_SCORE,
+    snippet: entry.snippet,
+    source: "memory",
+    provenance: entry.provenance,
+    ...(entry.sessionOrigin ? { sessionOrigin: entry.sessionOrigin } : {}),
+  }));
+}
+
+/** Native file append; session admission and checkpoints stay with the caller. */
+export async function appendSessionCorpusText(filePath: string, content: string): Promise<number> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const existing = await fs.readFile(filePath, "utf-8").catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return "";
     }
@@ -416,17 +530,9 @@ export async function appendSessionCorpusLines(params: {
     ? (normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized).split("\n").length
     : 0;
   await appendRegularFile({
-    filePath: absolutePath,
-    content: `${params.lines.map((entry) => entry.rendered).join("\n")}\n`,
+    filePath,
+    content,
     rejectSymlinkParents: true,
   });
-  return params.lines.map((entry, index) => ({
-    path: relativePath,
-    startLine: existingLines + index + 1,
-    endLine: existingLines + index + 1,
-    score: SESSION_INGESTION_SCORE,
-    snippet: entry.snippet,
-    source: "memory",
-    provenance: entry.provenance,
-  }));
+  return existingLines;
 }

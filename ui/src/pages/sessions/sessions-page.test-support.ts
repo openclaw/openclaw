@@ -1,14 +1,18 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  GatewaySessionRow,
-  SessionCompactionCheckpoint,
-  SessionsListResult,
-} from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
-import type { SessionsRouteData } from "./sessions-page.ts";
-import type { TranscriptSearchState } from "./view.ts";
+import type {
+  SessionCapability,
+  SessionListOptions,
+  SessionListSnapshot,
+} from "../../lib/sessions/index.ts";
+import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
+import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
+import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { buildSessionsListQuery } from "./list-query.ts";
+import type { SessionsRouteData } from "./route.ts";
 import "./sessions-page.ts";
 
 export type TestSessionsPage = HTMLElement & {
@@ -20,36 +24,35 @@ export type TestSessionsPage = HTMLElement & {
   result: SessionsListResult | null;
   error: string | null;
   loading: boolean;
+  refreshing: boolean;
   statusFilter: "active" | "archived" | "all";
   selectedKeys: Set<string>;
   sessionMenu: { key: string; x: number; y: number } | null;
   sessionMenuTrigger: HTMLElement | null;
-  checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
-  checkpointLoadingKey: string | null;
-  checkpointBusyKey: string | null;
   sessionMutationPending: boolean;
   transcriptSearchQuery: string;
-  transcriptSearch: TranscriptSearchState;
-  loadSessions: () => Promise<void>;
   updateTranscriptSearchQuery: (query: string) => void;
   runTranscriptSearch: () => Promise<void>;
-  loadCheckpoint: (sessionKey: string) => Promise<void>;
   deleteSelected: () => Promise<void>;
   deleteSessionFromMenu: (row: GatewaySessionRow) => Promise<void>;
   deleteAllArchived: () => Promise<void>;
   stopCloudWorker: (row: GatewaySessionRow) => Promise<void>;
-  rememberCustomGroup: (name: string) => Promise<void>;
+  rememberCustomGroup: (name: string) => Promise<unknown>;
+  requestNewCategory: (sessionKey?: string) => Promise<void>;
   openSessionMenu: (
     row: GatewaySessionRow,
     position: { x: number; y: number },
     trigger: HTMLElement | null,
   ) => void;
-  patchSession: (key: string, patch: { archived?: boolean; pinned?: boolean }) => Promise<unknown>;
+  patchSession: (
+    key: string,
+    patch: { archived?: boolean; pinned?: boolean; label?: string | null; unread?: boolean },
+    scope?: unknown,
+    expectedSessionId?: string,
+  ) => Promise<unknown>;
   archiveSessionWithUndo: (row: GatewaySessionRow) => Promise<void>;
-  forkSession: (key: string) => Promise<void>;
-  branchCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
-  restoreCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
-  addToWorkboard: (session: GatewaySessionRow) => Promise<void>;
+  forkSession: (key: string, fromLastCompleted?: boolean) => Promise<void>;
+  runPluginAction: (id: string, session: GatewaySessionRow) => Promise<void>;
 };
 
 type MutableGateway = {
@@ -64,7 +67,7 @@ export function createGateway(client: GatewayBrowserClient): MutableGateway {
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello: sessionMutationGatewayHello(),
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,
@@ -98,8 +101,65 @@ export function createGateway(client: GatewayBrowserClient): MutableGateway {
 }
 
 export function createSessions(overrides: Partial<SessionCapability> = {}): SessionCapability {
+  return createManagedSessions(overrides).sessions;
+}
+
+function sessionListKey(options: SessionListOptions | SessionRefreshOptions): string {
+  const {
+    force: _force,
+    backgroundHydrate: _backgroundHydrate,
+    offset: _offset,
+    append: _append,
+    ...scope
+  } = options as SessionRefreshOptions;
+  return JSON.stringify(scope);
+}
+
+const managedListPublishers = new WeakMap<
+  SessionCapability,
+  (options: SessionListOptions, snapshot: SessionListSnapshot) => void
+>();
+
+export function createManagedSessions(overrides: Partial<SessionCapability> = {}) {
   const subscribe = () => () => undefined;
-  return {
+  const archiveState = createSessionArchiveState(
+    (key) => overrides.state?.result?.sessions.find((row) => row.key === key),
+    () => {},
+    createSessionRowProvenance(),
+  );
+  const snapshots = new Map<string, SessionListSnapshot>();
+  const listeners = new Map<string, Set<(snapshot: SessionListSnapshot) => void>>();
+  const emptySnapshot = (): SessionListSnapshot => ({
+    result: null,
+    agentId: null,
+    loading: false,
+    error: null,
+  });
+  const publish = (options: SessionListOptions, snapshot: SessionListSnapshot) => {
+    const key = sessionListKey(options);
+    snapshots.set(key, snapshot);
+    listeners.get(key)?.forEach((listener) => listener(snapshot));
+  };
+  const listSnapshot = vi.fn((options: SessionListOptions) => {
+    return snapshots.get(sessionListKey(options)) ?? emptySnapshot();
+  });
+  const subscribeList = vi.fn(
+    (options: SessionListOptions, listener: (snapshot: SessionListSnapshot) => void) => {
+      const key = sessionListKey(options);
+      const scoped = listeners.get(key) ?? new Set();
+      scoped.add(listener);
+      listeners.set(key, scoped);
+      return () => {
+        scoped.delete(listener);
+      };
+    },
+  );
+  const refreshList = vi.fn(async (options: SessionRefreshOptions = {}) => {
+    const snapshot = listSnapshot(options);
+    publish(options, { ...snapshot, loading: true, error: null });
+    publish(options, { ...snapshot, loading: false, error: null });
+  });
+  const sessions = {
     state: {
       result: null,
       agentId: null,
@@ -107,17 +167,24 @@ export function createSessions(overrides: Partial<SessionCapability> = {}): Sess
       loading: false,
       error: null,
       deletedSessions: [],
+      groups: [],
+      groupSettings: [],
+      sectionOrder: [],
     },
     list: vi.fn(async () => null),
-    listCheckpoints: vi.fn(async () => []),
+    listSnapshot,
+    subscribeList,
+    refreshList,
     deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
     patch: vi.fn(async () => null),
+    archiveVisibility: archiveState.visibility,
+    beginArchive: archiveState.beginPending,
     create: vi.fn(async () => null),
-    branchCheckpoint: vi.fn(async () => ({ key: "branch" })),
-    restoreCheckpoint: vi.fn(async () => ({ ok: true })),
     subscribe,
     ...overrides,
   } as unknown as SessionCapability;
+  managedListPublishers.set(sessions, publish);
+  return { sessions, publish, listSnapshot, subscribeList, refreshList };
 }
 
 export function createContext(
@@ -129,6 +196,7 @@ export function createContext(
     basePath: "",
     gateway,
     sessions,
+    placementStartup: { pause: vi.fn() },
     agents: { state: { agentsList: null }, subscribe },
     agentIdentity: { get: () => undefined, ensure: vi.fn(), subscribe },
     agentSelection: {
@@ -139,9 +207,9 @@ export function createContext(
     },
     channels: { subscribe },
     runtimeConfig: { state: { configSnapshot: null }, subscribe },
-    workboard: {
-      state: { cards: [], capturingSessionKeys: new Set() },
-      notify: vi.fn(),
+    plugins: {
+      registrations: vi.fn(() => []),
+      reportError: vi.fn(),
       subscribe,
     },
     navigate: vi.fn(),
@@ -155,13 +223,22 @@ export async function createRenderedPage(
   statusFilter: "active" | "archived" | "all" = "active",
   expandedSessionKey: string | null = null,
 ): Promise<TestSessionsPage> {
+  const query = buildSessionsListQuery(context, {
+    limit: 50,
+    includeGlobal: true,
+    includeUnknown: false,
+    statusFilter,
+    deepLinkSessionKey: expandedSessionKey,
+  });
+  const publish = managedListPublishers.get(context.sessions);
+  if (publish) {
+    publish(query, { result, agentId: query.agentId ?? null, loading: false, error: null });
+  } else {
+    await context.sessions.refreshList(query);
+  }
   const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
   page.context = context;
   page.routeData = {
-    gateway: context.gateway,
-    gatewaySnapshot: context.gateway.snapshot,
-    result,
-    error: null,
     expandedSessionKey,
     statusFilter,
   };

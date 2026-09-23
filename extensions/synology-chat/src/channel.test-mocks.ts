@@ -1,5 +1,6 @@
 // Synology Chat plugin module implements channel mocks behavior.
 import type { IncomingMessage } from "node:http";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
@@ -7,8 +8,9 @@ import { vi } from "vitest";
 export const registerPluginHttpRouteMock: Mock<typeof registerPluginHttpRoute> = vi.fn(() =>
   vi.fn(),
 );
-export const synologyIngressStartMock = vi.fn();
+export const synologyIngressStartMock: Mock = vi.fn();
 export const synologyIngressStopMock = vi.fn(async () => undefined);
+export const tryHandleSynologyHostedMediaRequestMock = vi.fn(async () => false);
 
 export const dispatchReplyWithBufferedBlockDispatcher: Mock<
   (_params: unknown) => Promise<{ counts: Record<string, number> }>
@@ -148,9 +150,21 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
 vi.mock("./client.js", () => ({
   SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT: 2_000,
   sendMessage: vi.fn().mockResolvedValue(true),
-  sendFileUrl: vi.fn().mockResolvedValue(true),
+  sendHostedFileUrl: vi.fn().mockResolvedValue({ status: "accepted" }),
   resolveLegacyWebhookNameToChatUserId: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock("./outbound-media.js", async () => {
+  const actual = await vi.importActual<typeof import("./outbound-media.js")>("./outbound-media.js");
+  return {
+    ...actual,
+    prepareSynologyHostedMedia: vi.fn(async () => ({
+      url: "https://gateway.example.com/webhook/synology?__openclaw_synology_media_token_test=value",
+      cleanup: vi.fn(async () => undefined),
+    })),
+    tryHandleSynologyHostedMediaRequest: tryHandleSynologyHostedMediaRequestMock,
+  };
+});
 
 vi.mock("./webhook-ingress.js", async () => {
   const actual =
@@ -194,6 +208,7 @@ vi.mock("./runtime.js", () => ({
         recordInboundSession: vi.fn(async () => undefined),
       },
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         run: channelInboundRunMock,
         buildContext: buildChannelInboundEventContextMock,
       },

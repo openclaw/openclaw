@@ -74,13 +74,26 @@ async function runLocalShellCommand(
 }
 
 describe("sandbox fs bridge local backend e2e", () => {
-  it.runIf(process.platform !== "win32")(
-    "writes through backend shell commands using the pinned mutation helper",
-    async () => {
+  it.runIf(process.platform !== "win32").each([
+    { workspaceAccess: "rw", mutation: "write" },
+    { workspaceAccess: "none", mutation: "write" },
+    { workspaceAccess: "ro", mutation: "write" },
+    { workspaceAccess: "rw", mutation: "remove" },
+    { workspaceAccess: "none", mutation: "remove" },
+    { workspaceAccess: "rw", mutation: "rename" },
+    { workspaceAccess: "none", mutation: "rename" },
+  ] as const)(
+    "enforces $workspaceAccess workspace writes and protects skills from $mutation",
+    async ({ workspaceAccess, mutation }) => {
       const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fsbridge-e2e-"));
       const workspacePath = path.join(stateDir, "workspace");
       await fs.mkdir(workspacePath, { recursive: true });
       const workspaceDir = await fs.realpath(workspacePath);
+      const skillRelativePath =
+        mutation === "write" ? "skills/demo/SKILL.md" : ".agents/skills/demo/SKILL.md";
+      const skillPath = path.join(workspaceDir, skillRelativePath);
+      await fs.mkdir(path.dirname(skillPath), { recursive: true });
+      await fs.writeFile(skillPath, "managed instructions");
       const scripts: string[] = [];
       const backend: SandboxBackendHandle = {
         id: "local-test",
@@ -107,7 +120,9 @@ describe("sandbox fs bridge local backend e2e", () => {
         const sandbox = createSandboxTestContext({
           overrides: {
             workspaceDir,
-            agentWorkspaceDir: workspaceDir,
+            agentWorkspaceDir:
+              workspaceAccess === "none" ? path.join(stateDir, "agent") : workspaceDir,
+            workspaceAccess,
             containerName: "local-backend-fsbridge",
             containerWorkdir: workspaceDir,
             backend,
@@ -115,11 +130,48 @@ describe("sandbox fs bridge local backend e2e", () => {
         });
 
         const bridge = createSandboxFsBridge({ sandbox });
+        if (!bridge.readDirectory) {
+          throw new Error("The mounted bridge must support directory discovery.");
+        }
+        await expect(bridge.readDirectory({ filePath: "." })).resolves.toEqual([
+          { name: mutation === "write" ? "skills" : ".agents", isDirectory: true },
+        ]);
+        await expect(bridge.readDirectory({ filePath: "../" })).rejects.toThrow();
+        await fs.symlink(path.dirname(skillPath), path.join(workspaceDir, "alias"));
+        await expect(bridge.readDirectory({ filePath: "alias" })).resolves.toEqual([
+          { name: "SKILL.md", isDirectory: false },
+        ]);
+        await fs.symlink(stateDir, path.join(workspaceDir, "outside"));
+        await expect(bridge.readDirectory({ filePath: "outside" })).rejects.toThrow();
+        const scriptsBeforeMutation = scripts.length;
+        if (workspaceAccess === "ro") {
+          await expect(
+            bridge.writeFile({ filePath: "nested/hello.txt", data: "blocked" }),
+          ).rejects.toThrow("read-only");
+          expect(scripts).toHaveLength(scriptsBeforeMutation);
+          return;
+        }
         await bridge.writeFile({ filePath: "nested/hello.txt", data: "from-backend" });
 
         await expect(
           fs.readFile(path.join(workspaceDir, "nested", "hello.txt"), "utf8"),
         ).resolves.toBe("from-backend");
+        await bridge.rename({ from: "nested", to: "renamed" });
+        await expect(
+          fs.readFile(path.join(workspaceDir, "renamed", "hello.txt"), "utf8"),
+        ).resolves.toBe("from-backend");
+        await bridge.remove({ filePath: "renamed", recursive: true });
+        await expect(fs.stat(path.join(workspaceDir, "renamed"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        const mutate =
+          mutation === "write"
+            ? bridge.writeFile({ filePath: skillRelativePath, data: "changed" })
+            : mutation === "remove"
+              ? bridge.remove({ filePath: ".agents", recursive: true })
+              : bridge.rename({ from: ".agents", to: "moved-instructions" });
+        await expect(mutate).rejects.toThrow("read-only");
+        await expect(fs.readFile(skillPath, "utf8")).resolves.toBe("managed instructions");
         expect(scripts.some((script) => script.includes("operation = sys.argv[1]"))).toBe(true);
       } finally {
         await fs.rm(stateDir, { recursive: true, force: true });
@@ -194,6 +246,146 @@ describe("sandbox fs bridge local backend e2e", () => {
           await copied.close();
         }
         await expect(fs.stat(destinationPath)).resolves.toMatchObject({ size: largeFileBytes });
+      } finally {
+        await fs.rm(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "authorizes canonical destinations through aliases with observed final effects",
+    async () => {
+      const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fsbridge-pin-e2e-"));
+      const workspacePath = path.join(stateDir, "workspace");
+      await fs.mkdir(workspacePath, { recursive: true });
+      const workspaceDir = await fs.realpath(workspacePath);
+      const backend: SandboxBackendHandle = {
+        id: "local-test",
+        runtimeId: "local-backend-fsbridge-pinned",
+        runtimeLabel: "local-backend-fsbridge-pinned",
+        workdir: workspaceDir,
+        buildExecSpec: async ({ command, env }) => ({
+          argv: ["sh", "-c", command],
+          env,
+          stdinMode: "pipe-closed",
+        }),
+        runShellCommand: runLocalShellCommand,
+      };
+
+      try {
+        const [{ createSandboxFsBridge }, { createSandboxTestContext }] = await Promise.all([
+          import("./fs-bridge.js"),
+          import("./test-fixtures.js"),
+        ]);
+
+        const sandbox = createSandboxTestContext({
+          overrides: {
+            workspaceDir,
+            agentWorkspaceDir: workspaceDir,
+            workspaceAccess: "rw",
+            containerName: "local-backend-fsbridge-pinned",
+            containerWorkdir: workspaceDir,
+            backend,
+          },
+        });
+
+        const bridge = createSandboxFsBridge({ sandbox });
+        const realDir = path.join(workspaceDir, "real");
+        const decoyDir = path.join(workspaceDir, "decoy");
+        await fs.mkdir(realDir);
+        await fs.mkdir(decoyDir);
+        await fs.symlink(realDir, path.join(workspaceDir, "alias"));
+        await fs.writeFile(path.join(workspaceDir, "source.txt"), "copy-source");
+
+        // Write: the resolved pin carries the canonical destination and the
+        // executed mutation lands on exactly that path.
+        const writeTarget = await bridge.resolvePinnedMutationTarget!({
+          filePath: "alias/note.txt",
+          action: "write",
+        });
+        expect(writeTarget.pinnedPath).toBe(path.join(realDir, "note.txt"));
+        expect(writeTarget.policyPath).toBe(path.join(realDir, "note.txt"));
+        await bridge.writeFile({
+          filePath: "alias/note.txt",
+          data: "pinned-write",
+          pinnedPath: writeTarget.pinnedPath,
+        });
+        await expect(fs.readFile(path.join(realDir, "note.txt"), "utf8")).resolves.toBe(
+          "pinned-write",
+        );
+
+        // Post-authorization alias swap: the pinned write cannot be redirected.
+        await fs.unlink(path.join(workspaceDir, "alias"));
+        await fs.symlink(decoyDir, path.join(workspaceDir, "alias"));
+        await bridge.writeFile({
+          filePath: "alias/note.txt",
+          data: "after-swap",
+          pinnedPath: writeTarget.pinnedPath,
+        });
+        await expect(fs.readFile(path.join(realDir, "note.txt"), "utf8")).resolves.toBe(
+          "after-swap",
+        );
+        await expect(fs.stat(path.join(decoyDir, "note.txt"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+
+        // Restore the alias so the remaining scenarios resolve against realDir
+        // (the swap above must not poison subsequent pins).
+        await fs.unlink(path.join(workspaceDir, "alias"));
+        await fs.symlink(realDir, path.join(workspaceDir, "alias"));
+
+        // Copy: the destination pin lands on the canonical target.
+        const copyTarget = await bridge.resolvePinnedMutationTarget!({
+          filePath: "alias/config.txt",
+          action: "copy-destination",
+        });
+        const copyFile = bridge.copyFile?.bind(bridge);
+        if (!copyFile) {
+          throw new Error("The mounted bridge must support streaming copies.");
+        }
+        await copyFile({
+          sourcePath: "source.txt",
+          destinationPath: "alias/config.txt",
+          mkdir: true,
+          pinnedPath: copyTarget.pinnedPath,
+        });
+        await expect(fs.readFile(path.join(realDir, "config.txt"), "utf8")).resolves.toBe(
+          "copy-source",
+        );
+
+        // Directory creation: an alias may rename the directory; the pin
+        // follows the canonical directory contract.
+        const mkdirTarget = await bridge.resolvePinnedMutationTarget!({
+          filePath: "alias/newdir",
+          action: "mkdir",
+        });
+        expect(mkdirTarget.pinnedPath).toBe(path.join(realDir, "newdir"));
+        await bridge.mkdirp({ filePath: "alias/newdir", pinnedPath: mkdirTarget.pinnedPath });
+        expect((await fs.stat(path.join(realDir, "newdir"))).isDirectory()).toBe(true);
+
+        // Removal: the pinned removal deletes exactly the authorized entry.
+        await fs.writeFile(path.join(realDir, "gone.txt"), "remove-me");
+        await fs.writeFile(path.join(realDir, "keep.txt"), "keep-me");
+        const removeTarget = await bridge.resolvePinnedMutationTarget!({
+          filePath: "alias/gone.txt",
+          action: "remove",
+        });
+        await bridge.remove({
+          filePath: "alias/gone.txt",
+          force: true,
+          pinnedPath: removeTarget.pinnedPath,
+        });
+        await expect(fs.stat(path.join(realDir, "gone.txt"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(fs.readFile(path.join(realDir, "keep.txt"), "utf8")).resolves.toBe("keep-me");
+
+        // Recursive creation of the mount root remains an authorized no-op.
+        const rootTarget = await bridge.resolvePinnedMutationTarget!({
+          filePath: ".",
+          action: "mkdir",
+        });
+        await bridge.mkdirp({ filePath: ".", pinnedPath: rootTarget.pinnedPath });
       } finally {
         await fs.rm(stateDir, { recursive: true, force: true });
       }

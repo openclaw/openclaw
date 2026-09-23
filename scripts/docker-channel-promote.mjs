@@ -4,7 +4,11 @@ import { execFileSync } from "node:child_process";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
+import { isMissingManifestError } from "./lib/docker-manifest-error.mjs";
+import {
+  parseDockerImageConfigVersion,
+  resolveDockerReleasePolicy,
+} from "./lib/docker-release-policy.mjs";
 import { compareReleaseVersions } from "./lib/release-version.mjs";
 import { parsePlatform, verifyDockerAttestations } from "./verify-docker-attestations.mjs";
 
@@ -19,7 +23,7 @@ const VARIANTS = Object.freeze([
   { aliasKey: "browser", suffix: "-browser" },
 ]);
 
-/** @typedef {{ images: string[]; version: string }} DockerPromotionParams */
+/** @typedef {{ imageTagSuffix?: string; images: string[]; includeBrowser?: boolean; version: string }} DockerPromotionParams */
 /**
  * @typedef {object} DockerExecOptions
  * @property {"utf8"} encoding
@@ -49,21 +53,29 @@ const VARIANTS = Object.freeze([
  *
  * @param {DockerPromotionParams} params
  */
-export function createDockerChannelPromotionPlan({ version, images }) {
+export function createDockerChannelPromotionPlan({
+  version,
+  imageTagSuffix = "",
+  images,
+  includeBrowser = true,
+}) {
   if (images.length === 0) {
     throw new Error("At least one --image is required.");
+  }
+  if (imageTagSuffix !== "" && !/^-r[0-9]{8}$/u.test(imageTagSuffix)) {
+    throw new Error(`Invalid Docker image tag suffix "${imageTagSuffix}".`);
   }
   const policy = resolveDockerReleasePolicy(version);
   const promotions = [];
   for (const image of images) {
     for (const { aliasKey, suffix } of VARIANTS) {
       const aliases = policy.movingAliases[aliasKey];
-      if (aliases.length === 0) {
+      if (aliases.length === 0 || (!includeBrowser && aliasKey === "browser")) {
         continue;
       }
       promotions.push({
         image,
-        sourceRef: `${image}:${version}${suffix}`,
+        sourceRef: `${image}:${version}${imageTagSuffix}${suffix}`,
         targetRefs: aliases.map((alias) => `${image}:${alias}`),
       });
     }
@@ -101,27 +113,6 @@ function inspectManifestDigest(imageRef, execFileSyncImpl) {
   return digest;
 }
 
-function formatCommandError(error) {
-  if (!(error instanceof Error)) {
-    return String(error);
-  }
-  const output = [error.message];
-  for (const field of ["stderr", "stdout"]) {
-    const value = error[field];
-    if (typeof value === "string") {
-      output.push(value);
-    } else if (Buffer.isBuffer(value)) {
-      output.push(value.toString("utf8"));
-    }
-  }
-  return output.join("\n");
-}
-
-function isMissingManifestError(error) {
-  const message = formatCommandError(error);
-  return /(?:manifest unknown|no such manifest|:\s*not found(?:\s|$))/i.test(message);
-}
-
 function formatPlatform(platform) {
   const suffix = platform.variant ? `/${platform.variant}` : "";
   return `${platform.os}/${platform.architecture}${suffix}`;
@@ -147,26 +138,14 @@ function inspectImageVersion(imageRef, execFileSyncImpl, { allowMissing = false 
         execFileSyncImpl,
       );
     } catch (error) {
-      if (allowMissing && index === 0 && isMissingManifestError(error)) {
+      if (allowMissing && index === 0 && isMissingManifestError(error, imageRef)) {
         return null;
       }
       throw error;
     }
 
-    let version;
-    try {
-      version = JSON.parse(raw)?.config?.Labels?.["org.opencontainers.image.version"];
-    } catch (error) {
-      throw new Error(`Could not parse the ${platformName} image config for ${imageRef}.`, {
-        cause: error,
-      });
-    }
-    if (typeof version !== "string" || version.trim().length === 0) {
-      throw new Error(
-        `${imageRef} does not have an org.opencontainers.image.version label for ${platformName}.`,
-      );
-    }
-    versions.set(platformName, version.trim());
+    const version = parseDockerImageConfigVersion(raw, imageRef, platformName);
+    versions.set(platformName, version);
   }
   const uniqueVersions = new Set(versions.values());
   if (uniqueVersions.size !== 1) {
@@ -218,11 +197,11 @@ function preventChannelRollback(resolved, version, execFileSyncImpl) {
  * @param {DockerPromotionParams} params
  * @param {DockerPromotionOptions} [options]
  */
-export function promoteDockerChannel({ version, images }, options = {}) {
+export function promoteDockerChannel(params, options = {}) {
   const execFileSyncImpl = options.execFileSyncImpl ?? execFileSync;
   const log = options.log ?? console.log;
   const verifyAttestationsImpl = options.verifyAttestationsImpl ?? verifyDockerAttestations;
-  const plan = createDockerChannelPromotionPlan({ version, images });
+  const plan = createDockerChannelPromotionPlan(params);
 
   // Resolve every version-specific source before the first alias write. A missing
   // release variant must not leave the channel partially promoted.
@@ -276,7 +255,7 @@ export function promoteDockerChannel({ version, images }, options = {}) {
 
 function printHelp() {
   console.log(
-    "Usage: node scripts/docker-channel-promote.mjs --version YYYY.M.P --image REGISTRY/IMAGE [--image REGISTRY/IMAGE] [--allow-rollback]",
+    "Usage: node scripts/docker-channel-promote.mjs --version YYYY.M.P --image REGISTRY/IMAGE [--image REGISTRY/IMAGE] [--image-tag-suffix -rYYYYMMDD] [--allow-rollback]",
   );
 }
 
@@ -287,6 +266,7 @@ function main() {
       "allow-rollback": { type: "boolean" },
       help: { type: "boolean", short: "h" },
       image: { type: "string", multiple: true },
+      "image-tag-suffix": { type: "string", default: "" },
       version: { type: "string" },
     },
     strict: true,
@@ -304,7 +284,7 @@ function main() {
     throw new Error("At least one non-empty --image is required.");
   }
   const plan = promoteDockerChannel(
-    { version, images },
+    { version, imageTagSuffix: values["image-tag-suffix"], images },
     { allowRollback: values["allow-rollback"] },
   );
   console.log(`Promoted Docker ${plan.channel} aliases for ${plan.version}.`);

@@ -58,7 +58,7 @@ describe("ClickClack native agent progress", () => {
     });
   });
 
-  it("correlates lane-prefixed item ids with their bare tool-call ids", async () => {
+  it("retains canonical item identity through completion", async () => {
     const publishEphemeral = vi.fn().mockResolvedValue(undefined);
     const publisher = createClickClackAgentProgressPublisher({
       client: { publishEphemeral },
@@ -74,6 +74,7 @@ describe("ClickClack native agent progress", () => {
       progressText: "Reading",
     });
     publisher.onItemEvent({
+      itemId: "tool:read-1",
       toolCallId: "read-1",
       kind: "tool",
       name: "read",
@@ -86,7 +87,33 @@ describe("ClickClack native agent progress", () => {
     expect(publishEphemeral).toHaveBeenCalledTimes(3);
     expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
       op: "finalize",
-      line: { id: "item:read-1", text: "📖 Read: Done", status: "completed" },
+      line: { id: "item:tool:read-1", text: "📖 Read: Done", status: "completed" },
+    });
+  });
+
+  it("hides command metadata from item-only native progress", async () => {
+    const publishEphemeral = vi.fn().mockResolvedValue(undefined);
+    const publisher = createClickClackAgentProgressPublisher({
+      client: { publishEphemeral },
+      target: { workspaceId: "ws_1", channelId: "chn_1" },
+      turnId: "msg_1",
+    });
+
+    publisher.start();
+    publisher.onItemEvent({
+      itemId: "tool_1",
+      kind: "tool",
+      name: "server.exec",
+      meta: "echo private-sentinel",
+      commandBearing: true,
+      phase: "end",
+      status: "completed",
+    });
+    await publisher.finalize();
+
+    expect(JSON.stringify(publishEphemeral.mock.calls)).not.toContain("private-sentinel");
+    expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
+      line: { text: "🧩 Server.exec" },
     });
   });
 

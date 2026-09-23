@@ -4,9 +4,151 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { describe, expect, it } from "vitest";
 import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
-import { resolveSlackReplyBlockResolution } from "./reply-blocks.js";
+import {
+  resolveSlackReplyBlockResolution,
+  resolveSlackReplyDeliveryMessages,
+  resolveSlackReplyRenderPlan,
+} from "./reply-blocks.js";
 
 describe("renderSlackMessagePresentationFallbackText", () => {
+  it("uses complete authored fallback once when presentation has only text output", () => {
+    const text = "Choose once: /run foo_bar & <!channel>\nThen inspect the report.";
+    const payload = {
+      text,
+      presentationTextMode: "fallback" as const,
+      presentation: {
+        title: "Choose once",
+        blocks: [
+          {
+            type: "buttons" as const,
+            buttons: [
+              {
+                label: "Run",
+                action: { type: "command" as const, command: "/run foo_bar & <!channel>" },
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const resolution = resolveSlackReplyBlockResolution(payload, { materializeAuthoredText: true });
+    expect(resolveSlackReplyDeliveryMessages({ ...resolution, text })).toEqual([
+      { text, textIsSlackPlainText: true },
+    ]);
+    expect(resolveSlackReplyRenderPlan(payload)).toEqual({
+      mode: "single",
+      text,
+      textIsSlackPlainText: true,
+    });
+  });
+
+  it.each(["raw", "legacy"] as const)(
+    "preserves authored plain fallback alongside %s text companions",
+    (companion) => {
+      const text = "Run /inspect, then check the full report.";
+      const resolution = resolveSlackReplyBlockResolution({
+        text,
+        presentationTextMode: "fallback",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Inspect", action: { type: "command", command: "/inspect" } }],
+            },
+          ],
+        },
+        ...(companion === "raw"
+          ? {
+              channelData: {
+                slack: {
+                  blocks: [{ type: "section", text: { type: "plain_text", text: "Companion" } }],
+                },
+              },
+            }
+          : { interactive: { blocks: [{ type: "text", text: "Companion" }] } }),
+      });
+      const messages = resolveSlackReplyDeliveryMessages({ ...resolution, text });
+      expect(messages.map((message) => message.text)).toEqual(
+        companion === "raw" ? ["Companion", text] : [text, "Companion"],
+      );
+    },
+  );
+
+  it("includes native select choices in accessibility and escaped preview text", () => {
+    const payload = {
+      text: "Choose target: Staging <@U1>, Production",
+      presentationTextMode: "fallback" as const,
+      presentation: {
+        blocks: [
+          {
+            type: "select" as const,
+            placeholder: "Choose target",
+            options: [
+              { label: "Staging <@U1>", value: "staging" },
+              { label: "Production", value: "production" },
+            ],
+          },
+        ],
+      },
+    };
+    const resolution = resolveSlackReplyBlockResolution(payload);
+    const [message] = resolveSlackReplyDeliveryMessages({ ...resolution, text: payload.text });
+    expect(message?.text).toBe("Choose target\nStaging <@U1>\nProduction");
+    expect(resolveSlackReplyRenderPlan(payload)).toMatchObject({
+      mode: "single",
+      text: "Choose target\nStaging &lt;@U1&gt;\nProduction",
+      textIsSlackMrkdwn: true,
+    });
+  });
+
+  it.each(["fallback", undefined] as const)(
+    "keeps native data and controls with text mode %s without losing independent prose",
+    (presentationTextMode) => {
+      const text = "Report: Open <@U123> = 5";
+      const payload = {
+        text,
+        presentationTextMode,
+        presentation: {
+          title: "Report",
+          blocks: [
+            {
+              type: "table" as const,
+              caption: "Items",
+              headers: ["State", "Count"],
+              rows: [["Open <@U123>", 5]],
+            },
+            {
+              type: "buttons" as const,
+              buttons: [{ label: "Open report", url: "https://example.com/report?a=1&b=2" }],
+            },
+          ],
+        },
+      };
+      const resolution = resolveSlackReplyBlockResolution(payload, {
+        materializeAuthoredText: true,
+      });
+      const [message] = resolveSlackReplyDeliveryMessages({ ...resolution, text });
+      const blocks = message?.blocks ?? [];
+      expect(blocks.map((block) => block.type)).toEqual(
+        presentationTextMode
+          ? ["header", "data_table", "actions"]
+          : ["section", "header", "data_table", "actions"],
+      );
+      expect(message?.text).toContain("Open <@U123>\t5");
+      expect(message?.text).toContain("Open report");
+      expect(message?.text.includes(text)).toBe(presentationTextMode === undefined);
+      const preview = resolveSlackReplyRenderPlan(payload);
+      expect(preview.mode).toBe("single");
+      if (preview.mode !== "single") {
+        throw new Error("Native presentation must fit one preview");
+      }
+      expect(preview.text).toContain("Open &lt;@U123&gt;");
+      expect(preview.text.includes(text)).toBe(presentationTextMode === undefined);
+      expect(preview.blocks).toEqual(blocks);
+    },
+  );
+
   it("includes complete portable table data in Slack accessibility text", () => {
     expect(
       renderSlackMessagePresentationFallbackText({
@@ -30,7 +172,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     );
   });
 
-  it("keeps raw table values literal without changing authored Slack text", () => {
+  it("neutralizes raw table mentions without changing authored Slack text", () => {
     expect(
       renderSlackMessagePresentationFallbackText({
         text: "Intentional <!here>",
@@ -47,7 +189,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
         },
       }),
     ).toBe(
-      "Intentional <!here>\n\nReport &lt;@U999&gt;\n\n&lt;!channel&gt; \\*report\\* (table)\n- Owner\\_name: &lt;@U123&gt; &amp; &lt;https://example.com&gt;",
+      "Intentional <!here>\n\nReport &lt;@U999&gt;\n\n&lt;!channel&gt; *report* (table)\n- Owner_name: &lt;@U123&gt; &amp; &lt;https://example.com&gt;",
     );
   });
 
@@ -521,6 +663,31 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     });
   });
 
+  it.each(["interactive", "presentation"] as const)(
+    "preserves %s text across Slack's 50-block message boundary",
+    (surface) => {
+      const text = "x".repeat(3_000 * 50 + 1);
+      const payload =
+        surface === "interactive"
+          ? { interactive: { blocks: [{ type: "text" as const, text }] } }
+          : { presentation: { blocks: [{ type: "text" as const, text }] } };
+      const { segments } = resolveSlackReplyBlockResolution(payload);
+      const blockSegments = segments.flatMap((segment) =>
+        segment.kind === "blocks" ? [segment.blocks] : [],
+      );
+      const delivered = blockSegments.flatMap((blocks) =>
+        blocks.flatMap((block) =>
+          block.type === "section" && "text" in block && block.text?.type === "mrkdwn"
+            ? [block.text.text]
+            : [],
+        ),
+      );
+
+      expect(blockSegments.map((blocks) => blocks.length)).toEqual([50, 1]);
+      expect(delivered.join("")).toBe(text);
+    },
+  );
+
   it("subtracts exact legacy mirrors for every typed action family", () => {
     const presentation = {
       blocks: [
@@ -539,6 +706,14 @@ describe("renderSlackMessagePresentationFallbackText", () => {
                 approvalId: "plugin:req-1",
                 approvalKind: "plugin",
                 decision: "allow-once",
+              },
+            },
+            {
+              label: "Question",
+              action: {
+                type: "question",
+                questionId: "ask_0123456789abcdef0123456789abcdef",
+                optionValue: "Question",
               },
             },
             { label: "URL", action: { type: "url", url: "https://example.com/docs" } },
@@ -567,6 +742,12 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     } satisfies MessagePresentation;
 
     const { segments } = resolveSlackReplyBlockResolution({
+      channelData: {
+        askUser: {
+          questionId: "ask_0123456789abcdef0123456789abcdef",
+          optionValues: ["Question", "Unused"],
+        },
+      },
       presentation,
       interactive: presentationToInteractiveControlsReply(presentation),
     });
@@ -585,8 +766,9 @@ describe("renderSlackMessagePresentationFallbackText", () => {
       "openclaw:reply_button:1:1",
       "openclaw:callback_button:1:2",
       "openclaw:approval_button:1:3",
-      "openclaw:reply_link:1:4",
+      "openclaw:question_button:1:4",
       "openclaw:reply_link:1:5",
+      "openclaw:reply_link:1:6",
       "openclaw:reply_select:1",
       "openclaw:callback_select:2",
     ]);

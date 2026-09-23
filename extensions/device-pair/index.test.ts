@@ -12,14 +12,13 @@ import type { OpenClawPluginApi } from "./api.js";
 
 const pluginApiMocks = vi.hoisted(() => ({
   clearDeviceBootstrapTokens: vi.fn(async () => ({ removed: 2 })),
-  issueDeviceBootstrapToken: vi.fn(async () => ({
+  issueDeviceBootstrapToken: vi.fn(async (_params?: { assertCurrent?: () => void }) => ({
     token: "boot-token",
     expiresAtMs: Date.now() + 10 * 60_000,
   })),
   revokeDeviceBootstrapToken: vi.fn(async () => ({ removed: true })),
   renderQrPngDataUrl: vi.fn(async () => "data:image/png;base64,ZmFrZXBuZw=="),
   resolveGatewayPort: vi.fn(() => 18789),
-  resolveTailscaleServeGatewayUrlsWithRunner: vi.fn(async () => []),
   resolvePreferredOpenClawTmpDir: vi.fn(() => path.join(os.tmpdir(), "openclaw-device-pair-tests")),
   writeQrPngTempFile: vi.fn(async (dataValue: string, opts: { tmpRoot: string }) => {
     const dirPath = await fs.mkdtemp(path.join(opts.tmpRoot, "device-pair-qr-"));
@@ -46,8 +45,6 @@ vi.mock("./api.js", () => ({
   resolveGatewayBindUrl: vi.fn(),
   resolveGatewayPort: pluginApiMocks.resolveGatewayPort,
   resolveTailnetHostWithRunner: vi.fn(),
-  resolveTailscaleServeGatewayUrlsWithRunner:
-    pluginApiMocks.resolveTailscaleServeGatewayUrlsWithRunner,
   runPluginCommandWithTimeout: vi.fn(),
   writeQrPngTempFile: pluginApiMocks.writeQrPngTempFile,
 }));
@@ -64,7 +61,6 @@ import {
   resolveAdvertisedLanHost,
   resolveGatewayBindUrl,
   resolveTailnetHostWithRunner,
-  resolveTailscaleServeGatewayUrlsWithRunner,
 } from "./api.js";
 import registerDevicePair from "./index.js";
 
@@ -309,6 +305,15 @@ afterAll(() => {
   vi.resetModules();
 });
 
+it("declares bare invocation client presentation without changing remote argument handling", () => {
+  const command = registerPairCommand();
+  expect(command.acceptsArgs).toBe(true);
+  expect(command.clientPresentation).toEqual({
+    when: "no-arguments",
+    action: { kind: "device-pairing" },
+  });
+});
+
 describe("device-pair /pair qr", () => {
   it("returns an inline QR image for webchat surfaces", async () => {
     const command = registerPairCommand();
@@ -507,6 +512,88 @@ describe("device-pair /pair qr", () => {
 });
 
 describe("device-pair /pair default setup code", () => {
+  describe("trusted-proxy setup", () => {
+    const config: OpenClawPluginApi["config"] = {
+      gateway: {
+        auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-forwarded-user" } },
+      },
+    };
+
+    beforeEach(() => {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+    });
+    afterEach(() => vi.unstubAllEnvs());
+
+    it.each([
+      { scopes: ["operator.admin"], expected: FULL_SETUP_REQUEST },
+      { scopes: INTERNAL_SETUP_SCOPES, expected: LIMITED_SETUP_REQUEST },
+    ])("preserves issuer grants for $scopes", async ({ scopes, expected }) => {
+      const text = requireText(await runDefaultSetup({ config }, { gatewayClientScopes: scopes }));
+      expect(text).toContain("Auth: trusted-proxy");
+      expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledExactlyOnceWith(expected);
+    });
+
+    it.each([
+      { scopes: ["operator.read"], message: PAIRING_REQUIRED },
+      { scopes: INTERNAL_PAIRING_SCOPES, message: TALK_SECRETS_REQUIRED },
+      { scopes: undefined, message: PAIRING_REQUIRED },
+    ])("rejects unauthorized setup from $scopes", async ({ scopes, message }) => {
+      expect(await runDefaultSetup({ config }, { gatewayClientScopes: scopes })).toEqual({
+        text: message,
+      });
+      expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])(
+      "preserves external command-owner authority (%s)",
+      async (senderIsOwner) => {
+        const result = await runDefaultSetup(
+          { config },
+          {
+            channel: "discord",
+            gatewayClientScopes: undefined,
+            senderIsOwner,
+          },
+        );
+        if (senderIsOwner) {
+          expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledExactlyOnceWith(
+            FULL_SETUP_REQUEST,
+          );
+          expect(requireText(result)).toContain("Auth: trusted-proxy");
+        } else {
+          expect(result).toEqual({ text: PAIRING_REQUIRED });
+          expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+        }
+      },
+    );
+
+    it("keeps plaintext LAN handoff limited and rejects public plaintext", async () => {
+      const text = requireText(
+        await runDefaultSetup(
+          { config, pluginConfig: { publicUrl: "ws://192.168.1.20:18789" } },
+          { gatewayClientScopes: ["operator.admin"] },
+        ),
+      );
+      expect(text).toContain("Access: limited");
+      expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledExactlyOnceWith(
+        LIMITED_SETUP_REQUEST,
+      );
+      pluginApiMocks.issueDeviceBootstrapToken.mockClear();
+      await expectSetupRejected(
+        { config, pluginConfig: { publicUrl: "ws://gateway.example.test" } },
+        SECURE_URL_REQUIRED,
+      );
+    });
+
+    it("still rejects unauthenticated gateways", async () => {
+      await expectSetupRejected(
+        { config: { gateway: { auth: { mode: "none" } } } },
+        "Gateway auth is not configured",
+      );
+    });
+  });
+
   it.each`
     toString                                                                                                        | context                                                                                                   | text
     ${exactTestTitle("rejects setup code issuance for internal gateway callers without operator.pairing")}          | ${{ channel: "webchat", gatewayClientScopes: ["operator.write"] }}                                        | ${PAIRING_REQUIRED}
@@ -535,6 +622,53 @@ describe("device-pair /pair default setup code", () => {
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith(FULL_SETUP_REQUEST);
     expect(text).toContain("Pairing setup code generated.");
   });
+
+  it.each([false, true])(
+    "rechecks channel ownership after Gateway URL discovery (gateway admin: %s)",
+    async (gatewayAdmin) => {
+      let current = true;
+      const ctx = createCommandContext({
+        channel: "discord",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: gatewayAdmin ? ["operator.admin"] : undefined,
+        senderIsOwner: true,
+        assertOwnerCurrent: () => {
+          if (!current) {
+            throw new Error("original owner revoked");
+          }
+        },
+      });
+      vi.mocked(resolveTailnetHostWithRunner).mockImplementationOnce(async () => {
+        current = false;
+        ctx.assertOwnerCurrent = () => {};
+        return "gateway.tailnet.ts.net";
+      });
+      let issued = false;
+      pluginApiMocks.issueDeviceBootstrapToken.mockImplementationOnce(async (params) => {
+        params?.assertCurrent?.();
+        issued = true;
+        return { token: "boot-token", expiresAtMs: Date.now() + 60_000 };
+      });
+      const pending = registerPairCommand({
+        config: {
+          gateway: {
+            tailscale: { mode: "serve" },
+            auth: { mode: "token", token: "gateway-token" },
+          },
+        },
+        pluginConfig: { publicUrl: undefined },
+      }).handler(ctx);
+      if (gatewayAdmin) {
+        await expect(pending).resolves.toMatchObject({
+          text: expect.stringContaining("Pairing setup code generated"),
+        });
+      } else {
+        await expect(pending).rejects.toThrow("original owner revoked");
+      }
+      expect(issued).toBe(gatewayAdmin);
+    },
+  );
 
   it.each`
     toString                                                                                    | options                                                                                                                                                                  | context                                        | expectedText
@@ -614,15 +748,12 @@ describe("device-pair /pair default setup code", () => {
     expect(text).toContain("Gateway: ws://10.211.55.3:18789");
   });
 
-  it("includes a Tailscale Serve fallback for LAN bind-derived setup urls", async () => {
+  it("does not advertise legacy Tailscale Serve fallbacks for LAN setup urls", async () => {
     vi.mocked(resolveAdvertisedLanHost).mockResolvedValueOnce("192.168.139.3");
     vi.mocked(resolveGatewayBindUrl).mockImplementationOnce((params) => ({
       url: `ws://${params.pickLanHost()}:18789`,
       source: "gateway.bind=lan",
     }));
-    vi.mocked(resolveTailscaleServeGatewayUrlsWithRunner).mockResolvedValueOnce([
-      "wss://clawmac.tail.ts.net:8443",
-    ]);
     const text = requireText(
       await runDefaultSetup({
         config: {
@@ -632,7 +763,7 @@ describe("device-pair /pair default setup code", () => {
       }),
     );
     expect(text).toContain("Gateway: ws://192.168.139.3:18789");
-    expect(text).toContain("Fallback: wss://clawmac.tail.ts.net:8443");
+    expect(text).not.toContain("Fallback:");
   });
 
   it("does not advertise a loopback Serve route for a custom bind", async () => {
@@ -652,7 +783,6 @@ describe("device-pair /pair default setup code", () => {
         pluginConfig: { publicUrl: undefined },
       }),
     );
-    expect(resolveTailscaleServeGatewayUrlsWithRunner).not.toHaveBeenCalled();
     expect(text).toContain("Gateway: ws://192.168.139.3:18789");
     expect(text).not.toContain("Fallback:");
   });

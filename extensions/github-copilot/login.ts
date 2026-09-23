@@ -1,27 +1,14 @@
 // Github Copilot plugin module implements login behavior.
-import { intro, note, outro, spinner } from "@clack/prompts";
-import { stylePromptTitle } from "openclaw/plugin-sdk/cli-runtime";
-import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-mutation";
 import {
   resolveExpiresAtMsFromDurationMs,
   nonNegativeSecondsToSafeMilliseconds,
   positiveSecondsToSafeMilliseconds,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import {
-  applyAuthProfileConfig,
-  ensureAuthProfileStore,
-  normalizeGithubCopilotDomain,
-} from "openclaw/plugin-sdk/provider-auth";
-import { upsertAuthProfileWithLockOrThrow } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { normalizeGithubCopilotDomain } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  PUBLIC_GITHUB_COPILOT_DOMAIN,
-  resolveGithubCopilotDomain,
-  withGithubCopilotDomainConfig,
-} from "./domain.js";
+import { PUBLIC_GITHUB_COPILOT_DOMAIN } from "./domain.js";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS = 30_000;
@@ -131,6 +118,7 @@ async function postGitHubDeviceFlowForm(params: {
   failureLabel: string;
   domain: string;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<Record<string, unknown>> {
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
@@ -143,6 +131,7 @@ async function postGitHubDeviceFlowForm(params: {
       body: params.body,
     },
     ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.assertCurrent ? { beforeRequest: params.assertCurrent } : {}),
     requireHttps: true,
     policy: githubAuthSsrfPolicy(params.domain),
     auditContext: "github-copilot-device-flow",
@@ -166,6 +155,7 @@ async function requestDeviceCode(params: {
   scope: string;
   domain: string;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<DeviceCodeResponse> {
   const body = new URLSearchParams({
     client_id: CLIENT_ID,
@@ -178,7 +168,9 @@ async function requestDeviceCode(params: {
     failureLabel: "GitHub device code failed",
     domain: params.domain,
     ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
   });
+  params.assertCurrent?.();
   // Anchor expiry to when GitHub issued the code, before UI prompts or browser launch.
   return parseDeviceCodeResponse(json, Date.now());
 }
@@ -189,6 +181,7 @@ async function pollForAccessToken(params: {
   expiresAt: number;
   domain: string;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<string> {
   const bodyBase = new URLSearchParams({
     client_id: CLIENT_ID,
@@ -199,6 +192,7 @@ async function pollForAccessToken(params: {
   let intervalMs = params.intervalMs;
   while (Date.now() < params.expiresAt) {
     await sleepGitHubDevicePollDelay(intervalMs, params.expiresAt, params.signal);
+    params.assertCurrent?.();
     if (Date.now() >= params.expiresAt) {
       break;
     }
@@ -209,7 +203,9 @@ async function pollForAccessToken(params: {
       failureLabel: "GitHub device token failed",
       domain: params.domain,
       ...(params.signal ? { signal: params.signal } : {}),
+      ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
     })) as DeviceTokenResponse;
+    params.assertCurrent?.();
     if ("access_token" in json) {
       if (typeof json.access_token === "string") {
         return json.access_token;
@@ -315,6 +311,7 @@ type GitHubCopilotDeviceFlowIO = {
   showCode(args: { verificationUrl: string; userCode: string; expiresInMs: number }): Promise<void>;
   openUrl?: (url: string) => Promise<void>;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 };
 
 export async function runGitHubCopilotDeviceFlow(
@@ -322,24 +319,33 @@ export async function runGitHubCopilotDeviceFlow(
   domain: string = PUBLIC_GITHUB_COPILOT_DOMAIN,
 ): Promise<GitHubCopilotDeviceFlowResult> {
   const host = normalizeGithubCopilotDomain(domain);
+  const assertCurrent = () => {
+    io.signal?.throwIfAborted();
+    io.assertCurrent?.();
+  };
+  assertCurrent();
   const device = await requestDeviceCode({
     scope: "read:user",
     domain: host,
     ...(io.signal ? { signal: io.signal } : {}),
+    assertCurrent,
   });
   const verificationUrl = normalizeGitHubDeviceVerificationUrl(device.verificationUri, host);
   const userCode = normalizeGitHubDeviceUserCode(device.userCode);
+  assertCurrent();
   await io.showCode({
     verificationUrl,
     userCode,
     expiresInMs: device.expiresInMs,
   });
+  assertCurrent();
 
   try {
     await io.openUrl?.(verificationUrl);
   } catch {
     // The code and URL have already been shown. Browser launch is best-effort.
   }
+  assertCurrent();
 
   try {
     const accessToken = await pollForAccessToken({
@@ -348,6 +354,7 @@ export async function runGitHubCopilotDeviceFlow(
       expiresAt: device.expiresAt,
       domain: host,
       ...(io.signal ? { signal: io.signal } : {}),
+      assertCurrent,
     });
     return { status: "authorized", accessToken };
   } catch (err) {
@@ -359,91 +366,4 @@ export async function runGitHubCopilotDeviceFlow(
     }
     throw err;
   }
-}
-
-export async function githubCopilotLoginCommand(
-  opts: { profileId?: string; yes?: boolean; agentDir?: string },
-  runtime: RuntimeEnv,
-) {
-  if (!process.stdin.isTTY) {
-    throw new Error("github-copilot login requires an interactive TTY.");
-  }
-
-  intro(stylePromptTitle("GitHub Copilot login"));
-
-  const profileId = opts.profileId?.trim() || "github-copilot:github";
-  const store = ensureAuthProfileStore(opts.agentDir, {
-    allowKeychainPrompt: false,
-  });
-
-  if (store.profiles[profileId] && !opts.yes) {
-    note(
-      `Auth profile already exists: ${profileId}\nRe-running will overwrite it.`,
-      stylePromptTitle("Existing credentials"),
-    );
-  }
-
-  // Mint against the same host the runtime will route to. resolveGithubCopilotDomain
-  // is env-authoritative (COPILOT_GITHUB_DOMAIN wins), and runtime authentication
-  // uses the same resolver, so honoring it here keeps the minted token and the
-  // runtime endpoint on the same tenant instead of minting a public token that
-  // then 401s against api.<tenant>.
-  const domain = resolveGithubCopilotDomain();
-  if (domain !== PUBLIC_GITHUB_COPILOT_DOMAIN) {
-    note(
-      `Using the GitHub Enterprise domain from COPILOT_GITHUB_DOMAIN (${domain}). Unset it to log in against github.com.`,
-      stylePromptTitle("GitHub Copilot"),
-    );
-  }
-
-  const spin = spinner();
-  spin.start(`Requesting device code from ${domain}...`);
-  const device = await requestDeviceCode({
-    scope: "read:user",
-    domain,
-  });
-  spin.stop("Device code ready");
-
-  note(
-    [`Visit: ${device.verificationUri}`, `Code: ${device.userCode}`].join("\n"),
-    stylePromptTitle("Authorize"),
-  );
-
-  const intervalMs = Math.max(1000, device.intervalMs);
-
-  const polling = spinner();
-  polling.start("Waiting for GitHub authorization...");
-  const accessToken = await pollForAccessToken({
-    deviceCode: device.deviceCode,
-    intervalMs,
-    expiresAt: device.expiresAt,
-    domain,
-  });
-  polling.stop("GitHub access token acquired");
-
-  await upsertAuthProfileWithLockOrThrow({
-    profileId,
-    credential: {
-      type: "token",
-      provider: "github-copilot",
-      token: accessToken,
-    },
-    agentDir: opts.agentDir,
-  });
-
-  await updateConfig((cfg) =>
-    withGithubCopilotDomainConfig(
-      applyAuthProfileConfig(cfg, {
-        provider: "github-copilot",
-        profileId,
-        mode: "token",
-      }),
-      domain,
-    ),
-  );
-
-  logConfigUpdated(runtime);
-  runtime.log(`Auth profile: ${profileId} (github-copilot/token)`);
-
-  outro("Done");
 }

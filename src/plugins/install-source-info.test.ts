@@ -1,8 +1,30 @@
 // Covers plugin install source info formatting and parsing.
 import { describe, expect, it } from "vitest";
 import { describePluginInstallSource } from "./install-source-info.js";
+import { resolveManagedPluginInstallRequest } from "./install-source-plan.js";
 
 describe("describePluginInstallSource", () => {
+  it.each([
+    [undefined, false],
+    ["latest", false],
+    ["beta", false],
+    ["1.2.3", true],
+    ["1.2.3-beta.4", true],
+    ["2026.7.1-2", true],
+    ["v1.2.3", true],
+  ])("classifies ClawHub selector %s with exactVersion=%s", (version, exactVersion) => {
+    const spec = `clawhub:demo${version ? `@${version}` : ""}`;
+    expect(describePluginInstallSource({ clawhubSpec: spec })).toEqual({
+      clawhub: {
+        spec,
+        packageName: "demo",
+        ...(version ? { version } : {}),
+        exactVersion,
+      },
+      warnings: exactVersion ? [] : ["clawhub-spec-floating"],
+    });
+  });
+
   it("marks exact npm specs with integrity as fully pinned", () => {
     expect(
       describePluginInstallSource({
@@ -133,6 +155,21 @@ describe("describePluginInstallSource", () => {
     });
   });
 
+  it("preserves local as the default install source", () => {
+    expect(
+      describePluginInstallSource({
+        localPath: "extensions/demo",
+        defaultChoice: "local",
+      }),
+    ).toEqual({
+      defaultChoice: "local",
+      local: {
+        path: "extensions/demo",
+      },
+      warnings: [],
+    });
+  });
+
   it("warns when defaultChoice is not a supported install source", () => {
     expect(
       describePluginInstallSource({
@@ -226,5 +263,56 @@ describe("describePluginInstallSource", () => {
       },
       warnings: ["npm-spec-package-name-mismatch"],
     });
+  });
+});
+
+const hex = "ab".repeat(32);
+const integrity = `sha256-${Buffer.from(hex, "hex").toString("base64")}`;
+const catalog = [
+  {
+    name: "@example/fixture",
+    openclaw: {
+      plugin: { id: "fixture" },
+      install: { clawhubSpec: "clawhub:community/fixture@1.2.3", expectedIntegrity: integrity },
+    },
+  },
+];
+
+describe("managed install source constraints", () => {
+  it.each([hex, `sha256:${hex}`, integrity])(
+    "accepts the installer's equivalent ClawHub digest %s",
+    (expectedIntegrity) => {
+      expect(
+        resolveManagedPluginInstallRequest(
+          {
+            source: "clawhub",
+            packageName: "community/fixture",
+            expectedIntegrity,
+          },
+          catalog,
+        ),
+      ).toMatchObject({
+        source: "clawhub",
+        spec: "clawhub:community/fixture@1.2.3",
+        expectedPluginId: "fixture",
+        expectedIntegrity: integrity,
+      });
+    },
+  );
+
+  it.each([
+    { expectedPluginId: "another-plugin" },
+    { expectedIntegrity: `sha256:${"cd".repeat(32)}` },
+  ])("rejects caller constraints that conflict with catalog provenance", (constraint) => {
+    expect(() =>
+      resolveManagedPluginInstallRequest(
+        {
+          source: "clawhub",
+          packageName: "community/fixture",
+          ...constraint,
+        },
+        catalog,
+      ),
+    ).toThrow("differs from the official catalog");
   });
 });

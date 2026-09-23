@@ -2,7 +2,9 @@ import crypto from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveExecutablePath } from "../infra/executable-path.js";
+import { sha256File } from "../infra/directory-durability.js";
+import { resolveExecutablePath, resolveExecutablePathCandidate } from "../infra/executable-path.js";
+import { readFileWindowFully } from "../infra/file-read.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import {
   resolveWindowsExecutablePath,
@@ -27,6 +29,7 @@ export type CliExecutableIdentity = Readonly<{
   resolvedPath: string;
   invocation: Readonly<{
     command: string;
+    argv0?: string;
     leadingArgv: readonly string[];
     resolution: "direct" | "node-entrypoint" | "exe-entrypoint";
   }>;
@@ -76,7 +79,10 @@ function compareArtifactEntryNames(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-async function readExecutableFileIdentity(filePath: string): Promise<ReadIdentityResult | null> {
+async function readExecutableFileIdentity(
+  filePath: string,
+  includePrefix = false,
+): Promise<ReadIdentityResult | null> {
   let canonicalPath: string;
   try {
     canonicalPath = await fs.realpath(filePath);
@@ -91,25 +97,9 @@ async function readExecutableFileIdentity(filePath: string): Promise<ReadIdentit
     if (!before.isFile()) {
       return null;
     }
-    const hash = crypto.createHash("sha256");
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    const prefixChunks: Buffer[] = [];
-    let prefixBytes = 0;
-    let position = 0;
-    for (;;) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
-      if (bytesRead === 0) {
-        break;
-      }
-      const chunk = buffer.subarray(0, bytesRead);
-      hash.update(chunk);
-      if (prefixBytes < 4096) {
-        const prefixChunk = Buffer.from(chunk.subarray(0, 4096 - prefixBytes));
-        prefixChunks.push(prefixChunk);
-        prefixBytes += prefixChunk.length;
-      }
-      position += bytesRead;
-    }
+    const hash = await sha256File(handle);
+    const prefix = Buffer.allocUnsafe(includePrefix ? Math.min(4096, hash.bytes) : 0);
+    const prefixBytes = includePrefix ? await readFileWindowFully(handle, prefix, 0) : 0;
     const after = await handle.stat({ bigint: true });
     const current = await fs.stat(canonicalPath, { bigint: true });
     if (!sameOpenedFile(before, after) || !sameOpenedFile(after, current)) {
@@ -124,9 +114,9 @@ async function readExecutableFileIdentity(filePath: string): Promise<ReadIdentit
         size: String(after.size),
         modifiedNs: String(after.mtimeNs),
         changedNs: String(after.ctimeNs),
-        contentSha256: hash.digest("hex"),
+        contentSha256: hash.digest,
       },
-      prefix: Buffer.concat(prefixChunks, prefixBytes),
+      prefix: prefix.subarray(0, prefixBytes),
     };
   } catch {
     return null;
@@ -167,10 +157,21 @@ function resolveCommandPath(params: {
     // workspaces. A cwd-relative executable cannot name one durable owner.
     return undefined;
   }
-  return resolveExecutablePath(params.command, {
+  const command =
+    process.platform === "win32"
+      ? resolveWindowsExecutablePath(params.command, params.env)
+      : params.command;
+  if (process.platform === "win32" && !isDurableRootedCommand(command)) {
+    // The Windows resolver returns the raw command when PATH lookup misses.
+    return undefined;
+  }
+  const options = {
     ...(params.cwd ? { cwd: params.cwd } : {}),
     env: params.env,
-  });
+  };
+  return process.platform === "win32" && isDurableRootedCommand(params.command)
+    ? resolveExecutablePathCandidate(command, options)
+    : resolveExecutablePath(command, options);
 }
 
 function hasShebang(prefix: Buffer): boolean {
@@ -398,7 +399,7 @@ async function resolvePosixIdentity(params: {
   env: NodeJS.ProcessEnv;
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
 }): Promise<CliExecutableIdentity | undefined> {
-  const commandFile = await readExecutableFileIdentity(params.resolvedPath);
+  const commandFile = await readExecutableFileIdentity(params.resolvedPath, true);
   if (!commandFile) {
     return undefined;
   }
@@ -437,7 +438,7 @@ async function resolvePosixIdentity(params: {
     if (!interpreterPath) {
       return undefined;
     }
-    const interpreter = await readExecutableFileIdentity(interpreterPath);
+    const interpreter = await readExecutableFileIdentity(interpreterPath, true);
     if (!interpreter || hasShebang(interpreter.prefix)) {
       return undefined;
     }
@@ -452,7 +453,7 @@ async function resolvePosixIdentity(params: {
       if (!targetPath) {
         return undefined;
       }
-      const target = await readExecutableFileIdentity(targetPath);
+      const target = await readExecutableFileIdentity(targetPath, true);
       if (!target || hasShebang(target.prefix)) {
         return undefined;
       }
@@ -476,8 +477,10 @@ async function resolvePosixIdentity(params: {
     command: params.command,
     resolvedPath,
     invocation: {
-      // Spawn the exact file opened and hashed, not a mutable symlink alias.
+      // Execute the exact file opened and hashed, while preserving a symlink's
+      // invocation name for runtimes that dispatch from argv0.
       command: resolvedPath,
+      ...(params.resolvedPath !== resolvedPath ? { argv0: params.resolvedPath } : {}),
       leadingArgv: [],
       resolution: "direct",
     },
@@ -509,6 +512,14 @@ async function resolveWindowsIdentity(params: {
   if (candidate.resolution === "unresolved-wrapper") {
     return undefined;
   }
+  // The Windows adapter binds supported scripts to Node; PATHEXT only governs
+  // commands that still need native executable admission.
+  if (
+    candidate.resolution !== "node-entrypoint" &&
+    !resolveExecutablePath(params.resolvedPath, { env: params.env })
+  ) {
+    return undefined;
+  }
   if (
     candidate.resolution === "node-entrypoint" &&
     path.extname(candidate.command).toLowerCase() !== ".exe"
@@ -516,7 +527,10 @@ async function resolveWindowsIdentity(params: {
     return undefined;
   }
   const configuredFile = await readExecutableFileIdentity(params.resolvedPath);
-  const invocationFile = await readExecutableFileIdentity(candidate.command);
+  const invocationFile = await readExecutableFileIdentity(
+    candidate.command,
+    candidate.resolution === "direct",
+  );
   if (!configuredFile || !invocationFile) {
     return undefined;
   }

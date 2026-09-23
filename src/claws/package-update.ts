@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   digestClawPackageRef,
   replaceClawPackageRefExpected,
 } from "./package-update-provenance.js";
 import { installClawPackages } from "./packages.js";
+import type { ClawPluginRuntimeOptions } from "./plugin-runtime.js";
 import {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
   readClawPackageRefs,
@@ -14,6 +14,7 @@ import {
 } from "./provenance.js";
 import type { ClawAddPlan, ClawManifest, ClawPackage } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
+import { collectClawRollbackFailures } from "./update-rollback.js";
 
 type PackageInstallerDeps = NonNullable<
   NonNullable<Parameters<typeof installClawPackages>[1]>["deps"]
@@ -28,8 +29,9 @@ export class ClawPackageUpdateError extends Error {
   constructor(
     message: string,
     readonly partial: boolean,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "ClawPackageUpdateError";
   }
 }
@@ -46,7 +48,7 @@ export async function applyClawPackageUpdate(
   updatePlan: ClawUpdatePlan,
   _targetManifest: ClawManifest,
   targetAddPlan: ClawAddPlan,
-  options: OpenClawStateDatabaseOptions & {
+  options: ClawPluginRuntimeOptions & {
     installPackages?: typeof installClawPackages;
     readRefs?: typeof readClawPackageRefs;
     replaceExpected?: typeof replaceClawPackageRefExpected;
@@ -72,14 +74,7 @@ export async function applyClawPackageUpdate(
   const appliedIds: string[] = [];
 
   const rollback = async () => {
-    const failures: string[] = [];
-    for (const revert of undo.toReversed()) {
-      try {
-        await revert();
-      } catch (error) {
-        failures.push(error instanceof Error ? error.message : String(error));
-      }
-    }
+    const failures = await collectClawRollbackFailures(undo.toReversed());
     if (externalMutations.length > 0) {
       failures.push(`package artifacts may have been retained: ${externalMutations.join(", ")}`);
     }
@@ -198,6 +193,7 @@ export async function applyClawPackageUpdate(
         { ...targetAddPlan, actions: [targetAction] },
         {
           ...options,
+          pluginInstallMode: action.action === "change" ? "update" : "install",
           deps: {
             ...options.packageDeps,
             preflightPlugin: async (params) => {
@@ -271,21 +267,24 @@ export async function applyClawPackageUpdate(
   } catch (error) {
     if (externalMutations.length > 0) {
       throw new ClawPackageUpdateError(
-        `${error instanceof Error ? error.message : String(error)}; package artifact outcome requires reconciliation`,
+        `${coerceErrorMessage(error)}; package artifact outcome requires reconciliation`,
         true,
+        { cause: error },
       );
     }
     try {
       await rollback();
     } catch (rollbackError) {
       throw new ClawPackageUpdateError(
-        `${error instanceof Error ? error.message : String(error)}; rollback incomplete: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+        `${coerceErrorMessage(error)}; rollback incomplete: ${coerceErrorMessage(rollbackError)}`,
         externalMutations.length > 0,
+        { cause: new AggregateError([error, rollbackError]) },
       );
     }
     throw new ClawPackageUpdateError(
-      error instanceof Error ? error.message : String(error),
+      coerceErrorMessage(error),
       error instanceof ClawPackageUpdateError ? error.partial : false,
+      { cause: error },
     );
   }
   return { appliedIds, rollback };

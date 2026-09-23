@@ -28,6 +28,7 @@ data class GatewayRegistryEntry(
   val port: Int? = null,
   val tls: Boolean = true,
   val lastConnectedAtMs: Long = 0L,
+  val contextPath: String = "",
 )
 
 @Serializable
@@ -83,6 +84,7 @@ class GatewayRegistryStore(
           stableId = stableId,
           name = entry.name.trim().ifEmpty { stableId },
           host = entry.host?.trim()?.takeIf { it.isNotEmpty() },
+          contextPath = normalizeGatewayContextPath(entry.contextPath),
           lastConnectedAtMs =
             if (entry.lastConnectedAtMs == 0L) {
               existing?.lastConnectedAtMs ?: 0L
@@ -126,13 +128,6 @@ class GatewayRegistryStore(
           _connectedStableIds.value.filterNot { it == normalized }
         }
       persist()
-    }
-
-  fun connectedEntries(): List<GatewayRegistryEntry> =
-    synchronized(mutationLock) {
-      _connectedStableIds.value.mapNotNull { connectedId ->
-        _entries.value.firstOrNull { it.stableId == connectedId }
-      }
     }
 
   fun markConnected(

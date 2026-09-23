@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
-  listKnownProviderAuthEnvVarNames: () => [
+  listKnownProviderAuthEnvVarNamesCore: () => [
     "OPENAI_API_KEY",
     "OPENAI_ADMIN_KEY",
     "ANTHROPIC_ADMIN_KEY",
@@ -659,6 +659,27 @@ describe("resolvePermissionRequest", () => {
       cwd: "/tmp/openclaw-acp-cwd",
     });
   });
+
+  it.each(["FILE:///tmp/outside/marker.txt", "file:/tmp/outside/marker.txt"])(
+    "prompts for read when non-canonical file URL escapes cwd: %s",
+    async (fileUrl) => {
+      const prompt = vi.fn(async () => false);
+      const res = await resolvePermissionRequest(
+        makePermissionRequest({
+          toolCall: {
+            toolCallId: "tool-read-file-url-escape-cwd",
+            title: "read: ignored-by-raw-input",
+            status: "pending",
+            rawInput: { path: fileUrl },
+          },
+        }),
+        { prompt, log: () => {}, cwd: "/tmp/openclaw-acp-cwd" },
+      );
+      expect(prompt).toHaveBeenCalledTimes(1);
+      expect(prompt).toHaveBeenCalledWith("read", "read: ignored-by-raw-input");
+      expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+    },
+  );
 
   it("prompts for read when rawInput path escapes cwd via traversal", async () => {
     const prompt = vi.fn(async () => false);

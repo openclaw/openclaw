@@ -24,6 +24,13 @@ type ResolveInboundConversationParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
 >[0];
 
+interface MinimalInboundHookContext {
+  from: string;
+  content: string;
+  channelId: string;
+  isGroup: boolean;
+}
+
 function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
     From: "demo-chat:user:123",
@@ -118,6 +125,26 @@ describe("message hook mappers", () => {
         },
       ]),
     );
+  });
+
+  it("preserves producer enrichment and minimal mapper input compatibility", () => {
+    const derived = deriveInboundMessageHookContext(makeInboundCtx());
+    derived.runId = "run-1";
+    derived.trace = {
+      traceId: "11111111111111111111111111111111",
+      spanId: "2222222222222222",
+    };
+    derived.callDepth = 2;
+    derived.mediaStagingPending = true;
+    derived.originalMedia = [];
+
+    const minimal: MinimalInboundHookContext = {
+      from: "sender",
+      content: "hello",
+      channelId: "demo-chat",
+      isGroup: false,
+    };
+    expect(toPluginMessageContext(minimal)).toMatchObject({ channelId: "demo-chat" });
   });
 
   it("derives canonical inbound context with body precedence and group metadata", () => {
@@ -226,6 +253,95 @@ describe("message hook mappers", () => {
       replyToSender: "Ada",
       replyToIsQuote: true,
     });
+  });
+
+  it.each([
+    { name: "absent", fields: {}, expected: {} },
+    {
+      name: "undefined",
+      fields: {
+        replyToId: undefined,
+        replyToIdFull: undefined,
+        replyToBody: undefined,
+        replyToSender: undefined,
+        replyToIsQuote: undefined,
+      },
+      expected: {},
+    },
+    {
+      name: "empty and false",
+      fields: {
+        replyToId: "",
+        replyToIdFull: "",
+        replyToBody: "",
+        replyToSender: "",
+        replyToIsQuote: false,
+      },
+      expected: {
+        replyToId: "",
+        replyToIdFull: "",
+        replyToBody: "",
+        replyToSender: "",
+        replyToIsQuote: false,
+      },
+    },
+  ])("preserves $name optional reply fields across hook projections", ({ fields, expected }) => {
+    const canonical = {
+      from: "sender",
+      content: "hello",
+      channelId: "demo-chat",
+      isGroup: false,
+      ...fields,
+    };
+    const { context, event } = toPluginInboundClaimPair(canonical);
+    const received = toPluginMessageReceivedEvent(canonical);
+    for (const output of [toPluginMessageContext(canonical), context, event, received]) {
+      const entries = Object.entries(output).filter(([key]) => key.startsWith("replyTo"));
+      expect(entries).toEqual(Object.entries(expected));
+    }
+    for (const metadata of [event.metadata, received.metadata]) {
+      expect(metadata).toMatchObject({
+        replyToId: undefined,
+        replyToIdFull: undefined,
+        replyToBody: undefined,
+        replyToSender: undefined,
+        replyToIsQuote: undefined,
+        ...expected,
+      });
+      expect(Object.keys(metadata ?? {}).filter((key) => key.startsWith("replyTo"))).toEqual([
+        "replyToId",
+        "replyToIdFull",
+        "replyToBody",
+        "replyToSender",
+        "replyToIsQuote",
+      ]);
+    }
+  });
+
+  it("checks reply-field presence before reading a sent context", () => {
+    const reads: PropertyKey[] = [];
+    const canonical = new Proxy(
+      buildCanonicalSentMessageHookContext({
+        to: "target",
+        content: "reply",
+        success: true,
+        channelId: "demo-chat",
+      }),
+      {
+        get(target, key, receiver) {
+          if (typeof key === "string" && key.startsWith("replyTo")) {
+            reads.push(key);
+          }
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    expect(toPluginMessageContext(canonical)).toEqual({
+      channelId: "demo-chat",
+      accountId: undefined,
+      conversationId: "target",
+    });
+    expect(reads).toEqual([]);
   });
 
   it("falls back to raw body when command body is blank", () => {
@@ -818,6 +934,44 @@ describe("message hook mappers", () => {
       messageId: "out-1",
       isGroup: true,
       groupId: "demo-chat:chat:456",
+    });
+  });
+
+  it("projects normalized location and stable provider update identity", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        LocationLat: 43.8376,
+        LocationLon: 18.4534,
+        LocationAccuracy: 12,
+        LocationSource: "live",
+        LocationIsLive: true,
+        LocationLivePeriodSeconds: 900,
+        ProviderUpdateId: "9002",
+        ProviderUpdateKind: "edited_message",
+        ProviderMessageTimestamp: 1_786_094_460_000,
+        ProviderEditTimestamp: 1_786_094_520_000,
+      }),
+    );
+
+    const { event } = toPluginInboundClaimPair(canonical);
+    expect(event.location).toEqual({
+      latitude: 43.8376,
+      longitude: 18.4534,
+      accuracy: 12,
+      source: "live",
+      isLive: true,
+      livePeriodSeconds: 900,
+    });
+    expect(event.providerUpdate).toEqual({
+      id: "9002",
+      kind: "edited_message",
+      messageId: "msg-1",
+      messageTimestamp: 1_786_094_460_000,
+      editedTimestamp: 1_786_094_520_000,
+    });
+    expect(toPluginMessageReceivedEvent(canonical)).toMatchObject({
+      location: event.location,
+      providerUpdate: event.providerUpdate,
     });
   });
 });

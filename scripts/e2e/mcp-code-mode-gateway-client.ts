@@ -6,6 +6,7 @@ import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+import { readMcpCodeModeDiagnostics } from "./lib/mcp-code-mode-diagnostics.ts";
 import {
   extractMcpCodeModePlannedTools,
   type McpCodeModeMentions,
@@ -111,7 +112,7 @@ async function readSessionLogMentions(stateDir: string): Promise<Record<string, 
       apiFileRead: "API.read",
       mcpNamespace: "MCP.fixture",
       mcpTool: "MCP.fixture.lookupNote",
-      toolSearchPollution: 'tools.search("lookup note"',
+      toolSearchPollution: 'catalog.search("lookup note"',
     },
   });
 }
@@ -146,13 +147,13 @@ async function main() {
               text: [
                 "mcp code mode api file qa check:",
                 "MCP and API are code-mode globals; they are defined only inside the exec tool, not in normal chat.",
-                "Call exec with language javascript and this exact code:",
+                "Call exec with this exact JavaScript code:",
                 'const files = await API.list("mcp");',
                 'const root = await API.read("mcp/index.d.ts");',
                 'const api = await API.read("mcp/fixture.d.ts");',
                 'const result = await MCP.fixture.lookupNote({ id: "alpha" });',
                 'return { marker: "MCP_CODE_MODE_FILE_TOOL_RESULT", files: files.files.map((file) => file.path), rootHasFixture: root.content.includes("fixture"), headerHasLookup: api.content.includes("function lookupNote"), note: result.content?.[0]?.text };',
-                "Do not use tools.search for MCP and do not call the inline MCP API helper.",
+                "Do not use catalog.search for MCP and do not call the inline MCP API helper.",
                 "After exec finishes, send a normal assistant reply; do not stop after only the tool call.",
                 "Reply with MCP_CODE_MODE_FILE_OK note=fixture-note-alpha unclear=none only after the MCP call returns fixture-note-alpha.",
               ].join(" "),
@@ -176,6 +177,16 @@ async function main() {
     sessionKey: MCP_CODE_MODE_SESSION_KEY,
   });
   const plannedTools = extractMcpCodeModePlannedTools(transcriptEvents);
+  if (process.env.MOCK_REQUEST_LOG) {
+    process.stdout.write(
+      `${JSON.stringify({
+        mcpCodeModeDiagnostics: await readMcpCodeModeDiagnostics(
+          process.env.MOCK_REQUEST_LOG,
+          transcriptEvents,
+        ),
+      })}\n`,
+    );
+  }
   const finalText = validateMcpCodeModeResult(response, mentions as McpCodeModeMentions, {
     plannedTools,
     requireExec: true,

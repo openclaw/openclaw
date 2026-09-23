@@ -1,10 +1,13 @@
 // Real workspace contract for memory engine storage/index helpers.
+export type { MemoryWorkspaceFiles, MemoryWorkspaceWatchRequest } from "./host/workspace-files.js";
 
 export {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
   cosineSimilarity,
+  encodeMemoryEmbedding,
+  decodeMemoryEmbedding,
   extractProjectKeysFromCuratedEntry,
   ensureDir,
   hashText,
@@ -33,15 +36,33 @@ export {
   buildMemoryReadResultFromSlice,
   DEFAULT_MEMORY_READ_LINES,
   DEFAULT_MEMORY_READ_MAX_CHARS,
+  type LegacyMemoryReadResult,
   type MemoryReadResult,
 } from "./host/read-file-shared.js";
 export { resolveMemoryBackendConfig } from "./host/backend-config.js";
-export { resolveMemorySearchStaleness } from "./host/types.js";
+export {
+  formatMemoryIndexRebuildGuidance,
+  isAutomaticMemoryEntryEligible,
+  isMemoryOriginEligibleForAutomaticInjection,
+  resolveMemoryIndexIdentityDiagnostic,
+  resolveMemoryIndexIdentityReason,
+  resolveMemoryIndexSearchDiagnostic,
+  resolveMemorySearchStaleness,
+} from "./host/types.js";
 export type { ResolvedMemoryBackendConfig } from "./host/backend-config.js";
+export {
+  createMemorySearchDeadlineControl,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  type MemorySearchDeadlineControl,
+  type MemorySearchDeadlineControlAction,
+  type MemorySearchDeadlineControlOptions,
+} from "./host/search-deadline-control.js";
 export type {
   MemoryEmbeddingProbeResult,
   MemoryEntryProvenance,
   MemoryExtraPath,
+  MemoryIndexIdentityDiagnostic,
+  MemoryIndexIdentityState,
   MemoryOriginClass,
   MemoryProviderStatus,
   MemorySearchManager,
@@ -62,6 +83,7 @@ export {
   ensureMemoryPathFtsTriggers,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
   MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_FTS_TABLE,
@@ -71,7 +93,7 @@ export {
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
 } from "./host/memory-schema.js";
-export { loadSqliteVecExtension } from "./host/sqlite-vec.js";
+export { loadSqliteVecExtension, loadSqliteVecExtensionFromPath } from "./host/sqlite-vec.js";
 export {
   readCuratedProjectMemoryCandidates,
   readCuratedMemoryTriggerCandidates,

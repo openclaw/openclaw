@@ -1,18 +1,18 @@
-// Browser tests cover pw session.connections plugin behavior.
-import { chromium } from "playwright-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import * as chromeModule from "./chrome.js";
-import { pwAi } from "./pw-ai.js";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { describe, expect, it, vi } from "vitest";
+import {
+  type BrowserMockBundle,
+  makeEmptyBrowser,
+  setupPwSessionConnectionTest,
+} from "./pw-session.connection.test-support.js";
 
-const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
-  registerManagedProxyBrowserCdpBypassMock: vi.fn<(url: string) => (() => void) | undefined>(
-    () => undefined,
-  ),
-}));
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
-  registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
-}));
+const {
+  connectOverCdpSpy,
+  getChromeWebSocketEndpointSpy,
+  getChromeWebSocketUrlSpy,
+  registerManagedProxyBrowserCdpBypassMock,
+  pwAi,
+} = setupPwSessionConnectionTest();
 
 const {
   closePlaywrightBrowserConnection,
@@ -22,14 +22,6 @@ const {
   retirePlaywrightBrowserConnection,
   retirePlaywrightBrowserConnectionExact,
 } = pwAi;
-
-const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
-const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
-
-type BrowserMockBundle = {
-  browser: import("playwright-core").Browser;
-  browserClose: ReturnType<typeof vi.fn>;
-};
 
 function makeBrowser(targetId: string, url: string): BrowserMockBundle {
   const browserClose = vi.fn(async () => {});
@@ -63,83 +55,10 @@ function makeBrowser(targetId: string, url: string): BrowserMockBundle {
   return { browser, browserClose };
 }
 
-function makePageEnumerationBrowser(
-  specs: Array<{
-    targetId: string;
-    title: string;
-    url: string;
-    readTitle?: () => Promise<string>;
-    readTargetInfo?: () => Promise<{ targetInfo: { targetId: string; title: string } }>;
-    detach?: () => Promise<void>;
-  }>,
-): BrowserMockBundle & {
-  pages: import("playwright-core").Page[];
-  newCDPSession: ReturnType<typeof vi.fn>;
-} {
-  const browserClose = vi.fn(async () => {});
-  const specByPage = new WeakMap<import("playwright-core").Page, (typeof specs)[number]>();
-  const pages = specs.map((spec) => {
-    const page = {
-      on: vi.fn(),
-      context: () => context,
-      title: vi.fn(spec.readTitle ?? (async () => spec.title)),
-      url: vi.fn(() => spec.url),
-    } as unknown as import("playwright-core").Page;
-    specByPage.set(page, spec);
-    return page;
-  });
-  const newCDPSession = vi.fn(async (page: import("playwright-core").Page) => {
-    const spec = specByPage.get(page);
-    if (!spec) {
-      throw new Error("unexpected page");
-    }
-    return {
-      send: vi.fn(async (method: string) => {
-        if (method !== "Target.getTargetInfo") {
-          return {};
-        }
-        return await (spec.readTargetInfo?.() ??
-          Promise.resolve({ targetInfo: { targetId: spec.targetId, title: spec.title } }));
-      }),
-      detach: vi.fn(spec.detach ?? (async () => {})),
-    };
-  });
-  const context = {
-    pages: () => pages,
-    on: vi.fn(),
-    newCDPSession,
-  } as unknown as import("playwright-core").BrowserContext;
-  const browser = {
-    contexts: () => [context],
-    on: vi.fn(),
-    off: vi.fn(),
-    close: browserClose,
-  } as unknown as import("playwright-core").Browser;
-
-  return { browser, browserClose, pages, newCDPSession };
-}
-
-function makeEmptyBrowser(): BrowserMockBundle {
-  const browserClose = vi.fn(async () => {});
-  const context = {
-    pages: () => [],
-    on: vi.fn(),
-    newCDPSession: vi.fn(),
-  } as unknown as import("playwright-core").BrowserContext;
-
-  const browser = {
-    contexts: () => [context],
-    on: vi.fn(),
-    off: vi.fn(),
-    close: browserClose,
-  } as unknown as import("playwright-core").Browser;
-
-  return { browser, browserClose };
-}
-
 function makeDisconnectedReadBrowser(): BrowserMockBundle {
   const browserClose = vi.fn(async () => {});
   const page = {
+    isClosed: () => true,
     on: vi.fn(),
     context: () => context,
     title: vi.fn(async () => {
@@ -159,6 +78,7 @@ function makeDisconnectedReadBrowser(): BrowserMockBundle {
   } as unknown as import("playwright-core").BrowserContext;
 
   const browser = {
+    isConnected: () => false,
     contexts: () => [context],
     on: vi.fn(),
     off: vi.fn(),
@@ -169,6 +89,7 @@ function makeDisconnectedReadBrowser(): BrowserMockBundle {
 }
 
 function makeStuckPageTargetBrowser(): BrowserMockBundle & {
+  newCDPSession: ReturnType<typeof vi.fn>;
   rejectTargetRead: (error: Error) => void;
 } {
   let rejectTargetRead: ((error: Error) => void) | undefined;
@@ -180,15 +101,16 @@ function makeStuckPageTargetBrowser(): BrowserMockBundle & {
     url: vi.fn(() => "https://stuck.example"),
   } as unknown as import("playwright-core").Page;
 
+  const newCDPSession = vi.fn(
+    () =>
+      new Promise((_, reject) => {
+        rejectTargetRead = reject;
+      }),
+  );
   const context = {
     pages: () => [page],
     on: vi.fn(),
-    newCDPSession: vi.fn(
-      () =>
-        new Promise((_, reject) => {
-          rejectTargetRead = reject;
-        }),
-    ),
+    newCDPSession,
   } as unknown as import("playwright-core").BrowserContext;
 
   const browser = {
@@ -201,6 +123,7 @@ function makeStuckPageTargetBrowser(): BrowserMockBundle & {
   return {
     browser,
     browserClose,
+    newCDPSession,
     rejectTargetRead: (error) => rejectTargetRead?.(error),
   };
 }
@@ -229,22 +152,98 @@ function makeMutatingDisconnectBrowser(): BrowserMockBundle & {
   return { browser, browserClose, newPage };
 }
 
-afterEach(async () => {
-  connectOverCdpSpy.mockReset();
-  getChromeWebSocketUrlSpy.mockReset();
-  registerManagedProxyBrowserCdpBypassMock.mockReset();
-  registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => undefined);
-  await closePlaywrightBrowserConnection().catch(() => {});
-  vi.useRealTimers();
-});
-
 describe("pw-session connection scoping", () => {
+  it.each(["pending", "cached"] as const)(
+    "canceling one enumeration preserves its %s connection for another waiter",
+    async (phase) => {
+      const cdpUrl = "http://127.0.0.1:9222";
+      const gate = createDeferred<void>();
+      const started = createDeferred<void>();
+      const fixture = makeBrowser("A", "https://a.example/");
+      connectOverCdpSpy.mockImplementation(async () => {
+        if (phase === "pending") {
+          started.resolve();
+          await gate.promise;
+        }
+        return fixture.browser;
+      });
+      getChromeWebSocketUrlSpy.mockResolvedValue(null);
+      if (phase === "cached") {
+        await listPagesViaPlaywright({ cdpUrl });
+        vi.spyOn(fixture.browser.contexts()[0]!, "newCDPSession").mockImplementation(
+          async () =>
+            ({
+              send: async () => {
+                started.resolve();
+                await gate.promise;
+                return { targetInfo: { targetId: "A", title: "title:A" } };
+              },
+              detach: async () => {},
+            }) as never,
+        );
+      }
+      const controller = new AbortController();
+      const canceled = listPagesViaPlaywright({ cdpUrl, signal: controller.signal });
+      const rejected = expect(canceled).rejects.toThrow("cancel one waiter");
+      const sibling = listPagesViaPlaywright({ cdpUrl }).then(
+        (value) => value,
+        (error: unknown) => error,
+      );
+      try {
+        await started.promise;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        controller.abort(new Error("cancel one waiter"));
+        await rejected;
+        gate.resolve();
+        expect(await sibling).toEqual([
+          { targetId: "A", title: "title:A", url: "https://a.example/", type: "page" },
+        ]);
+        expect(fixture.browserClose).not.toHaveBeenCalled();
+        expect(connectOverCdpSpy).toHaveBeenCalledOnce();
+      } finally {
+        gate.resolve();
+        await sibling;
+      }
+    },
+  );
+
+  it("reuses a connection published while its endpoint policy check was pending", async () => {
+    const cdpUrl = "http://127.0.0.1:9222";
+    const gate = createDeferred<void>();
+    const started = createDeferred<void>();
+    const allowed = vi
+      .spyOn(await import("./cdp.helpers.js"), "assertCdpEndpointAllowed")
+      .mockImplementationOnce(async () => {
+        started.resolve();
+        await gate.promise;
+        return undefined;
+      });
+    const browser = makeBrowser("A", "https://a.example/");
+    connectOverCdpSpy.mockResolvedValue(browser.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    const first = listPagesViaPlaywright({ cdpUrl });
+    try {
+      await started.promise;
+      await expect(listPagesViaPlaywright({ cdpUrl })).resolves.toMatchObject([{ targetId: "A" }]);
+      gate.resolve();
+      await first;
+
+      expect(connectOverCdpSpy).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+      await first;
+      allowed.mockRestore();
+    }
+  });
+
   it("keeps the exact managed-proxy bypass active through a discovered CDP handshake", async () => {
     const browser = makeBrowser("A", "https://example.com");
     const wsUrl = "ws://127.0.0.1:9222/devtools/browser/discovered";
     const release = vi.fn();
     registerManagedProxyBrowserCdpBypassMock.mockReturnValue(release);
-    getChromeWebSocketUrlSpy.mockResolvedValue(wsUrl);
+    getChromeWebSocketUrlSpy.mockResolvedValue({ url: wsUrl });
     connectOverCdpSpy.mockImplementationOnce(async () => {
       expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(wsUrl);
       expect(release).not.toHaveBeenCalled();
@@ -273,23 +272,35 @@ describe("pw-session connection scoping", () => {
   });
 
   it("releases every managed-proxy bypass after failed CDP connection attempts", async () => {
-    const releases: Array<ReturnType<typeof vi.fn>> = [];
-    registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => {
-      const release = vi.fn();
-      releases.push(release);
-      return release;
-    });
-    connectOverCdpSpy.mockRejectedValue(new Error("CDP socket hang up"));
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const discoveryStarted = createDeferred<void>();
+      const releases: Array<ReturnType<typeof vi.fn>> = [];
+      registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => {
+        const release = vi.fn();
+        releases.push(release);
+        return release;
+      });
+      connectOverCdpSpy.mockRejectedValue(new Error("CDP socket hang up"));
+      getChromeWebSocketUrlSpy.mockImplementation(async () => {
+        discoveryStarted.resolve();
+        return null;
+      });
 
-    await expect(listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" })).rejects.toThrow(
-      "CDP socket hang up",
-    );
+      await Promise.all([
+        expect(listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" })).rejects.toThrow(
+          "CDP socket hang up",
+        ),
+        discoveryStarted.promise.then(() => vi.runAllTimersAsync()),
+      ]);
 
-    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledTimes(3);
-    expect(releases).toHaveLength(3);
-    for (const release of releases) {
-      expect(release).toHaveBeenCalledOnce();
+      expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledTimes(3);
+      expect(releases).toHaveLength(3);
+      for (const release of releases) {
+        expect(release).toHaveBeenCalledOnce();
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -303,7 +314,7 @@ describe("pw-session connection scoping", () => {
       releases.push(release);
       return release;
     });
-    getChromeWebSocketUrlSpy.mockResolvedValue(discoveredUrl);
+    getChromeWebSocketUrlSpy.mockResolvedValue({ url: discoveredUrl });
     connectOverCdpSpy
       .mockRejectedValueOnce(new Error("stale discovered endpoint"))
       .mockResolvedValueOnce(browser.browser);
@@ -321,51 +332,117 @@ describe("pw-session connection scoping", () => {
   });
 
   it("keeps URL credentials out of Playwright and escaped connection errors", async () => {
-    const username = "browser-user";
-    const password = "browser-password";
-    const token = "browser-token";
-    const cdpUrl = `wss://${username}:${password}@browserless.example/devtools/browser/id?token=${token}`;
-    connectOverCdpSpy.mockRejectedValue(new Error(`connect failed for ${cdpUrl}`));
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
-
-    let message = "";
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      await listPagesViaPlaywright({ cdpUrl });
-    } catch (err) {
-      message = String(err);
-    }
+      const discoveryStarted = createDeferred<void>();
+      const username = "browser-user";
+      const password = "browser-password";
+      const token = "browser-token";
+      const cdpUrl = `wss://${username}:${password}@browserless.example/devtools/browser/id?token=${token}`;
+      connectOverCdpSpy.mockRejectedValue(new Error(`connect failed for ${cdpUrl}`));
+      getChromeWebSocketUrlSpy.mockImplementation(async () => {
+        discoveryStarted.resolve();
+        return null;
+      });
 
-    expect(connectOverCdpSpy).toHaveBeenCalledTimes(3);
-    expect(connectOverCdpSpy).toHaveBeenCalledWith(
-      "wss://browserless.example/devtools/browser/id?token=browser-token",
-      {
-        timeout: expect.any(Number),
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
-        },
-      },
-    );
-    expect(message).toContain("browserless.example/devtools/browser/id");
-    expect(message).not.toContain(username);
-    expect(message).not.toContain(password);
-    expect(message).not.toContain(token);
+      const message = listPagesViaPlaywright({ cdpUrl }).then(
+        () => "",
+        (err: unknown) => String(err),
+      );
+      await Promise.all([
+        message.then((text) => {
+          expect(connectOverCdpSpy).toHaveBeenCalledTimes(3);
+          expect(connectOverCdpSpy).toHaveBeenCalledWith(
+            "wss://browserless.example/devtools/browser/id?token=browser-token",
+            {
+              timeout: expect.any(Number),
+              headers: {
+                Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
+              },
+            },
+          );
+          expect(text).toContain("browserless.example/devtools/browser/id");
+          expect(text).not.toContain(username);
+          expect(text).not.toContain(password);
+          expect(text).not.toContain(token);
+        }),
+        discoveryStarted.promise.then(() => vi.runAllTimersAsync()),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps credentialed HTTP discovery out of Playwright's redirect path", async () => {
     const cdpUrl = "https://browser-user:browser-password@browserless.example/cdp";
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const discoveryStarted = createDeferred<void>();
+      getChromeWebSocketUrlSpy.mockImplementation(async () => {
+        discoveryStarted.resolve();
+        return null;
+      });
 
-    await expect(listPagesViaPlaywright({ cdpUrl })).rejects.toThrow(
-      "Authenticated CDP HTTP endpoint did not expose a usable WebSocket URL.",
-    );
+      await Promise.all([
+        expect(listPagesViaPlaywright({ cdpUrl })).rejects.toThrow(
+          "Authenticated CDP HTTP endpoint did not expose a usable WebSocket URL.",
+        ),
+        discoveryStarted.promise.then(() => vi.runAllTimersAsync()),
+      ]);
 
-    expect(connectOverCdpSpy).not.toHaveBeenCalled();
+      expect(connectOverCdpSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
+
+  it.each([
+    {
+      host: "non-loopback CDP hosts",
+      cdpUrl: "http://93.184.216.34:9222",
+      ssrfPolicy: { allowPrivateNetwork: true },
+      error: "discovery unavailable",
+    },
+    {
+      host: "loopback HTTP CDP hosts",
+      cdpUrl: "http://127.0.0.1:9222",
+      ssrfPolicy: {},
+      error: "loopback discovery blocked",
+    },
+  ])(
+    "does not fall back to Playwright discovery for guarded $host",
+    async ({ cdpUrl, ssrfPolicy, error }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const discoveryStarted = createDeferred<void>();
+        const discoveryError = new Error(error);
+        getChromeWebSocketEndpointSpy.mockImplementation(async () => {
+          discoveryStarted.resolve();
+          throw discoveryError;
+        });
+
+        const connection = listPagesViaPlaywright({ cdpUrl, ssrfPolicy });
+        await Promise.all([
+          expect(connection).rejects.toThrow(
+            "Guarded CDP endpoint did not expose a usable WebSocket URL.",
+          ),
+          expect(connection).rejects.toThrow(error),
+          discoveryStarted.promise.then(() => vi.runAllTimersAsync()),
+        ]);
+
+        expect(connectOverCdpSpy).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("allows loopback CDP control without widening the navigation allowlist", async () => {
     const browser = makeBrowser("A", "https://example.com");
     connectOverCdpSpy.mockResolvedValue(browser.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    getChromeWebSocketUrlSpy.mockResolvedValue({
+      url: "ws://127.0.0.1:9222/devtools/browser/local",
+    });
     const ssrfPolicy = {
       dangerouslyAllowPrivateNetwork: true,
       allowedHostnames: ["example.com"],
@@ -645,110 +722,7 @@ describe("pw-session connection scoping", () => {
     expect(refreshed.browserClose).not.toHaveBeenCalled();
   });
 
-  it("lists healthy pages without awaiting a wedged page title", async () => {
-    vi.useFakeTimers();
-    const fixture = makePageEnumerationBrowser([
-      {
-        targetId: "WEDGED",
-        title: "Wedged",
-        url: "https://wedged.example",
-        readTitle: () => new Promise<string>(() => {}),
-      },
-      {
-        targetId: "HEALTHY",
-        title: "Healthy title",
-        url: "https://healthy.example",
-      },
-    ]);
-    connectOverCdpSpy.mockResolvedValue(fixture.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
-
-    let listed: Awaited<ReturnType<typeof listPagesViaPlaywright>> | undefined;
-    void listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" }).then((pages) => {
-      listed = pages;
-    });
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(listed).toEqual([
-      {
-        targetId: "WEDGED",
-        title: "Wedged",
-        url: "https://wedged.example",
-        type: "page",
-      },
-      {
-        targetId: "HEALTHY",
-        title: "Healthy title",
-        url: "https://healthy.example",
-        type: "page",
-      },
-    ]);
-  });
-
-  it("times out stuck target-info reads in one window and shares them across enumerations", async () => {
-    vi.useFakeTimers();
-    const fixture = makePageEnumerationBrowser([
-      {
-        targetId: "STUCK_A",
-        title: "Stuck A",
-        url: "https://stuck-a.example",
-        readTargetInfo: () => new Promise(() => {}),
-        detach: () => new Promise(() => {}),
-      },
-      {
-        targetId: "STUCK_B",
-        title: "Stuck B",
-        url: "https://stuck-b.example",
-        readTargetInfo: () => new Promise(() => {}),
-        detach: () => new Promise(() => {}),
-      },
-      {
-        targetId: "HEALTHY",
-        title: "Healthy title",
-        url: "https://healthy.example",
-      },
-    ]);
-    connectOverCdpSpy.mockResolvedValue(fixture.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
-
-    let listed: Array<Awaited<ReturnType<typeof listPagesViaPlaywright>>> | undefined;
-    void Promise.all([
-      listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" }),
-      listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" }),
-    ]).then((pages) => {
-      listed = pages;
-    });
-    await vi.advanceTimersByTimeAsync(2_000);
-
-    expect(listed).toEqual([
-      [
-        {
-          targetId: "HEALTHY",
-          title: "Healthy title",
-          url: "https://healthy.example",
-          type: "page",
-        },
-      ],
-      [
-        {
-          targetId: "HEALTHY",
-          title: "Healthy title",
-          url: "https://healthy.example",
-          type: "page",
-        },
-      ],
-    ]);
-    expect(
-      fixture.pages
-        .slice(0, 2)
-        .map(
-          (page) =>
-            fixture.newCDPSession.mock.calls.filter(([candidate]) => candidate === page).length,
-        ),
-    ).toEqual([1, 1]);
-  });
-
-  it("times out stuck page enumeration and evicts the scoped connection", async () => {
+  it("allows lifecycle retirement to recover a timed-out page enumeration", async () => {
     const stuck = makeStuckPageTargetBrowser();
     const refreshed = makeBrowser("A", "https://a.example/recovered");
     let connectCalls = 0;
@@ -767,6 +741,8 @@ describe("pw-session connection scoping", () => {
       listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", timeoutMs: 20 }),
     ).rejects.toThrow(/Playwright page enumeration timed out after 20ms/);
 
+    retirePlaywrightBrowserConnection({ cdpUrl: "http://127.0.0.1:9222" });
+
     await vi.waitFor(() => expect(stuck.browserClose).toHaveBeenCalledTimes(1));
 
     const pages = await listPagesViaPlaywright({
@@ -779,7 +755,7 @@ describe("pw-session connection scoping", () => {
     expect(refreshed.browserClose).not.toHaveBeenCalled();
   });
 
-  it("does not let a timed-out connect replace or clear its successor", async () => {
+  it("does not let a retired pending connect replace or clear its successor", async () => {
     const late = makeBrowser("LATE", "https://late.example");
     const refreshed = makeBrowser("A", "https://a.example/recovered");
     let resolveLate: ((browser: import("playwright-core").Browser) => void) | undefined;
@@ -801,6 +777,8 @@ describe("pw-session connection scoping", () => {
     await expect(
       listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", timeoutMs: 20 }),
     ).rejects.toThrow(/Playwright page enumeration timed out after 20ms/);
+
+    retirePlaywrightBrowserConnection({ cdpUrl: "http://127.0.0.1:9222" });
 
     const successor = listPagesViaPlaywright({
       cdpUrl: "http://127.0.0.1:9222",
@@ -825,7 +803,7 @@ describe("pw-session connection scoping", () => {
     expect(refreshed.browserClose).not.toHaveBeenCalled();
   });
 
-  it("does not let a timed-out read evict its healthy successor", async () => {
+  it("does not let a late failure from a retired read evict its healthy successor", async () => {
     const stuck = makeStuckPageTargetBrowser();
     const refreshed = makeBrowser("A", "https://a.example/recovered");
     let connectCalls = 0;
@@ -839,6 +817,8 @@ describe("pw-session connection scoping", () => {
     await expect(
       listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", timeoutMs: 20 }),
     ).rejects.toThrow(/Playwright page enumeration timed out after 20ms/);
+
+    retirePlaywrightBrowserConnection({ cdpUrl: "http://127.0.0.1:9222" });
 
     const recovered = await listPagesViaPlaywright({
       cdpUrl: "http://127.0.0.1:9222",
@@ -858,6 +838,28 @@ describe("pw-session connection scoping", () => {
     expect(stillCached.map((page) => page.targetId)).toEqual(["A"]);
     expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
     expect(refreshed.browserClose).not.toHaveBeenCalled();
+  });
+
+  it("does not let an older enumeration abort disconnect its already-connected successor", async () => {
+    const cdpUrl = "http://127.0.0.1:9222";
+    const stuck = makeStuckPageTargetBrowser();
+    const refreshed = makeBrowser("A", "https://a.example/recovered");
+    connectOverCdpSpy.mockResolvedValueOnce(stuck.browser).mockResolvedValue(refreshed.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    const controller = new AbortController();
+    const listing = listPagesViaPlaywright({ cdpUrl, signal: controller.signal });
+    const rejected = expect(listing).rejects.toThrow("cancelled obsolete enumeration");
+    await vi.waitFor(() => expect(stuck.newCDPSession).toHaveBeenCalledOnce());
+
+    await closePlaywrightBrowserConnection({ cdpUrl });
+    await expect(listPagesViaPlaywright({ cdpUrl })).resolves.toMatchObject([{ targetId: "A" }]);
+    controller.abort(new Error("cancelled obsolete enumeration"));
+    await rejected;
+
+    expect(refreshed.browserClose).not.toHaveBeenCalled();
+    await expect(listPagesViaPlaywright({ cdpUrl })).resolves.toMatchObject([{ targetId: "A" }]);
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
+    stuck.rejectTargetRead(new Error("Target page, context or browser has been closed"));
   });
 
   it("does not replay mutating page creation after an ambiguous disconnect", async () => {

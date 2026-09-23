@@ -45,8 +45,13 @@ private actor TestTranscriptCache: OpenClawChatTranscriptCache {
     }
 
     func loadSessions() async -> [OpenClawChatSessionEntry] {
+        let snapshot = self.sessions
         await self.loadSessionsHook?()
-        return self.sessions
+        return snapshot
+    }
+
+    func loadSessions(agentID _: String?) async -> [OpenClawChatSessionEntry] {
+        await self.loadSessions()
     }
 
     func loadTranscript(sessionKey: String) async -> [OpenClawChatMessage] {
@@ -55,6 +60,10 @@ private actor TestTranscriptCache: OpenClawChatTranscriptCache {
 
     func storeSessions(_ sessions: [OpenClawChatSessionEntry]) async {
         self.sessions = sessions
+    }
+
+    func storeSessions(_ sessions: [OpenClawChatSessionEntry], agentID _: String?) async {
+        await self.storeSessions(sessions)
     }
 
     func storeCanonicalTranscript(
@@ -66,6 +75,35 @@ private actor TestTranscriptCache: OpenClawChatTranscriptCache {
         self.transcripts[sessionKey] = messages
         self.storedTranscripts.append(messages)
     }
+}
+
+/// Old conformers compile through the protocol defaults but cannot partition
+/// selected-agent rosters, so scoped access must never reach this storage.
+private actor LegacyTranscriptCache: OpenClawChatTranscriptCache {
+    private var sessions: [OpenClawChatSessionEntry]
+
+    init(sessions: [OpenClawChatSessionEntry] = []) {
+        self.sessions = sessions
+    }
+
+    func loadSessions() async -> [OpenClawChatSessionEntry] {
+        self.sessions
+    }
+
+    func loadTranscript(sessionKey _: String) async -> [OpenClawChatMessage] {
+        []
+    }
+
+    func storeSessions(_ sessions: [OpenClawChatSessionEntry]) async {
+        self.sessions = sessions
+    }
+
+    func storeCanonicalTranscript(
+        sessionKey _: String,
+        agentID _: String?,
+        messages _: [OpenClawChatMessage],
+        canonicalMessageIdempotencyKeys _: Set<String>) async
+    {}
 }
 
 /// Minimal FIFO transport whose history responses can be gated during cold open.
@@ -127,7 +165,7 @@ private func makeViewModel(
     sessionKey: String = "main",
     transport: GatedHistoryChatTransport,
     activeAgentID: String? = nil,
-    cache: TestTranscriptCache,
+    cache: any OpenClawChatTranscriptCache,
     load: Bool = true) -> OpenClawChatViewModel
 {
     let vm = OpenClawChatViewModel(
@@ -268,7 +306,10 @@ struct ChatViewModelTranscriptCacheTests {
         #expect(await MainActor.run { vm.sessions.isEmpty })
     }
 
-    @Test func `prior agent cache cannot repaint global digest after owner switch`() async throws {
+    @Test(arguments: ["global", "agent:main:work"])
+    func `cached global digest follows its conversation owner during an ambient agent update`(
+        sessionKey: String) async throws
+    {
         var releaseSessions: AsyncStream<Void>.Continuation!
         let sessionsGate = AsyncStream<Void> { releaseSessions = $0 }
         let release = try #require(releaseSessions)
@@ -277,6 +318,7 @@ struct ChatViewModelTranscriptCacheTests {
         let startedSignal = try #require(loadStarted)
         var startedIterator = started.makeAsyncIterator()
         var global = cacheSessionEntry(key: "global", updatedAt: 1000)
+        global.agentId = "main"
         global.observerDigest = OpenClawChatSessionObserverDigest(
             agentId: "main",
             runId: "run-main",
@@ -295,7 +337,7 @@ struct ChatViewModelTranscriptCacheTests {
             historyPayload(sessionKey: sessionKey, sessionID: "unused-live-session")
         }
         let vm = await makeViewModel(
-            sessionKey: "agent:main:work",
+            sessionKey: sessionKey,
             transport: transport,
             activeAgentID: "main",
             cache: cache,
@@ -305,13 +347,22 @@ struct ChatViewModelTranscriptCacheTests {
         _ = await startedIterator.next()
 
         await MainActor.run { vm.syncActiveAgentId("work") }
-        release.yield(())
-        try await Task.sleep(nanoseconds: 100_000_000)
-
-        #expect(await MainActor.run { vm.sessions.isEmpty })
+        release.finish()
+        if sessionKey == "global" {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            #expect(await MainActor.run { vm.selectedAgentID } == "work")
+            #expect(await MainActor.run { vm.sessions.isEmpty })
+        } else {
+            try await waitUntil("canonical owner's cached roster painted") {
+                await MainActor.run { !vm.sessions.isEmpty }
+            }
+            #expect(await MainActor.run { vm.selectedAgentID } == "main")
+            #expect(await MainActor.run { vm.sessions.map(\.key) } == ["global"])
+            #expect(await MainActor.run { vm.sessions.first?.observerDigest?.agentId } == "main")
+        }
     }
 
-    @Test func `ownerless shared cache cannot claim the selected global owner`() async throws {
+    @Test func `legacy cache cannot paint an ownerless roster for either selected agent`() async throws {
         var global = cacheSessionEntry(key: "global", updatedAt: 1000)
         global.observerDigest = OpenClawChatSessionObserverDigest(
             runId: "run-legacy",
@@ -319,7 +370,7 @@ struct ChatViewModelTranscriptCacheTests {
             updatedAt: 1000,
             headline: "Ambiguous legacy owner",
             health: "on-track")
-        let cache = TestTranscriptCache(sessions: [global])
+        let cache = LegacyTranscriptCache(sessions: [global])
         let transport = GatedHistoryChatTransport { sessionKey, _ in
             historyPayload(sessionKey: sessionKey, sessionID: "unused-live-session")
         }
@@ -332,12 +383,66 @@ struct ChatViewModelTranscriptCacheTests {
         let snapshot = await MainActor.run { vm.currentSessionSnapshot() }
 
         await MainActor.run { vm.paintFromCacheIfNeeded(session: snapshot) }
-        try await waitUntil("shared cache row painted without ambiguous digest") {
-            await MainActor.run { vm.sessions.count == 1 }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        await MainActor.run { vm.syncActiveAgentId("gadget") }
+        let switchedSnapshot = await MainActor.run { vm.currentSessionSnapshot() }
+        await MainActor.run { vm.paintFromCacheIfNeeded(session: switchedSnapshot) }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(await MainActor.run { vm.sessions.isEmpty })
+    }
+
+    @Test func `legacy cache rejects scoped roster writes`() async {
+        let original = cacheSessionEntry(key: "agent-a", updatedAt: 1000)
+        let cache = LegacyTranscriptCache(sessions: [original])
+
+        await cache.storeSessions(
+            [cacheSessionEntry(key: "agent-b", updatedAt: 2000)],
+            agentID: "agent-b")
+
+        #expect(await cache.loadSessions().map(\.key) == ["agent-a"])
+        #expect(await cache.loadSessions(agentID: "agent-a").isEmpty)
+        #expect(await cache.loadSessions(agentID: "agent-b").isEmpty)
+    }
+
+    @Test(arguments: ["main", "gadget"])
+    func `cached session prepaint stays within the selected agent`(defaultAgentID: String) async throws {
+        var matchingBare = cacheSessionEntry(key: "shared-tool", updatedAt: 2000)
+        matchingBare.agentId = "main"
+        var foreignBare = cacheSessionEntry(key: "foreign-tool", updatedAt: 1750)
+        foreignBare.agentId = "gadget"
+        var foreignGlobal = cacheSessionEntry(key: "global", updatedAt: 1500)
+        foreignGlobal.agentId = "gadget"
+        let cache = TestTranscriptCache(sessions: [
+            cacheSessionEntry(key: "agent:main:owned", updatedAt: 3000),
+            cacheSessionEntry(key: "agent:gadget:foreign", updatedAt: 2500),
+            matchingBare,
+            foreignBare,
+            foreignGlobal,
+            cacheSessionEntry(key: "legacy-ownerless", updatedAt: 1000),
+        ])
+        let transport = GatedHistoryChatTransport { sessionKey, _ in
+            historyPayload(sessionKey: sessionKey, sessionID: "unused-live-session")
+        }
+        let vm = await makeViewModel(
+            sessionKey: "agent:main:main",
+            transport: transport,
+            activeAgentID: defaultAgentID,
+            cache: cache,
+            load: false)
+        let snapshot = await MainActor.run { vm.currentSessionSnapshot() }
+
+        await MainActor.run { vm.paintFromCacheIfNeeded(session: snapshot) }
+        try await waitUntil("cached sessions painted") {
+            await MainActor.run { !vm.sessions.isEmpty }
         }
 
-        #expect(await MainActor.run { vm.sessions[0].key == "global" })
-        #expect(await MainActor.run { vm.sessions[0].observerDigest == nil })
+        #expect(await MainActor.run { vm.sessions.map(\.key) } == [
+            "agent:main:owned",
+            "shared-tool",
+            "legacy-ownerless",
+        ])
     }
 
     @Test func `session cache strips active markers and preserves terminal recap`() {

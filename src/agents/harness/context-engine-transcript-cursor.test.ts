@@ -10,10 +10,11 @@ import { describe, expect, it } from "vitest";
 import {
   appendTranscriptMessage,
   replaceTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
   bootstrapHarnessContextEngine,
   finalizeHarnessContextEngineTurn,
@@ -108,7 +109,7 @@ describe("context engine transcript cursor contract", () => {
     > = async () => undefined;
 
     try {
-      await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 10 });
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 10 });
       const first = await appendTranscriptMessage(target, {
         message: { role: "user", content: "first" },
         now: 1_000,
@@ -218,6 +219,7 @@ describe("context engine transcript cursor contract", () => {
       expect(resetCount).toBe(1);
       expect(projectedMessages.map(readMessageContent)).toEqual(["replacement"]);
     } finally {
+      await cleanupSessionStateForTest({ stateDir: tempDir });
       fs.rmSync(tempDir, { force: true, recursive: true });
     }
   });

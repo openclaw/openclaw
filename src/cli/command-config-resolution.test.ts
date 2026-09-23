@@ -1,5 +1,5 @@
-// Command config resolution tests cover config lookup before command execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   resolveCommandSecretRefsViaGateway: vi.fn(),
@@ -22,7 +22,7 @@ describe("resolveCommandConfigWithSecrets", () => {
   });
 
   it("emits diagnostics to stderr and preserves resolved config when auto-enable is off", async () => {
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as const;
+    const runtime = createTestRuntime();
     const config = { channels: {} };
     const resolvedConfig = { channels: { telegram: {} } };
     const targetIds = new Set(["channels.telegram.token"]);
@@ -35,6 +35,7 @@ describe("resolveCommandConfigWithSecrets", () => {
       config,
       commandName: "status",
       targetIds,
+      agentId: "ops",
       mode: "read_only_status",
       runtime,
     });
@@ -43,6 +44,7 @@ describe("resolveCommandConfigWithSecrets", () => {
       config,
       commandName: "status",
       targetIds,
+      agentId: "ops",
       mode: "read_only_status",
     });
     expect(runtime.error).toHaveBeenCalledWith("[secrets] resolved channels.telegram.token");

@@ -1,9 +1,11 @@
+import "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe, truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import type {
   JsonValue,
   NativeHookRelayEvent,
   NativeHookRelayProvider,
 } from "./native-hook-relay-types.js";
+export { readNonEmptyStringPreservingWhitespace as readOptionalNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 
 const MAX_NATIVE_HOOK_RELAY_JSON_DEPTH = 64;
 const MAX_NATIVE_HOOK_RELAY_JSON_NODES = 20_000;
@@ -64,10 +66,6 @@ export function readNonEmptyString(value: unknown, name: string): string {
     return value.trim();
   }
   throw new Error(`native hook relay ${name} is required`);
-}
-
-export function readOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 export function readOptionalBoolean(value: unknown): boolean | undefined {
@@ -212,6 +210,6 @@ function snapshotString(value: string, state: { remainingStringLength: number })
   return `${prefix}...[truncated]`;
 }
 
-export function truncateText(value: string, maxLength: number): string {
+export function truncateRelayText(value: string, maxLength: number): string {
   return truncateWithMarker(value, maxLength, { marker: "...", reserve: 3, trimEnd: false });
 }

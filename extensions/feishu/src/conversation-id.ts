@@ -1,5 +1,8 @@
-// Feishu plugin module implements conversation id behavior.
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString as normalizeText,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeFeishuTarget, stripFeishuProviderPrefix } from "./targets.js";
 
 export type FeishuGroupSessionScope =
   | "group"
@@ -24,14 +27,6 @@ export function resolveConfiguredFeishuGroupSessionScope(params: {
     params.feishuCfg?.groupSessionScope ??
     (legacyTopicSessionMode === "enabled" ? "group_topic" : "group")
   );
-}
-
-function normalizeText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
 }
 
 export function buildFeishuConversationId(params: {
@@ -67,17 +62,7 @@ export function parseFeishuTargetId(raw: unknown): string | undefined {
   if (!target) {
     return undefined;
   }
-  const withoutProvider = target.replace(/^(feishu|lark):/i, "").trim();
-  if (!withoutProvider) {
-    return undefined;
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(withoutProvider);
-  for (const prefix of ["chat:", "group:", "channel:", "user:", "dm:", "open_id:"]) {
-    if (lowered.startsWith(prefix)) {
-      return normalizeText(withoutProvider.slice(prefix.length));
-    }
-  }
-  return withoutProvider;
+  return normalizeFeishuTarget(target) || undefined;
 }
 
 export function parseFeishuDirectConversationId(raw: unknown): string | undefined {
@@ -85,7 +70,7 @@ export function parseFeishuDirectConversationId(raw: unknown): string | undefine
   if (!target) {
     return undefined;
   }
-  const withoutProvider = target.replace(/^(feishu|lark):/i, "").trim();
+  const withoutProvider = stripFeishuProviderPrefix(target);
   if (!withoutProvider) {
     return undefined;
   }

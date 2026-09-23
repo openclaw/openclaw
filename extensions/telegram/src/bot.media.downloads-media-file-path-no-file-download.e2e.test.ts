@@ -1,16 +1,17 @@
-// Telegram tests cover bot.mediaownloads media file path no file download plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { holdTelegramMediaTimeouts } from "./bot-media-timers.test-support.js";
 import {
   readRemoteMediaBufferSpy,
   setNextSavedMediaPath,
   telegramBotDepsForTest,
   telegramMediaHarnessSendMessageSpy,
-} from "./bot.media.e2e-harness.js";
+} from "./bot.media.e2e.test-harness.js";
 import {
   TELEGRAM_TEST_TIMINGS,
   createBotHandler,
   createBotHandlerWithOptions,
+  createTelegramPhotoForTest,
   mockTelegramFileDownload,
   mockTelegramPngDownload,
   watchTelegramFetch,
@@ -166,7 +167,7 @@ describe("telegram inbound media", () => {
           },
         },
         {
-          name: "skips when file_path is missing",
+          name: "reports unavailable media when file_path is missing",
           messageId: 2,
           getFile: async () => ({}),
           setupFetch: () => watchTelegramFetch(),
@@ -178,7 +179,7 @@ describe("telegram inbound media", () => {
             expect(params.fetchSpy).not.toHaveBeenCalled();
             expect(params.replySpy).toHaveBeenCalledTimes(1);
             expect(replyPayload(params.replySpy)).toMatchObject({
-              BodyForAgent: "",
+              BodyForAgent: "[media unavailable: download failed]",
               MediaTypes: ["image"],
               RawBody: "",
             });
@@ -196,7 +197,7 @@ describe("telegram inbound media", () => {
             message_id: scenario.messageId,
             chat: { id: 1234, type: "private" },
             from: { id: 777, is_bot: false, first_name: "Ada" },
-            photo: [{ file_id: "fid" }],
+            photo: [createTelegramPhotoForTest("fid")],
             date: 1736380800, // 2025-01-09T00:00:00Z
           },
           me: { username: "openclaw_bot" },
@@ -233,7 +234,7 @@ describe("telegram inbound media", () => {
             message_id: 1001,
             chat: { id: 1234, type: "private" },
             from: { id: 777, is_bot: false, first_name: "Ada" },
-            photo: [{ file_id: "fid" }],
+            photo: [createTelegramPhotoForTest("fid")],
             date: 1736380800,
           },
           me: { username: "openclaw_bot" },
@@ -276,7 +277,7 @@ describe("telegram inbound media", () => {
       message: {
         message_id: 2,
         chat: { id: 1234, type: "private" },
-        photo: [{ file_id: "fid" }],
+        photo: [createTelegramPhotoForTest("fid")],
       },
       me: { username: "openclaw_bot" },
       getFile: async () => ({ file_path: "photos/2.jpg" }),
@@ -295,6 +296,7 @@ describe("telegram inbound media", () => {
 
     const cases = [
       {
+        updateId: 7005,
         message: {
           chat: { id: 42, type: "private" as const },
           message_id: 5,
@@ -313,9 +315,13 @@ describe("telegram inbound media", () => {
           expect(payload.LocationLon).toBe(2.294351);
           expect(payload.LocationSource).toBe("pin");
           expect(payload.LocationIsLive).toBe(false);
+          expect(payload.ProviderUpdateId).toBe("7005");
+          expect(payload.ProviderUpdateKind).toBe("message");
+          expect(payload.ProviderMessageTimestamp).toBe(1736380800000);
         },
       },
       {
+        updateId: 7006,
         message: {
           chat: { id: 42, type: "private" as const },
           message_id: 6,
@@ -338,6 +344,7 @@ describe("telegram inbound media", () => {
     for (const testCase of cases) {
       replySpy.mockClear();
       await handler({
+        update: { update_id: testCase.updateId, message: testCase.message },
         message: testCase.message,
         me: { username: "openclaw_bot" },
         getFile: async () => ({ file_path: "unused" }),
@@ -398,7 +405,7 @@ describe("telegram media groups", () => {
               message_id: 301,
               date: 1736380800,
               caption: "First album details 💙",
-              photo: [{ file_id: "album-caption-1" }],
+              photo: [createTelegramPhotoForTest("album-caption-1")],
             },
             me: { username: "openclaw_bot" },
             getFile: async () => ({ file_path: "photos/album-caption-1.jpg" }),
@@ -412,7 +419,7 @@ describe("telegram media groups", () => {
               caption_entities: [
                 { type: entityType, offset: 0, length: laterCaption.split(" ")[0]?.length ?? 0 },
               ],
-              photo: [{ file_id: "album-caption-2" }],
+              photo: [createTelegramPhotoForTest("album-caption-2")],
             },
             me: { username: "openclaw_bot" },
             getFile: async () => ({ file_path: "photos/album-caption-2.jpg" }),
@@ -478,7 +485,7 @@ describe("telegram media groups", () => {
             caption: "Forum album",
             date: 1736380800,
             media_group_id: "album-warning-topic",
-            photo: [{ file_id: "album-warning" }],
+            photo: [createTelegramPhotoForTest("album-warning")],
           },
           me: { username: "openclaw_bot", has_topics_enabled: true },
           getFile: async () => ({ file_path: "photos/album-warning.jpg" }),
@@ -528,7 +535,7 @@ describe("telegram media groups", () => {
               caption: "Album",
               date: 1736380800,
               media_group_id: "album-custom-api-root",
-              photo: [{ file_id: "photo1" }],
+              photo: [createTelegramPhotoForTest("photo1")],
             },
             me: { username: "openclaw_bot" },
             getFile: async () => ({ file_path: "photos/photo1.jpg" }),
@@ -540,7 +547,7 @@ describe("telegram media groups", () => {
               message_id: 2,
               date: 1736380801,
               media_group_id: "album-custom-api-root",
-              photo: [{ file_id: "photo2" }],
+              photo: [createTelegramPhotoForTest("photo2")],
             },
             me: { username: "openclaw_bot" },
             getFile: async () => ({ file_path: "photos/photo2.jpg" }),
@@ -577,12 +584,7 @@ describe("telegram media groups", () => {
       const runtimeError = vi.fn();
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
       const fetchSpy = mockTelegramPngDownload();
-      let nextTimerHandle = 1;
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(() => {
-        const handle = nextTimerHandle;
-        nextTimerHandle += 1;
-        return handle as unknown as ReturnType<typeof setTimeout>;
-      });
+      const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
 
       try {
@@ -596,7 +598,7 @@ describe("telegram media groups", () => {
                 caption: "Here are my photos",
                 date: 1736380800,
                 media_group_id: "album123",
-                photo: [{ file_id: "photo1" }],
+                photo: [createTelegramPhotoForTest("photo1")],
                 filePath: "photos/photo1.jpg",
               },
               {
@@ -605,7 +607,7 @@ describe("telegram media groups", () => {
                 message_id: 102,
                 date: 1736380801,
                 media_group_id: "album123",
-                photo: [{ file_id: "photo2" }],
+                photo: [createTelegramPhotoForTest("photo2")],
                 filePath: "photos/photo2.jpg",
               },
             ],
@@ -625,7 +627,7 @@ describe("telegram media groups", () => {
                 caption: "Album A",
                 date: 1736380800,
                 media_group_id: "albumA",
-                photo: [{ file_id: "photoA1" }],
+                photo: [createTelegramPhotoForTest("photoA1")],
                 filePath: "photos/photoA1.jpg",
               },
               {
@@ -635,7 +637,7 @@ describe("telegram media groups", () => {
                 caption: "Album B",
                 date: 1736380801,
                 media_group_id: "albumB",
-                photo: [{ file_id: "photoB1" }],
+                photo: [createTelegramPhotoForTest("photoB1")],
                 filePath: "photos/photoB1.jpg",
               },
             ],
@@ -687,12 +689,7 @@ describe("telegram media groups", () => {
       const runtimeError = vi.fn();
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
       const fetchSpy = mockTelegramPngDownload();
-      let nextTimerHandle = 1;
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(() => {
-        const handle = nextTimerHandle;
-        nextTimerHandle += 1;
-        return handle as unknown as ReturnType<typeof setTimeout>;
-      });
+      const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
       const savedPaths = [
         "/tmp/media/inbound/album-context-1.png",
@@ -714,7 +711,7 @@ describe("telegram media groups", () => {
               caption: "Here is the complete album",
               date: 1736380800,
               media_group_id: "album-context",
-              photo: [{ file_id: "album-photo-1" }],
+              photo: [createTelegramPhotoForTest("album-photo-1")],
             },
             getFile: async () => ({ file_path: "photos/album-context-1.png" }),
           },
@@ -725,7 +722,7 @@ describe("telegram media groups", () => {
               message_id: 302,
               date: 1736380801,
               media_group_id: "album-context",
-              photo: [{ file_id: "album-photo-2" }],
+              photo: [createTelegramPhotoForTest("album-photo-2")],
             },
             getFile: async () => ({ file_path: "photos/album-context-2.png" }),
           },
@@ -736,7 +733,7 @@ describe("telegram media groups", () => {
               message_id: 303,
               date: 1736380802,
               media_group_id: "album-context",
-              photo: [{ file_id: "album-photo-3" }],
+              photo: [createTelegramPhotoForTest("album-photo-3")],
             },
             getFile: async () => ({ file_path: "photos/album-context-3.png" }),
           },
@@ -786,12 +783,7 @@ describe("telegram media groups", () => {
     async () => {
       const runtimeError = vi.fn();
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
-      let nextTimerHandle = 1;
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(() => {
-        const handle = nextTimerHandle;
-        nextTimerHandle += 1;
-        return handle as unknown as ReturnType<typeof setTimeout>;
-      });
+      const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
       const savedPaths = [
         "/tmp/media/inbound/album-partial-2.png",
@@ -826,7 +818,7 @@ describe("telegram media groups", () => {
               message_id: 501,
               date: 1736380800,
               media_group_id: "album-partial-context",
-              photo: [{ file_id: "album-partial-photo-1" }],
+              photo: [createTelegramPhotoForTest("album-partial-photo-1")],
             },
             getFile: async () => ({ file_path: "photos/album-partial-1.png" }),
           },
@@ -838,7 +830,7 @@ describe("telegram media groups", () => {
               caption: "Here is a partial album",
               date: 1736380801,
               media_group_id: "album-partial-context",
-              photo: [{ file_id: "album-partial-photo-2" }],
+              photo: [createTelegramPhotoForTest("album-partial-photo-2")],
             },
             getFile: async () => ({ file_path: "photos/album-partial-2.png" }),
           },
@@ -849,7 +841,7 @@ describe("telegram media groups", () => {
               message_id: 503,
               date: 1736380802,
               media_group_id: "album-partial-context",
-              photo: [{ file_id: "album-partial-photo-3" }],
+              photo: [createTelegramPhotoForTest("album-partial-photo-3")],
             },
             getFile: async () => ({ file_path: "photos/album-partial-3.png" }),
           },
@@ -916,12 +908,7 @@ describe("telegram media groups", () => {
       const runtimeError = vi.fn();
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
       const fetchSpy = mockTelegramPngDownload();
-      let nextTimerHandle = 1;
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(() => {
-        const handle = nextTimerHandle;
-        nextTimerHandle += 1;
-        return handle as unknown as ReturnType<typeof setTimeout>;
-      });
+      const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
 
       try {
@@ -936,7 +923,7 @@ describe("telegram media groups", () => {
               caption: "@openclaw_bot Topic one album",
               date: 1736380800,
               media_group_id: "album-shared-by-telegram",
-              photo: [{ file_id: "topic1photo" }],
+              photo: [createTelegramPhotoForTest("topic1photo")],
             },
             me: { username: "openclaw_bot" },
             getFile: async () => ({ file_path: "photos/topic1.jpg" }),
@@ -951,7 +938,7 @@ describe("telegram media groups", () => {
               caption: "@openclaw_bot Topic two album",
               date: 1736380801,
               media_group_id: "album-shared-by-telegram",
-              photo: [{ file_id: "topic2photo" }],
+              photo: [createTelegramPhotoForTest("topic2photo")],
             },
             me: { username: "openclaw_bot" },
             getFile: async () => ({ file_path: "photos/topic2.jpg" }),
@@ -1033,7 +1020,7 @@ describe("telegram forwarded bursts", () => {
             from: { id: 777, is_bot: false, first_name: "N" },
             message_id: 22,
             date: 1736380801,
-            photo: [{ file_id: "fwd_photo_1" }],
+            photo: [createTelegramPhotoForTest("fwd_photo_1")],
             forward_origin: { type: "hidden_user", date: 1736380701, sender_user_name: "A" },
           },
           me: { username: "openclaw_bot" },

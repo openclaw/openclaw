@@ -24,6 +24,7 @@ private final class BrowserImportTransportStub {
     var requests: [BrowserProfileImportRequest] = []
     var failingPaths: Set<String> = []
     var beforeStatusResponse: (@MainActor () async -> Void)?
+    var beforeImportResponse: (@MainActor () async -> Void)?
     var statusJSON = """
     {
       "enabled": true,
@@ -43,16 +44,20 @@ private final class BrowserImportTransportStub {
             transport: { [weak self] request in
                 guard let self else { throw StubError() }
                 self.requests.append(request)
+                let statusJSON = self.statusJSON
+                let shouldFail = self.failingPaths.contains(request.path)
                 if request.path == "/system-profile-import/status", let hook = self.beforeStatusResponse {
                     self.beforeStatusResponse = nil
                     await hook()
                 }
-                if self.failingPaths.contains(request.path) {
-                    throw StubError()
+                if request.path == "/profiles/import", let hook = self.beforeImportResponse {
+                    self.beforeImportResponse = nil
+                    await hook()
                 }
+                if shouldFail { throw StubError() }
                 switch request.path {
                 case "/system-profile-import/status":
-                    return Data(self.statusJSON.utf8)
+                    return Data(statusJSON.utf8)
                 case "/profiles/import":
                     return Data(#"{"into":"imported","cookies":{"total":412,"imported":409}}"#.utf8)
                 default:
@@ -266,7 +271,8 @@ struct BrowserProfileImportModelTests {
         let forced = Self.status(
             profiles: [Self.chromeProfile],
             state: BrowserProfileImportOutcome(status: .dismissed))
-        model._testSetPhase(.offering(forced))
+        stub.statusJSON = stub.statusJSON.replacingOccurrences(of: "null", with: #"{"status":"dismissed"}"#)
+        await model.refresh(force: true)
 
         gate.continuation?.resume()
         #expect(await !idle.value)
@@ -308,13 +314,277 @@ struct BrowserProfileImportModelTests {
 
         // A faster poll offered the banner and the user dismissed it while the
         // slow poll was still waiting on its (pre-dismissal) status payload.
-        model._testSetPhase(.offering(Self.status(profiles: [Self.chromeProfile])))
+        await model.refresh(force: true)
         model.dismiss()
         #expect(model.phase == .hidden)
 
         gate.continuation?.resume()
         _ = await idle.value
         #expect(model.phase == .hidden)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func `forced refresh cannot publish after a mode change`(fails: Bool, returnsToLocal: Bool) async {
+        let stub = BrowserImportTransportStub()
+        let eligibility = BrowserImportEligibilityGate()
+        eligibility.isLocalMode = true
+        let model = stub.makeModel(isLocalMode: { eligibility.isLocalMode })
+        let gate = ContinuationBox()
+        stub.beforeStatusResponse = {
+            await withCheckedContinuation { gate.continuation = $0 }
+        }
+        if fails { stub.failingPaths = ["/system-profile-import/status"] }
+        let refresh = Task { await model.refresh(force: true) }
+        while gate.continuation == nil {
+            await Task.yield()
+        }
+
+        eligibility.isLocalMode = false
+        model.handleConnectionModeChange()
+        if returnsToLocal {
+            eligibility.isLocalMode = true
+            model.handleConnectionModeChange()
+        }
+        gate.continuation?.resume()
+        #expect(await refresh.value == .superseded)
+        #expect(model.phase == .hidden)
+        #expect(!model.importAvailable)
+        if returnsToLocal {
+            stub.failingPaths = []
+            #expect(await model.requestAutomaticOfferIfEligible())
+        }
+    }
+
+    @Test(arguments: [BrowserProfileImportDisposition.dismissed, .imported])
+    func `automatic offers cannot supersede a pending forced reoffer`(
+        disposition: BrowserProfileImportDisposition) async throws
+    {
+        let stub = BrowserImportTransportStub()
+        let status = Self.status(
+            profiles: [Self.chromeProfile],
+            state: BrowserProfileImportOutcome(status: disposition))
+        stub.statusJSON = try String(decoding: JSONEncoder().encode(status), as: UTF8.self)
+        let model = stub.makeModel()
+        let gate = ContinuationBox()
+        stub.beforeStatusResponse = {
+            await withCheckedContinuation { gate.continuation = $0 }
+        }
+        let forced = Task { await model.refresh(force: true) }
+        while gate.continuation == nil {
+            await Task.yield()
+        }
+
+        #expect(await !model.requestAutomaticOfferIfEligible())
+        #expect(stub.requests(for: "/system-profile-import/status").count == 1)
+        gate.continuation?.resume()
+        #expect(await forced.value == .offering)
+        #expect(model.phase == .offering(status))
+    }
+
+    @Test func `newer forced refresh owns the banner before either response arrives`() async {
+        let stub = BrowserImportTransportStub()
+        let model = stub.makeModel()
+        let olderGate = ContinuationBox()
+        stub.beforeStatusResponse = {
+            await withCheckedContinuation { olderGate.continuation = $0 }
+        }
+        let older = Task { await model.refresh(force: true) }
+        while olderGate.continuation == nil {
+            await Task.yield()
+        }
+
+        let newerGate = ContinuationBox()
+        stub.statusJSON = stub.statusJSON.replacingOccurrences(of: "null", with: #"{"status":"dismissed"}"#)
+        stub.beforeStatusResponse = {
+            await withCheckedContinuation { newerGate.continuation = $0 }
+        }
+        let newer = Task { await model.refresh(force: true) }
+        while newerGate.continuation == nil {
+            await Task.yield()
+        }
+        olderGate.continuation?.resume()
+        #expect(await older.value == .superseded)
+        #expect(model.phase == .hidden)
+        #expect(!model.importAvailable)
+        #expect(await !model.requestAutomaticOfferIfEligible())
+        #expect(stub.requests(for: "/system-profile-import/status").count == 2)
+
+        newerGate.continuation?.resume()
+        #expect(await newer.value == .offering)
+        #expect(model.phase == .offering(Self.status(
+            profiles: [Self.chromeProfile],
+            state: BrowserProfileImportOutcome(status: .dismissed))))
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func `older status response cannot replace newer availability`(
+        olderOffersBanner: Bool,
+        newerOffersBanner: Bool) async
+    {
+        let stub = BrowserImportTransportStub()
+        let model = stub.makeModel()
+        let gate = ContinuationBox()
+        stub.beforeStatusResponse = {
+            await withCheckedContinuation { gate.continuation = $0 }
+        }
+        let older = Task {
+            if olderOffersBanner {
+                _ = await model.refresh(force: true)
+            } else {
+                await model.refreshAvailability()
+            }
+        }
+        while gate.continuation == nil {
+            await Task.yield()
+        }
+
+        stub.statusJSON = stub.statusJSON.replacingOccurrences(of: #""enabled": true"#, with: #""enabled": false"#)
+        if newerOffersBanner {
+            await model.refresh(force: true)
+        } else {
+            await model.refreshAvailability()
+        }
+        #expect(!model.importAvailable)
+        gate.continuation?.resume()
+        await older.value
+        #expect(!model.importAvailable)
+        #expect(model.phase == .hidden)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func `availability reads preserve a pending forced offer using the latest status`(
+        availabilityFinishesFirst: Bool,
+        profileChanges: Bool) async throws
+    {
+        let stub = BrowserImportTransportStub()
+        let model = stub.makeModel()
+        let offerGate = ContinuationBox()
+        stub.beforeStatusResponse = {
+            await withCheckedContinuation { offerGate.continuation = $0 }
+        }
+        let offer = Task { await model.refresh(force: true) }
+        while offerGate.continuation == nil {
+            await Task.yield()
+        }
+
+        let latestStatus = BrowserProfileImportStatus(
+            enabled: true,
+            systemProfiles: [profileChanges
+                ? BrowserSystemProfile(browser: "brave", id: "Profile 1", name: "Work", hasCookies: true)
+                : Self.chromeProfile],
+            state: nil,
+            suggestedTarget: profileChanges ? "work-logins" : "imported")
+        stub.statusJSON = try String(decoding: JSONEncoder().encode(latestStatus), as: UTF8.self)
+        let availabilityGate = ContinuationBox()
+        stub.beforeStatusResponse = {
+            await withCheckedContinuation { availabilityGate.continuation = $0 }
+        }
+        let availability = Task { await model.refreshAvailability() }
+        while availabilityGate.continuation == nil {
+            await Task.yield()
+        }
+
+        if availabilityFinishesFirst {
+            availabilityGate.continuation?.resume()
+            await availability.value
+            offerGate.continuation?.resume()
+        } else {
+            offerGate.continuation?.resume()
+            availabilityGate.continuation?.resume()
+            await availability.value
+        }
+        #expect(await offer.value == .offering)
+        #expect(model.phase == .offering(latestStatus))
+        #expect(model.importAvailable)
+    }
+
+    @Test func `availability response stays withdrawn across a local mode round trip`() async {
+        let stub = BrowserImportTransportStub()
+        let eligibility = BrowserImportEligibilityGate()
+        eligibility.isLocalMode = true
+        let model = stub.makeModel(isLocalMode: { eligibility.isLocalMode })
+        let gate = ContinuationBox()
+        stub.beforeStatusResponse = {
+            await withCheckedContinuation { gate.continuation = $0 }
+        }
+        let availability = Task { await model.refreshAvailability() }
+        while gate.continuation == nil {
+            await Task.yield()
+        }
+        eligibility.isLocalMode = false
+        model.handleConnectionModeChange()
+        eligibility.isLocalMode = true
+        model.handleConnectionModeChange()
+        gate.continuation?.resume()
+        await availability.value
+        #expect(!model.importAvailable)
+    }
+
+    @Test(arguments: [false, true])
+    func `import completion cannot replace a newer local offer after a mode change`(fails: Bool) async {
+        let stub = BrowserImportTransportStub()
+        let eligibility = BrowserImportEligibilityGate()
+        eligibility.isLocalMode = true
+        let model = stub.makeModel(isLocalMode: { eligibility.isLocalMode })
+        await model.refresh(force: true)
+        if fails { stub.failingPaths = ["/profiles/import"] }
+        let gate = ContinuationBox()
+        stub.beforeImportResponse = {
+            await withCheckedContinuation { gate.continuation = $0 }
+        }
+        let importing = Task { await model.importProfile(Self.chromeProfile) }
+        while gate.continuation == nil {
+            await Task.yield()
+        }
+
+        eligibility.isLocalMode = false
+        model.handleConnectionModeChange()
+        #expect(model.phase == .hidden)
+        eligibility.isLocalMode = true
+        model.handleConnectionModeChange()
+        await model.refresh(force: true)
+        let currentPhase = BrowserProfileImportModel.Phase.offering(Self.status(profiles: [Self.chromeProfile]))
+        #expect(model.phase == currentPhase)
+        gate.continuation?.resume()
+        await importing.value
+        #expect(model.phase == currentPhase)
+        #expect(stub.requests(for: "/profiles/import").count == 1)
+    }
+
+    @Test func `forced refresh leaves an active import in control of its result`() async {
+        let stub = BrowserImportTransportStub()
+        let model = stub.makeModel()
+        await model.refresh(force: true)
+        let gate = ContinuationBox()
+        stub.beforeImportResponse = {
+            await withCheckedContinuation { gate.continuation = $0 }
+        }
+        let importing = Task { await model.importProfile(Self.chromeProfile) }
+        while gate.continuation == nil {
+            await Task.yield()
+        }
+
+        let requestCount = stub.requests.count
+        #expect(await model.refresh(force: true) == .offering)
+        #expect(stub.requests.count == requestCount)
+        #expect(model.phase == .importing(profile: Self.chromeProfile, target: "imported"))
+        await model.refreshAvailability()
+        gate.continuation?.resume()
+        await importing.value
+        #expect(model.phase == .imported(BrowserProfileImportResult(
+            into: "imported",
+            cookies: .init(total: 412, imported: 409))))
+    }
+
+    @Test func `import rechecks local eligibility before dispatch`() async {
+        let stub = BrowserImportTransportStub()
+        let eligibility = BrowserImportEligibilityGate()
+        eligibility.isLocalMode = true
+        let model = stub.makeModel(isLocalMode: { eligibility.isLocalMode })
+        await model.refresh(force: true)
+        eligibility.isLocalMode = false
+        await model.importProfile(Self.chromeProfile)
+        #expect(stub.requests(for: "/profiles/import").isEmpty)
     }
 
     @Test func `idle refresh never clobbers a visible outcome`() async {

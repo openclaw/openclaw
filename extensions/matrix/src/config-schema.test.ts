@@ -8,6 +8,21 @@ if (!MatrixConfigSchema) {
 }
 
 describe("MatrixConfigSchema SecretInput", () => {
+  it("preserves root and account join-introduction overrides without materializing defaults", () => {
+    const result = MatrixConfigSchema.safeParse({
+      joinIntro: false,
+      accounts: { work: { joinIntro: true, customField: 1 }, inherited: {} },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({
+        joinIntro: false,
+        accounts: { work: { joinIntro: true, customField: 1 }, inherited: {} },
+      });
+      expect(result.data).not.toHaveProperty("accounts.inherited.joinIntro");
+    }
+  });
+
   it("accepts SecretRef accessToken at top-level", () => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
@@ -23,6 +38,51 @@ describe("MatrixConfigSchema SecretInput", () => {
       password: { source: "env", provider: "default", id: "MATRIX_PASSWORD" },
     });
     expect(result.success).toBe(true);
+  });
+
+  it("accepts SecretRef accessToken and password on accounts", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accounts: {
+        work: {
+          joinIntro: true,
+          accessToken: { source: "store", provider: "default", id: "MATRIX_WORK_TOKEN" },
+          password: { source: "store", provider: "default", id: "MATRIX_WORK_PASSWORD" },
+          userId: "@work:example.org",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      throw new Error("expected schema parse to succeed");
+    }
+    expect(result.data).toMatchObject({
+      accounts: {
+        work: {
+          joinIntro: true,
+          accessToken: { source: "store", provider: "default", id: "MATRIX_WORK_TOKEN" },
+          password: { source: "store", provider: "default", id: "MATRIX_WORK_PASSWORD" },
+          userId: "@work:example.org",
+        },
+      },
+    });
+  });
+
+  it("publishes account credential SecretInput leaves for Control UI redaction hints", () => {
+    const accounts = (
+      MatrixChannelConfigSchema.schema as {
+        properties?: {
+          accounts?: {
+            additionalProperties?: {
+              properties?: Record<string, unknown>;
+            };
+          };
+        };
+      }
+    ).properties?.accounts?.additionalProperties?.properties;
+    expect(accounts).toHaveProperty("accessToken");
+    expect(accounts).toHaveProperty("password");
+    expect(accounts).toHaveProperty("joinIntro");
   });
 
   it("accepts dm threadReplies overrides", () => {

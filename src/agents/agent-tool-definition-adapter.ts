@@ -32,35 +32,19 @@ import {
 } from "./code-mode-control-tools.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
-import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
+import type { AgentTool, AgentToolResult } from "./runtime/index.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
 import type { ToolDefinition } from "./sessions/index.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { readToolOperatorHint } from "./tool-operator-hint.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult, payloadTextResult, ToolInputError } from "./tools/common.js";
 
 type AnyAgentTool = AgentTool;
 
-type ToolExecuteArgsCurrent = [
-  string,
-  unknown,
-  AbortSignal | undefined,
-  AgentToolUpdateCallback | undefined,
-  unknown,
-];
-type ToolExecuteArgsLegacy = [
-  string,
-  unknown,
-  AgentToolUpdateCallback | undefined,
-  unknown,
-  AbortSignal | undefined,
-];
-type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => unknown
-  ? P
-  : ToolExecuteArgsCurrent;
-type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteArgsCurrent;
+type ToolExecuteArgs = Parameters<ToolDefinition["execute"]>;
 const TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS = 600;
 const TOOL_ERROR_EXEC_COMMAND_HASH_CHARS = 16;
 const SENSITIVE_EXEC_ENV_VALUE = "[omitted exec env value]";
@@ -74,26 +58,15 @@ type ClientToolCallRecorder =
       discard?: (toolCallId: string, toolName: string) => void;
     };
 
-function isAbortSignal(value: unknown): value is AbortSignal {
-  return typeof value === "object" && value !== null && "aborted" in value;
-}
-
-function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteArgsLegacy {
-  const third = args[2];
-  const fifth = args[4];
-  if (typeof third === "function") {
-    return true;
-  }
-  return isAbortSignal(fifth);
-}
-
 function describeToolExecutionError(err: unknown): {
   message: string;
   stack?: string;
+  operatorHint?: string;
 } {
+  const operatorHint = readToolOperatorHint(err);
   if (err instanceof Error) {
     const message = err.message?.trim() ? err.message : String(err);
-    return { message, stack: err.stack };
+    return { message, stack: err.stack, ...(operatorHint ? { operatorHint } : {}) };
   }
   return { message: String(err) };
 }
@@ -130,8 +103,7 @@ function serializeToolParams(value: unknown): string {
   return Object.prototype.toString.call(value);
 }
 
-function formatToolParamPreview(label: string, value: unknown): string {
-  const serialized = serializeToolParams(value);
+function formatToolParamPreview(label: string, serialized: string): string {
   const redacted = redactToolDetail(serialized);
   const preview = sanitizeForConsole(redacted, TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS) ?? "<empty>";
   return `${label}=${preview}`;
@@ -225,11 +197,11 @@ function describeToolFailureInputs(params: {
 }): string {
   const rawParams = sanitizeToolFailureParamsForLog(params.toolName, params.rawParams);
   const effectiveParams = sanitizeToolFailureParamsForLog(params.toolName, params.effectiveParams);
-  const parts = [formatToolParamPreview("raw_params", rawParams)];
   const rawSerialized = serializeToolParams(rawParams);
+  const parts = [formatToolParamPreview("raw_params", rawSerialized)];
   const effectiveSerialized = serializeToolParams(effectiveParams);
   if (effectiveSerialized !== rawSerialized) {
-    parts.push(formatToolParamPreview("effective_params", effectiveParams));
+    parts.push(formatToolParamPreview("effective_params", effectiveSerialized));
   }
   return parts.join(" ");
 }
@@ -299,36 +271,17 @@ async function executeAdaptedToolOperation(params: {
       rawParams: params.rawParams,
       effectiveParams: params.getEffectiveParams(),
     });
-    logError(`[tools] ${params.normalizedToolName} failed: ${described.message} ${inputPreview}`);
+    const operatorHint = described.operatorHint ? ` ${described.operatorHint}` : "";
+    // Operator-only: the hint names containment configuration and stays out of the
+    // model-visible result below.
+    logError(
+      `[tools] ${params.normalizedToolName} failed: ${described.message}${operatorHint} ${inputPreview}`,
+    );
     return buildToolExecutionErrorResult({
       toolName: params.normalizedToolName,
       message: described.message,
     });
   }
-}
-
-function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
-  toolCallId: string;
-  params: unknown;
-  onUpdate: AgentToolUpdateCallback | undefined;
-  signal: AbortSignal | undefined;
-} {
-  if (isLegacyToolExecuteArgs(args)) {
-    const [toolCallId, params, onUpdate, _ctx, signal] = args;
-    return {
-      toolCallId,
-      params,
-      onUpdate,
-      signal,
-    };
-  }
-  const [toolCallId, params, signal, onUpdate] = args;
-  return {
-    toolCallId,
-    params,
-    onUpdate,
-    signal,
-  };
 }
 
 function attachAdapterExecutionPreparer<T extends ToolDefinition>(definition: T): T {
@@ -357,7 +310,7 @@ export function findClientToolNameConflicts(params: {
   for (const name of params.existingToolNames ?? []) {
     const trimmed = name.trim();
     if (trimmed) {
-      existingNormalized.add(normalizeToolName(trimmed));
+      existingNormalized.add(normalizeToolPolicyName(trimmed));
     }
   }
 
@@ -368,7 +321,7 @@ export function findClientToolNameConflicts(params: {
     if (!rawName) {
       continue;
     }
-    const normalizedName = normalizeToolName(rawName);
+    const normalizedName = normalizeToolPolicyName(rawName);
     if (existingNormalized.has(normalizedName)) {
       conflicts.add(rawName);
     }
@@ -397,10 +350,15 @@ export function isClientToolNameConflictError(err: unknown): err is Error {
 export function toToolDefinitions(
   tools: AnyAgentTool[],
   hookContext?: HookContext,
+  abortSignal?: AbortSignal,
 ): ToolDefinition[] {
+  // Adaptation installs policy hooks outside source tools. Bind their lifetime
+  // here too, so revoked generations cannot leave approvals waiting upstream.
+  const resolveAbortSignal = (signal?: AbortSignal) =>
+    signal && abortSignal ? AbortSignal.any([signal, abortSignal]) : (signal ?? abortSignal);
   return tools.map((tool) => {
     const name = tool.name || "tool";
-    const normalizedName = normalizeToolName(name);
+    const normalizedName = normalizeToolPolicyName(name);
     const beforeHookWrapped = isToolWrappedWithBeforeToolCallHook(tool);
     const sourcePreparer = getInternalToolExecutionPreparer(tool);
     const definition = {
@@ -413,7 +371,9 @@ export function toToolDefinitions(
       prepareArguments: tool.prepareArguments,
       executionMode: tool.executionMode,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
-        const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+        const [toolCallId, params, callSignal, onUpdate] = args;
+        const signal = resolveAbortSignal(callSignal);
+        signal?.throwIfAborted();
         const control = readInternalExecutionControl(args[4]);
         recordStructuredReplayTrustForToolCall(toolCallId, tool, hookContext?.runId);
         let executeParams = params;
@@ -474,6 +434,7 @@ export function toToolDefinitions(
               // A voice grant binds the post-finalizer execution shape. Consuming it
               // earlier would let later alias or tool-owned rewrites escape the grant.
               const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
+                toolCallId,
                 toolName: name,
                 params: executeParams,
                 ctx: hookContext,
@@ -499,6 +460,8 @@ export function toToolDefinitions(
       return beforeHookWrapped ? definition : attachAdapterExecutionPreparer(definition);
     }
     return attachInternalToolExecutionPreparer(definition, async (params) => {
+      const signal = resolveAbortSignal(params.signal);
+      signal?.throwIfAborted();
       recordStructuredReplayTrustForToolCall(params.toolCallId, tool, hookContext?.runId);
       const settle = (run: () => Promise<unknown>) =>
         executeAdaptedToolOperation({
@@ -506,7 +469,7 @@ export function toToolDefinitions(
           normalizedToolName: normalizedName,
           rawParams: params.args,
           getEffectiveParams: () => params.args,
-          signal: params.signal,
+          signal,
           hookContext,
           run,
         });
@@ -544,7 +507,7 @@ export function toToolDefinitions(
         prepared = await sourcePreparer({
           toolCallId: params.toolCallId,
           args: params.args,
-          ...(params.signal ? { signal: params.signal } : {}),
+          ...(signal ? { signal } : {}),
           ...(params.onUpdate ? { onUpdate: params.onUpdate } : {}),
         });
       } catch (error) {
@@ -557,7 +520,10 @@ export function toToolDefinitions(
       return {
         kind: "ready",
         args: ready.args,
-        execute: (onImplementationStart) => settle(() => ready.execute(onImplementationStart)),
+        execute: (onImplementationStart) => {
+          signal?.throwIfAborted();
+          return settle(() => ready.execute(onImplementationStart));
+        },
         dispose: ready.dispose,
       };
     });
@@ -622,7 +588,7 @@ export function toClientToolDefinitions(
       description: func.description ?? "",
       parameters: func.parameters as ToolDefinition["parameters"],
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
-        const { toolCallId, params, signal } = splitToolExecuteArgs(args);
+        const [toolCallId, params, signal] = args;
         const control = readInternalExecutionControl(args[4]);
         if (onClientToolCall && typeof onClientToolCall !== "function") {
           onClientToolCall.reserve?.(toolCallId, func.name);
@@ -662,6 +628,7 @@ export function toClientToolDefinitions(
             return { content: [], details: { status: "skipped" } };
           }
           const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
+            toolCallId,
             toolName: func.name,
             params: paramsRecord,
             ctx: hookContext,
@@ -677,6 +644,7 @@ export function toClientToolDefinitions(
               runId: hookContext?.runId,
             });
           }
+          signal?.throwIfAborted();
           decision?.start?.();
           // Notify handler that a client tool was called.
           if (onClientToolCall) {

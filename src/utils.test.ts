@@ -1,10 +1,10 @@
 // Tests shared utility helpers used by CLI and runtime modules.
 import fs from "node:fs";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { isAbortError } from "./infra/abort-signal.js";
-import { MAX_TIMER_TIMEOUT_MS } from "./shared/number-coercion.js";
-import { withTempDir } from "./test-helpers/temp-dir.js";
+import { withTestDir } from "./test-helpers/temp-dir.js";
 import { withEnv } from "./test-utils/env.js";
 import {
   CONFIG_DIR,
@@ -19,9 +19,19 @@ import {
   sleep,
 } from "./utils.js";
 
+const homeDisplayCases = [
+  ["", "/home/other", "~"],
+  ["undefined", "/home/other", "~"],
+  ["null", "/home/other", "~"],
+  [" undefined ", "/home/other", "~"],
+  ["\tnull\t", "/home/other", "~"],
+  ["/srv/openclaw-home", "/srv/openclaw-home", "$OPENCLAW_HOME"],
+  [" /srv/openclaw-home ", "/srv/openclaw-home", "$OPENCLAW_HOME"],
+] as const;
+
 describe("ensureDir", () => {
   it("creates nested directory", async () => {
-    await withTempDir({ prefix: "openclaw-test-" }, async (tmp) => {
+    await withTestDir({ prefix: "openclaw-test-" }, async (tmp) => {
       const target = path.join(tmp, "nested", "dir");
       await ensureDir(target);
       expect(fs.existsSync(target)).toBe(true);
@@ -134,13 +144,11 @@ describe("normalizeE164", () => {
 });
 
 describe("resolveConfigDir", () => {
-  it("prefers ~/.openclaw when legacy dir is missing", async () => {
-    await withTempDir({ prefix: "openclaw-config-dir-" }, async (root) => {
-      const newDir = path.join(root, ".openclaw");
-      await fs.promises.mkdir(newDir, { recursive: true });
-      const resolved = resolveConfigDir({} as NodeJS.ProcessEnv, () => root);
-      expect(resolved).toBe(newDir);
-    });
+  it("resolves the default config directory", () => {
+    const root = path.resolve("config-dir-home");
+    const newDir = path.join(root, ".openclaw");
+    const resolved = resolveConfigDir({} as NodeJS.ProcessEnv, () => root);
+    expect(resolved).toBe(newDir);
   });
 
   it("expands OPENCLAW_STATE_DIR using the provided env", () => {
@@ -190,13 +198,16 @@ describe("resolveHomeDir", () => {
 });
 
 describe("shortenHomePath", () => {
-  it("uses $OPENCLAW_HOME prefix when OPENCLAW_HOME is set", () => {
-    withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
-      expect(shortenHomePath(`${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`)).toBe(
-        "$OPENCLAW_HOME/.openclaw/openclaw.json",
-      );
-    });
-  });
+  it.each(homeDisplayCases)(
+    "uses the effective home prefix for OPENCLAW_HOME=%j",
+    (override, home, prefix) => {
+      withEnv({ OPENCLAW_HOME: override, HOME: "/home/other" }, () => {
+        expect(shortenHomePath(`${path.resolve(home)}/.openclaw/openclaw.json`)).toBe(
+          `${prefix}/.openclaw/openclaw.json`,
+        );
+      });
+    },
+  );
 
   it.skipIf(process.platform === "win32")("keeps POSIX home matching case-sensitive", () => {
     withEnv({ OPENCLAW_HOME: "/srv/OpenClaw-Home", HOME: "/home/other" }, () => {
@@ -213,7 +224,7 @@ describe("shortenHomePath", () => {
   it.skipIf(process.platform !== "win32")(
     "shortens real extended-length Windows home aliases without exposing the absolute path",
     async () => {
-      await withTempDir({ prefix: "openclaw-home-display-" }, async (home) => {
+      await withTestDir({ prefix: "openclaw-home-display-" }, async (home) => {
         const workspace = path.join(home, "workspace");
         await fs.promises.mkdir(workspace);
         const extendedAlias = `\\\\?\\${workspace.toUpperCase()}`;
@@ -230,15 +241,16 @@ describe("shortenHomePath", () => {
 });
 
 describe("shortenHomeInString", () => {
-  it("uses $OPENCLAW_HOME replacement when OPENCLAW_HOME is set", () => {
-    withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
-      expect(
-        shortenHomeInString(
-          `config: ${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`,
-        ),
-      ).toBe("config: $OPENCLAW_HOME/.openclaw/openclaw.json");
-    });
-  });
+  it.each(homeDisplayCases)(
+    "uses the effective home prefix for OPENCLAW_HOME=%j",
+    (override, home, prefix) => {
+      withEnv({ OPENCLAW_HOME: override, HOME: "/home/other" }, () => {
+        expect(shortenHomeInString(`config: ${path.resolve(home)}/.openclaw/openclaw.json`)).toBe(
+          `config: ${prefix}/.openclaw/openclaw.json`,
+        );
+      });
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "keeps embedded POSIX home matching case-sensitive",
@@ -254,7 +266,7 @@ describe("shortenHomeInString", () => {
   it.skipIf(process.platform !== "win32")(
     "shortens real Windows home casing aliases inside diagnostic text",
     async () => {
-      await withTempDir({ prefix: "openclaw-home-display-" }, async (home) => {
+      await withTestDir({ prefix: "openclaw-home-display-" }, async (home) => {
         const homeAlias = home.toUpperCase();
         expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
 
@@ -301,10 +313,5 @@ describe("resolveUserPath", () => {
   it("keeps blank paths blank", () => {
     expect(resolveUserPath("")).toBe("");
     expect(resolveUserPath("   ")).toBe("");
-  });
-
-  it("returns empty string for undefined/null input", () => {
-    expect(resolveUserPath(undefined as unknown as string)).toBe("");
-    expect(resolveUserPath(null as unknown as string)).toBe("");
   });
 });

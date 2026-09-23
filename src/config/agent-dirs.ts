@@ -1,14 +1,10 @@
 import fs from "node:fs";
 // Resolves agent-specific config and workspace directories.
-import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries, resolveAgentConfig } from "../agents/agent-scope-config.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { listAgentEntries, resolveEffectiveAgentDir } from "../agents/agent-scope-config.js";
 import { isPathCaseInsensitive } from "../infra/path-case.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveUserPath } from "../utils.js";
-import { resolveStateDir } from "./paths.js";
 import type { OpenClawConfig } from "./types.js";
 
 type DuplicateAgentDir = {
@@ -94,33 +90,18 @@ function collectReferencedAgentIds(cfg: OpenClawConfig): string[] {
   return [...ids];
 }
 
-function resolveEffectiveAgentDir(
-  cfg: OpenClawConfig,
-  agentId: string,
-  deps?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
-): string {
-  const id = normalizeAgentId(agentId);
-  const configured = resolveAgentConfig(cfg, id)?.agentDir;
-  const trimmed = configured?.trim();
-  if (trimmed) {
-    return resolveUserPath(trimmed);
-  }
-  const env = deps?.env ?? process.env;
-  const root = resolveStateDir(
-    env,
-    deps?.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir)),
-  );
-  return path.join(root, "agents", id, "agent");
-}
-
 /** Finds agent ids whose effective agentDir would share auth/session state. */
 export function findDuplicateAgentDirs(
   cfg: OpenClawConfig,
   deps?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
 ): DuplicateAgentDir[] {
+  const agentIds = collectReferencedAgentIds(cfg);
+  if (agentIds.length < 2) {
+    return [];
+  }
   const byDir = new Map<string, { agentDir: string; agentIds: string[] }>();
 
-  for (const agentId of collectReferencedAgentIds(cfg)) {
+  for (const agentId of agentIds) {
     const agentDir = resolveEffectiveAgentDir(cfg, agentId, deps);
     const key = canonicalizeAgentDir(agentDir);
     const entry = byDir.get(key);
@@ -144,7 +125,7 @@ export function formatDuplicateAgentDirError(dups: DuplicateAgentDir[]): string 
     ...dups.map((d) => `- ${d.agentDir}: ${d.agentIds.map((id) => `"${id}"`).join(", ")}`),
     "",
     "Fix: remove the shared agents.entries.*.agentDir override (or give each agent its own directory).",
-    "If you want to share credentials, copy auth-profiles.json instead of sharing the entire agentDir.",
+    "Auth profiles live in each agent's SQLite store, so a shared agentDir is not how credentials are shared: give each agent its own directory and either leave its store empty to inherit the main agent's profiles, or log it in with `openclaw models auth login`.",
   ];
   return lines.join("\n");
 }

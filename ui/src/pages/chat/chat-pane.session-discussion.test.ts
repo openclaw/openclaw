@@ -4,8 +4,11 @@ import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionDiscussionInfo } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
+import {
+  createSessionCapabilityFixture,
+  createTestChatPane,
+  type TestChatPane,
+} from "./chat-pane.test-support.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import "./components/session-discussion-panel.ts";
 import { openSlot } from "./sidebar-layout.ts";
@@ -33,7 +36,7 @@ function createDiscussionPane(params: {
     throw new Error(`unexpected method ${method}`);
   });
   const client = { request } as unknown as GatewayBrowserClient;
-  const created = createTestChatPane({ client, sessions: {} as SessionCapability });
+  const created = createTestChatPane({ client, sessions: createSessionCapabilityFixture() });
   const pane = created.pane as DiscussionTestPane;
   const state = created.state;
   (pane.context.gateway.snapshot as { hello: unknown }).hello = {
@@ -47,21 +50,18 @@ function createDiscussionPane(params: {
   return { pane, state, updateSidebarLayout, request };
 }
 
-describe("chat pane session discussion auto-show", () => {
-  it("auto-shows the discussion slot when the probe reports an open discussion", async () => {
-    const { pane, state, updateSidebarLayout } = createDiscussionPane({
+describe("chat pane session discussion", () => {
+  it("does not auto-show an open discussion", async () => {
+    const { pane, updateSidebarLayout } = createDiscussionPane({
       info: { state: "open", embedUrl: "https://clack.example/embed/c1" },
     });
 
     await pane.probeSessionDiscussion(SESSION_KEY);
 
-    expect(updateSidebarLayout).toHaveBeenCalledTimes(1);
-    expect(
-      state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
-    ).toEqual(["discussion"]);
+    expect(updateSidebarLayout).not.toHaveBeenCalled();
   });
 
-  it("keeps the reported external URL with the promoted discussion panel", async () => {
+  it("keeps the reported external URL with the discussion panel", async () => {
     const openUrl = "https://clack.example/channels/c1";
     const { pane, state } = createDiscussionPane({
       info: { state: "open", embedUrl: "https://clack.example/embed/c1", openUrl },
@@ -137,7 +137,8 @@ describe("chat pane session discussion auto-show", () => {
     expect(action?.ariaLabel).toBe("Hide discussion");
     expect(action?.getAttribute("aria-pressed")).toBe("true");
     action?.click();
-    expect(state.sidebarLayout.columns).toEqual([]);
+    expect(state.sidebarLayout.columns[0]?.panels).toEqual([]);
+    expect(state.sidebarLayout.open).toBe(false);
     expect(updateSidebarLayout).toHaveBeenCalledTimes(2);
 
     container.remove();
@@ -148,12 +149,17 @@ describe("chat pane session discussion auto-show", () => {
       info: { state: "open", embedUrl: "https://clack.example/embed/c1" },
       detailOpen: true,
     });
+    const container = document.createElement("div");
+    document.body.append(container);
 
     await pane.probeSessionDiscussion(SESSION_KEY);
+    render(pane.renderSessionDiscussionAction(), container);
+    container.querySelector<HTMLButtonElement>(".chat-session-discussion-toggle")?.click();
 
     expect(
       state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
     ).toEqual(["detail", "discussion"]);
+    container.remove();
   });
 
   it("opens as a collapsed tab when two columns cannot fit side by side", async () => {
@@ -162,12 +168,17 @@ describe("chat pane session discussion auto-show", () => {
       detailOpen: true,
     });
     pane.paneWidth = 700;
+    const container = document.createElement("div");
+    document.body.append(container);
 
     await pane.probeSessionDiscussion(SESSION_KEY);
+    render(pane.renderSessionDiscussionAction(), container);
+    container.querySelector<HTMLButtonElement>(".chat-session-discussion-toggle")?.click();
 
     expect(
       state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
     ).toEqual(["detail", "discussion"]);
+    container.remove();
   });
 
   it("ignores a stale none callback after switching sessions", async () => {
@@ -195,21 +206,5 @@ describe("chat pane session discussion auto-show", () => {
     });
 
     expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("discussion");
-  });
-
-  it("does not auto-show when the pane switched sessions before the probe resolved", async () => {
-    let resolveInfo!: (value: SessionDiscussionInfo) => void;
-    const { pane, state, updateSidebarLayout } = createDiscussionPane({
-      info: new Promise<SessionDiscussionInfo>((resolve) => {
-        resolveInfo = resolve;
-      }),
-    });
-
-    const probe = pane.probeSessionDiscussion(SESSION_KEY);
-    state.sessionKey = "agent:main:other";
-    resolveInfo({ state: "open", embedUrl: "https://clack.example/embed/c1" });
-    await probe;
-
-    expect(updateSidebarLayout).not.toHaveBeenCalled();
   });
 });

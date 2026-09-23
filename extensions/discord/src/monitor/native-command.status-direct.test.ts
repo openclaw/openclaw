@@ -3,6 +3,7 @@ import { ChannelType } from "discord-api-types/v10";
 import type { dispatchChannelInboundTurn } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { nativeCommandRuntime } from "./native-command.runtime.js";
 import { createMockCommandInteraction as createInteraction } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
@@ -82,13 +83,25 @@ function createConfig(params?: { requireMention?: boolean }): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-async function createStatusCommand(cfg: OpenClawConfig) {
+async function createStatusCommand(cfg: OpenClawConfig, pluginExecute?: ReturnType<typeof vi.fn>) {
   return createDiscordNativeCommand({
     command: {
       name: "status",
       description: "Status",
       acceptsArgs: false,
-    },
+      ...(pluginExecute
+        ? {
+            requireAuth: true,
+            prepareDispatch: () => ({
+              kind: "plugin" as const,
+              invocation: {
+                runtime: { execute: pluginExecute },
+                selection: Object.freeze({}),
+              },
+            }),
+          }
+        : {}),
+    } as never,
     cfg,
     discordConfig: cfg.channels?.discord ?? {},
     accountId: "default",
@@ -99,7 +112,7 @@ async function createStatusCommand(cfg: OpenClawConfig) {
 }
 
 function setDefaultRouteState() {
-  nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = async (params) => ({
+  nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = (params) => ({
     route: {
       agentId: "main",
       channel: "discord",
@@ -121,7 +134,6 @@ function setDefaultRouteState() {
     boundSessionKey: undefined,
     configuredRoute: null,
     configuredBinding: null,
-    bindingReadiness: null,
   });
 }
 
@@ -182,8 +194,6 @@ describe("discord native /status", () => {
       fileName: "status.png",
     });
     nativeCommandRuntime.dispatchChannelInboundTurn = dispatchChannelInboundTurnForTest;
-    nativeCommandRuntime.matchPluginCommand = (() =>
-      null) as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand;
     setDefaultRouteState();
   });
 
@@ -204,22 +214,29 @@ describe("discord native /status", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
-  it("prioritizes direct status replies over matching plugin commands", async () => {
-    const executePluginCommand = vi.fn(async () => ({ text: "plugin status" }));
-    nativeCommandRuntime.matchPluginCommand = (() => ({
-      command: {
-        name: "status",
-        description: "Plugin status",
-        pluginId: "status-plugin",
-        acceptsArgs: false,
-        handler: async () => ({ text: "plugin status" }),
-      },
-      args: undefined,
-    })) as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand;
-    nativeCommandRuntime.executePluginCommand =
-      executePluginCommand as typeof import("openclaw/plugin-sdk/plugin-runtime").executePluginCommand;
+  it("delivers an embed-only direct status reply without reporting it unavailable", async () => {
+    const embeds = [{ title: "Status", description: "All systems operational" }];
+    runtimeModuleMocks.resolveDirectStatusReplyForSession.mockResolvedValue({
+      channelData: { discord: { embeds } },
+    });
     const cfg = createConfig();
     const command = await createStatusCommand(cfg);
+    const interaction = createInteraction();
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(runtimeModuleMocks.dispatchReplyWithDispatcher).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledOnce();
+    expect(firstMockArg(interaction.followUp, "interaction.followUp")).toStrictEqual({
+      embeds,
+      ephemeral: true,
+    });
+  });
+
+  it("prioritizes direct status replies over matching plugin commands", async () => {
+    const executePluginCommand = vi.fn(async () => ({ text: "plugin status" }));
+    const cfg = createConfig();
+    const command = await createStatusCommand(cfg, executePluginCommand);
     const interaction = createInteraction();
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
@@ -296,3 +313,5 @@ describe("discord native /status", () => {
     expect(statusCall.defaultGroupActivation()).toBe("always");
   });
 });
+
+installDiscordIngressTestRuntime();

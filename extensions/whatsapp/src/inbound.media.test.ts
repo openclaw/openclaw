@@ -172,13 +172,16 @@ vi.mock("openclaw/plugin-sdk/media-store", async () => {
 });
 
 vi.mock("./runtime.js", async () => {
+  const { createPluginRuntimeMock } = await import("openclaw/plugin-sdk/channel-test-helpers");
   const { createChannelIngressQueueForTests: createChannelIngressQueue } = await Promise.resolve(
     vi.importActual<typeof import("openclaw/plugin-sdk/plugin-state-test-runtime")>(
       "openclaw/plugin-sdk/plugin-state-test-runtime",
     ),
   );
   const stateDir = `/tmp/openclaw-whatsapp-inbound-media-${Date.now()}-${Math.random()}`;
+  const channelRuntime = createPluginRuntimeMock().channel;
   return {
+    getWhatsAppChannelRuntime: () => channelRuntime,
     getOptionalWhatsAppRuntime: () => undefined,
     getWhatsAppRuntime: () => ({
       state: {
@@ -263,9 +266,11 @@ const QUOTED_SYNTHETIC_API_KEY = "synthetic-quoted-api-key-never-real";
 const DEPLOYMENT_REDACTION_SENTINEL = "deployment-secret-never-real";
 
 async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
+  // Saturated no-isolate suite runs can stall the worker (sync module fetches
+  // against the shared transform queue) well past a 2s delivery budget.
   await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1), {
     interval: 1,
-    timeout: 2_000,
+    timeout: 5_000,
   });
   return onMessage.mock.calls[0]?.[0];
 }

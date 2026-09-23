@@ -10,7 +10,7 @@
   "types": "./dist/index.d.mts",
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.6.5"
   },
   "exports": {
     ".": {
@@ -32,6 +32,11 @@
       "types": "./dist/model-catalog-normalize.d.mts",
       "import": "./dist/model-catalog-normalize.mjs",
       "default": "./dist/model-catalog-normalize.mjs"
+    },
+    "./model-catalog-pricing": {
+      "types": "./dist/model-catalog-pricing.d.mts",
+      "import": "./dist/model-catalog-pricing.mjs",
+      "default": "./dist/model-catalog-pricing.mjs"
     },
     "./model-catalog-types": {
       "types": "./dist/model-catalog-types.d.mts",

@@ -1,52 +1,87 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import {
+  resolvePathPrefixSync,
+  writeFileWindowFully,
+} from "openclaw/plugin-sdk/file-access-runtime";
+import type { MemoryWorkspaceFiles } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { getMemoryWorkspaceMaintenance, readWorkspaceText } from "./memory-workspace-files.js";
+
+type MemoryFileCommit = Parameters<
+  NonNullable<MemoryWorkspaceFiles["maintenance"]>["commitContent"]
+>[0];
+
+export function buildPromotionMarker(candidateKey: string): string {
+  return `<!-- openclaw-memory-promotion:${candidateKey} -->`;
+}
+
+export function extractPromotionKeys(content: string): string[] {
+  // Source paths can contain spaces; the comment boundary terminates a key.
+  return [...content.matchAll(/<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->/giu)]
+    .map((match) => match[1]?.trim())
+    .filter((key): key is string => Boolean(key));
+}
 
 export class MemoryWriteConflictError extends Error {
-  constructor() {
-    super("MEMORY.md changed before the dreaming write could commit");
+  constructor(message = "MEMORY.md changed before the dreaming write could commit") {
+    super(message);
     this.name = "MemoryWriteConflictError";
   }
 }
 
-export async function resolveMemoryWritePath(filePath: string): Promise<string> {
-  try {
-    return await fs.realpath(filePath);
-  } catch (err) {
-    const hasTrailingSeparator =
-      filePath.endsWith(path.sep) ||
-      (process.platform === "win32" && filePath.endsWith(path.posix.sep));
-    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT" || hasTrailingSeparator) {
-      throw err;
-    }
-  }
+export class MemoryAtomicPublicationError extends Error {
+  readonly code: ReturnType<typeof extractErrorCode>;
 
-  // Canonicalize each parent before applying a relative link target. Lexical
-  // normalization would change `..` semantics when an earlier component is a symlink.
-  const parentPath = await fs.realpath(path.dirname(filePath));
-  const canonicalPath = path.join(parentPath, path.basename(filePath));
-  let linkTarget: string;
-  try {
-    linkTarget = await fs.readlink(canonicalPath);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === "ENOENT" || code === "EINVAL") {
-      return canonicalPath;
-    }
-    throw err;
+  constructor(
+    readonly publication: "uncertain" | "committed",
+    cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = cause instanceof Error ? cause.name : "Error";
+    this.code = extractErrorCode(cause);
   }
-  const isWindowsRootRelative = process.platform === "win32" && /^[\\/](?![\\/])/.test(linkTarget);
-  const targetPath = isWindowsRootRelative
-    ? `${path.parse(parentPath).root.replace(/[\\/]$/, "")}${linkTarget}`
-    : path.isAbsolute(linkTarget)
-      ? linkTarget
-      : `${parentPath}${parentPath.endsWith(path.sep) ? "" : path.sep}${linkTarget}`;
-  return await resolveMemoryWritePath(targetPath);
 }
 
-export async function readMemoryContent(filePath: string): Promise<string> {
-  return await fs.readFile(filePath, "utf-8").catch((error: unknown) => {
+export async function resolveMemoryWritePath(
+  filePath: string,
+  workspaceDir?: string,
+): Promise<string> {
+  const files = workspaceDir ? getMemoryWorkspaceMaintenance(workspaceDir) : undefined;
+  if (files) {
+    return await files.resolveWritePath(filePath);
+  }
+  // Keep existing-file lookups asynchronous where realpath preserves physical traversal.
+  if (!process.versions.bun || process.platform === "win32") {
+    try {
+      return await fs.realpath(filePath);
+    } catch (error) {
+      if (extractErrorCode(error) !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  const { existingPath, unresolvedSegments } = resolvePathPrefixSync(filePath);
+  if (unresolvedSegments.length === 0) {
+    return existingPath;
+  }
+  // Only the leaf may be missing; retain unresolved dots and trailing separators.
+  if (unresolvedSegments.length !== 1) {
+    throw Object.assign(new Error(`ENOENT: no such file or directory, realpath '${filePath}'`), {
+      code: "ENOENT",
+      path: filePath,
+      syscall: "realpath",
+    });
+  }
+  return path.join(existingPath, unresolvedSegments[0]!);
+}
+
+export async function readMemoryContent(filePath: string, workspaceDir?: string): Promise<string> {
+  return await (
+    workspaceDir ? readWorkspaceText(workspaceDir, filePath) : fs.readFile(filePath, "utf-8")
+  ).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return "";
     }
@@ -63,9 +98,10 @@ async function writeExistingMemoryInPlace(params: {
   filePath: string;
   expectedContent: string;
   content: string;
+  conflictMessage?: string;
 }): Promise<boolean> {
   if ((await readMemoryContent(params.filePath)) !== params.expectedContent) {
-    throw new MemoryWriteConflictError();
+    throw new MemoryWriteConflictError(params.conflictMessage);
   }
   let handle: Awaited<ReturnType<typeof fs.open>>;
   try {
@@ -78,6 +114,19 @@ async function writeExistingMemoryInPlace(params: {
     await handle.truncate(Buffer.byteLength(params.content));
     await handle.sync();
     return true;
+  } catch (error) {
+    const original = Buffer.from(params.expectedContent, "utf-8");
+    try {
+      await writeFileWindowFully(handle, original, 0);
+      await handle.truncate(original.length);
+      await handle.sync();
+    } catch (restoreError) {
+      throw new Error(
+        `${path.basename(params.filePath)} in-place write failed and restoring the original content also failed`,
+        { cause: restoreError },
+      );
+    }
+    throw error;
   } finally {
     await handle.close();
   }
@@ -87,45 +136,95 @@ export function hashMemoryContent(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-export async function writeMemoryContent(params: {
-  memoryPath: string;
-  memoryWritePath: string;
-  expectedHash?: string;
-  expectedContent?: string;
-  allowInPlaceFallback?: boolean;
-  content: string;
-}): Promise<void> {
-  const memoryDirMode = (await fs.stat(path.dirname(params.memoryWritePath))).mode & 0o7777;
-  let renameCommitted = false;
-  const trackedRename: typeof fs.rename = async (source, destination) => {
-    if (
-      params.expectedHash &&
-      hashMemoryContent(await readMemoryContent(params.memoryWritePath)) !== params.expectedHash
-    ) {
-      throw new MemoryWriteConflictError();
+export async function commitMemoryContent(
+  params: MemoryFileCommit & { workspaceDir?: string },
+): Promise<void> {
+  const files = params.workspaceDir
+    ? getMemoryWorkspaceMaintenance(params.workspaceDir)
+    : undefined;
+  if (files) {
+    const { workspaceDir: _workspaceDir, ...request } = params;
+    try {
+      return await files.commitContent(request);
+    } catch (error) {
+      // Preserve the native caller's conflict and publication handling across IPC.
+      if (error instanceof Error && error.name === "MemoryWriteConflictError") {
+        throw new MemoryWriteConflictError(error.message);
+      }
+      if (
+        error &&
+        typeof error === "object" &&
+        "publication" in error &&
+        (error.publication === "uncertain" || error.publication === "committed")
+      ) {
+        throw new MemoryAtomicPublicationError(error.publication, error);
+      }
+      throw error;
     }
-    // External editors can still write between this check and rename. OpenClaw writers
-    // are serialized; policy accepts this millisecond-wide race because the preimage is recoverable.
-    await fs.rename(source, destination);
-    renameCommitted = true;
-  };
+  }
+  if (params.content === null) {
+    if ((await readMemoryContent(params.filePath)) !== params.expectedContent) {
+      throw new MemoryWriteConflictError(params.conflictMessage);
+    }
+    // Unlink is atomic; the preimage check preserves external edits made after planning.
+    await fs.unlink(params.filePath);
+    return;
+  }
+  const memoryDirMode = (await fs.stat(path.dirname(params.filePath))).mode & 0o7777;
+  const expectedHash = params.expectedHash;
+  const replacementContent = params.content;
+  const publication: {
+    state: "unattempted" | "unchanged-after-rejection" | "uncertain" | "committed";
+  } = { state: "unattempted" };
   try {
     await replaceFileAtomic({
-      filePath: params.memoryWritePath,
+      filePath: params.filePath,
       content: params.content,
       dirMode: memoryDirMode,
       mode: 0o600,
       preserveExistingMode: true,
-      tempPrefix: `${path.basename(params.memoryPath)}.promotion`,
+      tempPrefix: params.tempPrefix,
       syncTempFile: true,
       syncParentDir: true,
       throwOnCleanupError: true,
+      beforeRename: async () => {
+        if (
+          params.expectedHash &&
+          hashMemoryContent(await readMemoryContent(params.filePath)) !== params.expectedHash
+        ) {
+          throw new MemoryWriteConflictError(params.conflictMessage);
+        }
+        // OpenClaw writers are serialized. The recoverable preimage covers the
+        // accepted race with external editors between this check and rename.
+      },
       fileSystem: {
         promises: {
           mkdir: fs.mkdir,
           chmod: fs.chmod,
           writeFile: fs.writeFile,
-          rename: trackedRename,
+          rename: async (from, to) => {
+            publication.state = "uncertain";
+            try {
+              await fs.rename(from, to);
+            } catch (error) {
+              if (
+                isAtomicReplacePermissionError(error) &&
+                expectedHash &&
+                hashMemoryContent(replacementContent) !== expectedHash
+              ) {
+                // Errno alone proves no outcome. Reconcile this rejected rename's target.
+                try {
+                  if (hashMemoryContent(await readMemoryContent(String(to))) === expectedHash) {
+                    publication.state = "unchanged-after-rejection";
+                  }
+                } catch {
+                  // An unavailable preimage leaves the dispatched mutation uncertain.
+                }
+              }
+              throw error;
+            }
+            publication.state = "committed";
+          },
           copyFile: fs.copyFile,
           unlink: fs.unlink,
           rm: fs.rm,
@@ -138,21 +237,20 @@ export async function writeMemoryContent(params: {
   } catch (error) {
     // Append-only promotion retains the shipped writable-file fallback when
     // directory ACLs block temp-file replacement; consolidation never uses it.
-    if (renameCommitted) {
-      throw new Error("MEMORY.md rename committed before a later write step failed", {
-        cause: error,
-      });
-    }
     if (
       !params.allowInPlaceFallback ||
       params.expectedContent === undefined ||
       !isAtomicReplacePermissionError(error) ||
       !(await writeExistingMemoryInPlace({
-        filePath: params.memoryWritePath,
+        filePath: params.filePath,
         expectedContent: params.expectedContent,
         content: params.content,
+        conflictMessage: params.conflictMessage,
       }))
     ) {
+      if (publication.state === "uncertain" || publication.state === "committed") {
+        throw new MemoryAtomicPublicationError(publication.state, error);
+      }
       throw error;
     }
   }

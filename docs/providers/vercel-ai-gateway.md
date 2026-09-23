@@ -33,6 +33,10 @@ refs such as `vercel-ai-gateway/openai/gpt-5.5` and
     ```bash
     openclaw plugins install @openclaw/vercel-ai-gateway-provider
     ```
+
+    Installation applies to a running Gateway automatically; otherwise it takes effect
+    on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
+
   </Step>
   <Step title="Set the API key">
     ```bash
@@ -60,7 +64,7 @@ refs such as `vercel-ai-gateway/openai/gpt-5.5` and
 ## Non-interactive example
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice ai-gateway-api-key \
   --ai-gateway-api-key "$AI_GATEWAY_API_KEY"

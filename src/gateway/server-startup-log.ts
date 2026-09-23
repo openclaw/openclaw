@@ -3,32 +3,22 @@
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import chalk from "chalk";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { resolveDefaultAgentId, resolveAgentConfig } from "../agents/agent-scope.js";
+import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { formatFastModeValue, resolveFastModeState } from "../agents/fast-mode.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
-import { legacyModelKey, modelKey } from "../agents/model-ref-shared.js";
 import {
   buildConfiguredModelCatalog,
   resolveConfiguredModelRef,
 } from "../agents/model-selection-shared.js";
+import { resolveConfiguredThinkingDefaultCore } from "../agents/model-thinking-default-core.js";
 import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "../security/dangerous-config-flags-current.js";
-
-type StartupThinkLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max"
-  | "ultra";
 
 /** Emit startup summary lines after Gateway bind and plugin loading complete. */
 export async function logGatewayStartup(params: {
@@ -48,6 +38,7 @@ export async function logGatewayStartup(params: {
 }) {
   const { provider: agentProvider, model: agentModel } = resolveConfiguredModelRef({
     cfg: params.cfg,
+    agentId: tryResolveAmbientOwnerAgentId(params.cfg),
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -67,6 +58,14 @@ export async function logGatewayStartup(params: {
     `http server listening (${formatReadyDetails(params.loadedPluginIds, startupDurationLabel)})`,
   );
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
+  const sqliteLibrary = ensureSqliteLibrarySelected();
+  if (sqliteLibrary.source !== "runtime") {
+    params.log.info(
+      `SQLite: using ${sanitizeForLog(sqliteLibrary.path)} (${sqliteLibrary.version}, extension loading enabled)`,
+    );
+  } else if (sqliteLibrary.ignoredOverride) {
+    params.log.warn(`SQLite: ${sqliteLibrary.ignoredOverride}; override ignored`);
+  }
   if (params.isNixMode) {
     params.log.info("gateway: running in Nix mode (config managed externally)");
   }
@@ -108,39 +107,6 @@ export function formatAgentModelStartupLogLine(params: {
   };
 }
 
-/** Normalize model thinking values that are useful in the compact startup log. */
-function normalizeStartupThinkLevel(value: unknown): StartupThinkLevel | undefined {
-  return value === "off" ||
-    value === "minimal" ||
-    value === "low" ||
-    value === "medium" ||
-    value === "high" ||
-    value === "xhigh" ||
-    value === "adaptive" ||
-    value === "max" ||
-    value === "ultra"
-    ? value
-    : undefined;
-}
-
-/** Resolve explicit thinking overrides from agent defaults and per-model config. */
-function resolveExplicitStartupThinking(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-  defaultAgentThinking: unknown;
-}): StartupThinkLevel | undefined {
-  const models = params.cfg.agents?.defaults?.models;
-  const canonicalKey = modelKey(params.provider, params.model);
-  const legacyKey = legacyModelKey(params.provider, params.model);
-  return (
-    normalizeStartupThinkLevel(params.defaultAgentThinking) ??
-    normalizeStartupThinkLevel(models?.[canonicalKey]?.params?.thinking) ??
-    normalizeStartupThinkLevel(legacyKey ? models?.[legacyKey]?.params?.thinking : undefined) ??
-    normalizeStartupThinkLevel(params.cfg.agents?.defaults?.thinkingDefault)
-  );
-}
-
 /** True when a configured catalog entry disables reasoning for the startup model. */
 function isConfiguredReasoningDisabled(params: {
   catalog: readonly ModelCatalogEntry[];
@@ -159,15 +125,8 @@ export function formatAgentModelStartupDetails(params: {
   provider: string;
   model: string;
 }): string {
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const defaultAgentConfig = resolveAgentConfig(params.cfg, defaultAgentId);
-  const explicitThinking = resolveExplicitStartupThinking({
-    cfg: params.cfg,
-    provider: params.provider,
-    model: params.model,
-    defaultAgentThinking: defaultAgentConfig?.thinkingDefault,
-  });
-  let thinking = explicitThinking;
+  const soleAgentId = tryResolveAmbientOwnerAgentId(params.cfg);
+  let thinking = resolveConfiguredThinkingDefaultCore({ ...params, agentId: soleAgentId });
   if (thinking === undefined) {
     const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
     // Catalog reasoning=false is authoritative; avoid loading provider policy artifacts
@@ -183,6 +142,7 @@ export function formatAgentModelStartupDetails(params: {
     } else {
       const resolvedThinking = resolveThinkingDefault({
         cfg: params.cfg,
+        agentId: soleAgentId,
         provider: params.provider,
         model: params.model,
         catalog: configuredCatalog,
@@ -194,7 +154,7 @@ export function formatAgentModelStartupDetails(params: {
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
-    agentId: defaultAgentId,
+    agentId: soleAgentId,
   });
 
   return `thinking=${thinking}, fast=${formatFastModeValue(fast.mode)}`;
@@ -256,9 +216,10 @@ function formatSuppressedAmbientChannelsStartupWarning(channelIds: readonly stri
     sanitizeForLog(channelId),
   );
   return (
-    `dev gateway suppressed ambient channel auto-configuration for ${safeChannelIds.length} ` +
+    `gateway suppressed ambient channel auto-configuration for ${safeChannelIds.length} ` +
     `${safeChannelIds.length === 1 ? "channel" : "channels"}: ${safeChannelIds.join(", ")}. ` +
-    "Use --dev-ambient-channels to re-enable ambient channel triggers."
+    "Configure channels.<id> (openclaw channels add <id>) to enable the channel, or pass " +
+    "--ambient-channels to allow ambient env credentials."
   );
 }
 

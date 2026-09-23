@@ -22,13 +22,14 @@ import {
   redactHomePath,
   redactJsonValueForDevToolLog,
 } from "../../scripts/lib/dev-tooling-safety.ts";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
+import { isProcessAlive, waitForChildClose, waitForDead } from "../helpers/process-wait.js";
+import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 const tempDirs: string[] = [];
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
-}
+const testNodeExecPath = resolveTestNodeExecPath();
 
 async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
@@ -60,37 +61,79 @@ async function waitForPidFile(pidPath: string, timeoutMs = 15_000): Promise<numb
   return Number.parseInt(content, 10);
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+function quotePosixShellArg(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-async function writeFakePromptCli(root: string, descendantPidPath: string): Promise<string> {
-  const fakeCli = path.join(root, "fake-prompt-cli.mjs");
-  const descendantScript = [
-    "process.on('SIGINT', () => {});",
-    "process.on('SIGTERM', () => {});",
-    "setInterval(() => {}, 1000);",
-  ].join("");
+async function writeFakePromptCli(
+  root: string,
+  descendantPidPath: string,
+  mode: "blocking" | "leader-exit" | "escaped-output" = "blocking",
+): Promise<string> {
+  const descendantPath = path.join(root, "fake-prompt-descendant.mjs");
+  await fs.writeFile(
+    descendantPath,
+    [
+      'import fs from "node:fs";',
+      'process.on("SIGINT", () => {});',
+      'process.on("SIGTERM", () => {});',
+      "fs.writeFileSync(process.argv[2], String(process.pid));",
+      "setInterval(() => {}, 1000);",
+      ...(mode === "escaped-output" ? ['fs.writeFileSync(process.argv[3], "ready");'] : []),
+      "",
+    ].join("\n"),
+  );
+
+  const fakeCli = path.join(root, "fake-prompt-cli.sh");
+  if (mode === "escaped-output") {
+    const leaderPath = path.join(root, "fake-prompt-leader.mjs");
+    await fs.writeFile(
+      leaderPath,
+      [
+        'import { spawn } from "node:child_process";',
+        'import fs from "node:fs";',
+        `const child = spawn(${JSON.stringify(testNodeExecPath)}, ${JSON.stringify([
+          descendantPath,
+          descendantPidPath,
+          path.join(root, "escaped.ready"),
+        ])}, { detached: true, stdio: ["ignore", "inherit", "inherit"] });`,
+        `fs.appendFileSync(${JSON.stringify(path.join(root, "launches.jsonl"))}, JSON.stringify({ pid: child.pid, args: process.argv.slice(2) }) + "\\n");`,
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(child.pid));`,
+        "child.unref();",
+        "setInterval(() => {}, 1000);",
+        "",
+      ].join("\n"),
+    );
+    await fs.writeFile(
+      fakeCli,
+      [
+        "#!/bin/sh",
+        `exec ${quotePosixShellArg(testNodeExecPath)} ${quotePosixShellArg(leaderPath)} "$@"`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    return fakeCli;
+  }
   await fs.writeFile(
     fakeCli,
     [
-      "#!/usr/bin/env node",
-      "import childProcess from 'node:child_process';",
-      "import fs from 'node:fs';",
-      "const descendant = childProcess.spawn(process.execPath, [",
-      "  '--input-type=module',",
-      `  '--eval', ${JSON.stringify(descendantScript)},`,
-      "], { stdio: 'ignore' });",
-      `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
-      "setInterval(() => {}, 1000);",
+      "#!/bin/sh",
+      `${quotePosixShellArg(testNodeExecPath)} ${quotePosixShellArg(descendantPath)} ${quotePosixShellArg(descendantPidPath)} >/dev/null 2>&1 &`,
+      `while [ ! -s ${quotePosixShellArg(descendantPidPath)} ]; do sleep 0.01; done`,
+      mode === "leader-exit" ? "exit 0" : "while :; do sleep 1; done",
+      "",
     ].join("\n"),
     { mode: 0o755 },
   );
+  return fakeCli;
+}
+
+async function writeBlockingPromptCli(root: string): Promise<string> {
+  const fakeCli = path.join(root, "blocking-prompt-cli.sh");
+  await fs.writeFile(fakeCli, ["#!/bin/sh", "while :; do sleep 1; done", ""].join("\n"), {
+    mode: 0o755,
+  });
   return fakeCli;
 }
 
@@ -121,7 +164,7 @@ type CliResult = {
 
 function runCli(scriptPath: string, args: string[]): Promise<CliResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", scriptPath, ...args], {
+    const child = spawn(testNodeExecPath, ["--import", "tsx", scriptPath, ...args], {
       cwd: process.cwd(),
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -427,22 +470,18 @@ describe("script-specific dev tooling hardening", () => {
     const signals: NodeJS.Signals[] = [];
     const stopper = tuiPtyWatchTesting.createChildStopper(
       { kill: () => true },
-      {
-        signalChild(_child, signal: NodeJS.Signals): void {
-          signals.push(signal);
-        },
-        sigkillGraceMs: 20,
-        sigtermGraceMs: 10,
+      (_child, signal: NodeJS.Signals): void => {
+        signals.push(signal);
       },
     );
 
     stopper.stop();
     expect(signals).toEqual(["SIGINT"]);
 
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(500);
     expect(signals).toEqual(["SIGINT", "SIGTERM"]);
 
-    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(signals).toEqual(["SIGINT", "SIGTERM", "SIGKILL"]);
   });
 
@@ -499,95 +538,6 @@ describe("script-specific dev tooling hardening", () => {
     );
 
     expect(retained.toString("utf8")).toBe("89abcdef");
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "signals the TUI PTY watch process group before falling back to the child",
-    () => {
-      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-      const childKill = vi.fn(() => true);
-
-      try {
-        tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM");
-        expect(kill).toHaveBeenCalledWith(-123, "SIGTERM");
-        expect(childKill).not.toHaveBeenCalled();
-      } finally {
-        kill.mockRestore();
-      }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "falls back to direct TUI PTY watch child signaling when the process group is gone",
-    () => {
-      const kill = vi.spyOn(process, "kill").mockImplementation(() => {
-        const error = new Error("missing process group") as NodeJS.ErrnoException;
-        error.code = "ESRCH";
-        throw error;
-      });
-      const childKill = vi.fn(() => true);
-
-      try {
-        tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM");
-        expect(kill).toHaveBeenCalledWith(-123, "SIGTERM");
-        expect(childKill).toHaveBeenCalledWith("SIGTERM");
-      } finally {
-        kill.mockRestore();
-      }
-    },
-  );
-
-  it("signals Windows TUI PTY watch process trees with taskkill", () => {
-    const childKill = vi.fn(() => true);
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
-      stdio: "ignore",
-    });
-
-    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "123", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(childKill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows TUI PTY watch process trees when graceful taskkill fails", () => {
-    const childKill = vi.fn(() => true);
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
-      stdio: "ignore",
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "123", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(childKill).not.toHaveBeenCalled();
   });
 
   it("aborts stalled OpenAI realtime smoke fetches at the request timeout", async () => {
@@ -702,7 +652,7 @@ describe("script-specific dev tooling hardening", () => {
   it("resolves the realtime relay smoke to an existing Control UI module", () => {
     const modulePath = realtimeSmokeTesting.resolveGatewayRelayModulePath(process.cwd());
 
-    expect(modulePath.endsWith("/ui/src/pages/chat/realtime-talk-gateway-relay.ts")).toBe(true);
+    expect(modulePath.endsWith("/ui/src/pages/chat/talk/gateway-relay.ts")).toBe(true);
     expect(existsSync(modulePath.slice("/@fs/".length))).toBe(true);
   });
 
@@ -833,34 +783,175 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "cleans Anthropic direct prompt descendants after timeout",
+    "rejects Anthropic direct prompt success while its descendant remains active",
+    async () => {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-normal-exit-"));
+      tempDirs.push(tempRoot);
+      const descendantPidPath = path.join(tempRoot, "descendant.pid");
+      const fakeClaudeBin = await writeFakePromptCli(tempRoot, descendantPidPath, "leader-exit");
+      let descendantPid = 0;
+      const result = promptProbeTesting.runDirectPrompt("normal exit cleanup proof", {
+        claudeBin: fakeClaudeBin,
+        timeoutMs: 5_000,
+      });
+      void result.catch(() => undefined);
+
+      await runQaGatewayFixture(
+        async () => {
+          descendantPid = await waitForPidFile(descendantPidPath);
+          await expect(result).rejects.toMatchObject({
+            code: "EPROCESSGROUP_CLEANUP_FAILED",
+            processTreeState: "terminated",
+          });
+          expect(isProcessAlive(descendantPid)).toBe(false);
+        },
+        async () => {
+          if (descendantPid && isProcessAlive(descendantPid)) {
+            process.kill(descendantPid, "SIGKILL");
+          }
+          await result.catch(() => undefined);
+          if (descendantPid) {
+            await waitForDead(descendantPid, 5_000);
+          }
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "reports Anthropic direct cleanup uncertainty on parent signal",
+    async () => {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-unjoined-"));
+      const owner = createVitestResourceOwner(tempRoot);
+      const descendantPidPath = path.join(tempRoot, "descendant.pid");
+      const fakeClaudeBin = await writeFakePromptCli(tempRoot, descendantPidPath, "escaped-output");
+      const probe = spawn(
+        process.execPath,
+        ["--import", "tsx", "scripts/anthropic-prompt-probe.ts"],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            CLAUDE_BIN: fakeClaudeBin,
+            OPENCLAW_PROMPT_TRANSPORT: "direct",
+            OPENCLAW_PROMPT_CAPTURE: "0",
+            OPENCLAW_PROMPT_KEEP_TMP: "0",
+            OPENCLAW_PROMPT_TIMEOUT_MS: "10000",
+            OPENCLAW_PROMPT_LIST_JSON: JSON.stringify(["cleanup uncertainty", "must not run"]),
+            TMPDIR: tempRoot,
+            TMP: tempRoot,
+            TEMP: tempRoot,
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      let stdout = "";
+      let stderr = "";
+      let descendantPid = 0;
+      probe.stdout.on("data", (chunk) => (stdout += String(chunk)));
+      probe.stderr.on("data", (chunk) => (stderr += String(chunk)));
+      const closed = waitForChildClose(probe, 10_000);
+      void closed.catch(() => undefined);
+
+      await runQaGatewayFixture(
+        async () => {
+          descendantPid = await waitForPidFile(descendantPidPath);
+          await waitForCondition(() => {
+            const readyPath = path.join(tempRoot, "escaped.ready");
+            return existsSync(readyPath) && readFileSync(readyPath, "utf8") === "ready";
+          });
+          expect(isProcessAlive(descendantPid)).toBe(true);
+          probe.kill("SIGTERM");
+          const exit = await closed;
+
+          expect(isProcessAlive(descendantPid)).toBe(true);
+          expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+          expect(exit).toEqual({ code: 1, signal: null });
+          expect(stderr).toContain(
+            "Managed command cleanup could not verify child, process group, and output closure",
+          );
+          expect(stdout).toBe("");
+          const launches = (await fs.readFile(path.join(tempRoot, "launches.jsonl"), "utf8"))
+            .trim()
+            .split("\n");
+          expect(launches).toHaveLength(1);
+        },
+        async () => {
+          const failures: unknown[] = [];
+          const cleanupClosed =
+            probe.stdout.closed &&
+            probe.stderr.closed &&
+            (probe.exitCode !== null || probe.signalCode !== null)
+              ? Promise.resolve()
+              : waitForChildClose(probe);
+          if (probe.exitCode === null && probe.signalCode === null) {
+            probe.kill("SIGTERM");
+          }
+          try {
+            await cleanupClosed;
+          } catch (error) {
+            failures.push(error);
+          }
+          // Rescue extra launches too, even when the one-prompt assertion fails.
+          const ownedPids = new Set(descendantPid > 1 ? [descendantPid] : []);
+          try {
+            const journal = await fs.readFile(path.join(tempRoot, "launches.jsonl"), "utf8");
+            for (const line of journal.trim().split("\n").filter(Boolean)) {
+              const entry: unknown = JSON.parse(line);
+              if (
+                !entry ||
+                typeof entry !== "object" ||
+                !("pid" in entry) ||
+                typeof entry.pid !== "number" ||
+                !Number.isSafeInteger(entry.pid) ||
+                entry.pid <= 1
+              ) {
+                throw new Error("Invalid escaped-child PID in the owned launch journal");
+              }
+              ownedPids.add(entry.pid);
+            }
+          } catch (error) {
+            failures.push(error);
+          }
+          for (const pid of ownedPids) {
+            try {
+              killPidIfAlive(pid);
+            } catch (error) {
+              failures.push(error);
+            }
+          }
+          const cleanup = await Promise.allSettled(
+            [...ownedPids].map((pid) => waitForDead(pid, 5_000)),
+          );
+          failures.push(
+            ...cleanup.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+          );
+          if (failures.length > 0) {
+            throw new AggregateError(failures, `Fixture cleanup failed; retained ${tempRoot}`);
+          }
+          tempDirs.push(tempRoot);
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "returns a terminal result after an Anthropic direct prompt timeout",
     async () => {
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-prompt-tree-"));
       tempDirs.push(tempRoot);
-      const descendantPidPath = path.join(tempRoot, "descendant.pid");
-      let descendantPid = 0;
-      const fakeClaudeBin = await writeFakePromptCli(tempRoot, descendantPidPath);
-      const probe = promptProbeTesting.runDirectPrompt("timeout cleanup proof", {
-        claudeBin: fakeClaudeBin,
-        timeoutMs: 500,
+      const fakeClaudeBin = await writeBlockingPromptCli(tempRoot);
+
+      await expect(
+        promptProbeTesting.runDirectPrompt("timeout cleanup proof", {
+          claudeBin: fakeClaudeBin,
+          timeoutMs: 500,
+        }),
+      ).resolves.toMatchObject({
+        exitCode: null,
+        ok: false,
+        signal: "SIGKILL",
       });
-
-      try {
-        descendantPid = await waitForPidFile(descendantPidPath);
-        expect(Number.isInteger(descendantPid)).toBe(true);
-        expect(isProcessAlive(descendantPid)).toBe(true);
-
-        await expect(probe).resolves.toMatchObject({
-          exitCode: null,
-          ok: false,
-          signal: "SIGKILL",
-        });
-        await waitForCondition(() => !isProcessAlive(descendantPid));
-      } finally {
-        if (descendantPid && isProcessAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
-      }
     },
   );
 
@@ -1036,7 +1127,7 @@ describe("script-specific dev tooling hardening", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "cleans Anthropic prompt gateway descendants on parent signal",
+    "cleans Anthropic prompt gateway descendants when the child attaches after parent signal",
     async () => {
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-parent-signal-"));
       tempDirs.push(tempRoot);
@@ -1068,13 +1159,21 @@ describe("script-specific dev tooling hardening", () => {
           `const { testing } = await import(${JSON.stringify(
             pathToFileURL(path.resolve("scripts/anthropic-prompt-probe.ts")).href,
           )});`,
+          "const signalController = testing.createPromptProbeParentSignalController();",
           `const child = childProcess.spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(leaderScript)}], { detached: true, stdio: 'ignore' });`,
           "let stopPromise;",
           "const stopGateway = () => {",
           "  stopPromise ??= testing.stopGatewayPromptChild(child, { close: async () => {} }, 50, 100);",
           "  return stopPromise;",
           "};",
-          "testing.installGatewayPromptParentSignalHandlers(child, stopGateway);",
+          "process.on('SIGTERM', () => {",
+          "  signalController.attach({",
+          "    stop: stopGateway,",
+          "    forceKill: () => {",
+          "      try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }",
+          "    },",
+          "  });",
+          "});",
           `fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid));`,
           "setInterval(() => {}, 1000);",
         ].join("\n"),
@@ -1224,24 +1323,21 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("bounds Claude usage response body reads by content-length", async () => {
-    const maxBytes = claudeUsageTesting.FETCH_RESPONSE_MAX_BYTES;
+    const maxBytes = 256 * 1024;
     const response = new Response("{}", {
       headers: { "content-length": String(maxBytes + 1) },
     });
-    const controller = new AbortController();
 
     await expect(
-      claudeUsageTesting.readBoundedResponseText(
-        response,
-        "Claude usage test",
-        controller.signal,
-        maxBytes,
-      ),
-    ).rejects.toThrow(`Claude usage test response body exceeded ${maxBytes} bytes`);
+      claudeUsageTesting.fetchAnthropicOAuthUsage("test-token", {
+        fetchImpl: async () => response,
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow(`Anthropic OAuth usage request response body exceeded ${maxBytes} bytes`);
   });
 
   it("bounds Claude usage response body reads by streamed bytes", async () => {
-    const maxBytes = claudeUsageTesting.FETCH_RESPONSE_MAX_BYTES;
+    const maxBytes = 256 * 1024;
     const response = new Response(
       new ReadableStream({
         start(controller) {
@@ -1250,16 +1346,13 @@ describe("script-specific dev tooling hardening", () => {
         },
       }),
     );
-    const controller = new AbortController();
 
     await expect(
-      claudeUsageTesting.readBoundedResponseText(
-        response,
-        "Claude usage test",
-        controller.signal,
-        maxBytes,
-      ),
-    ).rejects.toThrow(`Claude usage test response body exceeded ${maxBytes} bytes`);
+      claudeUsageTesting.fetchAnthropicOAuthUsage("test-token", {
+        fetchImpl: async () => response,
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow(`Anthropic OAuth usage request response body exceeded ${maxBytes} bytes`);
   });
 
   it.each([
@@ -1297,17 +1390,45 @@ describe("script-specific dev tooling hardening", () => {
         timeoutMs: 100,
       });
       const startedAt = Date.now();
-      const request = nativeFetch(`http://127.0.0.1:${proxy.port}/v1/messages`, {
-        method: "POST",
-        body: "{}",
-      }).then(async (response) => ({ status: response.status, body: await response.text() }));
+      const proxyUrl = `http://127.0.0.1:${proxy.port}/v1/messages`;
+      const request = sendsHeaders
+        ? new Promise<{ status: number; body: string }>((resolve, reject) => {
+            const downstream = spawn(
+              testNodeExecPath,
+              [
+                "-e",
+                `fetch(process.argv[1], { method: "POST", body: "{}" })
+                  .then(async response => ({ status: response.status, body: await response.text() }))
+                  .then(result => process.stdout.write(JSON.stringify(result)))
+                  .catch(error => { process.stderr.write(String(error)); process.exitCode = 1; });`,
+                proxyUrl,
+              ],
+              { stdio: ["ignore", "pipe", "pipe"] },
+            );
+            let stdout = "";
+            let stderr = "";
+            downstream.stdout.on("data", (chunk) => (stdout += chunk));
+            downstream.stderr.on("data", (chunk) => (stderr += chunk));
+            downstream.once("error", reject);
+            downstream.once("close", (code) => {
+              if (code === 0) {
+                resolve(JSON.parse(stdout));
+              } else {
+                reject(new Error(stderr || `proxy client exited ${String(code)}`));
+              }
+            });
+          })
+        : nativeFetch(proxyUrl, { method: "POST", body: "{}" }).then(async (response) => ({
+            status: response.status,
+            body: await response.text(),
+          }));
 
       if (sendsHeaders) {
         await expect(request).rejects.toThrow();
       } else {
         await expect(request).resolves.toMatchObject({
           status: 502,
-          body: expect.stringMatching(/TimeoutError/u),
+          body: expect.stringMatching(/Anthropic upstream timed out after 100ms/u),
         });
       }
       expect(Date.now() - startedAt).toBeLessThan(2_000);

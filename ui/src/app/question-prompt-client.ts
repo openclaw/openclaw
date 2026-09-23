@@ -19,6 +19,12 @@ export type QuestionClientResolutionOwner = {
   onQuestionResolution: (resolution: QuestionResolvedEvent) => void;
 };
 
+const questionLists = new WeakMap<QuestionClient, Promise<unknown>>();
+
+export function invalidateQuestionList(client: QuestionClient): void {
+  questionLists.delete(client);
+}
+
 const resolutionOwnersByClient = new WeakMap<QuestionClient, Set<QuestionClientResolutionOwner>>();
 
 export function registerQuestionClientOwner(
@@ -44,6 +50,7 @@ export function unregisterQuestionClientOwner(
   owners.delete(owner);
   if (owners.size === 0) {
     resolutionOwnersByClient.delete(client);
+    invalidateQuestionList(client);
   }
 }
 
@@ -51,6 +58,7 @@ export function publishQuestionClientResolution(
   client: QuestionClient,
   resolution: QuestionResolvedEvent,
 ): void {
+  invalidateQuestionList(client);
   const owners = resolutionOwnersByClient.get(client);
   if (!owners) {
     return;
@@ -80,5 +88,18 @@ export function requestQuestionGateway(
     expiresAtMs === undefined
       ? DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS
       : Math.min(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS, Math.max(0, expiresAtMs - Date.now()));
-  return client.request(method, params, { timeoutMs });
+  if (method !== "question.list") {
+    return client.request(method, params, { timeoutMs });
+  }
+  let pending = questionLists.get(client);
+  if (!pending) {
+    pending = client.request(method, params, { timeoutMs });
+    questionLists.set(client, pending);
+    void pending.catch(() => {
+      if (questionLists.get(client) === pending) {
+        questionLists.delete(client);
+      }
+    });
+  }
+  return pending;
 }

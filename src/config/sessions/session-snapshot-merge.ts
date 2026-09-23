@@ -27,6 +27,7 @@ const MODEL_OVERRIDE_RUNTIME_FIELDS = [
   "model",
   "fallbackNotice",
   "contextTokens",
+  "contextTokensSource",
   "contextBudgetStatus",
 ] as const satisfies ReadonlyArray<keyof SessionEntry>;
 const MODEL_OVERRIDE_RUNTIME_FIELD_SET = new Set<keyof SessionEntry>(MODEL_OVERRIDE_RUNTIME_FIELDS);
@@ -34,16 +35,16 @@ const MODEL_OVERRIDE_RUNTIME_FIELD_SET = new Set<keyof SessionEntry>(MODEL_OVERR
 const MODEL_OVERRIDE_DEPENDENT_FIELDS = new Set<keyof SessionEntry>([
   ...MODEL_OVERRIDE_RUNTIME_FIELDS,
   "liveModelSwitchPending",
+  "contextWindow",
   "thinkingLevel",
 ]);
 
-const MODEL_OVERRIDE_CONFLICT_DEPENDENT_FIELDS = ["thinkingLevel"] as const satisfies ReadonlyArray<
-  keyof SessionEntry
->;
+const MODEL_OVERRIDE_CONFLICT_DEPENDENT_FIELDS = ["contextWindow", "thinkingLevel"] as const;
 
 const MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS = [
   "abortedLastRun",
   "restartRecoveryRuns",
+  "restartRecoveryForceSafeTools",
   "mainRestartRecovery",
 ] as const satisfies ReadonlyArray<keyof SessionEntry>;
 
@@ -61,8 +62,10 @@ function mainSessionRecoveryTransactionChanged(before: SessionEntry, after: Sess
   return (
     before.abortedLastRun !== after.abortedLastRun ||
     !isDeepStrictEqual(before.restartRecoveryRuns, after.restartRecoveryRuns) ||
+    before.restartRecoveryForceSafeTools !== after.restartRecoveryForceSafeTools ||
     beforeState?.cycleId !== afterState?.cycleId ||
     beforeState?.chargedAttempts !== afterState?.chargedAttempts ||
+    beforeState?.startedAttempt !== afterState?.startedAttempt ||
     !isDeepStrictEqual(beforeState?.reservation, afterState?.reservation) ||
     !isDeepStrictEqual(beforeState?.tombstone, afterState?.tombstone)
   );
@@ -90,6 +93,7 @@ function mainSessionRecoveryCycleStateUnchanged(
   return (
     beforeState.cycleId === afterState.cycleId &&
     beforeState.chargedAttempts === afterState.chargedAttempts &&
+    beforeState.startedAttempt === afterState.startedAttempt &&
     isDeepStrictEqual(beforeState.reservation, afterState.reservation) &&
     isDeepStrictEqual(beforeState.tombstone, afterState.tombstone)
   );
@@ -108,6 +112,7 @@ function isCanonicalMainSessionRecoveryClear(entry: SessionEntry): boolean {
   return (
     entry.abortedLastRun === false &&
     entry.restartRecoveryRuns === undefined &&
+    entry.restartRecoveryForceSafeTools === undefined &&
     entry.mainRestartRecovery === undefined
   );
 }
@@ -221,23 +226,17 @@ export function projectSessionSnapshotChanges(params: {
     isCanonicalMainSessionRecoveryClear(params.next) &&
     !mainRecoveryOwnershipChangedConcurrently &&
     mainSessionRecoveryCycleStateUnchanged(params.initial, params.current) &&
+    params.initial.restartRecoveryForceSafeTools === params.current.restartRecoveryForceSafeTools &&
     restartRecoveryRunsOnlyConsumed(params.initial, params.current);
   if (
     mainRecoveryChanged &&
+    !mainRecoveryOwnershipChangedConcurrently &&
     (!mainRecoveryChangedConcurrently || currentOnlyConsumedLifecycleFences)
   ) {
-    // Apply all three fields together: a stale healthy flag can otherwise hide a newer marker.
-    // A healthy run first marks its claim non-interrupted; token-scoped release
-    // removes the aggregate only after the final concurrent owner exits.
-    if (
-      mainRecoveryOwnershipChangedConcurrently &&
-      isCanonicalMainSessionRecoveryClear(params.next)
-    ) {
-      patch.abortedLastRun = false;
-    } else if (!mainRecoveryOwnershipChangedConcurrently) {
-      for (const field of MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS) {
-        patchRecord[field] = Object.hasOwn(params.next, field) ? next[field] : undefined;
-      }
+    // Apply all four fields together. Concurrent ownership changes settle through
+    // their lifecycle/release owner, never through an older run-local snapshot.
+    for (const field of MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS) {
+      patchRecord[field] = Object.hasOwn(params.next, field) ? next[field] : undefined;
     }
   }
 

@@ -72,16 +72,22 @@ export function scopedAgentIdMatches(
   );
 }
 
-export function policyHasExecApprovalsRules(policy: unknown): boolean {
+function policyOrScopeHasRules(
+  policy: unknown,
+  section: string,
+  hasRules: (value: unknown) => boolean,
+): boolean {
   if (!isRecord(policy)) {
     return false;
   }
-  if (execApprovalsPolicyHasRules(policy.execApprovals)) {
-    return true;
-  }
-  return agentScopedPolicyOverlays(policy).some(([, overlay]) =>
-    execApprovalsPolicyHasRules(overlay.execApprovals),
+  return (
+    hasRules(policy[section]) ||
+    agentScopedPolicyOverlays(policy).some(([, overlay]) => hasRules(overlay[section]))
   );
+}
+
+export function policyHasExecApprovalsRules(policy: unknown): boolean {
+  return policyOrScopeHasRules(policy, "execApprovals", execApprovalsPolicyHasRules);
 }
 
 function execApprovalsPolicyHasRules(value: unknown): boolean {
@@ -113,15 +119,7 @@ export function policyHasAuthProfileRules(policy: unknown): boolean {
 }
 
 export function policyHasIngressRules(policy: unknown): boolean {
-  if (!isRecord(policy)) {
-    return false;
-  }
-  if (ingressPolicyHasRules(policy.ingress)) {
-    return true;
-  }
-  return agentScopedPolicyOverlays(policy).some(([, overlay]) =>
-    ingressPolicyHasRules(overlay.ingress),
-  );
+  return policyOrScopeHasRules(policy, "ingress", ingressPolicyHasRules);
 }
 
 export function policyHasRoutingRules(policy: unknown): boolean {
@@ -177,15 +175,7 @@ export function policyHasAgentWorkspaceRules(policy: unknown): boolean {
 }
 
 export function policyHasSandboxPostureRules(policy: unknown): boolean {
-  if (!isRecord(policy)) {
-    return false;
-  }
-  if (sandboxPosturePolicyHasRules(policy.sandbox)) {
-    return true;
-  }
-  return agentScopedPolicyOverlays(policy).some(([, overlay]) =>
-    sandboxPosturePolicyHasRules(overlay.sandbox),
-  );
+  return policyOrScopeHasRules(policy, "sandbox", sandboxPosturePolicyHasRules);
 }
 
 function sandboxPosturePolicyHasRules(value: unknown): boolean {
@@ -205,15 +195,7 @@ function sandboxPosturePolicyHasRules(value: unknown): boolean {
 }
 
 export function policyHasDataHandlingRules(policy: unknown): boolean {
-  if (!isRecord(policy)) {
-    return false;
-  }
-  if (dataHandlingPolicyHasRules(policy.dataHandling)) {
-    return true;
-  }
-  return agentScopedPolicyOverlays(policy).some(([, overlay]) =>
-    dataHandlingPolicyHasRules(overlay.dataHandling),
-  );
+  return policyOrScopeHasRules(policy, "dataHandling", dataHandlingPolicyHasRules);
 }
 
 export function dataHandlingPolicyHasRules(value: unknown): boolean {
@@ -233,15 +215,7 @@ export function dataHandlingPolicyHasRules(value: unknown): boolean {
 }
 
 export function policyHasToolPostureRules(policy: unknown): boolean {
-  if (!isRecord(policy)) {
-    return false;
-  }
-  if (toolPosturePolicyHasRules(policy.tools)) {
-    return true;
-  }
-  return agentScopedPolicyOverlays(policy).some(([, overlay]) =>
-    toolPosturePolicyHasRules(overlay.tools),
-  );
+  return policyOrScopeHasRules(policy, "tools", toolPosturePolicyHasRules);
 }
 
 function workspacePolicyHasRules(value: unknown): boolean {

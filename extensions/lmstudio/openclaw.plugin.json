@@ -1,6 +1,6 @@
 {
   "id": "lmstudio",
-  "icon": "https://cdn.simpleicons.org/lmstudio",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -60,7 +60,7 @@
     }
   ],
   "contracts": {
-    "memoryEmbeddingProviders": ["lmstudio"]
+    "embeddingProviders": ["lmstudio"]
   },
   "configSchema": {
     "type": "object",

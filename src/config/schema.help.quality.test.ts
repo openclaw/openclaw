@@ -150,6 +150,13 @@ describe("config help copy quality", () => {
     }
   }
 
+  it("describes auto-mode weekly Workshop review", () => {
+    const help = requireHelp("skills.workshop.autonomous.mode");
+    expect(help).toContain("weekly");
+    expect(help).toContain("Workshop-owned skills");
+    expect(help).toContain("ordinary file edits");
+  });
+
   it("keeps root section labels and help complete", () => {
     for (const key of ROOT_SECTIONS) {
       expect(requireLabel(key)).not.toHaveLength(0);
@@ -197,10 +204,14 @@ describe("config help copy quality", () => {
   });
 
   it("covers final backlog help keys with non-trivial operational guidance", () => {
-    expectOperationalGuidance(
-      FINAL_BACKLOG_TARGET_KEYS,
-      /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
-    );
+    for (const key of FINAL_BACKLOG_TARGET_KEYS) {
+      expectOperationalGuidance(
+        [key],
+        key === "gateway.remote.token"
+          ? /Store via secret\/env substitution and rotate alongside remote gateway auth changes\./
+          : /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
+      );
+    }
   });
 
   it("documents option behavior for enum-style fields", () => {
@@ -238,6 +249,8 @@ describe("config help copy quality", () => {
       name: "documents session maintenance duration/size examples and deprecations",
       fields: [
         ["session.maintenance.pruneAfter", ["30d", "12h"]],
+        ["session.maintenance.archiveDashboardAfter", ["7d", /false/i, "0"]],
+        ["session.maintenance.preserveRecent", ["7d", /false/i]],
         ["session.maintenance.resetArchiveRetention", [".reset.", /false/i]],
         ["session.maintenance.maxDiskBytes", ["500mb"]],
         ["session.maintenance.highWaterBytes", ["80%"]],
@@ -255,8 +268,13 @@ describe("config help copy quality", () => {
       ],
     },
     {
-      name: "documents broadcast command examples",
-      fields: [["broadcast.*", [/source peer ID/i, /destination peer IDs/i]]],
+      name: "documents agent group participants and bounds",
+      fields: [
+        ["broadcast.*", ["telegram:-100123", /agent IDs/i, /precedence/i, "16"]],
+        ["broadcast.*.mentionGating", [/explicitly @mentioned/i, /otherwise run all/i]],
+        ["broadcast.*.maxRounds", [/initial round/i, "1–4"]],
+        ["broadcast.*.maxTurns", [/participant turns/i, "1–32", /agents.length/i, /restart/i]],
+      ],
     },
     {
       name: "documents hook transform safety and queue behavior options",

@@ -2,9 +2,10 @@
 // events, CLI bindings, browser cleanup, and active-run shutdown.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesCore, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
@@ -24,6 +25,15 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
+const pendingHookCleanups = new Set<() => Promise<void>>();
+
+afterEach(async () => {
+  // A runner timeout does not unwind the test body; settle gates before store teardown.
+  for (const cleanup of pendingHookCleanups) {
+    await cleanup();
+  }
+  pendingHookCleanups.clear();
+});
 
 type HookEventRecord = Record<string, unknown> & {
   context?: Record<string, unknown> & {
@@ -37,6 +47,7 @@ type CommandNewHookEvent = {
   action: string;
   sessionKey?: string;
   context?: {
+    agentId?: string;
     commandSource?: string;
     previousSessionEntry?: { sessionId?: string };
   };
@@ -101,7 +112,9 @@ async function configureGlobalAgentSessionStore(dir: string) {
     configPath,
     `${JSON.stringify(
       {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: {
+          list: [{ id: "main", default: true }, { id: "work" }],
+        },
         session: { scope: "global", store: storeTemplate },
       },
       null,
@@ -272,15 +285,23 @@ function commandNewHookEvents() {
     .filter(isCommandNewHookEvent);
 }
 
-function expectSingleCommandNewHookEvent() {
-  const events = commandNewHookEvents();
+function expectSingleCommandHookEvent(action: "new" | "reset") {
+  const events = (sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>)
+    .map((call) => call[0])
+    .filter(
+      (event): event is CommandNewHookEvent =>
+        Boolean(event) &&
+        typeof event === "object" &&
+        (event as { type?: unknown }).type === "command" &&
+        (event as { action?: unknown }).action === action,
+    );
   expect(events).toHaveLength(1);
   const event = events[0];
   if (!event) {
-    throw new Error("expected session hook event");
+    throw new Error(`expected command ${action} hook event`);
   }
   expect(event.type).toBe("command");
-  expect(event.action).toBe("new");
+  expect(event.action).toBe(action);
   return event;
 }
 
@@ -319,7 +340,7 @@ async function resolveGatewaySessionStorePathForKey(key: string) {
 async function loadGatewaySessionStoreForKey(key: string) {
   const gatewayStorePath = await resolveGatewaySessionStorePathForKey(key);
   return Object.fromEntries(
-    listSessionEntries({ storePath: gatewayStorePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesCore({ storePath: gatewayStorePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),
@@ -345,7 +366,7 @@ test("sessions.reset emits internal command hook with reason", async () => {
   await writeMainSessionEntry("sess-main");
 
   await resetMainSession();
-  const event = expectSingleCommandNewHookEvent();
+  const event = expectSingleCommandHookEvent("new");
   expect(event.sessionKey).toBe("agent:main:main");
   expect(event.context?.commandSource).toBe("gateway:sessions.reset");
   expect(event.context?.previousSessionEntry?.sessionId).toBe("sess-main");
@@ -533,6 +554,41 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
       }),
     );
     expect(broadcast.mock.calls[0]?.[2]).toEqual(new Set(["conn-work"]));
+    const hookEvent = expectSingleCommandHookEvent("reset");
+    expect(hookEvent.sessionKey).toBe("global");
+    expect(hookEvent.context?.agentId).toBe("work");
+  });
+});
+
+test("sessions.reset of an incognito session broadcasts a delete, not a reset", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "incognito-chat": sessionStoreEntry("sess-incognito", { incognito: true }),
+    },
+  });
+  const broadcast = vi.fn();
+  const reset = await directSessionReq<{ ok: true; key: string; deleted?: boolean }>(
+    "sessions.reset",
+    { key: "incognito-chat", reason: "reset" },
+    {
+      context: {
+        broadcastToConnIds: broadcast,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-incognito"]),
+      },
+    },
+  );
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.deleted).toBe(true);
+  // The row is gone; only reason "delete" makes clients drop it and navigate away.
+  expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
+  expect(broadcast.mock.calls[0]?.[1]).toEqual({
+    sessionKey: reset.payload?.key,
+    agentId: "main",
+    sessionId: "sess-incognito",
+    reason: "delete",
+    ts: expect.any(Number),
   });
 });
 
@@ -585,7 +641,12 @@ test("sessions.reset returns unavailable when active run does not stop", async (
   expect(reset.ok).toBe(false);
   expect(reset.error?.code).toBe("UNAVAILABLE");
   expect(reset.error?.message ?? "").toMatch(/still active/i);
-  expectActiveRunCleanup("agent:main:main", ["main", "agent:main:main", "sess-main"], "sess-main");
+  expectActiveRunCleanup(
+    "agent:main:main",
+    ["main", "agent:main:main", "sess-main"],
+    "sess-main",
+    "main",
+  );
   expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
   expect(waitCallCountAtSnapshotClear).toEqual([1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
@@ -667,7 +728,7 @@ test("sessions.create with emitCommandHooks=true fires command:new hook against 
 
   await createFromMainSession({ emitCommandHooks: true });
 
-  expect(expectSingleCommandNewHookEvent().context?.commandSource).toBe("webchat");
+  expect(expectSingleCommandHookEvent("new").context?.commandSource).toBe("webchat");
 });
 
 test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks against parent (#76957)", async () => {
@@ -752,40 +813,66 @@ test("sessions.create waits for the parent work admission to release", async () 
 test("sessions.create fences new parent work while rollover hooks run", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeMainSessionEntry("sess-parent-fenced");
-  let releaseHook: (() => void) | undefined;
-  sessionHookMocks.triggerInternalHook.mockImplementationOnce(
-    async () =>
-      await new Promise<void>((resolve) => {
-        releaseHook = resolve;
-      }),
-  );
+  const hookEntered = createDeferred();
+  const releaseHook = createDeferred();
+  const admissionController = new AbortController();
+  let admission: ReturnType<typeof beginSessionWorkAdmission> | undefined;
+  sessionHookMocks.triggerInternalHook.mockImplementationOnce(async () => {
+    hookEntered.resolve();
+    await releaseHook.promise;
+  });
 
   const creating = directSessionReq("sessions.create", {
     key: "tui-next",
     parentSessionKey: "main",
     emitCommandHooks: true,
   });
-  await vi.waitFor(() => expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1));
+  const settledWork: Promise<unknown>[] = [Promise.allSettled([creating])];
+  let cleaningUp: Promise<void> | undefined;
+  const cleanup = () => {
+    releaseHook.resolve();
+    admissionController.abort();
+    return (cleaningUp ??= (async () => {
+      const lease = await admission?.catch(() => undefined);
+      lease?.release();
+      await Promise.all(settledWork);
+      sessionHookMocks.triggerInternalHook.mockReset();
+    })());
+  };
+  pendingHookCleanups.add(cleanup);
+  try {
+    await Promise.race([
+      hookEntered.promise,
+      creating.then((result) => {
+        throw new Error(
+          `Session creation settled before its rollover hook: ${result.error?.message ?? "no hook"}`,
+        );
+      }),
+    ]);
+    admissionController.signal.throwIfAborted();
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
 
-  let admissionStarted = false;
-  const admission = beginSessionWorkAdmission({
-    scope: storePath,
-    identities: ["agent:main:main", "sess-parent-fenced"],
-    assertAllowed: () => {
-      admissionStarted = true;
-    },
-  });
-  await Promise.resolve();
-  expect(admissionStarted).toBe(false);
+    let admissionStarted = false;
+    admission = beginSessionWorkAdmission({
+      scope: storePath,
+      identities: ["agent:main:main", "sess-parent-fenced"],
+      signal: admissionController.signal,
+      assertAllowed: () => {
+        admissionStarted = true;
+      },
+    });
+    settledWork.push(Promise.allSettled([admission]));
+    await Promise.resolve();
+    expect(admissionStarted).toBe(false);
 
-  if (!releaseHook) {
-    throw new Error("expected pending command:new hook");
+    releaseHook.resolve();
+    expect((await creating).ok).toBe(true);
+    await admission;
+    expect(admissionStarted).toBe(true);
+  } finally {
+    await cleanup();
+    pendingHookCleanups.delete(cleanup);
   }
-  releaseHook();
-  expect((await creating).ok).toBe(true);
-  const lease = await admission;
-  expect(admissionStarted).toBe(true);
-  lease.release();
 });
 
 test("sessions.create with emitCommandHooks=true resets parent in place when session.dmScope is 'main' (#77434)", async () => {
@@ -870,7 +957,7 @@ test("sessions.create keeps an explicit TUI child key when session.dmScope is 'm
     expect(result.ok).toBe(true);
     expect(result.payload?.key).toBe("agent:main:tui-explicit");
     expect(result.payload?.sessionId).not.toBe("sess-parent-tui");
-    expect(expectSingleCommandNewHookEvent().context?.commandSource).toBe("webchat");
+    expect(expectSingleCommandHookEvent("new").context?.commandSource).toBe("webchat");
     const [endEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
     const [startEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
     expect(endEvent.sessionKey).toBe("agent:main:main");

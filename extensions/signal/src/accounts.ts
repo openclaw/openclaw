@@ -3,12 +3,12 @@ import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
-  resolveAccountEntry,
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveSignalAccountEntry } from "./account-selection.js";
 import type { SignalAccountConfig, SignalTransportConfig } from "./account-types.js";
 import {
   allocateSignalManagedNativePort,
@@ -17,7 +17,12 @@ import {
   isSignalManagedNativeConnectionUrlForBind,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
-import { buildSignalTransportHttpUrl } from "./transport-url.js";
+import {
+  assertSignalSocketTransport,
+  buildSignalSocketUrl,
+  buildSignalTransportHttpUrl,
+  normalizeSignalTransportHost,
+} from "./transport-url.js";
 
 export type ResolvedSignalTransport =
   | {
@@ -25,6 +30,7 @@ export type ResolvedSignalTransport =
       baseUrl: string;
       cliPath: string;
       configPath?: string;
+      socketPath?: string;
       httpHost: string;
       httpPort: number;
       startupTimeoutMs: number;
@@ -74,6 +80,7 @@ export function resolveSignalAccountConfig(
       | Record<string, Partial<SignalAccountConfig>>
       | undefined,
     accountId,
+    channelId: "signal",
     nestedObjectKeys: ["aliases"],
   });
   if (accountId === DEFAULT_ACCOUNT_ID && channelConfig?.transport) {
@@ -98,6 +105,27 @@ function resolveSignalManagedNativePort(params: {
   accountConfig: SignalAccountConfig;
   transport: SignalTransportConfig | undefined;
 }): number {
+  if (params.transport?.kind === "managed-native" && params.transport.socketPath !== undefined) {
+    assertSignalSocketTransport(params.transport);
+    if (isSignalAccountEnabled(params.cfg, params.accountConfig)) {
+      for (const accountId of listSignalAccountIds(params.cfg)) {
+        if (normalizeAccountId(accountId) === params.accountId) {
+          continue;
+        }
+        const sibling = resolveSignalAccountConfig(params.cfg, accountId);
+        if (
+          isSignalAccountEnabled(params.cfg, sibling) &&
+          sibling.transport?.kind === "managed-native" &&
+          sibling.transport.socketPath === params.transport.socketPath
+        ) {
+          throw new Error(
+            `Signal managed native accounts "${params.accountId}" and "${accountId}" share transport.socketPath. Assign each account a distinct socket path.`,
+          );
+        }
+      }
+    }
+    return DEFAULT_SIGNAL_MANAGED_NATIVE_PORT;
+  }
   if (!isSignalAccountEnabled(params.cfg, params.accountConfig)) {
     return params.transport?.kind === "managed-native" && params.transport.httpPort !== undefined
       ? params.transport.httpPort
@@ -172,6 +200,9 @@ function resolveSignalManagedNativePort(params: {
       continue;
     }
     if (transport?.kind === "managed-native") {
+      if (transport.socketPath !== undefined) {
+        continue;
+      }
       if (transport.httpPort !== undefined) {
         reservedPorts.add(transport.httpPort);
       } else {
@@ -209,17 +240,28 @@ export function resolveSignalTransport(
     };
   }
 
+  if (transport?.kind === "managed-native") {
+    assertSignalSocketTransport(transport);
+  }
   const managedTransport =
-    transport?.kind === "managed-native"
+    transport?.kind === "managed-native" && transport.socketPath === undefined
       ? assignSignalManagedNativePort(transport, transport.httpPort ?? managedNativePort)
       : transport;
-  const httpHost = normalizeOptionalString(managedTransport?.httpHost) ?? "127.0.0.1";
+  const httpHost = normalizeSignalTransportHost(
+    normalizeOptionalString(managedTransport?.httpHost) ?? "127.0.0.1",
+  );
   const httpPort = managedTransport?.httpPort ?? managedNativePort;
   const configPath = normalizeOptionalString(managedTransport?.configPath);
   const connectionUrl = normalizeOptionalString(managedTransport?.url);
   return {
     kind: "managed-native",
-    baseUrl: connectionUrl ?? buildSignalTransportHttpUrl(httpHost, httpPort),
+    baseUrl:
+      managedTransport?.socketPath !== undefined
+        ? buildSignalSocketUrl(managedTransport.socketPath)
+        : (connectionUrl ?? buildSignalTransportHttpUrl(httpHost, httpPort)),
+    ...(managedTransport?.socketPath !== undefined
+      ? { socketPath: managedTransport.socketPath }
+      : {}),
     cliPath: normalizeOptionalString(managedTransport?.cliPath) ?? "signal-cli",
     ...(configPath ? { configPath } : {}),
     httpHost,
@@ -286,7 +328,7 @@ export function resolveSignalReplyToMode(params: {
     params.accountId ?? resolveDefaultSignalAccountId(params.cfg),
   );
   const signalConfig = params.cfg.channels?.signal;
-  const accountConfig = resolveAccountEntry(
+  const accountConfig = resolveSignalAccountEntry(
     signalConfig?.accounts as Record<string, SignalAccountConfig> | undefined,
     accountId,
   );

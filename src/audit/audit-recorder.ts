@@ -1,13 +1,17 @@
 /** Gateway-owned recorder joining trusted run, tool, and message lifecycle streams. */
 import { randomUUID } from "node:crypto";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   createAgentEventAuditRecorder,
   type AgentEventAuditRecorder,
 } from "./agent-event-audit.js";
-import type { AuditMessageMode } from "./audit-config.js";
+import {
+  isAuditLedgerEnabled,
+  isExecutionIdentityCollectionEnabled,
+  resolveAuditMessageMode,
+} from "./audit-config.js";
 import { createAuditEventWriter, type AuditEventWriter } from "./audit-event-writer.js";
-import type { ExecutionIdentityAdmissionWork } from "./execution-identity-admission.js";
 import type { TrustedMessageAuditEvent } from "./message-audit-events.js";
 
 const log = createSubsystemLogger("audit/events");
@@ -15,11 +19,13 @@ let persistenceFailureWarned = false;
 
 type AuditEventRecorder = AgentEventAuditRecorder & {
   recordMessage: (event: TrustedMessageAuditEvent) => void;
-  recordExecutionIdentity: (work: ExecutionIdentityAdmissionWork) => boolean;
+  recordExecutionIdentity: AuditEventWriter["recordExecutionIdentity"];
+  recordExecutionDecision: AuditEventWriter["recordExecutionDecision"];
+  recordExecutionDecisionWork: AuditEventWriter["recordExecutionDecisionWork"];
 };
 
 export function createAuditEventRecorder(options: {
-  messageMode: AuditMessageMode;
+  getConfig: () => OpenClawConfig;
   writer?: AuditEventWriter;
   stateDir?: string;
   terminalSettleMs?: number;
@@ -29,6 +35,7 @@ export function createAuditEventRecorder(options: {
     options.writer ??
     createAuditEventWriter({
       ...(options.stateDir ? { stateDir: options.stateDir } : {}),
+      onContention: (message) => log.warn(message),
       onError: (error) => {
         if (!persistenceFailureWarned) {
           persistenceFailureWarned = true;
@@ -38,19 +45,28 @@ export function createAuditEventRecorder(options: {
     });
   const agentRecorder = createAgentEventAuditRecorder({
     writer,
-    ...(options.terminalSettleMs !== undefined
-      ? { terminalSettleMs: options.terminalSettleMs }
-      : {}),
+    getConfig: options.getConfig,
+    terminalSettleMs: options.terminalSettleMs,
   });
 
   return {
     ...agentRecorder,
-    recordExecutionIdentity: writer.recordExecutionIdentity,
+    recordExecutionIdentity: (work) =>
+      isExecutionIdentityCollectionEnabled(options.getConfig()) &&
+      writer.recordExecutionIdentity(work),
+    recordExecutionDecision: (receipt) =>
+      isExecutionIdentityCollectionEnabled(options.getConfig()) &&
+      writer.recordExecutionDecision(receipt),
+    recordExecutionDecisionWork: (work) =>
+      isExecutionIdentityCollectionEnabled(options.getConfig()) &&
+      writer.recordExecutionDecisionWork(work),
     recordMessage: (event) => {
-      if (options.messageMode === "off") {
+      const config = options.getConfig();
+      const messageMode = resolveAuditMessageMode(config);
+      if (!isAuditLedgerEnabled(config) || messageMode === "off") {
         return;
       }
-      if (options.messageMode === "direct" && event.conversationKind !== "direct") {
+      if (messageMode === "direct" && event.conversationKind !== "direct") {
         return;
       }
       nextAcceptedMessageSequence += 1;

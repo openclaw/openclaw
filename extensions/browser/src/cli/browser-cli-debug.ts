@@ -5,55 +5,16 @@ import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_TAB_REFERENCE_HELP,
-  callBrowserRequest,
-  printBrowserJsonResult as printJsonResult,
-  resolveBrowserProfileQuery as resolveProfileQuery,
-  runBrowserCliCommand,
+  runBrowserCliRequest,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 import { defaultRuntime, shortenHomePath } from "./core-api.js";
 
-const BROWSER_DEBUG_TIMEOUT_MS = 20000;
-
-type BrowserRequestParams = Parameters<typeof callBrowserRequest>[1];
-
-type DebugContext = {
-  parent: BrowserParentOpts;
-  profile?: string;
-};
-
-async function withDebugContext(
-  cmd: Command,
-  parentOpts: (cmd: Command) => BrowserParentOpts,
-  action: (context: DebugContext) => Promise<void>,
-) {
-  const parent = parentOpts(cmd);
-  await runBrowserCliCommand(() =>
-    action({
-      parent,
-      profile: parent.browserProfile,
-    }),
-  );
-}
-
-async function callDebugRequest<T>(
-  parent: BrowserParentOpts,
-  params: BrowserRequestParams,
-): Promise<T> {
-  return callBrowserRequest<T>(parent, params, { timeoutMs: BROWSER_DEBUG_TIMEOUT_MS });
-}
-
-function resolveDebugQuery(params: {
-  targetId?: unknown;
-  clear?: unknown;
-  profile?: string;
-  filter?: unknown;
-}) {
+function resolveDebugQuery(params: { targetId?: unknown; clear?: unknown; filter?: unknown }) {
   return {
     targetId: normalizeOptionalString(params.targetId),
     filter: normalizeOptionalString(params.filter),
     clear: Boolean(params.clear),
-    profile: params.profile,
   };
 }
 
@@ -68,20 +29,14 @@ export function registerBrowserDebugCommands(
     .argument("<ref>", "Ref id from snapshot")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (ref: string, opts, cmd) => {
-      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest(parent, {
-          method: "POST",
-          path: "/highlight",
-          query: resolveProfileQuery(profile),
-          body: {
-            ref: ref.trim(),
-            targetId: normalizeOptionalString(opts.targetId),
-          },
-        });
-        if (printJsonResult(parent, result)) {
-          return;
-        }
-        defaultRuntime.log(`highlighted ${ref.trim()}`);
+      await runBrowserCliRequest({
+        parent: parentOpts(cmd),
+        path: "/highlight",
+        body: {
+          ref: ref.trim(),
+          targetId: normalizeOptionalString(opts.targetId),
+        },
+        successMessage: `highlighted ${ref.trim()}`,
       });
     });
 
@@ -91,30 +46,27 @@ export function registerBrowserDebugCommands(
     .option("--clear", "Clear stored errors after reading", false)
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest<{
-          errors: Array<{ timestamp: string; name?: string; message: string }>;
-        }>(parent, {
-          method: "GET",
-          path: "/errors",
-          query: resolveDebugQuery({
-            targetId: opts.targetId,
-            clear: opts.clear,
-            profile,
-          }),
-        });
-        if (printJsonResult(parent, result)) {
-          return;
-        }
-        if (!result.errors.length) {
-          defaultRuntime.log("No page errors.");
-          return;
-        }
-        defaultRuntime.log(
-          result.errors
-            .map((e) => `${e.timestamp} ${e.name ? `${e.name}: ` : ""}${e.message}`)
-            .join("\n"),
-        );
+      await runBrowserCliRequest<{
+        errors: Array<{ timestamp: string; name?: string; message: string }>;
+      }>({
+        parent: parentOpts(cmd),
+        method: "GET",
+        path: "/errors",
+        query: resolveDebugQuery({
+          targetId: opts.targetId,
+          clear: opts.clear,
+        }),
+        print: (result) => {
+          if (!result.errors.length) {
+            defaultRuntime.log("No page errors.");
+            return;
+          }
+          defaultRuntime.log(
+            result.errors
+              .map((e) => `${e.timestamp} ${e.name ? `${e.name}: ` : ""}${e.message}`)
+              .join("\n"),
+          );
+        },
       });
     });
 
@@ -125,43 +77,40 @@ export function registerBrowserDebugCommands(
     .option("--clear", "Clear stored requests after reading", false)
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest<{
-          requests: Array<{
-            timestamp: string;
-            method: string;
-            status?: number;
-            ok?: boolean;
-            url: string;
-            failureText?: string;
-          }>;
-        }>(parent, {
-          method: "GET",
-          path: "/requests",
-          query: resolveDebugQuery({
-            targetId: opts.targetId,
-            filter: opts.filter,
-            clear: opts.clear,
-            profile,
-          }),
-        });
-        if (printJsonResult(parent, result)) {
-          return;
-        }
-        if (!result.requests.length) {
-          defaultRuntime.log("No requests recorded.");
-          return;
-        }
-        defaultRuntime.log(
-          result.requests
-            .map((r) => {
-              const status = typeof r.status === "number" ? ` ${r.status}` : "";
-              const ok = r.ok === true ? " ok" : r.ok === false ? " fail" : "";
-              const fail = r.failureText ? ` (${r.failureText})` : "";
-              return `${r.timestamp} ${r.method}${status}${ok} ${r.url}${fail}`;
-            })
-            .join("\n"),
-        );
+      await runBrowserCliRequest<{
+        requests: Array<{
+          timestamp: string;
+          method: string;
+          status?: number;
+          ok?: boolean;
+          url: string;
+          failureText?: string;
+        }>;
+      }>({
+        parent: parentOpts(cmd),
+        method: "GET",
+        path: "/requests",
+        query: resolveDebugQuery({
+          targetId: opts.targetId,
+          filter: opts.filter,
+          clear: opts.clear,
+        }),
+        print: (result) => {
+          if (!result.requests.length) {
+            defaultRuntime.log("No requests recorded.");
+            return;
+          }
+          defaultRuntime.log(
+            result.requests
+              .map((r) => {
+                const status = typeof r.status === "number" ? ` ${r.status}` : "";
+                const ok = r.ok === true ? " ok" : r.ok === false ? " fail" : "";
+                const fail = r.failureText ? ` (${r.failureText})` : "";
+                return `${r.timestamp} ${r.method}${status}${ok} ${r.url}${fail}`;
+              })
+              .join("\n"),
+          );
+        },
       });
     });
 
@@ -175,22 +124,16 @@ export function registerBrowserDebugCommands(
     .option("--no-snapshots", "Disable snapshots")
     .option("--sources", "Include sources (bigger traces)", false)
     .action(async (opts, cmd) => {
-      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest(parent, {
-          method: "POST",
-          path: "/trace/start",
-          query: resolveProfileQuery(profile),
-          body: {
-            targetId: normalizeOptionalString(opts.targetId),
-            screenshots: Boolean(opts.screenshots),
-            snapshots: Boolean(opts.snapshots),
-            sources: Boolean(opts.sources),
-          },
-        });
-        if (printJsonResult(parent, result)) {
-          return;
-        }
-        defaultRuntime.log("trace started");
+      await runBrowserCliRequest({
+        parent: parentOpts(cmd),
+        path: "/trace/start",
+        body: {
+          targetId: normalizeOptionalString(opts.targetId),
+          screenshots: Boolean(opts.screenshots),
+          snapshots: Boolean(opts.snapshots),
+          sources: Boolean(opts.sources),
+        },
+        successMessage: "trace started",
       });
     });
 
@@ -203,20 +146,14 @@ export function registerBrowserDebugCommands(
     )
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest<{ path: string }>(parent, {
-          method: "POST",
-          path: "/trace/stop",
-          query: resolveProfileQuery(profile),
-          body: {
-            targetId: normalizeOptionalString(opts.targetId),
-            path: normalizeOptionalString(opts.out),
-          },
-        });
-        if (printJsonResult(parent, result)) {
-          return;
-        }
-        defaultRuntime.log(`TRACE:${shortenHomePath(result.path)}`);
+      await runBrowserCliRequest<{ path: string }>({
+        parent: parentOpts(cmd),
+        path: "/trace/stop",
+        body: {
+          targetId: normalizeOptionalString(opts.targetId),
+          path: normalizeOptionalString(opts.out),
+        },
+        successMessage: (result) => `TRACE:${shortenHomePath(result.path)}`,
       });
     });
 }

@@ -1,13 +1,20 @@
 // Doctor lint flow tests cover lint diagnostics surfaced by doctor.
 import { describe, expect, it } from "vitest";
-import { exitCodeFromFindings, runDoctorLintChecks } from "./doctor-lint-flow.js";
+import {
+  OpenClawStateLeaseAcquisitionError,
+  OpenClawStateLeaseError,
+} from "../state/openclaw-state-lease-error.js";
+import {
+  exitCodeFromFindings,
+  runDoctorLintChecks,
+  selectUpdateReadinessChecks,
+} from "./doctor-lint-flow.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import {
   clearHealthChecksForTest,
   listHealthChecks,
   registerHealthCheck,
 } from "./health-check-registry.js";
-import type { RunnableHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthCheckContext } from "./health-checks.js";
 
 const ctx: HealthCheckContext = {
@@ -251,39 +258,78 @@ describe("runDoctorLintChecks", () => {
     });
   });
 
-  it("supports single-run checks in lint mode", async () => {
-    const runnable: RunnableHealthCheck = {
-      id: "run-check",
-      kind: "core",
-      description: "run check",
-      async run(runCtx) {
-        expect(runCtx).toMatchObject({
-          mode: "lint",
-          repair: false,
-        });
-        return {
-          findings: [
-            {
-              checkId: "run-check",
-              severity: "warning",
-              message: "warn",
-            },
-          ],
-        };
-      },
-    };
-    const checkLocal = normalizeHealthCheck(runnable);
+  it("runs only checks that own the selected update-readiness phase", async () => {
+    const detections: string[] = [];
+    const checks = [
+      Object.assign(
+        check("plugin/example/post-plugin", async () => {
+          detections.push("post-plugin");
+          return [];
+        }),
+        { updateReadiness: "post-plugin" as const },
+      ),
+      check("plugin/example/default", async () => {
+        detections.push("default");
+        return [];
+      }),
+    ];
 
-    const result = await runDoctorLintChecks(ctx, { checks: [checkLocal] });
+    const result = await runDoctorLintChecks(ctx, {
+      checks: selectUpdateReadinessChecks(checks, "post-plugin"),
+    });
 
-    expect(result.findings.map((finding) => finding.checkId)).toEqual(["run-check"]);
+    expect(result).toEqual({ findings: [], checksRun: 1, checksSkipped: 0 });
+    expect(detections).toEqual(["post-plugin"]);
   });
 
-  it("turns thrown checks into error findings", async () => {
+  it("records acquisition cancellation without diagnosing a failed inspection", async () => {
+    const result = await runDoctorLintChecks(ctx, {
+      checks: [
+        check("cancelled", async () => {
+          throw new OpenClawStateLeaseAcquisitionError("state lease fixture", {
+            kind: "aborted",
+            reason: "caller-signal",
+            elapsedMs: 250,
+          });
+        }),
+        check("next", async () => [{ checkId: "next", severity: "info", message: "inspected" }]),
+      ],
+    });
+
+    expect(result).toEqual({
+      checksRun: 2,
+      checksSkipped: 0,
+      findings: [
+        {
+          checkId: "cancelled",
+          severity: "info",
+          errorCode: "OPENCLAW_STATE_LEASE_ABORTED",
+          message:
+            "state lease inspection not performed: aborted after 250 ms by the caller's signal",
+        },
+        { checkId: "next", severity: "info", message: "inspected" },
+      ],
+    });
+    expect(exitCodeFromFindings(result.findings)).toBe(0);
+  });
+
+  it.each([
+    new Error("nope"),
+    new DOMException("nope", "AbortError"),
+    new OpenClawStateLeaseError("nope", { code: "OPENCLAW_STATE_LEASE_ABORTED" }),
+    new OpenClawStateLeaseAcquisitionError("state lease fixture", {
+      kind: "held",
+      holder: { owner: "another-owner", epoch: 1 },
+    }),
+    new OpenClawStateLeaseAcquisitionError("state lease fixture", {
+      kind: "store-unavailable",
+      reason: "sqlite-busy",
+    }),
+  ])("retains ordinary, operation and storage failures as errors: %s", async (error) => {
     const result = await runDoctorLintChecks(ctx, {
       checks: [
         check("boom", async () => {
-          throw new Error("nope");
+          throw error;
         }),
       ],
     });
@@ -292,9 +338,10 @@ describe("runDoctorLintChecks", () => {
       {
         checkId: "boom",
         severity: "error",
-        message: "health check threw: nope",
+        message: `health check threw: ${error.message}`,
       },
     ]);
+    expect(exitCodeFromFindings(result.findings)).toBe(1);
   });
 
   it("keeps truncated thrown error messages UTF-16 safe", async () => {

@@ -1,6 +1,7 @@
 // Message-action threading helpers inherit reply/thread metadata only for
 // same-conversation sends and prepare outbound session mirroring.
-import { readStringParam } from "../../agents/tools/common.js";
+import { readToolStringParam } from "../../agents/tools/common.js";
+import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import type {
   ChannelId,
   ChannelThreadingAdapter,
@@ -34,12 +35,12 @@ export function resolveAndApplyOutboundThreadId(
     replyToIsExplicit?: boolean;
   },
 ): string | undefined {
-  const threadId = readStringParam(actionParams, "threadId");
+  const threadId = readToolStringParam(actionParams, "threadId");
   // `topLevel` and explicit null thread ids are caller opt-outs from inherited threading.
   if (!threadId && suppressesImplicitThreading(actionParams)) {
     return undefined;
   }
-  const replyToId = readStringParam(actionParams, "replyTo");
+  const replyToId = readToolStringParam(actionParams, "replyTo");
   const autoResolvedThreadId = threadId
     ? undefined
     : context.resolveAutoThreadId?.({
@@ -47,7 +48,11 @@ export function resolveAndApplyOutboundThreadId(
         accountId: context.accountId,
         to: context.to,
         toolContext: context.toolContext,
-        replyToId,
+        // An inherited reply names the incoming message, not a user-selected
+        // thread. Let the provider recover its root before canonicalizing it.
+        // Passing a Slack child here suppresses root lookup and posts outside
+        // the conversation. Explicit and unknown reply targets stay intact.
+        replyToId: context.replyToIsExplicit === false ? undefined : replyToId,
       });
   const resolvedThreadId = threadId ?? autoResolvedThreadId;
   if (autoResolvedThreadId && !actionParams.threadId) {
@@ -86,9 +91,9 @@ function isSameConversationTarget(
     return false;
   }
   const explicitTarget =
-    readStringParam(actionParams, "target") ??
-    readStringParam(actionParams, "to") ??
-    readStringParam(actionParams, "channelId");
+    readToolStringParam(actionParams, "target") ??
+    readToolStringParam(actionParams, "to") ??
+    readToolStringParam(actionParams, "channelId");
   if (!explicitTarget) {
     return true;
   }
@@ -107,16 +112,18 @@ export function resolveAndApplyOutboundReplyToId(
     toolContext?: ChannelThreadingToolContext;
     matchesToolContextTarget?: MatchesToolContextTarget;
   },
-): string | undefined {
-  const explicitReplyToId = readStringParam(actionParams, "replyTo");
+): OutboundReplyFacts | undefined {
+  const explicitReplyToId = readToolStringParam(actionParams, "replyTo");
+  const configuredMode = context.toolContext?.replyToMode ?? "off";
+  const mode = configuredMode === "batched" ? "first" : configuredMode;
   if (explicitReplyToId) {
-    if (context.toolContext?.replyToMode === "first") {
-      const hasRepliedRef = context.toolContext.hasRepliedRef;
+    if (mode === "first") {
+      const hasRepliedRef = context.toolContext?.hasRepliedRef;
       if (hasRepliedRef) {
         hasRepliedRef.value = true;
       }
     }
-    return explicitReplyToId;
+    return { replyToId: explicitReplyToId, source: "explicit" };
   }
   if (suppressesImplicitThreading(actionParams)) {
     return undefined;
@@ -137,8 +144,7 @@ export function resolveAndApplyOutboundReplyToId(
     return undefined;
   }
 
-  const mode = context.toolContext?.replyToMode ?? "off";
-  if (mode === "off" || mode === "batched") {
+  if (mode === "off") {
     return undefined;
   }
 
@@ -159,7 +165,7 @@ export function resolveAndApplyOutboundReplyToId(
     return undefined;
   }
   actionParams.replyTo = resolvedReplyToId;
-  return resolvedReplyToId;
+  return { replyToId: resolvedReplyToId, source: "implicit", mode };
 }
 
 /** Prepares outbound session mirroring metadata for message-action sends. */
@@ -180,12 +186,6 @@ export async function prepareOutboundMirrorRoute(params: {
   resolveOutboundSessionRoute: (
     params: ResolveOutboundSessionRouteParams,
   ) => Promise<OutboundSessionRoute | null>;
-  ensureOutboundSessionEntry: (params: {
-    cfg: OpenClawConfig;
-    channel: ChannelId;
-    accountId?: string | null;
-    route: OutboundSessionRoute;
-  }) => Promise<void>;
 }): Promise<{
   resolvedThreadId?: string;
   outboundRoute: OutboundSessionRoute | null;
@@ -199,7 +199,10 @@ export async function prepareOutboundMirrorRoute(params: {
     resolveReplyTransport: params.resolveReplyTransport,
     replyToIsExplicit: params.replyToIsExplicit,
   });
-  const replyToId = readStringParam(params.actionParams, "replyTo");
+  const replyToId = readToolStringParam(params.actionParams, "replyTo");
+  // Route resolution is read-only here; the durable session/route write happens
+  // in ensureOutboundSessionEntry only after the send succeeds. Persisting
+  // before delivery let a failed CLI probe rebind the main session's route.
   const outboundRoute =
     params.agentId && !params.dryRun
       ? await params.resolveOutboundSessionRoute({
@@ -214,14 +217,6 @@ export async function prepareOutboundMirrorRoute(params: {
           threadId: resolvedThreadId,
         })
       : null;
-  if (outboundRoute && params.agentId && !params.dryRun) {
-    await params.ensureOutboundSessionEntry({
-      cfg: params.cfg,
-      channel: params.channel,
-      accountId: params.accountId,
-      route: outboundRoute,
-    });
-  }
   if (outboundRoute && !params.dryRun) {
     params.actionParams["__sessionKey"] = outboundRoute.sessionKey;
   }

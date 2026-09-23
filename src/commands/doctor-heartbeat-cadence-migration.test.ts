@@ -3,11 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { heartbeatMonitorAgentId } from "../cron/heartbeat-monitor.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   collectHeartbeatCadenceMigrationFindings,
@@ -24,6 +26,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   if (originalHome === undefined) {
@@ -57,7 +60,7 @@ async function createFixture(every = "15m") {
 
 async function loadMonitor(storePath: string, agentId: string) {
   const store = await loadCronJobsStore(storePath);
-  return store.jobs.find((job) => heartbeatMonitorAgentId(job) === agentId);
+  return store.jobs.find((job) => job.agentId === agentId && job.payload.kind === "heartbeat");
 }
 
 async function loadMainMonitor(storePath: string) {
@@ -147,7 +150,7 @@ describe("heartbeat cadence cron migration", () => {
     );
   });
 
-  it("keeps multi-agent updates and creates scoped to their declared monitors", async () => {
+  it("keeps ownerless multi-agent updates scoped to their declared monitors", async () => {
     const fixture = await createFixture();
     const initialCfg = {
       agents: {

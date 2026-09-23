@@ -5,7 +5,8 @@ import { pathToFileURL } from "node:url";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mts";
 import {
   createQaScriptBlockedStatusTracker,
@@ -170,10 +171,6 @@ function formatProviderList(providers: Iterable<string>): string {
   return [...providers].toSorted().join(", ");
 }
 
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }) {
   return _spawnPnpmRunner({
     pnpmArgs: params.pnpmArgs,
@@ -188,8 +185,8 @@ async function collectProviderApiKeysForLiveMedia(provider: string): Promise<unk
 }
 
 async function getProviderEnvVarsForLiveMedia(provider: string): Promise<string[]> {
-  const { getProviderEnvVars } = await import("../../../../src/secrets/provider-env-vars.js");
-  return getProviderEnvVars(provider);
+  const { getProviderEnvVarsCore } = await import("../../../../src/secrets/provider-env-vars.js");
+  return getProviderEnvVarsCore(provider);
 }
 
 async function loadShellEnvFallbackForLiveMedia(params: {

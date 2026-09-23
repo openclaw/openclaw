@@ -1,22 +1,25 @@
-// Discord plugin module implements channel actions behavior.
 import { createUnionActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
+  ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import { Type } from "typebox";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
-import { readDiscordComponentSpec } from "./components.js";
+import { coerceDiscordComponentParam, readDiscordComponentSpec } from "./components.js";
 import { withDiscordInboundEventDeliveryMetadata } from "./inbound-event-delivery.js";
+import { matchesDiscordToolContextTarget, normalizeDiscordMessagingTarget } from "./normalize.js";
 import { isTrustedRequesterGuildAdminAction } from "./trusted-requester-actions.js";
 
 const localExecutionActions = new Set<ChannelMessageActionName>([
   "send",
+  "poll",
   "upload-file",
   "thread-reply",
   "sticker",
@@ -27,6 +30,46 @@ const localExecutionActions = new Set<ChannelMessageActionName>([
 
 function resolveDiscordActionExecutionMode({ action }: { action: ChannelMessageActionName }) {
   return localExecutionActions.has(action) ? "local" : "gateway";
+}
+
+function resolveDiscordThreadReplyDeliveryAlias(args: Record<string, unknown>): string | undefined {
+  if (
+    normalizeOptionalString(args.target) ||
+    normalizeOptionalString(args.to) ||
+    normalizeOptionalString(args.channelId)
+  ) {
+    return undefined;
+  }
+  const threadId = normalizeOptionalString(args.threadId);
+  return threadId ? normalizeDiscordMessagingTarget(`channel:${threadId}`) : undefined;
+}
+
+function resolveDiscordThreadReplyTarget(args: Record<string, unknown>): string | undefined {
+  const threadId = normalizeOptionalString(args.threadId);
+  const target =
+    threadId !== undefined
+      ? `channel:${threadId}`
+      : (normalizeOptionalString(args.channelId) ??
+        normalizeOptionalString(args.to) ??
+        normalizeOptionalString(args.target));
+  return target ? normalizeDiscordMessagingTarget(target) : undefined;
+}
+
+function matchesCurrentDiscordThread(params: {
+  args: Record<string, unknown>;
+  toolContext: {
+    currentChannelId?: string;
+    currentMessagingTarget?: string;
+  };
+}): boolean {
+  const requestedTarget = resolveDiscordThreadReplyTarget(params.args);
+  if (!requestedTarget) {
+    return false;
+  }
+  return matchesDiscordToolContextTarget({
+    target: requestedTarget,
+    toolContext: params.toolContext,
+  });
 }
 
 const loadDiscordChannelActionsRuntime = createLazyRuntimeModule(
@@ -168,18 +211,93 @@ function describeDiscordMessageTool({
   if (discovery.isEnabled("presence", false)) {
     actions.add("set-presence");
   }
+  const schema: ChannelMessageToolSchemaContribution[] = [];
+  if (actions.has("react")) {
+    schema.push({
+      actions: ["react", "reactions"],
+      properties: {
+        emoji: Type.Optional(
+          Type.String({
+            description: `Unicode emoji or custom name:id (also <:name:id> / <a:name:id>).${actions.has("emoji-list") ? ' Use action:"emoji-list" for server emojis.' : ""}`,
+          }),
+        ),
+      },
+    });
+  }
+  if (actions.has("send")) {
+    schema.push({
+      actions: ["send"],
+      visibility: "all-configured",
+      properties: {
+        components: Type.Optional(
+          Type.Object(
+            {
+              blocks: Type.Optional(
+                Type.Array(Type.Unknown(), {
+                  description:
+                    "Discord Components V2 blocks such as text, buttons, selects, media, containers, and separators.",
+                }),
+              ),
+              modal: Type.Optional(
+                Type.Object(
+                  {},
+                  {
+                    additionalProperties: true,
+                    description: "Optional Discord modal triggered by generated components.",
+                  },
+                ),
+              ),
+            },
+            {
+              additionalProperties: true,
+              description:
+                "Discord Components V2 payload for send actions. Accepts the same object consumed by the Discord components adapter.",
+            },
+          ),
+        ),
+      },
+    });
+  }
   return {
     actions: Array.from(actions),
     capabilities: ["presentation"],
+    schema,
   };
 }
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
+  providerOwnedReadGates: true,
+  readAuthorityActions: [
+    "read",
+    "search",
+    "reactions",
+    "list-pins",
+    "thread-list",
+    "channel-info",
+    "permissions",
+    "member-info",
+    "role-info",
+    "emoji-list",
+    "channel-list",
+    "voice-status",
+    "event-list",
+  ],
+  writeAuthorityActions: ["channel-edit", "delete", "edit", "pin", "unpin"],
   // Credential-only Discord actions run in the gateway when one is available.
   // Send/file-style actions stay local because core owns their thread, media,
   // component, and client-local payload semantics.
   resolveExecutionMode: resolveDiscordActionExecutionMode,
   describeMessageTool: describeDiscordMessageTool,
+  supportsAction: ({ action }) => action !== "poll",
+  messageActionTargetAliases: {
+    "thread-reply": {
+      aliases: ["threadId"],
+      deliveryTargetAliases: ["threadId"],
+      resolveDeliveryTarget: ({ args }) => resolveDiscordThreadReplyDeliveryAlias(args),
+      matchesCurrentConversation: ({ args, toolContext }) =>
+        matchesCurrentDiscordThread({ args, toolContext }),
+    },
+  },
   requiresTrustedRequesterSender: ({ action, toolContext }) =>
     Boolean(toolContext) && isTrustedRequesterGuildAdminAction(action),
   extractToolSend: ({ args }) => {
@@ -201,7 +319,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       sessionKey: ctx.sessionKey,
       inboundEventKind: ctx.inboundEventKind,
     });
-    const rawComponents = ctx.params.components;
+    const rawComponents = coerceDiscordComponentParam(ctx.params.components);
     if (typeof rawComponents === "function") {
       return null;
     }
@@ -253,6 +371,9 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     sessionKey,
     inboundEventKind,
     conversationReadOrigin,
+    reply,
+    progressSnapshot,
+    assertDirectAdapterHandoff,
   }) => {
     return await (
       await loadDiscordChannelActionsRuntime()
@@ -271,6 +392,9 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       ...(inboundEventKind ? { inboundEventKind } : {}),
       ...(requesterAccountId ? { requesterAccountId } : {}),
       ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
+      ...(reply ? { reply } : {}),
+      ...(progressSnapshot ? { progressSnapshot } : {}),
+      ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
     });
   },
 };

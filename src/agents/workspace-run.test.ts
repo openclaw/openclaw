@@ -132,6 +132,31 @@ describe("resolveRunWorkspaceDir", () => {
     ).toThrow(expect.objectContaining({ code: "RUN_WORKSPACE_ROSTER_REQUIRED" }));
   });
 
+  it.each(["", "   ", "!!!"])("rejects invalid explicit agent id %j", (agentId) => {
+    expect(() =>
+      resolveRunWorkspaceDir({
+        workspaceDir: path.join(process.cwd(), "tmp", "workspace-main"),
+        agentId,
+        sessionKey: "agent:main:main",
+        config: { agents: { entries: { main: {} } } },
+      }),
+    ).toThrow("Invalid explicit agent id");
+  });
+
+  it("normalizes a valid explicit agent at the selection boundary", () => {
+    const workspaceDir = path.join(process.cwd(), "tmp", "workspace-ops");
+    const result = resolveRunWorkspaceDir({
+      workspaceDir: undefined,
+      agentId: " OPS ",
+      sessionKey: "agent:ops:main",
+      config: { agents: { entries: { ops: { workspace: workspaceDir } } } },
+    });
+
+    expect(result.agentId).toBe("ops");
+    expect(result.agentIdSource).toBe("explicit");
+    expect(result.workspaceDir).toBe(path.resolve(workspaceDir));
+  });
+
   it.each([
     { agentId: "research", sessionKey: undefined },
     { agentId: undefined, sessionKey: "agent:research:subagent:test" },
@@ -188,5 +213,29 @@ describe("resolveRunWorkspaceDir", () => {
     expect(result.agentId).toBe("main");
     expect(result.agentIdSource).toBe("default");
     expect(result.workspaceDir).toBe(path.resolve(fallbackWorkspace));
+  });
+
+  it("uses the persisted fixed-store owner for a bare global workspace", () => {
+    const opsWorkspace = path.join(process.cwd(), "tmp", "workspace-ops-global");
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: {
+          ops: { workspace: opsWorkspace },
+          research: { workspace: path.join(process.cwd(), "tmp", "workspace-research-global") },
+        },
+      },
+      session: { scope: "global", store: "/tmp/openclaw-shared-sessions.sqlite" },
+    } satisfies OpenClawConfig;
+
+    const result = resolveRunWorkspaceDir({
+      workspaceDir: undefined,
+      sessionKey: "global",
+      config: cfg,
+    });
+
+    expect(result.agentId).toBe("ops");
+    expect(result.workspaceDir).toBe(path.resolve(opsWorkspace));
   });
 });
