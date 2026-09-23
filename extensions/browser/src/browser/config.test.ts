@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveUserPath } from "../utils.js";
 import {
   getManagedBrowserMissingDisplayError,
+  isLocalManagedProfile,
   resolveBrowserConfig,
   resolveManagedBrowserHeadlessMode,
   resolveProfile,
@@ -33,6 +34,97 @@ function withProfile(
 }
 
 describe("browser config", () => {
+  it.each(["chromium", "lightpanda"] as const)(
+    "rejects Lightpanda endpoint aliases in unvalidated runtime config (%s)",
+    (engine) => {
+      expect(() =>
+        resolveBrowserConfig({
+          profiles: {
+            lightweight: {
+              engine: "lightpanda",
+              cdpUrl: "ws://127.0.0.1:9222/",
+              attachOnly: true,
+            },
+            alias: { engine, cdpUrl: "ws://127.0.0.1:9222", attachOnly: true },
+          },
+        }),
+      ).toThrow(/dedicated CDP endpoint/);
+    },
+  );
+
+  it.each(["ws://127.0.0.1:9222/", "ws://lightpanda:9222/", "wss://browser.example/cdp"])(
+    "resolves Lightpanda as a persistent, externally owned semantic browser: %s",
+    (cdpUrl) => {
+      const profile = resolveRequiredProfile(
+        withProfile(
+          "lightweight",
+          { engine: "lightpanda", cdpUrl, attachOnly: true },
+          { headless: false, executablePath: "/usr/bin/chromium", attachOnly: false },
+        ),
+        "lightweight",
+      );
+      expect(profile).toMatchObject({
+        engine: "lightpanda",
+        cdpUrl,
+        attachOnly: true,
+        headless: true,
+        driver: "openclaw",
+      });
+      expect(profile.executablePath).toBeUndefined();
+      expect(isLocalManagedProfile(profile)).toBe(false);
+      expect(getBrowserProfileCapabilities(profile)).toMatchObject({
+        mode: "lightweight-cdp",
+        browserFilesystemLocal: false,
+        usesPersistentPlaywright: true,
+        supportsJsonTabEndpoints: false,
+        supportsPerTabWs: false,
+        supportsMultipleTabs: false,
+        supportsPageText: true,
+        supportsScreenshots: false,
+        supportsVisualActions: false,
+        supportsDownloads: false,
+        supportsPdf: false,
+        supportsUploads: false,
+        supportsDialogs: false,
+        supportsStorage: false,
+        supportsScreencast: false,
+        supportsConsole: false,
+        supportsBatchActions: false,
+        supportsRequests: false,
+        supportsErrors: false,
+        supportsEmulation: false,
+      });
+    },
+  );
+
+  it.each<Partial<BrowserProfileConfig>>([
+    { cdpUrl: undefined },
+    { cdpUrl: "http://127.0.0.1:9222" },
+    { cdpUrl: "not-a-url" },
+    { attachOnly: undefined },
+    { attachOnly: false },
+    { driver: "existing-session" },
+    { driver: "extension" },
+    { cdpPort: 9222 },
+    { userDataDir: "/tmp/chrome-profile" },
+    { mcpCommand: "chrome-devtools-mcp" },
+    { mcpArgs: [] },
+    { executablePath: "/usr/bin/chromium" },
+    { headless: false },
+  ])("rejects incompatible Lightpanda runtime config without schema validation: %j", (invalid) => {
+    expect(() =>
+      resolveRequiredProfile(
+        withProfile("lightweight", {
+          engine: "lightpanda",
+          cdpUrl: "ws://127.0.0.1:9222/",
+          attachOnly: true,
+          ...invalid,
+        }),
+        "lightweight",
+      ),
+    ).toThrow(/Lightpanda/);
+  });
+
   it("fills defaults without changing caller-owned profiles or prototype-like names", () => {
     const selected = Object.freeze({ driver: "existing-session" as const, attachOnly: true });
     const profiles = Object.freeze({
@@ -69,6 +161,7 @@ describe("browser config", () => {
     const profile = resolveProfile(resolved, resolved.defaultProfile);
     expect(profile?.name).toBe("openclaw");
     expect(profile?.driver).toBe("openclaw");
+    expect(profile?.engine).toBe("chromium");
     expect(profile?.cdpPort).toBe(18800);
     expect(profile?.cdpUrl).toBe("http://127.0.0.1:18800");
 
@@ -762,6 +855,7 @@ describe("browser config", () => {
       exact: true,
       expected: {
         name: "chrome-live",
+        engine: "chromium",
         driver: "existing-session",
         attachOnly: true,
         cdpPort: 0,

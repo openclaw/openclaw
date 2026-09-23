@@ -89,3 +89,43 @@ export function materializeControlUiLocaleCatalog(
   }
   return catalog;
 }
+
+export type PreparedControlUiCatalogSource = {
+  readonly hashesByKey: ReadonlyMap<string, string>;
+};
+
+export function prepareControlUiCatalogSource(
+  sourceFlat: ReadonlyMap<string, string>,
+): PreparedControlUiCatalogSource {
+  const hashesByKey = new Map<string, string>();
+  for (const [key, text] of sourceFlat) {
+    hashesByKey.set(key, hashControlUiTranslationText(text));
+  }
+  return { hashesByKey };
+}
+
+export function materializePreparedControlUiLocaleCatalog(
+  source: PreparedControlUiCatalogSource,
+  memory: ReadonlyMap<string, TranslationMemoryEntry>,
+): TranslationMap {
+  const translations = new Map<string, string>();
+
+  for (const entry of memory.values()) {
+    for (const key of [entry.segment_id, ...(entry.segment_ids ?? [])]) {
+      const expectedHash = source.hashesByKey.get(key);
+      if (expectedHash === undefined || entry.text_hash !== expectedHash) {
+        continue;
+      }
+      translations.set(key, entry.translated);
+    }
+  }
+
+  const catalog: TranslationMap = {};
+  for (const key of source.hashesByKey.keys()) {
+    const translated = translations.get(key);
+    if (translated !== undefined) {
+      setControlUiCatalogValue(catalog, key, translated);
+    }
+  }
+  return catalog;
+}

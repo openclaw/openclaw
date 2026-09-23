@@ -2,9 +2,11 @@
 // Exercises the serialized mock gateway exactly as a page would: the init
 // script installs MockWebSocket on window, and requests flow over it.
 import { describe, expect } from "vitest";
+import { setSharedControlUiE2eServerBaseUrl } from "./control-ui-e2e-shared-preview.ts";
 import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockGateway,
+  type ControlUiMockGatewayScenario,
   type ControlUiMockRequestHandler,
 } from "./control-ui-e2e.ts";
 import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
@@ -21,6 +23,50 @@ function waitForMockCycle(): Promise<void> {
     setTimeout(resolve, 300);
   });
 }
+
+it("advertises the leased build in hello while retaining scenario overrides and clearing stale identity", async ({
+  gatewayPage,
+}) => {
+  const buildInfo = { buildId: "prepared-ui-build", version: "2026.9.23" };
+  const defaultIdentity = { buildId: "e2e", version: "e2e" };
+  const expectHello = async (
+    id: string,
+    scenario: ControlUiMockGatewayScenario,
+    server: typeof buildInfo,
+  ) => {
+    gatewayPage.execute(createControlUiMockGatewayInitScript(scenario));
+    const { request } = gatewayPage.connect();
+    await flushMockTimers();
+    expect(await request(id, "connect", {})).toMatchObject({ server });
+  };
+
+  setSharedControlUiE2eServerBaseUrl(null);
+  try {
+    await expectHello("ordinary", {}, defaultIdentity);
+    setSharedControlUiE2eServerBaseUrl("http://prebuilt-ui/", buildInfo);
+    await expectHello("prepared", {}, buildInfo);
+    await expectHello(
+      "build-override",
+      { serverBuildId: " custom-build ", serverVersion: " " },
+      { ...buildInfo, buildId: "custom-build" },
+    );
+    await expectHello(
+      "version-override",
+      { serverBuildId: " ", serverVersion: " 2026.9.24 " },
+      { ...buildInfo, version: "2026.9.24" },
+    );
+
+    setSharedControlUiE2eServerBaseUrl("http://prebuilt-ui/", { ...buildInfo, version: null });
+    await expectHello("unknown-version", {}, { ...buildInfo, version: "e2e" });
+    setSharedControlUiE2eServerBaseUrl("http://ordinary-ui/");
+    await expectHello("replacement", {}, defaultIdentity);
+    setSharedControlUiE2eServerBaseUrl("http://prebuilt-ui/", buildInfo);
+    setSharedControlUiE2eServerBaseUrl(null);
+    await expectHello("reset", {}, defaultIdentity);
+  } finally {
+    setSharedControlUiE2eServerBaseUrl(null);
+  }
+});
 
 it("keeps handler responses and events on the requesting socket", async ({ gatewayPage }) => {
   const { window, execute } = gatewayPage;

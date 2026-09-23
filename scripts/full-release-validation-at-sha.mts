@@ -856,7 +856,8 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
       !enveloped ||
         (!Object.hasOwn(request.inputs, "validation_purpose") &&
           !Object.hasOwn(request.inputs, "publication_selection_json") &&
-          !Object.hasOwn(request.inputs, "extension_test_exclude_patterns_json")),
+          !Object.hasOwn(request.inputs, "extension_test_exclude_patterns_json") &&
+          !Object.hasOwn(request.inputs, "known_flaky_jobs_json")),
       "Retained dispatch contains conflicting source intent representations",
     );
     requireDispatch(
@@ -1001,15 +1002,25 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     validation_purpose,
     publication_selection_json,
     extension_test_exclude_patterns_json,
+    known_flaky_jobs_json,
     ...wireOverrides
   } = overrides;
   const laneInputs =
-    extension_test_exclude_patterns_json === undefined
+    extension_test_exclude_patterns_json === undefined && known_flaky_jobs_json === undefined
       ? undefined
-      : { extension_test_exclude_patterns_json };
+      : {
+          ...(extension_test_exclude_patterns_json !== undefined
+            ? { extension_test_exclude_patterns_json }
+            : {}),
+          ...(known_flaky_jobs_json !== undefined ? { known_flaky_jobs_json } : {}),
+        };
   requireDispatch(
     laneInputs === undefined || workflow.env.FULL_RELEASE_LANE_INPUTS_CONTRACT === "1",
     `Tooling SHA ${workflowSha} does not support packed lane inputs; no remote refs or run were created. Keep the frozen Tooling SHA.`,
+  );
+  requireDispatch(
+    known_flaky_jobs_json === undefined || workflow.env.FULL_RELEASE_FLAKE_RETRY_CONTRACT === "1",
+    `Tooling SHA ${workflowSha} does not support declared flake retries; no remote refs or run were created. Keep the frozen Tooling SHA.`,
   );
   const intent = normalizePublicationIntent(validation_purpose, publication_selection_json);
   requireDispatch(
@@ -1370,7 +1381,7 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
           ? publicationIntentInputs(
               normalizePublicationIntent(retainedIntent.validationPurpose, args.inputs[key]),
             ).publicationSelectionJson === retainedIntent.publicationSelectionJson
-          : key === "extension_test_exclude_patterns_json"
+          : key === "extension_test_exclude_patterns_json" || key === "known_flaky_jobs_json"
             ? normalizePublicationLaneInputs({ [key]: args.inputs[key] })[key] ===
               retainedInputs[key]
             : args.inputs[key] === retainedInputs[key],

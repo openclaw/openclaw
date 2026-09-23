@@ -34,6 +34,7 @@ import { registerPersonalInstructionsEnglish } from "../../ui/src/i18n/locales/e
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-plugin-management.ts";
 import { registerPortalsEnglish } from "../../ui/src/i18n/locales/en-portals.ts";
+import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts";
 import { registerSessionPeopleEnglish } from "../../ui/src/i18n/locales/en-session-people.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
@@ -94,6 +95,7 @@ const sourceFiles = [
   "en-plugin-consent.ts",
   "en-plugin-management.ts",
   "en-portals.ts",
+  "en-profile.ts",
   "en-settings.ts",
   "en-sidebar-attention.ts",
   "en-skill-library.ts",
@@ -160,6 +162,10 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       debug: registerDebugEnglish.catalog.debug,
       desktop: registerDesktopEnglish.catalog.desktop,
       attention: registerSidebarAttentionEnglish.catalog.attention,
+      profilePage: {
+        ...en.profilePage,
+        identity: registerProfileEnglish.catalog.profilePage.identity,
+      },
     },
     registerActivityEnglish.catalog,
     registerAgentsHomeEnglish.catalog,
@@ -187,6 +193,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerPluginConsentEnglish.catalog,
     registerPluginManagementEnglish.catalog,
     registerPortalsEnglish.catalog,
+    registerProfileEnglish.catalog,
     registerSettingsEnglish.catalog,
     registerSidebarAttentionEnglish.catalog,
     registerSkillWorkshopEnglish.catalog,

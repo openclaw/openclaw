@@ -403,6 +403,8 @@ This checklist is the public shape of the release flow. Private credentials and 
 
 ### Fast path (default)
 
+Flaky tests never block a release: rerun once, record, waive as advisory; only install smoke, upgrade-survivor proofs, pack budget and artifact children stay required.
+
 The default regular stable release is one cut, one validation parent, and one
 publish, with stable on npm `latest` within 6 hours of the cut. The full
 checklist below explains each step; this section decides what the default is.
@@ -412,7 +414,11 @@ checklist below explains each step; this section decides what the default is.
    entry, and the contribution record land on that branch in one commit, so
    Code SHA = Release SHA. Freeze the Tooling SHA once at dispatch. A
    publish-tooling re-tag (`release-publish/<sha12>-<epoch>` at a newer `main`)
-   never requires a new candidate or a new validation parent.
+   never requires a new candidate or a new validation parent. A second cut
+   (re-basing the candidate on newer `main`) happens only when Peter explicitly
+   asks for it in that release; otherwise cherry-pick merged `main` commits onto
+   the release branch only for a confirmed release blocker and name each one in
+   the handoff record.
 2. **Beta-profile evidence with a stable soak waiver.** Dispatch Full Release
    Validation with `release_profile=beta` and `run_release_soak=false`. Pass
    `--release-profile beta --stable-soak-waiver '<reason>' --skip-telegram --skip-parallels`
@@ -431,7 +437,8 @@ checklist below explains each step; this section decides what the default is.
    it lands.) A
    lane that fails twice on a test the candidate did not touch, where diagnosis
    finds no product cause in the candidate delta, is flaky: record it, fix it
-   on `main` in parallel, and do not re-cut. A re-cut is justified only by a
+   on `main` in parallel, and do not re-cut. A new Code SHA on the release
+   branch is justified only by a
    confirmed product defect that a required lane blocks on: the update/install
    path (the previous stable must update to the candidate, `install-smoke`,
    pack budget, worker bundle), the bytes to publish, or another required gate
@@ -1466,6 +1473,8 @@ npm packages or plugins, dispatching native releases, or finalizing the GitHub
 release. Existing approval and provenance checks still apply.
 
 Stable publication requires Full Release Validation with `runReleaseSoak=true` unless the operator supplies a non-empty `stable_soak_waiver` reason; the waiver also accepts advisory (beta-profile) performance evidence for publication and closeout when the product performance child run succeeded. The reason is recorded in postpublish evidence and the release verification tail, and all other evidence checks remain required. For regular stable tags published to `latest`, the waiver also authorizes first-time plugin npm bootstrap with beta-profile validation and is recorded in the attested bootstrap approval. The [fast path](#fast-path-default) supplies the waiver by default; leave the input empty only when soak actually ran:
+
+**Operator lane waiver.** When the release owner decides non-proof lanes must not block a stable, set the repository variable `OPENCLAW_FRV_LANE_WAIVER` to `<target version> <reason>` (for example `2026.9.6 ship now`; `workflow_dispatch` caps inputs at 25, and a value naming another version fails closed) and dispatch Full Release Validation: failed jobs in the CI, plugin prerelease, release-checks, and performance children become advisory and are recorded in the manifest (`advisoryJobs` with `reason: lane_waiver`), while install-smoke, upgrade-survivor, pack/qualify-npm, `resolve_target`, and every artifact gate stay blocking (a lost `update-first-hop-compat` lane is waivable only behind green upgrade-survivor lanes). Publishing that evidence requires `lane_waiver=<reason>` on `openclaw-release-publish.yml` as acknowledgement; the receipt records `laneWaiver`, `laneWaiverAcknowledgement`, and `waivedJobs` next to `stableSoakWaiver`. Clear the variable after the release. Native app and Control UI CI lanes and cross-OS execution lanes are advisory for the npm decision even without a waiver.
 
 ```bash
 gh workflow run openclaw-release-publish.yml \

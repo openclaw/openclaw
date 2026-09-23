@@ -228,6 +228,10 @@ async function buildBrowserStatus(
     enabled: current.resolved.enabled,
     profile: profileCtx.profile.name,
     driver: profileCtx.profile.driver,
+    engine: profileCtx.profile.engine ?? "chromium",
+    ...(profileCtx.profile.engine === "lightpanda"
+      ? { sessionScope: "connection", screenshotFidelity: "none" }
+      : {}),
     transport: capabilities.usesChromeMcp
       ? ("chrome-mcp" as const)
       : capabilities.mode === "local-extension"

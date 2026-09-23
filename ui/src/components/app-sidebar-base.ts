@@ -117,6 +117,7 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
     return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, {
       method: "sessions.create",
       params: {},
+      sessionScope: true,
     });
   }
 

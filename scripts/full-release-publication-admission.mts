@@ -61,6 +61,7 @@ const toolingPaths = new Set([
   "scripts/release-validation-intent.mjs",
   "scripts/full-release-publication-admission.mts",
   "scripts/full-release-publication-contract.mjs",
+  "scripts/full-release-flake-policy.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/npm-json-output.mts",
   "packages/normalization-core/src/expect.ts",

@@ -26,6 +26,8 @@ Read only the references needed for the selected phase:
 
 ## Shared release boundaries
 
+Flaky tests never block a release. A lane that fails on a test the candidate did not touch, or that passes on rerun, is a flake: rerun it once, record it, and treat it as advisory (operator lane waiver `OPENCLAW_FRV_LANE_WAIVER`, or the declared flake allowance) rather than holding npm/ClawHub publication. Only install smoke, upgrade-survivor proofs, pack budget, and the artifact children stay required. A release-critical tooling PR blocked solely by a flaky check may be admin-merged once every non-flaky required check is green.
+
 Explicit approval is required for version changes and irreversible publication.
 A request to cut, publish, or complete a named release carries through its
 validated publication and verification; do not ask again unless identity,
@@ -63,6 +65,15 @@ source delta, rename, or deletion returns to the Code SHA loop. Historical
 root-only receipts retain `changelog-only-release-v1`.
 Keep trusted **Tooling SHA** separate; tooling or infrastructure failures do
 not justify changing the candidate.
+
+Once a candidate is cut, its base is the operator's decision. Never re-cut
+(re-base the candidate on newer `main`) unless Peter explicitly asks for it in
+that release. Without asking, cherry-pick already-merged `main` commits onto
+the release branch only to fix a confirmed release blocker: a required lane
+failing deterministically on the frozen candidate, or an update/install/
+publish-bytes defect. Name each cherry-pick in the handoff record. Not allowed:
+opportunistic backports, feature reverts, or a new base taken to "pick up" a
+fix that cherry-picks cleanly enough with a small conflict resolution.
 
 Published versions and final tags are immutable. Reuse successful exact-source
 artifacts; do not rebuild or republish as an implicit retry. The active release

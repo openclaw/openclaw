@@ -193,6 +193,25 @@ until their dependent enforcement changes land.
 - Recover one failed surface with one diagnosis, one fix when needed, and one
   narrow retry. Then reassess the release decision. Do not automatically
   dispatch `rerun_group=all`.
+- For diagnosed intermittent jobs, declare exact `child:job name` selectors
+  before dispatch with `-f known_flaky_jobs_json='["normalCi:checks-node-agentic-control-plane-agent-chat"]'`.
+  The default is `[]`; the immutable plan binds the allowance. Each selected
+  child gets at most one automatic wave from attempt 1 to attempt 2: exactly
+  one declared failure uses the targeted job API; multiple declared failures
+  use the failed-jobs API only when every failed job is declared. Multiple
+  declared failures mixed with an undeclared failure record no automatic
+  attempt; required failures remain blockers. Any earlier child rerun consumes this budget,
+  even if it did not execute the listed job. GitHub also reruns dependent jobs
+  and offers no atomic arbitrary-subset operation. Explicit manual job retries
+  remain separate. Decision and Drain wait for retry owners and preserve their records
+  in the manifest. The owner uploads and witnesses an immutable intent, saves
+  its exact cache key, then sends its mutation once. Parent reruns authenticate
+  the restored intent and reconcile read-only; they never renew or replay it.
+  A dedicated original rejection witness preserves confirmed no-effect outcomes
+  through artifact loss and later manual attempts. `observed` authenticates a
+  matching replacement; it does not claim the automatic POST caused that attempt.
+  Preserve original logs and intent cache through verified validation. An
+  uncertain or exhausted allowance requires explicit operator recovery.
 - For a supported parent, `pnpm frv rerun --run <parent-run-id> --job
 "<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
   Actions job ID. Get the child key and exact name from `frv status --json`.
@@ -444,6 +463,10 @@ publish workflow reads the effective profile from the full-validation manifest.
 Stable publication requires soak unless the operator supplies `stable_soak_waiver`
 with a reason; the publisher forwards and records that reason in release evidence
 without changing validation coverage or other publication gates.
+An operator lane waiver (repository variable `OPENCLAW_FRV_LANE_WAIVER="<target version> <reason>"`, cleared after the release) keeps
+non-proof lane failures advisory; install-smoke, upgrade-survivor, pack/qualify-npm,
+`resolve_target`, and artifact gates stay blocking, and publishing that manifest
+needs the same `lane_waiver` acknowledgement on the publish workflow.
 
 ### Extended-stable validation
 
