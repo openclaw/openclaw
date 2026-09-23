@@ -86,7 +86,10 @@ export function createDiscordWidgetPresenter(
           },
         };
       }
-      if (title.length > 80) {
+      // Discord's 80-character button label limit counts characters, and so does the
+      // message this rejection shows. `String.length` counts UTF-16 code units, so an
+      // astral character such as an emoji is charged twice.
+      if (Array.from(title).length > 80) {
         return {
           ok: false,
           error: { code: "presentation_error", message: "title must be 80 characters or fewer" },
