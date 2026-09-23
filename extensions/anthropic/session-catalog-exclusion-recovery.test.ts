@@ -616,9 +616,7 @@ describe("Claude session catalog exclusions and recovery", () => {
     expect(overlay.skippedFiles).toBe(1);
     expect(overlay.active.get(sessionId)).toMatchObject({
       customGroup: "Release",
-      prNumber: 111773,
-      prState: "OPEN",
-      prs: [{ prNumber: 111771, state: "CLOSED" }],
+      pullRequest: { numbers: [111771, 111773], state: "open" },
     });
   });
 
