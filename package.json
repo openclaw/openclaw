@@ -2227,6 +2227,7 @@
     "ui:proof:workboard": "node --import ./scripts/tsx.mjs scripts/capture-workboard-ui-proof.mts",
     "update:network-budget:check": "node scripts/generate-update-network-budget.mjs --check",
     "update:network-budget:gen": "node scripts/generate-update-network-budget.mjs",
+    "workboard:proof:delete-rollback": "node --import ./scripts/tsx.mjs scripts/proof-workboard-delete-rollback.mjs .",
     "native:i18n:baseline": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts baseline --write",
     "native:i18n:check": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts check",
     "native:i18n:sync": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts sync --write",
