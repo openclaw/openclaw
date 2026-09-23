@@ -264,7 +264,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(complete).toHaveBeenCalledTimes(3);
   });
 
-  it("keeps describe non-current while the newer first-turn recap is queued or held", async () => {
+  it("keeps describe non-current while the newer first-turn recap is queued or held", async (testContext) => {
     await messages(1);
     complete.mockResolvedValueOnce(result("Only the request is recorded."));
     service.ensure(target);
@@ -290,6 +290,8 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       return responses[0]?.[1];
     };
     const completion = createDeferred<ReturnType<typeof result>>();
+    const publication = createDeferred();
+    const abortPublication = () => publication.reject(testContext.signal.reason);
     try {
       // Prime the real resident projection with the older, valid current summary.
       expect(await describeSession()).toMatchObject({
@@ -328,15 +330,17 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         totalMessages: 1,
       });
 
+      testContext.signal.throwIfAborted();
+      testContext.signal.addEventListener("abort", abortPublication, { once: true });
+      changed.mockImplementationOnce(() => publication.resolve());
       completion.resolve(result("Completed the first turn."));
-      await vi.waitFor(async () => {
-        expect(await describeSession()).toMatchObject({
-          session: {
-            key: target.key,
-            sessionId: scope.sessionId,
-            activitySummary: { state: "current", text: "Completed the first turn." },
-          },
-        });
+      await publication.promise;
+      expect(await describeSession()).toMatchObject({
+        session: {
+          key: target.key,
+          sessionId: scope.sessionId,
+          activitySummary: { state: "current", text: "Completed the first turn." },
+        },
       });
       expect(read()?.activitySummary).toMatchObject({
         ...latestWatermark,
@@ -347,6 +351,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       });
       expect(complete).toHaveBeenCalledTimes(2);
     } finally {
+      testContext.signal.removeEventListener("abort", abortPublication);
       completion.resolve(result("Completed the first turn."));
       try {
         await service.dispose();
