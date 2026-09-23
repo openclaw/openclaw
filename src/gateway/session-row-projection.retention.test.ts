@@ -40,6 +40,15 @@ it("collects superseded resident rows and their materializations after metadata 
       materialized: WeakRef<object>;
     }[] = [];
     const selections: WeakRef<object>[] = [];
+    function captureSelections() {
+      for (const opts of [{}, { agentId: "main" }, { configuredAgentsOnly: true }]) {
+        for (const activeOnly of [false, true]) {
+          selections.push(
+            new WeakRef(prepareSessionRowSelection(projection, { ...opts, activeOnly }).entries),
+          );
+        }
+      }
+    }
     const control = createCollectionControl();
     function refreshEntries(revision: number) {
       for (const row of projection.selectEntries().filter(ready)) {
@@ -63,7 +72,7 @@ it("collects superseded resident rows and their materializations after metadata 
         expect(result.sessions.map((row) => row.label)).toEqual(
           keys.map(() => `Revision ${revision}`),
         );
-        selections.push(new WeakRef(prepareSessionRowSelection(projection, {}).entries));
+        captureSelections();
       }
       // A publication must release the last list even when no subsequent viewer arrives.
       refreshEntries(5);
@@ -80,7 +89,7 @@ it("collects superseded resident rows and their materializations after metadata 
       expect(projection.selectEntries().filter(ready)).toHaveLength(keys.length);
       await listProjectedSessions({ projection, opts: {} });
       const disposedEntries = projection.selectEntries().map((row) => new WeakRef(row.entry));
-      selections.push(new WeakRef(prepareSessionRowSelection(projection, {}).entries));
+      captureSelections();
       projection.dispose();
       await nextTurn();
       queryObjects(WeakRef);

@@ -20,13 +20,17 @@ import {
   persistCliSessionForkSuccessorInStore,
   restoreCliSessionForkInStore,
   recordCliCompactionInStore,
-  updateSessionStoreAfterAgentRun as updateSessionStoreAfterAgentRunBase,
 } from "./session-store.js";
-import { withTempSessionStore } from "./session-store.test-support.js";
+import {
+  loadPersistedSessionEntry,
+  loadPersistedSessionStore,
+  seedSessionStore,
+  updateSessionStoreAfterAgentRun,
+  withTempSessionStore,
+} from "./session-store.test-support.js";
 import { resolveSession } from "./session.js";
 
-const { listSessionEntriesCore, loadSessionEntry, patchSessionEntryCore, replaceSessionEntry } =
-  sessionAccessor;
+const { loadSessionEntry, replaceSessionEntry } = sessionAccessor;
 
 vi.mock("../model-selection.js", () => ({
   isCliProvider: (provider: string, _cfg?: OpenClawConfig) =>
@@ -43,43 +47,6 @@ function acpMeta() {
     state: "idle" as const,
     lastActivityAt: Date.now(),
   };
-}
-
-async function seedSessionStore(
-  storePath: string,
-  entries: Record<string, SessionEntry>,
-): Promise<void> {
-  for (const [sessionKey, entry] of Object.entries(entries)) {
-    await patchSessionEntryCore({ storePath, sessionKey }, () => entry, {
-      fallbackEntry: entry,
-      replaceEntry: true,
-      skipMaintenance: true,
-    });
-  }
-}
-
-function loadPersistedSessionStore(storePath: string): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
-}
-
-function loadPersistedSessionEntry(
-  storePath: string,
-  sessionKey: string,
-): SessionEntry | undefined {
-  return loadSessionEntry({ storePath, sessionKey }) ?? undefined;
-}
-
-type SessionStoreUpdateParams = Parameters<typeof updateSessionStoreAfterAgentRunBase>[0];
-
-async function updateSessionStoreAfterAgentRun(
-  params: Omit<SessionStoreUpdateParams, "agentDir"> & { agentDir?: string },
-) {
-  await updateSessionStoreAfterAgentRunBase({
-    ...params,
-    agentDir: params.agentDir ?? "/tmp/openclaw-session-store-test-agent",
-  });
 }
 
 describe("updateSessionStoreAfterAgentRun", () => {
@@ -140,6 +107,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           let recorded: SessionEntry | undefined;
           if (operation === "cli-compaction") {
             recorded = await recordCliCompactionInStore({
+              agentId: "main",
               compactionKind: "native-harness",
               sessionKey,
               sessionStore,
@@ -214,6 +182,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       );
 
       await updateSessionStoreAfterAgentRun({
+        agentId: "marie",
         cfg: {
           agents: { ownership: "explicit", entries: { main: {}, marie: {} } },
           models: {
@@ -767,6 +736,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
 
       const settled = await persistCliSessionBindingResult({
+        agentId: "main",
         assertSettlementCurrent: () => {},
         expectedSession: sessionStore[sessionKey],
         provider: "claude-cli",
@@ -833,6 +803,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
 
       await persistCliSessionBindingResult({
+        agentId: "main",
         assertSettlementCurrent: () => {},
         expectedSession: sessionStore[sessionKey],
         provider: "claude-cli",
@@ -877,6 +848,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
 
       await updateSessionStoreAfterAgentRun({
+        agentId: "codex",
         cfg: {} as never,
         sessionId,
         sessionKey,
@@ -992,6 +964,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
 
       await updateSessionStoreAfterAgentRun({
+        agentId: "codex",
         cfg: {} as never,
         sessionId,
         sessionKey,
@@ -2854,6 +2827,7 @@ describe("recordCliCompactionInStore", () => {
       await seedSessionStore(storePath, sessionStore);
 
       await recordCliCompactionInStore({
+        agentId: "main",
         expectedSession: { sessionId, lifecycleRevision: undefined, activeWriterRunId: undefined },
         compactionKind: "native-harness",
         sessionKey,
@@ -2927,6 +2901,7 @@ describe("recordCliCompactionInStore", () => {
       await seedSessionStore(storePath, sessionStore);
 
       await recordCliCompactionInStore({
+        agentId: "main",
         expectedSession: { sessionId, lifecycleRevision: undefined, activeWriterRunId: undefined },
         compactionKind: "native-harness",
         sessionKey,
@@ -2984,6 +2959,7 @@ describe("recordCliCompactionInStore", () => {
       await seedSessionStore(storePath, sessionStore);
 
       await recordCliCompactionInStore({
+        agentId: "main",
         expectedSession: { sessionId, lifecycleRevision: undefined, activeWriterRunId: undefined },
         compactionKind: "context-engine",
         sessionKey,
@@ -3027,6 +3003,7 @@ describe("recordCliCompactionInStore", () => {
       };
 
       const result = await recordCliCompactionInStore({
+        agentId: "main",
         expectedSession: { sessionId, lifecycleRevision: undefined, activeWriterRunId: undefined },
         compactionKind: "context-engine",
         sessionKey,
@@ -3056,6 +3033,7 @@ describe("recordCliCompactionInStore", () => {
         await seedSessionStore(storePath, { [sessionKey]: changed });
 
         const result = await recordCliCompactionInStore({
+          agentId: "main",
           compactionKind: "context-engine",
           sessionKey,
           storePath,
@@ -3140,6 +3118,7 @@ describe("CLI binding settlement", () => {
           cause: new Error(`Synthetic storage cause ${"x".repeat(2_000)}`),
         });
         const settled = await persistCliSessionBindingResult({
+          agentId: "main",
           result,
           provider: "fixture-cli",
           sessionKey,
@@ -3204,6 +3183,7 @@ describe("CLI binding settlement", () => {
         const before = loadPersistedSessionEntry(storePath, sessionKey);
 
         await persistCliSessionBindingResult({
+          agentId: "main",
           assertSettlementCurrent: () => {},
           sessionKey,
           storePath,
@@ -3242,6 +3222,7 @@ describe("CLI binding settlement", () => {
         const controller = new AbortController();
         let open = true;
         const settlement = persistCliSessionBindingResult({
+          agentId: "main",
           sessionKey,
           storePath,
           expectedSession: entry,
@@ -3317,6 +3298,7 @@ describe("consumeCliSessionForkInStore", () => {
         { ...entry, label: "concurrent update" },
       );
       const consumed = await consumeCliSessionForkInStore({
+        agentId: "main",
         provider: "claude-cli",
         sessionKey,
         sessionStore,
@@ -3338,6 +3320,7 @@ describe("consumeCliSessionForkInStore", () => {
       });
       await expect(
         consumeCliSessionForkInStore({
+          agentId: "main",
           provider: "claude-cli",
           sessionKey,
           sessionStore,
@@ -3362,6 +3345,7 @@ describe("consumeCliSessionForkInStore", () => {
       await seedSessionStore(storePath, sessionStore);
 
       const restored = await restoreCliSessionForkInStore({
+        agentId: "main",
         provider: "claude-cli",
         sessionKey,
         sessionStore,
@@ -3398,6 +3382,7 @@ describe("consumeCliSessionForkInStore", () => {
       await seedSessionStore(storePath, sessionStore);
 
       const persisted = await persistCliSessionForkSuccessorInStore({
+        agentId: "main",
         provider: "claude-cli",
         sessionKey,
         sessionStore,
@@ -3479,6 +3464,7 @@ describe("consumeCliSessionForkInStore", () => {
 
       let open = true;
       const common = {
+        agentId: "main",
         provider: "claude-cli",
         sessionKey,
         sessionStore,
@@ -3540,6 +3526,7 @@ describe("clearCliSessionInStore", () => {
       await seedSessionStore(storePath, sessionStore);
 
       const cleared = await clearCliSessionInStore({
+        agentId: "main",
         provider: "claude-cli",
         sessionKey,
         sessionStore,
@@ -3579,6 +3566,7 @@ describe("clearCliSessionInStore", () => {
       await seedSessionStore(storePath, sessionStore);
 
       const cleared = await clearCliSessionInStore({
+        agentId: "main",
         provider: "claude-cli",
         sessionKey: "agent:main:explicit:missing",
         sessionStore,
@@ -3619,6 +3607,7 @@ describe("clearCliSessionInStore", () => {
       const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
 
       const cleared = await clearCliSessionInStore({
+        agentId: "main",
         provider: "claude-cli",
         sessionKey,
         sessionStore,
@@ -3659,6 +3648,7 @@ describe("clearCliSessionInStore", () => {
       };
 
       await clearCliSessionInStore({
+        agentId: "main",
         provider: "claude-cli",
         sessionKey,
         sessionStore,

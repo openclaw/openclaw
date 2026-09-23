@@ -44,7 +44,7 @@ import {
   buildBoardWidgetFrameUrl,
   createBoardViewTicket,
 } from "../board-view-ticket.js";
-import { resolveBoardWidgetApproval } from "../board-widget-approval.js";
+import { createBoardWidgetApprovalResolver } from "../board-widget-approval.js";
 import { withAuthorizedBoardWidgetView } from "../board-widget-view.js";
 import {
   requireMcpAppInteraction,
@@ -96,6 +96,7 @@ export function createBoardHandlers(
   readCanvasDocument: CanvasDocumentReader = readCanvasDocumentHtmlSource,
   dependencies: BoardHandlerDependencies = {},
 ): GatewayRequestHandlers {
+  const resolveBoardWidgetApproval = createBoardWidgetApprovalResolver();
   const mcpApp: McpAppDependencies = {
     resolveActiveView: dependencies.resolveActiveView ?? resolveMcpAppActiveView,
     resolveAllowedToolNames: dependencies.resolveAllowedToolNames ?? resolveMcpAppAllowedToolNames,
@@ -433,6 +434,7 @@ export function createBoardHandlers(
               cfg: context.getRuntimeConfig(),
               ...boardSession,
               name: snapshot.resolvedWidgetName,
+              content: materializedContent,
               declared: declared ?? {},
             });
             authority.assertActive();

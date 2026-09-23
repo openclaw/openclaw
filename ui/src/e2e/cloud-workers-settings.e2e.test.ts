@@ -186,7 +186,7 @@ suite.define(() => {
         .waitFor();
       expect(await gateway.getSocketCount()).toBe(socketCount);
 
-      await page.getByRole("button", { name: "Edit" }).click();
+      await page.getByRole("button", { name: "Edit: build-fleet", exact: true }).click();
       await expect.poll(() => machineClass.inputValue()).toBe("standard");
       await machineClass.fill("batch/ARM64.v2");
       await page.getByLabel("Crabbox backend").fill("daytona");
@@ -317,7 +317,7 @@ suite.define(() => {
       });
 
       await page.getByText("Class: batch/ARM64.v2", { exact: false }).waitFor();
-      await page.getByRole("button", { name: "Edit", exact: true }).click();
+      await page.getByRole("button", { name: "Edit: build-fleet", exact: true }).click();
       await waitForSettledFormControls(page, [
         { locator: machineClass, value: "batch/ARM64.v2" },
         { locator: page.getByLabel("Crabbox backend"), value: "daytona" },
@@ -392,7 +392,7 @@ suite.define(() => {
         .filter({
           has: page.locator("code", { hasText: /^pending$/ }),
         })
-        .getByRole("button", { name: "Edit", exact: true })
+        .getByRole("button", { name: "Edit: pending", exact: true })
         .click();
       await expect.poll(() => machineClass.inputValue()).toBe("custom");
       await page.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -639,7 +639,7 @@ suite.define(() => {
         const pendingRow = page.locator(".settings-row").filter({
           has: page.locator("code", { hasText: /^pending$/ }),
         });
-        await pendingRow.getByRole("button", { name: "Edit" }).click();
+        await pendingRow.getByRole("button", { name: "Edit: pending", exact: true }).click();
         const editor = page.locator(".settings-section", {
           has: page.getByRole("heading", { name: "Edit profile", exact: true }),
         });
@@ -672,7 +672,7 @@ suite.define(() => {
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         await editor.getByRole("button", { name: "Cancel" }).click();
 
-        await pendingRow.getByRole("button", { name: "Edit" }).click();
+        await pendingRow.getByRole("button", { name: "Edit: pending", exact: true }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/advanced");
         await expect
           .poll(() => new URL(page.url()).searchParams.get("section"))
@@ -714,7 +714,7 @@ suite.define(() => {
         await page.goBack();
         await pendingRow.getByText(description, { exact: false }).waitFor();
 
-        await pendingRow.getByRole("button", { name: "Delete" }).click();
+        await pendingRow.getByRole("button", { name: "Delete: pending", exact: true }).click();
         const confirmation = await waitForConfirmModal(page);
         await expect.poll(() => confirmation.textContent()).toContain("Delete profile pending?");
         await expect.poll(() => confirmation.textContent()).toContain("Repository defaults");
@@ -765,7 +765,7 @@ suite.define(() => {
       const pendingRow = page.locator(".settings-row").filter({
         has: page.locator("code", { hasText: /^pending$/ }),
       });
-      await pendingRow.getByRole("button", { name: "Delete" }).click();
+      await pendingRow.getByRole("button", { name: "Delete: pending", exact: true }).click();
       const confirmation = await waitForConfirmModal(page);
       const socketCount = await gateway.getSocketCount();
       const configGetCount = (await gateway.getRequests("config.get")).length;
@@ -779,7 +779,9 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("config.get")).length)
         .toBeGreaterThan(configGetCount);
       await expect
-        .poll(() => pendingRow.getByRole("button", { name: "Delete" }).isEnabled())
+        .poll(() =>
+          pendingRow.getByRole("button", { name: "Delete: pending", exact: true }).isEnabled(),
+        )
         .toBe(true);
 
       await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
@@ -815,7 +817,7 @@ suite.define(() => {
       const pendingRow = page.locator(".settings-row").filter({
         has: page.locator("code", { hasText: /^pending$/ }),
       });
-      await pendingRow.getByRole("button", { name: "Delete" }).click();
+      await pendingRow.getByRole("button", { name: "Delete: pending", exact: true }).click();
       const confirmation = await waitForConfirmModal(page);
       const socketCount = await gateway.getSocketCount();
       const configGetCount = (await gateway.getRequests("config.get")).length;
@@ -877,7 +879,9 @@ suite.define(() => {
       });
       expect(replacementClientInstanceId).not.toBe(originalGateway.clientInstanceId);
       await expect
-        .poll(() => pendingRow.getByRole("button", { name: "Delete" }).isEnabled())
+        .poll(() =>
+          pendingRow.getByRole("button", { name: "Delete: pending", exact: true }).isEnabled(),
+        )
         .toBe(true);
 
       await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
@@ -917,7 +921,7 @@ suite.define(() => {
       const pendingRow = page.locator(".settings-row").filter({
         has: page.locator("code", { hasText: /^pending$/ }),
       });
-      await pendingRow.getByRole("button", { name: "Delete" }).click();
+      await pendingRow.getByRole("button", { name: "Delete: pending", exact: true }).click();
       const confirmation = await waitForConfirmModal(page);
       const configGetCount = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("config.get");

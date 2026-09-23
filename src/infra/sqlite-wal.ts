@@ -576,15 +576,28 @@ export function configureSqliteWalMaintenance(
   let timer: IntervalHandle | null = null;
   const maintain = createSqliteWalMaintenanceScheduler(
     db,
-    () => {
+    (maxPages) => {
       // Admission may outlive this timer or its exact native connection.
       if (!timer || invalidated) {
-        return;
+        return 0;
       }
+      let reclaimedPages = 0;
       runMaintenance(() => {
-        const checkpointed = reclaimSqliteWalFreePages(db, runCheckpoint, {
+        const reclaimed = reclaimSqliteWalFreePages(db, runCheckpoint, {
           checkpointMode: periodicCheckpointMode,
-        }).checkpointCompleted;
+          maxPages,
+        });
+        const checkpointed = reclaimed.checkpointCompleted;
+        if (
+          checkpointed &&
+          reclaimed.freePagesBefore !== null &&
+          reclaimed.remainingFreePages !== null
+        ) {
+          reclaimedPages = Math.min(
+            reclaimed.vacuumPagesRequested,
+            reclaimed.freePagesBefore - reclaimed.remainingFreePages,
+          );
+        }
         if (
           checkpointed &&
           periodicCheckpointMode === "PASSIVE" &&
@@ -596,8 +609,10 @@ export function configureSqliteWalMaintenance(
         }
         return checkpointed;
       });
+      return reclaimedPages;
     },
     (error) => checkpointOwner.recordError(error),
+    512,
   );
   if (timerIntervalMs > 0) {
     timer = runInSqliteMaintenanceContext(
@@ -630,7 +645,7 @@ export function configureSqliteWalMaintenance(
               terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
             }
           }
-          maintain();
+          void maintain();
         }, timerIntervalMs) as IntervalHandle,
     );
     timer.unref?.();

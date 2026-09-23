@@ -33,6 +33,7 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "theme", family: "openclaw" },
   { name: "secrets", family: "openclaw" },
   { name: "dashboard", family: "openclaw" },
+  { name: "decision_evaluate", family: "openclaw" },
   { name: "gateway", family: "openclaw" },
   { name: "plugins", family: "openclaw" },
   { name: "get_goal", family: "openclaw" },

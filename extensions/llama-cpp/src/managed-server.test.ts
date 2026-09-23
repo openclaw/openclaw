@@ -920,11 +920,16 @@ describe("managed llama-server", () => {
   it.each(["metrics", "props"] as const)(
     "bounds %s inspection responses while accepting a legitimate large body",
     async (endpoint) => {
-      let padding = "x".repeat(1024 * 1024);
+      const responseBytes = (size: number) => {
+        const padding = "x".repeat(size);
+        return Buffer.from(endpoint === "metrics" ? padding : JSON.stringify({ padding }));
+      };
+      // Fixture serialization must not consume the concurrent inspection deadlines.
+      let body = responseBytes(1024 * 1024);
       const server = http.createServer((req, res) => {
         if (req.url?.startsWith(`/${endpoint}?`)) {
           res.setHeader("content-type", endpoint === "metrics" ? "text/plain" : "application/json");
-          res.end(endpoint === "metrics" ? padding : JSON.stringify({ padding }));
+          res.end(body);
           return;
         }
         res.setHeader("content-type", "application/json");
@@ -967,7 +972,7 @@ describe("managed llama-server", () => {
         endpoints: { health: "ready", models: "ready", props: "ready", metrics: "ready" },
       });
 
-      padding = "x".repeat(32 * 1024 * 1024);
+      body = responseBytes(32 * 1024 * 1024);
       await expect(inspect()).resolves.toMatchObject({
         state: "failed",
         endpoints: {

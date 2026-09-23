@@ -362,7 +362,7 @@ export const streamSimpleAnthropic: StreamFunction<
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: true,
-      effort: resolveAnthropicThinkingEffort(model, reasoning ?? "high"),
+      effort: resolveAnthropicThinkingEffort(model, reasoning),
     } satisfies AnthropicCompactionOptions);
   }
   if (!reasoning) {

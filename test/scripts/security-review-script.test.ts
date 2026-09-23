@@ -174,6 +174,66 @@ describe("combined security review entry point", () => {
     expect(result.reviews.filter((entry) => entry.body?.state === "success")).toHaveLength(2);
   });
 
+  it.each(["detect", "enforce"])(
+    "recovers diff data that takes longer than seven seconds to settle in %s mode",
+    (mode) => {
+      const result = evaluate(
+        {
+          [`GET ${pullPath}`]: {
+            settlesAt: "2026-01-02T00:00:30Z",
+            before: { ...pr, changed_files: 3146 },
+            after: pr,
+          },
+          [`GET ${pullPath}/files`]: {
+            settlesAt: "2026-01-02T00:00:30Z",
+            before: files.slice(0, 1),
+            after: files,
+          },
+        },
+        mode,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits.some((delay) => delay >= 30_000)).toBe(true);
+      expect(result.requests.filter((entry) => entry.path === `${pullPath}/files`)).toHaveLength(2);
+      if (mode === "enforce") {
+        expect(result.combined.at(-1)).toBe("success");
+        expect(result.reviews.filter((entry) => entry.body?.state === "success")).toHaveLength(2);
+      }
+    },
+  );
+
+  it.each([
+    { phase: "before dependency approval", stableReads: 2 },
+    { phase: "between guards", stableReads: 3 },
+    { phase: "before combined success", stableReads: 5 },
+  ])("restarts the complete review when the file count changes $phase", ({ stableReads }) => {
+    const changed = { ...pr, changed_files: 3 };
+    const result = evaluate({
+      [`GET ${pullPath}`]: {
+        responses: [...Array.from({ length: stableReads }, () => ({ ...pr })), changed],
+      },
+      [`GET ${pullPath}/files`]: {
+        responses: [files, [...files, { filename: "src/secrets/store.ts", status: "modified" }]],
+      },
+      [rolePath]: {
+        settlesAt: "2026-01-02T00:00:30Z",
+        before: { role_name: "maintain" },
+        after: { role_name: "read" },
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toHaveLength(1);
+    const afterWait = result.requests.slice(
+      result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+    );
+    expect(afterWait[0]).toMatchObject({ method: "GET", path: pullPath });
+    expect(afterWait.some((entry) => entry.body?.state === "success")).toBe(false);
+    expect(result.combined.at(-1)).toBe("failure");
+    expect(afterWait.map((entry) => entry.body?.body ?? "").join("\n")).toContain(
+      "src/secrets/store.ts",
+    );
+  });
+
   it("restarts incomplete pagination and still requires approval for recovered sensitive files", () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => ({
       filename: `docs/example-${index}.md`,
@@ -196,6 +256,12 @@ describe("combined security review entry point", () => {
   it.each([
     { name: "head", changedPr: { ...pr, head: { ...pr.head, sha: "d".repeat(40) } }, status: 0 },
     { name: "target branch", changedPr: { ...pr, base: { ...pr.base, ref: "stable" } }, status: 1 },
+    {
+      name: "author",
+      changedPr: { ...pr, user: { id: 2, login: "other-author", type: "User" } },
+      status: 1,
+    },
+    { name: "state", changedPr: { ...pr, state: "closed" }, status: 1 },
   ])("stops for a changed $name during file-list recovery", ({ changedPr, status }) => {
     const result = evaluate({
       [`GET ${pullPath}`]: { responses: [pr, pr, changedPr] },
@@ -211,10 +277,10 @@ describe("combined security review entry point", () => {
   it("bounds file-list recovery across both guards and reports the conflicting counts", () => {
     const result = evaluate({ [`GET ${pullPath}/files`]: files.slice(0, 1) });
     expect(result.status).toBe(1);
-    expect(result.waits).toHaveLength(3);
+    expect(result.waits).toEqual([60_000, 120_000, 240_000]);
     expect(result.requests.filter((entry) => entry.path === `${pullPath}/files`)).toHaveLength(4);
     expect(result.stderr).toContain("expected 2, received 1, current count 2");
-    expect(result.stderr).toContain("recovery exhausted");
+    expect(result.stderr).toContain("recovery budget exhausted");
     expect(result.stderr).not.toContain("Split the PR");
     expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
     expect(result.combined.at(-1)).toBe("failure");
@@ -310,6 +376,24 @@ describe("combined security review entry point", () => {
     expect(result.combined).not.toContain("success");
   });
 
+  it.each([
+    { failure: { httpError: 429, headers: { "retry-after": "120" } }, minimumDelay: 120_000 },
+    { failure: { httpError: 500 }, minimumDelay: 1_000 },
+  ])(
+    "preserves publication recovery when reporting an inconsistent diff: $failure.httpError",
+    ({ failure, minimumDelay }) => {
+      const result = evaluate({
+        [statusPath]: { responses: [{}, {}, failure, {}] },
+        [`GET ${pullPath}/files`]: { responses: [files.slice(0, 1), files] },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits).toHaveLength(1);
+      expect(result.waits[0]).toBeGreaterThanOrEqual(minimumDelay);
+      expect(result.waits[0]).toBeLessThan(minimumDelay + 17_000);
+      expect(result.combined.at(-1)).toBe("success");
+    },
+  );
+
   it("rereads CI after a failed combined-success publication", () => {
     const result = evaluate({
       [statusPath]: { responses: [{}, {}, {}, {}, {}, { httpError: 500 }, {}] },
@@ -400,6 +484,11 @@ describe("combined security review entry point", () => {
       deadline: "2026-01-02T00:01:00Z",
     },
     { route: statusPath, failure: { httpError: 500 }, deadline: "2026-01-02T00:00:30Z" },
+    {
+      route: `GET ${pullPath}/files`,
+      failure: files.slice(0, 1),
+      deadline: "2026-01-02T00:01:00Z",
+    },
   ])("keeps $route recovery within the shared deadline", ({ route, failure, deadline }) => {
     const result = evaluate({ [route]: failure }, "enforce", Date.parse(deadline));
     expect(result.status).toBe(1);
@@ -922,11 +1011,6 @@ describe("combined security review entry point", () => {
         maintainer_can_modify: false,
       },
       changedFields: ["user.id", "user.login", "user.type", "maintainer_can_modify"],
-    },
-    {
-      name: "file count after file-list recovery",
-      changedPr: { ...pr, changed_files: 3 },
-      changedFields: ["changed_files"],
     },
   ])("does not publish combined success after a changed $name", ({ changedPr, changedFields }) => {
     const result = evaluate({

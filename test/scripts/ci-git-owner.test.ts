@@ -1086,15 +1086,15 @@ posixIt.each(sanityFetchCases)(
 
 posixIt.each([
   { label: "30-second fetch deadline", fetchResults: ["hang", 0], warnings: 1 },
-  { label: "real five-second backoff", fetchResults: [137, 0], warnings: 1 },
+  { label: "five-second backoff", fetchResults: [137, 0], warnings: 1 },
 ] as const)(
   "workflow sanity retains $label",
   async ({ fetchResults, warnings }) => {
-    const started = performance.now();
     const readyFetchClockAdvanceSeconds = fetchResults[0] === "hang" ? 30 : undefined;
     const report = await sanity({
       fetchResults: [...fetchResults],
       realClock: true,
+      virtualBackoff: true,
       cooperativeTrees: true,
       readyFetchClockAdvanceSeconds,
     });
@@ -1108,7 +1108,9 @@ posixIt.each([
         "fixture fetch timeout: 30",
       ]);
     }
-    const elapsed = performance.now() - started + (report.fetchClockAdvancedSeconds ?? 0) * 1000;
+    expect(report.output.match(/fixture backoff: \d+/gu)).toEqual(["fixture backoff: 5"]);
+    const elapsed =
+      (report.backoffClockAdvancedSeconds + (report.fetchClockAdvancedSeconds ?? 0)) * 1000;
     expect(elapsed).toBeGreaterThanOrEqual(fetchResults[0] === "hang" ? 35_000 : 5_000);
   },
   55_000,

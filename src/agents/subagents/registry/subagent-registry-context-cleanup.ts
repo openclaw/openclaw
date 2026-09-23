@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from "../../../config/config.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import {
@@ -13,7 +14,6 @@ import {
 import {
   loadSubagentRegistryPluginRuntimeHandle,
   resolveSubagentRegistryContextEngine,
-  type SubagentRegistryDeps,
 } from "./subagent-registry-deps.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import type {
@@ -22,18 +22,17 @@ import type {
 } from "./subagent-registry.types.js";
 
 export function createSubagentRegistryContextCleanup(config: {
-  deps: () => SubagentRegistryDeps;
   persist: (...runIds: string[]) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
-  const { deps, persist, warn } = config;
+  const { persist, warn } = config;
   const endedHookInFlightRunIds = new Set<string>();
 
   async function runContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
     options?: { isCurrent?: () => boolean },
   ): Promise<void> {
-    const cfg = deps().getRuntimeConfig();
+    const cfg = getRuntimeConfig();
     const registry = await loadSubagentRegistryPluginRuntimeHandle({
       config: cfg,
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
@@ -149,7 +148,7 @@ export function createSubagentRegistryContextCleanup(config: {
     }
     // Loading and entering plugin scope are part of the best-effort hook boundary.
     try {
-      const cfg = deps().getRuntimeConfig();
+      const cfg = getRuntimeConfig();
       const registry = await loadSubagentRegistryPluginRuntimeHandle({
         config: cfg,
         ...(params.entry.workspaceDir ? { workspaceDir: params.entry.workspaceDir } : {}),

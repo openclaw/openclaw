@@ -432,3 +432,155 @@ it.each(["cause", "error", "aggregate", "cyclic aggregate", "cleanup"])(
     }
   },
 );
+
+it("joins delayed acquisition and its cleanup before releasing fixture inputs", async () => {
+  const lifetime = createFixtureLifetime(owner.root);
+  const directory = lifetime.createTempDir("inputs-");
+  const entered = createDeferred();
+  const releaseSetup = createDeferred();
+  const cleanupEntered = createDeferred();
+  const releaseCleanup = createDeferred();
+  let cleanups = 0;
+  let drained = false;
+  const acquisition = lifetime.acquire(async () => {
+    entered.resolve();
+    await releaseSetup.promise;
+    return {
+      cleanup: async () => {
+        cleanups++;
+        cleanupEntered.resolve();
+        await releaseCleanup.promise;
+      },
+    };
+  });
+  const draining = lifetime.cleanup().then(() => {
+    drained = true;
+  });
+  try {
+    await entered.promise;
+    expect(drained).toBe(false);
+    await expect(fs.promises.stat(directory)).resolves.toBeDefined();
+    expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+    releaseSetup.resolve();
+    await acquisition;
+    await cleanupEntered.promise;
+    expect(drained).toBe(false);
+    await expect(fs.promises.stat(directory)).resolves.toBeDefined();
+    releaseCleanup.resolve();
+    await draining;
+    expect(cleanups).toBe(1);
+    await expect(fs.promises.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(() => owner.assertReleased()).not.toThrow();
+  } finally {
+    releaseSetup.resolve();
+    releaseCleanup.resolve();
+    await Promise.allSettled([acquisition, draining]);
+  }
+});
+
+it("retains failed acquisition inputs and the original failure before caller registration", async () => {
+  const lifetime = createFixtureLifetime(owner.root);
+  const directory = lifetime.createTempDir("inputs-");
+  const failure = new Error("synthetic acquisition failed after allocating inputs");
+  await expect(
+    lifetime.acquire(async () => {
+      throw failure;
+    }),
+  ).rejects.toBe(failure);
+  await expect(lifetime.cleanup()).rejects.toMatchObject({ errors: [failure] });
+  await expect(fs.promises.stat(directory)).resolves.toBeDefined();
+  expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+});
+
+it("joins explicit acquired cleanup once without repeating it during fallback teardown", async () => {
+  const lifetime = createFixtureLifetime(owner.root);
+  const release = createDeferred();
+  let cleanups = 0;
+  const original = {
+    cleanup: async () => {
+      cleanups++;
+      await release.promise;
+    },
+  };
+  try {
+    const acquired = await lifetime.acquire(async () => original);
+    expect(acquired).toBe(original);
+    const first = acquired.cleanup();
+    const second = acquired.cleanup();
+    expect(second).toBe(first);
+    const draining = lifetime.cleanup();
+    release.resolve();
+    await Promise.all([first, second, draining]);
+    expect(cleanups).toBe(1);
+    expect(() => owner.assertReleased()).not.toThrow();
+  } finally {
+    release.resolve();
+    await lifetime.cleanup();
+  }
+});
+
+it.each([
+  { name: "error identity", cause: new Error("synthetic rolled-back acquisition") },
+  { name: "undefined rejection", cause: undefined },
+])("releases completed acquisition rollback while preserving $name", async ({ cause }) => {
+  const lifetime = createFixtureLifetime(owner.root);
+  const directory = lifetime.createTempDir("rolled-back-inputs-");
+  const rollbackStarted = createDeferred();
+  const releaseRollback = createDeferred();
+  const acquisition = lifetime.acquire((rejectAfterCleanup) =>
+    rejectAfterCleanup(cause, async () => {
+      rollbackStarted.resolve();
+      await releaseRollback.promise;
+      await fs.promises.rm(directory, { recursive: true, force: true });
+    }),
+  );
+  const rejected = expect(acquisition).rejects.toBe(cause);
+  const draining = lifetime.cleanup();
+  try {
+    await rollbackStarted.promise;
+    expect(fs.existsSync(directory)).toBe(true);
+    expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+    releaseRollback.resolve();
+    await rejected;
+    await draining;
+    expect(fs.existsSync(directory)).toBe(false);
+    expect(() => owner.assertReleased()).not.toThrow();
+  } finally {
+    releaseRollback.resolve();
+    await Promise.allSettled([acquisition, rejected, draining]);
+  }
+});
+
+it("retains both errors and inputs when acquisition rollback fails", async () => {
+  const lifetime = createFixtureLifetime(owner.root);
+  const directory = lifetime.createTempDir("rollback-failed-inputs-");
+  const original = new Error("synthetic acquisition failure");
+  const rollback = new Error("synthetic rollback failure");
+  await expect(
+    lifetime.acquire((rejectAfterCleanup) =>
+      rejectAfterCleanup(original, async () => {
+        throw rollback;
+      }),
+    ),
+  ).rejects.toMatchObject({ errors: [original, rollback], cause: rollback });
+  await expect(lifetime.cleanup()).rejects.toMatchObject({
+    errors: expect.arrayContaining([
+      rollback,
+      expect.objectContaining({ errors: [original, rollback] }),
+    ]),
+  });
+  expect(fs.existsSync(directory)).toBe(true);
+  expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+});
+
+it("retains an undefined acquisition rejection without a completed rollback receipt", async () => {
+  const lifetime = createFixtureLifetime(owner.root);
+  const directory = lifetime.createTempDir("unrecorded-rollback-inputs-");
+  const rejected = createDeferred<never>();
+  const acquisition = lifetime.acquire(() => rejected.promise);
+  rejected.reject(undefined);
+  await expect(acquisition).rejects.toBeUndefined();
+  await expect(lifetime.cleanup()).rejects.toMatchObject({ errors: [undefined] });
+  expect(fs.existsSync(directory)).toBe(true);
+  expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+});

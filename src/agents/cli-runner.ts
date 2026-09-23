@@ -221,7 +221,7 @@ async function runCliAgentInternal(
         durationMs: Date.now() - hookStartedAt,
         agentMeta: {
           sessionId: "",
-          provider: params.provider,
+          provider: params.modelProvider ?? params.provider,
           model: params.model ?? "",
           ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
         },
@@ -239,6 +239,11 @@ async function runCliAgentInternal(
     await settleCliPreparationError(error, params);
     throw error;
   }
+  // Preparation replaced the caller's agentId with the session-resolved
+  // execution owner; publish that fact so run/harness diagnostic events
+  // attribute to the owner that actually executes, like the prepared
+  // model-call events already do.
+  diagnosticLifecycle?.setExecutionOwner(context.params.agentId);
   return await settlePreparedCliRun({
     context,
     diagnosticLifecycle,

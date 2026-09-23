@@ -8,7 +8,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as pidAlive from "../shared/pid-alive.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
+import { nativeBoundaryTestEntrypoints } from "./native-boundary-runtime.test-support.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
@@ -44,17 +46,16 @@ describe("managed handoff Windows process identities", () => {
       vi.useRealTimers();
       const root = dirs.make("handoff-original-argv-");
       const fixturePath = path.join(root, "profile-identity.mjs");
-      const profileUrl = new URL("../cli/profile.ts", import.meta.url).href;
-      const identityUrl = new URL("./update-managed-service-handoff-process.ts", import.meta.url)
-        .href;
+      const profileUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.cliProfile);
+      const identityUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.handoffProcess);
       fs.writeFileSync(
         fixturePath,
         `
       import assert from "node:assert/strict";
       import childProcess from "node:child_process";
       import {syncBuiltinESMExports} from "node:module";
-      import {parseCliProfileArgs} from ${JSON.stringify(profileUrl)};
-      import {createManagedHandoffProcessIdentityReader} from ${JSON.stringify(identityUrl)};
+      import {parseCliProfileArgs} from ${JSON.stringify(profileUrl.href)};
+      import {createManagedHandoffProcessIdentityReader} from ${JSON.stringify(identityUrl.href)};
       const originalArgv = process.report.getReport().header.commandLine;
       const parsed = parseCliProfileArgs(process.argv);
       assert(parsed.ok && parsed.profile);
@@ -74,7 +75,13 @@ describe("managed handoff Windows process identities", () => {
       );
       const child = spawn(
         process.execPath,
-        ["--import", path.resolve("scripts/tsx.mjs"), fixturePath, ...args, "update", "--yes"],
+        [
+          ...resolveRuntimeWorkerArgv(profileUrl).slice(0, -1),
+          fixturePath,
+          ...args,
+          "update",
+          "--yes",
+        ],
         { stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 },
       );
       const closed = once(child, "close");

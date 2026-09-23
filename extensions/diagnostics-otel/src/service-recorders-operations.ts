@@ -249,7 +249,9 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     if (!tracesEnabled) {
       return;
     }
-    const span = spanWithDuration("openclaw.tool.loop", attrs, 0, { endTimeMs: evt.ts });
+    const spanAttrs: Record<string, string | number | boolean> = { ...attrs };
+    addRunAttrs(spanAttrs, evt);
+    const span = spanWithDuration("openclaw.tool.loop", spanAttrs, 0, { endTimeMs: evt.ts });
     if (evt.level === "critical" || evt.action === "block") {
       span.setStatus({
         code: SpanStatusCode.ERROR,

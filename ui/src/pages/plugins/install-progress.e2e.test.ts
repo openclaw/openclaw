@@ -29,6 +29,7 @@ describeControlUiE2e("plugin install button progress", () => {
         recordVideo: { dir: evidence },
       });
       const page = await context.newPage();
+      await page.clock.install();
       await page.emulateMedia({ colorScheme: "dark" });
       const gateway = await installMockGateway(page, {
         featureMethods: [...pluginMethods, "openclaw.chat", "openclaw.chat.history"],
@@ -66,6 +67,7 @@ describeControlUiE2e("plugin install button progress", () => {
         expect(await card.locator(".plugin-install-progress__activity--completed").count()).toBe(4);
         const timer = card.locator(".plugin-install-progress__header > span");
         const initialTime = await timer.textContent();
+        await page.clock.runFor(1100);
         await expect.poll(() => timer.textContent()).not.toBe(initialTime);
         expect(await card.textContent()).toContain("Installing plugin dependencies");
         await card.hover();
@@ -103,6 +105,7 @@ describeControlUiE2e("plugin install button progress", () => {
             5,
           );
           const applyingAt = await timer.textContent();
+          await page.clock.runFor(1100);
           await expect.poll(() => timer.textContent()).not.toBe(applyingAt);
           expect(await card.locator(".plugin-install-progress__activity--started").count()).toBe(1);
           expect(await button.textContent()).toContain("Installing");
@@ -174,7 +177,7 @@ describeControlUiE2e("plugin install button progress", () => {
           );
           expect(await button.locator(".btn__spinner").count()).toBe(0);
           const stoppedAt = await timer.textContent();
-          await page.waitForTimeout(1100);
+          await page.clock.runFor(1100);
           expect(await timer.textContent()).toBe(stoppedAt);
           expect(await page.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
           await page.screenshot({ path: `${evidence}/after.png` });
@@ -208,6 +211,7 @@ describeControlUiE2e("plugin install button progress", () => {
           expect(await card.locator(".plugin-install-progress__activity--started").count()).toBe(0);
           expect(await button.textContent()).toContain("Installing");
           const waitingAt = await timer.textContent();
+          await page.clock.runFor(1100);
           await expect.poll(() => timer.textContent()).not.toBe(waitingAt);
           await gateway.setMethodResponse("plugins.list", inventory([installed], 1));
           await gateway.setMethodResponse("plugins.inspect", {

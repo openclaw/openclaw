@@ -29,14 +29,14 @@ function formatRequestTime(value: string): string {
 }
 
 function filteredAccounts(props: ChannelsProps): ChannelsPairingAccount[] {
-  const accounts = props.pairingSnapshot?.accounts ?? [];
+  const accounts = props.channels.pairingSnapshot?.accounts ?? [];
   return props.pairingChannelFilter
     ? accounts.filter((account) => account.channel === props.pairingChannelFilter)
     : accounts;
 }
 
 function filteredRequests(props: ChannelsProps): ChannelsPairingRequest[] {
-  return (props.pairingSnapshot?.requests ?? []).filter((request) => {
+  return (props.channels.pairingSnapshot?.requests ?? []).filter((request) => {
     if (props.pairingChannelFilter && request.channel !== props.pairingChannelFilter) {
       return false;
     }
@@ -48,7 +48,7 @@ function filteredRequests(props: ChannelsProps): ChannelsPairingRequest[] {
 }
 
 function renderFilters(props: ChannelsProps) {
-  const accounts = props.pairingSnapshot?.accounts ?? [];
+  const accounts = props.channels.pairingSnapshot?.accounts ?? [];
   const channels = Array.from(
     new Map(accounts.map((account) => [account.channel, account.channelLabel])).entries(),
   ).toSorted((left, right) => left[1].localeCompare(right[1]));
@@ -89,8 +89,8 @@ function renderFilters(props: ChannelsProps) {
 }
 
 function renderRequest(request: ChannelsPairingRequest, props: ChannelsProps) {
-  const busy = Boolean(props.pairingBusyRequestId);
-  const thisRequestBusy = props.pairingBusyRequestId === request.requestId;
+  const busy = Boolean(props.channels.pairingBusyRequestId);
+  const thisRequestBusy = props.channels.pairingBusyRequestId === request.requestId;
   const metadata = Object.entries(request.metadata ?? {});
   return html`
     <div class="settings-row settings-row--stacked channels-pairing-request">
@@ -156,7 +156,7 @@ function renderRequest(request: ChannelsPairingRequest, props: ChannelsProps) {
 }
 
 export function renderChannelPairingQueue(props: ChannelsProps) {
-  const snapshot = props.canManagePairing ? props.pairingSnapshot : null;
+  const snapshot = props.canManagePairing ? props.channels.pairingSnapshot : null;
   const accounts = snapshot?.accounts ?? [];
   const requests = props.canManagePairing ? filteredRequests(props) : [];
   const hasFilter = Boolean(props.pairingChannelFilter || props.pairingAccountFilter);
@@ -169,8 +169,8 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
           description: t("channels.pairing.subtitle"),
           ...(count > 0 ? { count } : {}),
           actions: renderChannelRefreshAction({
-            updatedAt: props.canManagePairing ? props.pairingLastSuccessAt : null,
-            disabled: props.pairingLoading || !props.canManagePairing,
+            updatedAt: props.canManagePairing ? props.channels.pairingLastSuccess : null,
+            disabled: props.channels.pairingLoading || !props.canManagePairing,
             onRefresh: props.onPairingRefresh,
           }),
         },
@@ -185,10 +185,10 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
             `
           : html`
               ${
-                props.pairingError
+                props.channels.pairingError
                   ? html`
                       <div class="settings-row channels-pairing-feedback" role="alert">
-                        ${renderSettingsStatus({ kind: "danger", label: props.pairingError })}
+                        ${renderSettingsStatus({ kind: "danger", label: props.channels.pairingError })}
                       </div>
                     `
                   : nothing
@@ -204,7 +204,7 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
               }
               ${snapshot ? renderFilters(props) : nothing}
               ${
-                props.pairingLoading && !snapshot
+                props.channels.pairingLoading && !snapshot
                   ? renderSettingsLoadingSkeleton({ rows: 2 })
                   : accounts.length === 0
                     ? renderSettingsEmpty(t("channels.pairing.noAccounts"))
@@ -238,13 +238,13 @@ export function renderChannelPairingDetail(channelId: string, props: ChannelsPro
   if (!props.canManagePairing) {
     return nothing;
   }
-  const accounts = (props.pairingSnapshot?.accounts ?? []).filter(
+  const accounts = (props.channels.pairingSnapshot?.accounts ?? []).filter(
     (account) => account.channel === channelId,
   );
   if (accounts.length === 0) {
     return nothing;
   }
-  const requests = props.pairingSnapshot?.requests ?? [];
+  const requests = props.channels.pairingSnapshot?.requests ?? [];
   return renderSettingsSection(
     {
       title: t("channels.pairing.detailTitle"),
@@ -288,9 +288,9 @@ export function renderChannelPairingPrompt(props: ChannelsProps) {
     return nothing;
   }
   const request = prompt.request;
-  const busy = props.pairingBusyRequestId === request.requestId;
+  const busy = props.channels.pairingBusyRequestId === request.requestId;
   const approving = prompt.kind === "approve";
-  const ownerMissing = props.pairingSnapshot?.commandOwnerConfigured === false;
+  const ownerMissing = props.channels.pairingSnapshot?.commandOwnerConfigured === false;
   const dialogTitle = approving
     ? t("channels.pairing.approveDialogTitle")
     : t("channels.pairing.dismissDialogTitle");
@@ -310,8 +310,8 @@ export function renderChannelPairingPrompt(props: ChannelsProps) {
           }
         </div>
         ${
-          props.pairingError
-            ? html`<div class="callout danger" role="alert">${props.pairingError}</div>`
+          props.channels.pairingError
+            ? html`<div class="callout danger" role="alert">${props.channels.pairingError}</div>`
             : nothing
         }
         ${

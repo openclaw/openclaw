@@ -1,4 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { loadSessionEntry } from "../session-utils.js";
 
 export type ChatAbortOrigin = "rpc" | "stop-command" | "placement-abandon";
@@ -12,6 +15,27 @@ export type ChatAbortSessionSnapshot = Result<
 >;
 
 export type AbortedPartialSnapshot = ReturnType<typeof captureAbortedPartial>;
+
+export function withAbortedPartialPersistenceWarning(
+  error: ErrorShape,
+  warning: string | undefined,
+): ErrorShape {
+  return warning ? { ...error, message: `${error.message} ${warning}` } : error;
+}
+
+/** Retain a failed save when a later cancellation or terminal write also fails. */
+export function abortedPartialPersistenceError(
+  error: unknown,
+  warning: string | undefined,
+): unknown {
+  if (!warning) {
+    return error;
+  }
+  const message = `${formatErrorMessage(error)} ${warning}`;
+  return error instanceof SessionMutationAuthorizationChangedError
+    ? new SessionMutationAuthorizationChangedError({ ...error.error, message })
+    : new Error(message, { cause: error });
+}
 
 /** Capture before signaling cancellation, without loading asynchronous transcript writers. */
 export function captureAbortedPartial(params: {

@@ -1,7 +1,8 @@
-import type { Context, Model } from "@openclaw/llm-core";
+import type { Context, Model, SimpleStreamOptions } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, expect, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "./host.js";
+import type { AnthropicOptions } from "./provider-options.js";
 
 export const anthropicModel = {
   id: "claude-sonnet-4-6",
@@ -109,7 +110,9 @@ export async function captureAnthropicRequest(
     model?: Partial<Model<"anthropic-messages">>;
     apiKey?: string;
     transportApi?: Model["api"];
-    reasoning?: "low" | "off";
+    reasoning?: SimpleStreamOptions["reasoning"];
+    temperature?: number;
+    toolChoice?: AnthropicOptions["toolChoice"];
     cacheRetention?: "short" | "long" | "none";
     events?: readonly Record<string, unknown>[];
     context?: Context;
@@ -155,7 +158,9 @@ export async function captureAnthropicRequest(
   const model = { ...anthropicModel, ...options.model };
   const streamOptions = {
     apiKey: options.apiKey ?? "sk-test",
-    reasoning: options.reasoning ?? "low",
+    reasoning: Object.hasOwn(options, "reasoning") ? options.reasoning : "low",
+    temperature: options.temperature,
+    toolChoice: options.toolChoice,
     cacheRetention: options.cacheRetention,
     headers: options.headers,
     cacheTtlPruning: options.cacheTtlPruning,

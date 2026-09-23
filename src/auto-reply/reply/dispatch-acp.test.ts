@@ -27,7 +27,6 @@ import { createChannelAdmissionAudit } from "../../channels/message-access/admis
 import { createHostChannelIngressRuntime } from "../../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  listSessionParticipantsReadOnly,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -50,6 +49,7 @@ import {
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
 import { tryDispatchAcpReplyCore } from "./dispatch-acp.js";
+import { expectAcpSessionParticipantInput } from "./dispatch-acp.participant.test-support.js";
 import { createAbortAwareDispatcher } from "./dispatch-from-config.abort.js";
 import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
 import {
@@ -166,15 +166,13 @@ const bindingServiceMocks = vi.hoisted(() => ({
   unbind: vi.fn<(input: unknown) => Promise<SessionBindingRecord[]>>(async () => []),
 }));
 
-vi.mock("./dispatch-acp-manager.runtime.js", () => ({
+vi.mock("../../infra/outbound/session-binding-service.js", () => ({
+  getSessionBindingService: () => bindingServiceMocks,
+}));
+vi.mock("./dispatch-acp-manager.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./dispatch-acp-manager.runtime.js")>()),
   getAcpSessionManager: () => managerMocks,
-  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
-    sessionMetaMocks.readAcpSessionEntry(params),
-  getSessionBindingService: () => ({
-    listBySession: (targetSessionKey: string) =>
-      bindingServiceMocks.listBySession(targetSessionKey),
-    unbind: (input: unknown) => bindingServiceMocks.unbind(input),
-  }),
+  readAcpSessionEntry: sessionMetaMocks.readAcpSessionEntry,
 }));
 
 vi.mock("../../agents/command/attempt-execution.runtime.js", () => ({
@@ -514,22 +512,9 @@ function expectRoutedPayload(callIndex: number, payload: Partial<MockTtsReply>) 
 
 describe("tryDispatchAcpReplyCore", () => {
   it("records an accepted channel input in the canonical participant store", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await upsertSessionEntryCore(
-        { agentId: "codex-acp", env: state.env, sessionKey },
-        {
-          sessionId: "acp-participant-session",
-          updatedAt: 1,
-        },
-      );
+    await expectAcpSessionParticipantInput(sessionKey, async () => {
       setReadyAcpResolution();
       await runDispatch({ bodyForAgent: "hello", ctxOverrides: { SenderId: "participant" } });
-      await Promise.resolve();
-      expect(
-        listSessionParticipantsReadOnly({ agentId: "codex-acp", env: state.env, sessionKey }).get(
-          sessionKey,
-        ),
-      ).toHaveLength(1);
     });
   });
   beforeEach(() => {

@@ -150,6 +150,7 @@ describe("ApprovalsPage", () => {
 
     const body = page.querySelector(".approval-history-table tbody")?.textContent ?? "";
     expect(body).not.toContain("No resolved approvals");
+    expect(page.querySelector('[role="alert"]')?.textContent).toContain("boom");
   });
 
   it("shows the empty message only after a successful zero-row load", async () => {
@@ -333,6 +334,8 @@ describe("ApprovalsPage", () => {
     const revoke = [...page.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("Revoke"),
     );
+    expect(revoke?.getAttribute("aria-label")).toBe("Revoke: Nightly backup — id -un");
+    expect(ledger?.querySelector("th:last-child")?.textContent?.trim()).toBe("Revoke");
     revoke?.click();
     await settle(page);
 

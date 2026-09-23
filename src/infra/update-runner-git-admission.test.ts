@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -6,10 +7,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runPackageUpdateDoctor } from "../cli/update-cli/update-command-package.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as diskSpace from "./disk-space.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
+import { resolveCandidateNodeRuntimeForTest } from "./update-runner-git-candidate.test-support.js";
 import { updateGitCheckout } from "./update-runner-git.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
 
@@ -40,6 +43,7 @@ function fixture(relativeRemote = false, partialClone = false, shallow = false) 
   git(source, "config", "user.email", "fixture@example.invalid");
   fs.writeFileSync(path.join(source, ".gitignore"), "node_modules/\ndist/\n.artifacts/\n");
   fs.writeFileSync(path.join(source, "openclaw.mjs"), "export {};\n");
+  const targets = new Map<string, Parameters<UpdateRunnerOptions["inspectGitTarget"]>[0]>();
   const commit = (version: string, agentSchema: number) => {
     fs.writeFileSync(
       path.join(source, "package.json"),
@@ -53,7 +57,9 @@ function fixture(relativeRemote = false, partialClone = false, shallow = false) 
     git(source, "add", ".");
     git(source, "commit", "-m", "isolated fixture");
     git(source, "tag", `v${version}`);
-    return git(source, "rev-parse", "HEAD");
+    const sha = git(source, "rev-parse", "HEAD");
+    targets.set(sha, { sha, version, schemaVersions: { state: 5, agent: agentSchema } });
+    return sha;
   };
   commit("2026.7.1", 13);
   if (shallow) {
@@ -88,7 +94,10 @@ function fixture(relativeRemote = false, partialClone = false, shallow = false) 
       if (argv.includes("build")) {
         const dist = path.join(options.cwd!, "dist");
         fs.mkdirSync(path.join(dist, "control-ui"), { recursive: true });
-        fs.writeFileSync(path.join(dist, "entry.js"), "export {};\n");
+        fs.writeFileSync(
+          path.join(dist, "entry.js"),
+          "console.log(JSON.stringify(require('../package.json')));\n",
+        );
         fs.writeFileSync(path.join(dist, "control-ui", "index.html"), "ready\n");
       }
       return { code: 0, stdout: argv.includes("--version") ? "12.1.0\n" : "", stderr: "" };
@@ -105,8 +114,13 @@ function fixture(relativeRemote = false, partialClone = false, shallow = false) 
     });
     return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
   };
-  const run = (options: Partial<UpdateRunnerOptions>, command: CommandRunner = runCommand) =>
-    updateGitCheckout({
+  const run = (
+    options: Partial<Omit<UpdateRunnerOptions, "prepareGitExposure">> = {},
+    command: CommandRunner = runCommand,
+  ) => {
+    const inspected = new Set<string>();
+    let mutationAdmitted = false;
+    return updateGitCheckout({
       gitRoot: install,
       runCommand: command,
       defaultCommandEnv: env,
@@ -114,18 +128,53 @@ function fixture(relativeRemote = false, partialClone = false, shallow = false) 
       startedAt: Date.now(),
       opts: {
         channel: "stable",
-        inspectGitTarget: async () => undefined,
-        validateCandidate: async () => {},
-        runGitDoctor: async (doctorRoot) => ({
-          name: "openclaw doctor",
-          command: "CLI activation doctor",
-          cwd: doctorRoot,
-          durationMs: 0,
-          exitCode: 0,
-        }),
         ...options,
+        inspectGitTarget: async (candidate) => {
+          assert(candidate.sha);
+          expect(candidate).toEqual(targets.get(candidate.sha));
+          inspected.add(candidate.sha);
+          await options.inspectGitTarget?.(candidate);
+        },
+        validateCandidate: async (candidateRoot) => {
+          expect(mutationAdmitted).toBe(false);
+          const candidateSha = git(candidateRoot, "rev-parse", "HEAD");
+          expect(inspected.has(candidateSha)).toBe(true);
+          expect(fs.statSync(path.join(candidateRoot, "dist", "entry.js")).isFile()).toBe(true);
+          await options.validateCandidate?.(candidateRoot);
+        },
+        beforeGitMutation: async (candidate) => {
+          assert(candidate.sha);
+          expect(inspected.has(candidate.sha)).toBe(true);
+          expect(candidate).toEqual(targets.get(candidate.sha));
+          await options.beforeGitMutation?.(candidate);
+          mutationAdmitted = true;
+        },
+        runGitDoctor:
+          options.runGitDoctor ??
+          (async (installedRoot) => {
+            expect(mutationAdmitted).toBe(true);
+            const installedSha = git(installedRoot, "rev-parse", "HEAD");
+            expect(inspected.has(installedSha)).toBe(true);
+            const doctor = await runPackageUpdateDoctor({
+              root: installedRoot,
+              timeoutMs: 15_000,
+              progress: {},
+              managedServiceEnv: {
+                OPENCLAW_STATE_DIR: path.join(root, "state"),
+                OPENCLAW_CONFIG_PATH: path.join(root, "state", "openclaw.json"),
+              },
+              nodeRunner: (await resolveCandidateNodeRuntimeForTest()).path,
+            });
+            expect(doctor?.exitCode, doctor?.stderrTail ?? undefined).toBe(0);
+            expect(JSON.parse(doctor?.stdoutTail ?? "")).toMatchObject({
+              version: targets.get(installedSha)?.version,
+              openclaw: { schemaVersions: targets.get(installedSha)?.schemaVersions },
+            });
+            return doctor;
+          }),
       },
     });
+  };
   return { root, source, install, globalConfig, git, commit, target, calls, runCommand, run };
 }
 
@@ -212,17 +261,14 @@ describe("Git database admission", () => {
         return result;
       };
       const result = await state.run(
-        {
-          beforeGitMutation: async () => undefined,
-          ...(publish
-            ? {
-                publishGitCheckout: async () => {
-                  fs.renameSync(state.install, published);
-                  return published;
-                },
-              }
-            : {}),
-        },
+        publish
+          ? {
+              publishGitCheckout: async () => {
+                fs.renameSync(state.install, published);
+                return published;
+              },
+            }
+          : {},
         command,
       );
       const installed = publish ? published : state.install;
@@ -295,7 +341,7 @@ describe("Git database admission", () => {
       }
       return state.runCommand(argv, options);
     };
-    const result = await state.run({ beforeGitMutation: async () => undefined }, command);
+    const result = await state.run({}, command);
     expect(result.status, JSON.stringify(result)).toBe("ok");
     expect(fs.readFileSync(keepPath, "utf8")).toBe("operator retention\n");
   });
@@ -359,7 +405,10 @@ describe("Git database admission", () => {
         fs.rmSync(path.join(dist, ".runtime-postbuildstamp"));
       }
       const beforeRuntime = snapshotTree(dist);
-      const admission = vi.fn(async () => undefined);
+      const admission = vi.fn<UpdateRunnerOptions["beforeGitMutation"]>(async (candidate) => {
+        expect(candidate.sha).toBe(state.target);
+        expect(state.git(state.install, "rev-parse", "HEAD")).toBe(beforeSha);
+      });
       const command: CommandRunner = async (argv, options) => {
         const fail =
           phase === "staging"
@@ -406,7 +455,6 @@ describe("Git database admission", () => {
     try {
       const onStepComplete = vi.fn();
       const result = await state.run({
-        beforeGitMutation: async () => undefined,
         progress: { onStepComplete },
       });
       expect(result.status, JSON.stringify(result)).toBe("ok");
@@ -451,21 +499,14 @@ describe("Git database admission", () => {
       }
       return result;
     };
-    const result = await state.run(
-      { channel: "dev", beforeGitMutation: async () => undefined },
-      command,
-    );
+    const result = await state.run({ channel: "dev" }, command);
     expect(result.status, JSON.stringify(result)).toBe("ok");
     expect(restoredUpstream).toBe(true);
   });
 
-  it.each(
-    (["stable", "dev"] as const).flatMap((channel) =>
-      [false, true].map((admitted) => ({ channel, admitted })),
-    ),
-  )(
-    "rechecks admission after transport ($channel, admitted=$admitted)",
-    async ({ channel, admitted }) => {
+  it.each(["stable", "dev"] as const)(
+    "rechecks admission after transport (%s)",
+    async (channel) => {
       const state = fixture();
       let checkoutObserved = false;
       let admissionFinished = false;
@@ -477,10 +518,8 @@ describe("Git database admission", () => {
           admissionFresh = false;
         }
         if (argv[2] === state.install && (argv[3] === "checkout" || argv[3] === "rebase")) {
-          expect(remoteFetches).toEqual([admitted]);
-          if (admitted) {
-            expect(admissionFresh).toBe(true);
-          }
+          expect(remoteFetches).toEqual([true]);
+          expect(admissionFresh).toBe(true);
           expect(state.git(state.install, "show", `${state.target}:package.json`)).toContain(
             '"agent":14',
           );
@@ -491,19 +530,15 @@ describe("Git database admission", () => {
       const result = await state.run(
         {
           channel,
-          ...(admitted
-            ? {
-                beforeGitMutation: async () => {
-                  admissionFinished = true;
-                  admissionFresh = true;
-                },
-                inspectGitTarget: async () => {
-                  if (admissionFinished) {
-                    admissionFresh = true;
-                  }
-                },
-              }
-            : {}),
+          beforeGitMutation: async () => {
+            admissionFinished = true;
+            admissionFresh = true;
+          },
+          inspectGitTarget: async () => {
+            if (admissionFinished) {
+              admissionFresh = true;
+            }
+          },
         },
         command,
       );
@@ -555,8 +590,15 @@ describe("Git database admission", () => {
         opts: {
           channel: "stable",
           inspectGitTarget: admission,
-          validateCandidate: async () => {},
-          runGitDoctor: async () => null,
+          validateCandidate: async () => {
+            throw new Error("Refused transport must not validate a candidate");
+          },
+          beforeGitMutation: async () => {
+            throw new Error("Refused transport must not mutate the installed checkout");
+          },
+          runGitDoctor: async () => {
+            throw new Error("Refused transport must not run Doctor");
+          },
         },
       });
       if (configured) {

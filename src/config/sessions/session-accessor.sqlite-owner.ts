@@ -53,7 +53,7 @@ export function replaceSessionOwnerInTransaction(
   }
   publishSessionEntryCacheInvalidation(
     database,
-    { sessionKey, sharingUnchanged: true },
+    { sessionKey, facts: { kind: "unchanged" } },
     writeGeneration,
   );
   return true;

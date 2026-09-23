@@ -6,7 +6,6 @@ import {
   readAgentRuntimeRestrictionErrorDetails,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -33,11 +32,7 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
-import {
-  hasGatewayAdminScope,
-  resolveChatSendActiveScopeKey,
-  validateChatSelectedAgent,
-} from "./chat-origin-routing.js";
+import { hasGatewayAdminScope, resolveChatSendActiveScopeKey } from "./chat-origin-routing.js";
 import { createRestartSafeChatRequest } from "./chat-restart-recovery.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
@@ -118,7 +113,7 @@ function loadChatSendSessionContext(params: {
   const sessionLoadStartedAtMs = performance.now();
   const sessionLoadResult = measureDiagnosticsTimelineSpanSync(
     "gateway.chat_send.load_session",
-    () => loadSessionEntry(sessionLoadKey, sessionLoadOptions),
+    () => loadSessionEntry(sessionLoadKey, sessionLoadOptions, runtimeConfig),
     {
       phase: "agent-turn",
       attributes: {
@@ -129,7 +124,7 @@ function loadChatSendSessionContext(params: {
     },
   );
   const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
-  const { cfg, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
+  const { cfg, agentId, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
   const expectedSessionRoutingContract = normalizeOptionalChatText(
     p.expectedSessionRoutingContract,
   );
@@ -148,6 +143,8 @@ function loadChatSendSessionContext(params: {
       sessionLoadOptions,
       sessionLoadMs,
       cfg,
+      agentId,
+      selectedAgent: requestedAgent,
       storePath,
       ...(sessionLoadResult.readSource ? { readSource: sessionLoadResult.readSource } : {}),
       entry,
@@ -174,7 +171,7 @@ export function prepareChatSendSession(params: {
   const loadedValue = loaded.value;
   const { request, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind, rawMessage } = request;
-  const { cfg, sessionKey, entry, legacyKey, rawSessionKey, agentIdOverride } = loadedValue;
+  const { cfg, agentId, sessionKey, entry, legacyKey, selectedAgent } = loadedValue;
   if (isIncognitoSessionKey(sessionKey) && !entry) {
     return { ok: false as const, error: `Incognito session "${sessionKey}" was not found.` };
   }
@@ -183,14 +180,6 @@ export function prepareChatSendSession(params: {
     return { ok: false as const, error: missingHarnessSessionError };
   }
 
-  const selectedAgent = validateChatSelectedAgent({
-    cfg,
-    requestedSessionKey: rawSessionKey,
-    explicitAgentId: agentIdOverride,
-  });
-  if (!selectedAgent.ok) {
-    return { ok: false as const, error: selectedAgent.error };
-  }
   const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, sessionKey, entry, {
     acpMetadataSessionKey: legacyKey ?? sessionKey,
   });
@@ -203,11 +192,6 @@ export function prepareChatSendSession(params: {
 
   const requestedSessionId = normalizeOptionalChatText(p.sessionId);
   const backingSessionId = entry?.sessionId ?? requestedSessionId;
-  const agentId = resolveSessionAgentId({
-    sessionKey,
-    config: cfg,
-    agentId: selectedAgent.agentId,
-  });
   if (!entry) {
     const creationError = authorizeGatewaySessionCreation({
       cfg,
@@ -255,10 +239,8 @@ export function prepareChatSendSession(params: {
     ok: true as const,
     value: {
       ...loadedValue,
-      selectedAgent,
       requestedSessionId,
       backingSessionId,
-      agentId,
       activeRunScopeKey,
       resolvedSessionModel,
       resolvedSessionAuthProvider,

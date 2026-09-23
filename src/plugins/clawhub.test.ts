@@ -2447,7 +2447,7 @@ describe("installPluginFromClawHub", () => {
           entryType,
         }),
       );
-      const loadAsyncSpy = vi.spyOn(JSZip, "loadAsync");
+      const loadAsyncSpy = vi.spyOn(JSZip.prototype, "loadAsync");
       fetchClawHubPackageVersionMock.mockResolvedValueOnce({
         version: {
           version: "2026.3.22",

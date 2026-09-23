@@ -93,6 +93,11 @@ const scalarInputState = new WeakMap<
 export function setControlValidity(target: HTMLInputElement, message: string): boolean {
   target.setCustomValidity(message);
   target.setAttribute("aria-invalid", String(Boolean(message)));
+  const error = target.closest(".settings-row")?.querySelector<HTMLElement>(".cfg-field__error");
+  if (error) {
+    error.hidden = !message;
+    error.textContent = message;
+  }
   return !message;
 }
 

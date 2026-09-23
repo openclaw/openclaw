@@ -76,7 +76,7 @@ export function applySessionEntryPatchInDatabase(
       ? { canonicalPreviousEntry: fresh[0].entry }
       : {}),
   });
-  // Identity observers only consume sessionId, already owned by this canonical write.
+  // Identity publication borrows session and lifecycle facts owned by this canonical write.
   const current = new Map([[params.sessionKey, persisted]]);
   return { entry: cloneSessionEntry(persisted), identity: { previous, current } };
 }

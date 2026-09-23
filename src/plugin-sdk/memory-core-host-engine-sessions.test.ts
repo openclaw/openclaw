@@ -6,10 +6,10 @@ import {
   appendTranscriptMessage,
   deleteSessionEntryLifecycle,
   listSessionTranscriptInstances,
-  recordSessionParticipant,
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,

@@ -329,7 +329,7 @@ async function runPdfPrompt(params: {
         const completion = params.work.track(() =>
           providerStreamFn
             ? (async () => await (await providerStreamFn(model, context, streamOptions)).result())()
-            : complete(model, context, streamOptions),
+            : complete(model, context, streamOptions, params.assertResourcesOpen),
         );
         return params.signal ? await abortable(params.signal, completion) : await completion;
       };

@@ -1,12 +1,13 @@
 // Vitest shared config wires the shared test shard.
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
 import normalizationCorePackageJson from "../../packages/normalization-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mts";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
+import { resolveTsxImport } from "../../scripts/lib/tsx-cli-shim.mjs";
 import {
   isCiLikeEnv,
   resolveLocalVitestScheduling,
@@ -16,6 +17,7 @@ import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
 } from "./vitest.bundled-plugin-paths.ts";
+import { sharedVitestExcludePatterns } from "./vitest.pattern-file.ts";
 import {
   createVitestProjectCachePlugin,
   loadVitestPerformanceConfig,
@@ -506,10 +508,8 @@ export const sharedVitestConfig = {
     unstubGlobals: true,
     isolate: false,
     pool: workerConfig.pool,
-    // Native SDK imports need the same source loader as standalone tooling.
-    execArgv: process.versions.bun
-      ? []
-      : ["--import", pathToFileURL(resolveRepoRootPath("scripts/tsx.mjs")).href],
+    // Native imports keep the invocation owner's isolated source-cache policy.
+    execArgv: process.versions.bun ? [] : ["--import", resolveTsxImport(repoRoot)],
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,
     fileParallelism: workerConfig.fileParallelism,
@@ -548,18 +548,7 @@ export const sharedVitestConfig = {
       "ui/src/pages/chat/tool-stream.node.test.ts",
     ],
     setupFiles: [resolveRepoRootPath("test/setup.ts")],
-    exclude: [
-      "dist/**",
-      "test/fixtures/**",
-      "apps/macos/**",
-      "apps/macos/.build/**",
-      "**/node_modules/**",
-      "**/vendor/**",
-      "dist/OpenClaw.app/**",
-      "**/._*",
-      "**/*.live.test.ts",
-      "**/*.e2e.test.ts",
-    ],
+    exclude: [...sharedVitestExcludePatterns],
     coverage: {
       provider: "v8" as const,
       reporter: ["text", "lcov"],

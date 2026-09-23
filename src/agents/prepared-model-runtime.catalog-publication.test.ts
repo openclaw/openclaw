@@ -201,7 +201,7 @@ describe("catalog publication session rows", () => {
       mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
       mocks.authStorage.getAll.mockReturnValue({});
       mocks.modelRegistry.getAll.mockReturnValue([model]);
-      mocks.resolveAgentEffectiveModelPrimary.mockReturnValue(
+      mocks.resolveNativeModelPrimary.mockReturnValue(
         configured ? "custom/synthetic-model" : undefined,
       );
       const owner = await publishPreparedModelRuntimeSnapshot(

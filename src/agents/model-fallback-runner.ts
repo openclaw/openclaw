@@ -299,6 +299,7 @@ async function runWithModelFallbackInternal<T>(
     };
 
     let candidateAuthProfileIds: string[] | undefined;
+    let quotaRequiresAuthPreparation = false;
     let userLockedAuthProfileEligible = false;
     if (authRuntime && authStore) {
       userLockedAuthProfileEligible =
@@ -320,12 +321,15 @@ async function runWithModelFallbackInternal<T>(
       if (userLockedAuthProfileEligible && userLockedAuthProfileId) {
         profileIds = [...new Set([userLockedAuthProfileId, ...profileIds])];
       }
-      await authRuntime.maybeReprobeWhamBlockedProfiles({
+      const quota = await authRuntime.maybeReprobeWhamBlockedProfiles({
         store: authStore,
         profileIds,
         agentDir: params.agentDir,
+        cfg: params.cfg,
         forModel: candidate.model,
       });
+      // Normal auth selection owns remaining profiles and declared direct credentials.
+      quotaRequiresAuthPreparation = quota?.requiresAuthPreparation === true;
       if (!candidateHarnessAuth.skipsProviderAuthCooldown) {
         candidateAuthProfileIds = profileIds;
         profileIdsByCandidate.set(candidate, candidateAuthProfileIds);
@@ -371,6 +375,7 @@ async function runWithModelFallbackInternal<T>(
       authRuntime &&
       authStore &&
       candidateAuthProfileIds &&
+      !quotaRequiresAuthPreparation &&
       !candidateHarnessAuth.skipsProviderAuthCooldown
     ) {
       const profileIds = candidateAuthProfileIds;

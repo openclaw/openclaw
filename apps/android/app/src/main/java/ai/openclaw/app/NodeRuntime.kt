@@ -1147,7 +1147,13 @@ class NodeRuntime private constructor(
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val tlsProbeRunner = GatewayTlsProbeRunner(scope, tlsFingerprintProbe)
   private val deviceAuthStore = DeviceAuthStore(prefs)
-  val camera = CameraCaptureManager(appContext) { prefs.preferredCameraFacing.value }
+  val camera =
+    CameraCaptureManager(
+      context = appContext,
+      isForeground = { _isForeground.value },
+      cameraEnabled = { prefs.cameraEnabled.value },
+      defaultFacing = { prefs.preferredCameraFacing.value },
+    )
   val location = LocationCaptureManager(appContext)
   val sms = SmsManager(appContext)
   private val json = Json { ignoreUnknownKeys = true }

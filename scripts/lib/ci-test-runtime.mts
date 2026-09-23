@@ -108,8 +108,12 @@ function selectionVitestArgs(selection: TestSelection): string[] | undefined {
 
 function supportsRuntimePartition(args: string[]): boolean {
   // Native sharding, alternate roots/projects, filters and config overrides can
-  // change membership. Admit only resource/deadline flags with known semantics.
-  return args.every((arg) => /^--(?:maxWorkers|testTimeout|hookTimeout)=\d+$/u.test(arg));
+  // change membership. Collection skips every body but preserves file imports.
+  return args.every(
+    (arg) =>
+      arg === "--testNamePattern=(?!)" ||
+      /^--(?:maxWorkers|testTimeout|hookTimeout)=\d+$/u.test(arg),
+  );
 }
 
 function supportsUiRuntime(args: string[]): boolean {
@@ -178,7 +182,6 @@ export function resolveCiTestRuntimeSelections(
     selection.configs?.length === 1 &&
     selection.configs[0] === "ui/vitest.config.ts" &&
     !selection.targets?.length &&
-    !selection.includePatterns &&
     supportsUiRuntime(args);
   if (!uiPartition && !supportsRuntimePartition(args)) {
     return node;
@@ -223,13 +226,19 @@ export function resolveCiTestRuntimeSelections(
   if (!partition || (partition.includeAfterShard && !uiPartition)) {
     return node;
   }
-  const files = partition
-    .files(cwd)
-    .filter(
-      (file) =>
-        !selection.includePatterns ||
-        selection.includePatterns.some((pattern) => matchesVitestGlob(file, pattern)),
-    );
+  const inventory = partition.files(cwd);
+  const requested = new Set(selection.includePatterns ?? []);
+  // Canonical file inventories should not reparse every file pair as a glob.
+  const exactFiles = selection.includePatterns?.every(
+    (pattern) => /^[\w./-]+$/u.test(pattern) && inventory.includes(pattern),
+  );
+  const files = inventory.filter(
+    (file) =>
+      !selection.includePatterns ||
+      (exactFiles
+        ? requested.has(file)
+        : selection.includePatterns.some((pattern) => matchesVitestGlob(file, pattern))),
+  );
   const bunFiles = files.filter((file) => !partition.nodeRequired.has(file));
   if (!bunFiles.length) {
     return node;

@@ -17,6 +17,7 @@ import type { NativeDeviceSettingsCapability } from "./app/native-device-setting
 import { readGatewayOperatorAccess } from "./app/operator-access.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
+import { createChromeExtensionSetupResult } from "./test-helpers/chrome-extension-setup.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
@@ -36,18 +37,7 @@ describe("sidebar entries", () => {
       openSystemSettings: () => undefined,
       openPanel: () => undefined,
       checkForUpdates: () => undefined,
-      chromeExtensionStatus: async () => ({
-        nativeHostRegistered: false,
-        installRequested: false,
-        installedProfiles: 0,
-        discoveredProfiles: 0,
-      }),
-      installChromeExtension: async () => ({
-        nativeHostRegistered: false,
-        installRequested: false,
-        installedProfiles: 0,
-        discoveredProfiles: 0,
-      }),
+      setupChromeExtension: async (action) => createChromeExtensionSetupResult({ action }),
       refresh: () => undefined,
       dispose: () => undefined,
     };
