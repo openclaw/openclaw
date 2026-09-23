@@ -416,21 +416,26 @@ async function runTaskRecoveryCommand(
     runtime.exit(1);
     return;
   }
-  const tasks: TaskRecord[] = [];
+  const taskIds: string[] = [];
   for (const lookup of lookups) {
     const task = reconcileTaskLookupToken(lookup);
-    if (!task) {
-      runtime.error(formatTaskLookupMiss(lookup));
-      runtime.exit(1);
-      return;
+    if (task) {
+      taskIds.push(task.taskId);
+      continue;
     }
-    tasks.push(task);
+    if (action === "dismiss" && lookup.trim()) {
+      taskIds.push(lookup.trim());
+      continue;
+    }
+    runtime.error(formatTaskLookupMiss(lookup));
+    runtime.exit(1);
+    return;
   }
   try {
     const { callGateway } = await import("../gateway/call.js");
     const response = await callGateway<GatewayTaskRecoveryResult>({
       method: `tasks.${action}`,
-      params: { taskIds: tasks.map((task) => task.taskId) },
+      params: { taskIds },
       timeoutMs: 10_000,
     });
     const failures = response.results?.filter((result) => result.ok !== true) ?? [];
@@ -447,7 +452,7 @@ async function runTaskRecoveryCommand(
     }
     runtime.log(
       sanitizeTerminalText(
-        `${action === "retry" ? "Retried" : "Dismissed"} ${tasks.length} ${tasks.length === 1 ? "completion delivery" : "completion deliveries"}.${action === "retry" ? " Ambiguous prior acknowledgements may still produce a duplicate visible result." : ""}`,
+        `${action === "retry" ? "Retried" : "Dismissed"} ${taskIds.length} ${taskIds.length === 1 ? "completion delivery" : "completion deliveries"}.${action === "retry" ? " Ambiguous prior acknowledgements may still produce a duplicate visible result." : ""}`,
       ),
     );
   } catch (error) {

@@ -276,4 +276,30 @@ describe("subagent completion recovery identity", () => {
       expect(resumeSubagentRun).not.toHaveBeenCalled();
     },
   );
+
+  it("dismisses an outstanding failed run after its task record is pruned", async () => {
+    const orphan = persistCompletion("old", "delivered");
+    orphan.subagent.delivery = {
+      status: "failed",
+      disposition: "permanent_failure",
+      generation: 1,
+      lastError: "requester unavailable",
+    };
+    database.db
+      .prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?")
+      .run(JSON.stringify(orphan.subagent), orphan.subagent.runId);
+    subagentRuns.set(orphan.subagent.runId, structuredClone(orphan.subagent));
+    database.db.prepare("DELETE FROM task_runs WHERE task_id = ?").run(orphan.task.taskId);
+    resetTaskRegistryForTests({ persist: false });
+
+    await expect.soft(dismiss(orphan.subagent.runId)).resolves.toMatchObject({ ok: true });
+    expect.soft(getTaskById(orphan.task.taskId)).toBeUndefined();
+    expect.soft(storedPair(orphan).subagent).toMatchObject({
+      delivery: {
+        status: "discarded",
+        disposition: "intentional_non_delivery",
+      },
+    });
+    expect(resumeSubagentRun).not.toHaveBeenCalled();
+  });
 });

@@ -104,11 +104,13 @@ function publishCommittedSubagent(
   return deferredObserverEvents;
 }
 
-export function publishCommittedRecords(subagent: SubagentRunRecord, task: TaskRecord): void {
+export function publishCommittedRecords(subagent: SubagentRunRecord, task?: TaskRecord): void {
   const deferredObserverEvents: Array<() => void> = [];
   publishCommittedSubagent(subagent, deferredObserverEvents);
-  const published = publishTaskRecordAfterAtomicStore(task, { deferredObserverEvents });
-  syncFlowFromTaskAfterTaskMutation(published, "atomic completion admission");
+  if (task) {
+    const published = publishTaskRecordAfterAtomicStore(task, { deferredObserverEvents });
+    syncFlowFromTaskAfterTaskMutation(published, "atomic completion admission");
+  }
   for (const emitObserverEvent of deferredObserverEvents) {
     emitObserverEvent();
   }
@@ -202,16 +204,18 @@ export function admitSubagentCompletionDelivery(params: {
 /** Atomically consumes a correlated queue settlement into registry and task projections. */
 export function settleSubagentCompletionDelivery(params: {
   subagent: SubagentRunRecord;
-  task: TaskRecord;
+  task?: TaskRecord;
   databaseOptions?: OpenClawStateDatabaseOptions;
   mutateSubagent?: (entry: SubagentRunRecord) => unknown;
 }): void {
-  const boundTask = bindTaskRecord(params.task);
+  const boundTask = params.task ? bindTaskRecord(params.task) : undefined;
   runOpenClawStateWriteTransaction(
     (database) => {
       invokeSynchronousHook(() => params.mutateSubagent?.(params.subagent));
       upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(params.subagent));
-      upsertTaskRunRowInDatabase(database, boundTask);
+      if (boundTask) {
+        upsertTaskRunRowInDatabase(database, boundTask);
+      }
     },
     params.databaseOptions,
     { operationLabel: "subagent completion delivery settlement" },

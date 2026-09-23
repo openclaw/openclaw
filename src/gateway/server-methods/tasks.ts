@@ -17,6 +17,8 @@ import {
   dismissSubagentCompletionDelivery,
   retrySubagentCompletionDelivery,
 } from "../../agents/subagents/completion/subagent-completion-delivery.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { getSubagentRunsSnapshotForRunIds } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
 import {
   createTaskRegistryReadPreparation,
@@ -369,6 +371,25 @@ export const tasksHandlers: GatewayRequestHandlers = {
       if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
         results.push({ taskId, ok: false, reason: "task not found" });
         continue;
+      }
+      if (!task) {
+        const orphan = getSubagentRunsSnapshotForRunIds(subagentRuns, [taskId]).get(taskId);
+        if (
+          orphan &&
+          !canAccessTaskRequesterSession({
+            access: "write",
+            cfg,
+            client,
+            task: {
+              ownerKey: orphan.requesterSessionKey,
+              requesterSessionKey: orphan.requesterSessionKey,
+              requesterAgentId: orphan.requesterAgentId,
+            },
+          })
+        ) {
+          results.push({ taskId, ok: false, reason: "task not found" });
+          continue;
+        }
       }
       const result = await dismissSubagentCompletionDelivery(taskId, {
         discardTerminalDelivery: discardSubagentTerminalDelivery,

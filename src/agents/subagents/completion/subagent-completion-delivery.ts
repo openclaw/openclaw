@@ -23,6 +23,7 @@ import {
 import { loadPendingFinalDeliveryPayload } from "../registry/subagent-registry-lifecycle-delivery.js";
 import type { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { getSubagentRunsSnapshotForRunIds } from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   admitSubagentCompletionDelivery,
@@ -50,6 +51,44 @@ function findSubagentForTask(task: TaskRecord): SubagentRunRecord | undefined {
     if ((entry.taskRunId ?? entry.runId) === task.runId) {
       return entry;
     }
+  }
+  return undefined;
+}
+
+function isOutstandingFailedOrSuspendedDelivery(entry: SubagentRunRecord): boolean {
+  if (
+    entry.execution.status !== "terminal" ||
+    entry.suppressCompletionDelivery === true ||
+    entry.killReconciliation?.suppressTaskDelivery === true ||
+    entry.killIntent?.suppressTaskDelivery === true ||
+    entry.delivery?.disposition === "intentional_non_delivery"
+  ) {
+    return false;
+  }
+  return ["failed", "suspended"].includes(entry.delivery?.status ?? "");
+}
+
+function findOrphanedSubagentRun(lookup: string): SubagentRunRecord | undefined {
+  const token = lookup.trim();
+  if (!token) {
+    return undefined;
+  }
+  const live = subagentRuns.get(token);
+  if (
+    live &&
+    isOutstandingFailedOrSuspendedDelivery(live) &&
+    !findTaskByRunId(live.taskRunId ?? live.runId)
+  ) {
+    return live;
+  }
+  const snapshot = getSubagentRunsSnapshotForRunIds(subagentRuns, [token]);
+  const stored = snapshot.get(token);
+  if (
+    stored &&
+    isOutstandingFailedOrSuspendedDelivery(stored) &&
+    !findTaskByRunId(stored.taskRunId ?? stored.runId)
+  ) {
+    return stored;
   }
   return undefined;
 }
@@ -285,24 +324,30 @@ export async function dismissSubagentCompletionDelivery(
   },
 ): Promise<CompletionDeliveryRecoveryResult> {
   const task = getTaskById(taskId);
-  const current = task ? findSubagentForTask(task) : undefined;
-  if (!task || !current || current.delivery?.status !== "suspended") {
+  const current = task ? findSubagentForTask(task) : findOrphanedSubagentRun(taskId);
+  if (
+    !current ||
+    (task && current.delivery?.status !== "suspended") ||
+    (!task && !isOutstandingFailedOrSuspendedDelivery(current))
+  ) {
     return { ok: false, reason: "completion delivery is not blocked" };
   }
   const now = Date.now();
   const subagent = structuredClone(current);
-  const projectedTask: TaskRecord = {
-    ...task,
-    deliveryStatus: "dismissed",
-    terminalOutcome: "blocked",
-    terminalSummary: "Task completed; result delivery was dismissed by the operator.",
-    progressSummary: resolveSubagentCompletionResultText(subagent) ?? task.progressSummary,
-    cleanupAfter: Math.max(task.cleanupAfter ?? 0, now + SUSPENDED_RETENTION_MS),
-    lastEventAt: now,
-  };
+  const projectedTask = task
+    ? {
+        ...task,
+        deliveryStatus: "dismissed" as const,
+        terminalOutcome: "blocked" as const,
+        terminalSummary: "Task completed; result delivery was dismissed by the operator.",
+        progressSummary: resolveSubagentCompletionResultText(subagent) ?? task.progressSummary,
+        cleanupAfter: Math.max(task.cleanupAfter ?? 0, now + SUSPENDED_RETENTION_MS),
+        lastEventAt: now,
+      }
+    : undefined;
   settleSubagentCompletionDelivery({
     subagent,
-    task: projectedTask,
+    ...(projectedTask ? { task: projectedTask } : {}),
     databaseOptions: options.databaseOptions,
     mutateSubagent: (entry) => options.discardTerminalDelivery(entry, now),
   });
@@ -310,5 +355,5 @@ export async function dismissSubagentCompletionDelivery(
   if (subagent.cleanup === "delete" || !subagent.retainAttachmentsOnKeep) {
     await safeRemoveAttachmentsDir(subagent);
   }
-  return { ok: true, task: getTaskById(taskId) };
+  return { ok: true, ...(projectedTask ? { task: getTaskById(taskId) } : {}) };
 }
