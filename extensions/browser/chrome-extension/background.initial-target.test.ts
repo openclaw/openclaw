@@ -419,12 +419,16 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
         });
       } else {
         harness.tabGroupsUpdate.mockRejectedValueOnce(failure);
+        harness.tabGroupsGet.mockResolvedValue({ id: 7, title: "", windowId: 1 });
       }
       expect(
         await harness.command({ type: "createTab", url: "about:blank", focus: true }),
       ).toMatchObject({ type: "result" });
       expect(harness.debuggerAttach).toHaveBeenCalledExactlyOnceWith({ tabId: 101 }, "1.3");
       expect(harness.tabsRemove).not.toHaveBeenCalled();
+      expect(
+        await harness.command({ type: "cdp", tabId: 101, method: "Page.enable" }),
+      ).toMatchObject({ type: "result" });
       expect(await harness.command({ type: "closeTab", tabId: 101 })).toMatchObject({
         type: "result",
       });

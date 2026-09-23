@@ -6,10 +6,12 @@ function createChromeApi({
   group = false,
   groupError,
   renameError,
+  groupErrorTargetGroup,
 }: {
   group?: boolean;
   groupError?: Error;
   renameError?: Error;
+  groupErrorTargetGroup?: number;
 } = {}) {
   const tab = { id: 1, windowId: 1, groupId: group ? 7 : -1 };
   return {
@@ -19,7 +21,7 @@ function createChromeApi({
         get: vi.fn(async () => ({ ...tab })),
         group: vi.fn(async () => {
           if (groupError) {
-            tab.groupId = 7;
+            tab.groupId = groupErrorTargetGroup ?? 7;
             throw groupError;
           }
           tab.groupId = 7;
@@ -61,6 +63,33 @@ describe("addTabToOpenClawGroup", () => {
     ).resolves.toBeUndefined();
     expect(created.groupFallback).toBe(true);
     expect(created.groupId).toBe(7);
+  });
+
+  it("rejects a fallback that lands in a different group than the intended group", async () => {
+    const groupingError = new Error("group identity unavailable");
+    const harness = createChromeApi({
+      group: true,
+      groupError: groupingError,
+      groupErrorTargetGroup: 8,
+    });
+    const created = {
+      tab: { ...harness.tab },
+      groupId: 7,
+      groupFallback: false,
+      grouping: true,
+      initialGroup: false,
+      expectedGroupId: 7,
+      assertCurrent: vi.fn(),
+    };
+
+    await expect(
+      addTabToOpenClawGroup(1, {
+        chromeApi: harness.chromeApi,
+        getGroupColor: async () => "orange",
+        created,
+      }),
+    ).rejects.toThrow(groupingError.message);
+    expect(created.groupFallback).toBe(false);
   });
 
   it.each([

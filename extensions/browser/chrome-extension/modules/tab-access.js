@@ -46,19 +46,21 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         return false;
       }
       if (created.handedOff) {
-        let currentGroup;
-        try {
-          currentGroup = await chromeApi.tabGroups.get(created.groupId);
-        } catch {
-          currentGroup = undefined;
-        }
-        if (
-          currentGroup?.title !== OPENCLAW_TAB_GROUP_TITLE ||
-          currentGroup.windowId !== tab.windowId
-        ) {
-          created.groupFallback = false;
-          invalidateTab(tab.id);
-          return false;
+        if (created.groupFallbackRequiresOpenClawTitle) {
+          let currentGroup;
+          try {
+            currentGroup = await chromeApi.tabGroups.get(created.groupId);
+          } catch {
+            currentGroup = undefined;
+          }
+          if (
+            currentGroup?.title !== OPENCLAW_TAB_GROUP_TITLE ||
+            currentGroup.windowId !== tab.windowId
+          ) {
+            created.groupFallback = false;
+            invalidateTab(tab.id);
+            return false;
+          }
         }
       }
       return true;
@@ -324,6 +326,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       groupId: tab.groupId,
       grouping: false,
       groupFallback: false,
+      groupFallbackRequiresOpenClawTitle: false,
       expectedGroupId: undefined,
       namingGroup: undefined,
       initialGroup: false,

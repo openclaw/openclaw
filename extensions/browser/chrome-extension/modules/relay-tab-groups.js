@@ -30,6 +30,13 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
     }
     assertCurrent();
     const fallbackGroupId = currentTab.groupId;
+    const expectedGroupId =
+      Number.isInteger(created.expectedGroupId) && created.expectedGroupId >= 0
+        ? created.expectedGroupId
+        : created.initialGroup && Number.isInteger(created.groupId) && created.groupId >= 0
+          ? created.groupId
+          : undefined;
+    const requiresOpenClawTitle = created.requiresOpenClawTitle ?? expectedGroupId === undefined;
     // The first snapshot can have been queued before the grouping failure was
     // observed. Re-read after the authority check so a delayed tab move cannot
     // be turned into a create-time grant from stale state.
@@ -42,19 +49,32 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
     if (!Number.isInteger(currentTab.groupId) || currentTab.groupId < 0) {
       throw error instanceof Error ? error : new Error(String(error));
     }
-    if (
-      Number.isInteger(created.groupId) &&
-      created.groupId >= 0 &&
-      currentTab.groupId !== created.groupId
-    ) {
+    if (expectedGroupId !== undefined && currentTab.groupId !== expectedGroupId) {
       throw error instanceof Error ? error : new Error(String(error));
+    }
+    if (requiresOpenClawTitle) {
+      let currentGroup;
+      try {
+        currentGroup = await chromeApi.tabGroups.get(currentTab.groupId);
+      } catch {
+        currentGroup = undefined;
+      }
+      if (
+        currentGroup?.title !== OPENCLAW_TAB_GROUP_TITLE ||
+        currentGroup.windowId !== currentTab.windowId
+      ) {
+        throw error instanceof Error ? error : new Error(String(error));
+      }
     }
     // Some Chromium shells expose grouping but do not reliably expose the
     // resulting group identity. Keep this exception scoped to creation.
     created.groupFallback = true;
+    created.groupFallbackRequiresOpenClawTitle = requiresOpenClawTitle;
     created.grouping = false;
-    created.expectedGroupId = undefined;
-    if (currentTab.groupId !== fallbackGroupId) {
+    if (
+      currentTab.groupId !== fallbackGroupId ||
+      (expectedGroupId !== undefined && fallbackGroupId !== expectedGroupId)
+    ) {
       throw error instanceof Error ? error : new Error(String(error));
     }
     created.groupId = fallbackGroupId;
