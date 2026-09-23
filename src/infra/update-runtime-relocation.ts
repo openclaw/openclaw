@@ -85,7 +85,7 @@ export async function relocateRuntimeLauncher(
   destinationFile: string,
   relocations: RuntimeRelocations,
 ): Promise<void> {
-  relocations = prepareRuntimeRelocations(relocations);
+  const prepared = prepareRuntimeRelocations(relocations);
   const original = await fs.readFile(file, "utf8");
   // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
   // Resolve them before changing the directory; absolute store/runtime paths stay external.
@@ -104,12 +104,12 @@ export async function relocateRuntimeLauncher(
             path.dirname(destinationFile),
             path.relative(path.dirname(sourceFile), sourceTarget),
           )
-        : relocateRuntimePath(sourceTarget, relocations);
+        : relocateRuntimePath(sourceTarget, prepared);
       const replacement = path.relative(path.dirname(destinationFile), target);
       return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}`;
     },
   );
-  for (const relocation of relocations.rules) {
+  for (const relocation of prepared.rules) {
     for (const sourceRoot of [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])]) {
       // NODE_PATH and the shim's target comment can carry absolute project paths.
       content = content.replaceAll(
@@ -205,9 +205,9 @@ export async function relocateRuntimeTree(
   destinationRoot: string,
   relocations: RuntimeRelocations,
 ): Promise<void> {
-  relocations = prepareRuntimeRelocations(relocations);
+  const prepared = prepareRuntimeRelocations(relocations);
   if ((await fs.lstat(root)).isSymbolicLink()) {
-    await relocateRuntimeSymlink(root, sourceRoot, destinationRoot, relocations);
+    await relocateRuntimeSymlink(root, sourceRoot, destinationRoot, prepared);
     return;
   }
   for (const entry of await fs.readdir(root, { withFileTypes: true })) {
@@ -215,11 +215,11 @@ export async function relocateRuntimeTree(
     const sourceFile = path.join(sourceRoot, entry.name);
     const destinationFile = path.join(destinationRoot, entry.name);
     if (entry.isDirectory()) {
-      await relocateRuntimeTree(file, sourceFile, destinationFile, relocations);
+      await relocateRuntimeTree(file, sourceFile, destinationFile, prepared);
     } else if (entry.isSymbolicLink()) {
-      await relocateRuntimeEntry(file, sourceFile, destinationFile, "symlink", relocations);
+      await relocateRuntimeEntry(file, sourceFile, destinationFile, "symlink", prepared);
     } else if (entry.isFile()) {
-      await relocateRuntimeEntry(file, sourceFile, destinationFile, "file", relocations);
+      await relocateRuntimeEntry(file, sourceFile, destinationFile, "file", prepared);
     }
   }
 }

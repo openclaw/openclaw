@@ -50,8 +50,8 @@ export function createRuntimePathLookup<T>(entries: Iterable<readonly [string, T
       return roots.find((entry) => isPathInside(entry.root, value))?.value;
     }
     let first: Entry | undefined;
-    const consider = (entries: readonly Entry[]) => {
-      for (const entry of entries) {
+    const consider = (candidates: readonly Entry[]) => {
+      for (const entry of candidates) {
         if (first && entry.order >= first.order) {
           break;
         }
