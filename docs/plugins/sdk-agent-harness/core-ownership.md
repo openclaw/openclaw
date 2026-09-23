@@ -36,6 +36,27 @@ applies it when building the surface; harnesses do not need to forward that fact
 and plugin-supplied options cannot replace it. Tool profiles still filter the
 catalog, and each executable remains bound to the host's live authority.
 
+### Current input files for local execution
+
+A harness that has confirmed unsandboxed execution on the Gateway host may call
+`hostCapabilities.prepareInputAttachments({ placement: "local-host", maxChars, assertCurrent, signal })`.
+The host returns an execution-only note with verified readable document paths,
+using the admitted input and its captured media and tool policy. It retains the
+originals even when native image projection clears the ordinary media field.
+For steering, pass the current `turn: { media, userTurnTranscriptRecorder }`.
+Path metadata must fit the supplied native input budget; excessive input fails
+with a request to send fewer attachments.
+The note belongs only in the current native input; do not persist it over the
+canonical prompt, transcript, or media references.
+
+This optional addition preserves the shipped V2 host capability contract: older
+hosts omit it, so plugins retain ordinary inline attachment context when absent.
+It is not a fallback for remote transports, remote workspace roots, registered
+workspace adapters, sandboxes, or workspace-only/no-read policies. A harness must
+confirm placement from its effective connection, not infer it from the absence
+of a workspace adapter. The supplied current-turn guard and the captured host
+authority are checked across awaited preparation and before returning paths.
+
 ### Workspace files on the harness host
 
 A trusted host plugin can bind the existing `agents.files.list/get/set` methods

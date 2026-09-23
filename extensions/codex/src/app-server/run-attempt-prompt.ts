@@ -113,6 +113,18 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     connection.assertCurrent();
     connection.runAbortController.signal.throwIfAborted();
   };
+  const inputAttachmentNote = await connection.prepareInputAttachments({
+    maxChars: Math.max(
+      0,
+      CODEX_TURN_START_TEXT_INPUT_MAX_CHARS -
+        (nativeHistoryProvenancePrefix?.length ?? 0) -
+        params.prompt.length -
+        2,
+    ),
+    assertCurrent: assertProjectionCurrent,
+    signal: connection.runAbortController.signal,
+  });
+  assertProjectionCurrent();
   const admittedMessage =
     params.userTurnTranscriptRecorder?.message ??
     (await params.userTurnTranscriptRecorder?.resolveMessage());
@@ -420,7 +432,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     const fitted = fitCodexProjectedContextForTurnStart({
       promptText: turnPromptText,
       maxChars:
-        CODEX_TURN_START_TEXT_INPUT_MAX_CHARS - (nativeHistoryProvenancePrefix?.length ?? 0),
+        CODEX_TURN_START_TEXT_INPUT_MAX_CHARS -
+        (nativeHistoryProvenancePrefix?.length ?? 0) -
+        (inputAttachmentNote ? inputAttachmentNote.length + 2 : 0),
       contextRange: projectedRanges?.contextRange,
       requestRange: projectedRanges?.requestRange,
       preservedRange,
@@ -434,7 +448,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
             })),
     });
     turnContextImageGroups = fitted.imageGroups ?? [];
-    return fitted.promptText;
+    return inputAttachmentNote
+      ? `${fitted.promptText}\n\n${inputAttachmentNote}`
+      : fitted.promptText;
   };
   const firstPromptBuild = await buildPromptFromCurrentInputs();
   const turnState = {
