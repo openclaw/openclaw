@@ -73,7 +73,7 @@ export async function runStructuredHealthRepairs(
       cwd: workspaceDir,
       configPath: ctx.configPath,
     }),
-    { checks },
+    { checks, progress: ctx.options.json !== true },
   );
   reportDoctorRepairResult(
     ctx,
@@ -110,7 +110,7 @@ export async function runCoreContributionHealth(
       configPath: ctx.configPath,
       dryRun,
     }),
-    { checks, dryRun },
+    { checks, dryRun, progress: ctx.options.json !== true },
   );
   reportDoctorRepairResult(ctx, result, dryRun ? result.findings : result.remainingFindings, note);
 }

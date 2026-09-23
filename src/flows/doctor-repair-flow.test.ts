@@ -1,5 +1,5 @@
 // Doctor repair flow tests cover repair plan output and repair execution.
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthRepairs } from "./doctor-repair-flow.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
@@ -47,6 +47,34 @@ function successfullyRepairedCheck(): DoctorHealthCheck {
 }
 
 describe("runDoctorHealthRepairs", () => {
+  it("reports per-check lifecycle and duration when Doctor progress is enabled", async () => {
+    const log = vi.fn();
+    const checks: DoctorHealthCheck[] = [
+      normalizeHealthCheck({
+        id: "test/progress",
+        kind: "core",
+        description: "progress",
+        async detect() {
+          return [];
+        },
+      }),
+    ];
+
+    await runDoctorHealthRepairs(
+      {
+        ...ctx({}),
+        runtime: { log, error() {}, exit() {} },
+      },
+      { checks, progress: true },
+    );
+
+    expect(log).toHaveBeenNthCalledWith(1, "Doctor: test/progress started");
+    expect(log).toHaveBeenNthCalledWith(
+      2,
+      expect.stringMatching(/^Doctor: test\/progress completed \(\d+ms\)$/),
+    );
+  });
+
   it("repairs modern checks and threads updated config", async () => {
     const scopes: unknown[] = [];
     const checks: DoctorHealthCheck[] = [

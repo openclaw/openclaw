@@ -535,6 +535,7 @@ async function runDoctorHealthContributionList(
         ...contributions.filter((entry) => entry.updateWork?.kind === "finalize"),
       ]
     : contributions;
+  const reportProgress = ctx.options.json !== true;
   try {
     for (const contribution of ordered) {
       // Skip before opening a plugin snapshot; these diagnostics cannot establish
@@ -555,6 +556,11 @@ async function runDoctorHealthContributionList(
       ) {
         continue;
       }
+      const startedAt = performance.now();
+      if (reportProgress) {
+        ctx.runtime.log(`Doctor: ${contribution.option.label} started`);
+      }
+      let outcome: "completed" | "warning" = "completed";
       try {
         const run = async () => {
           try {
@@ -585,12 +591,19 @@ async function runDoctorHealthContributionList(
           error instanceof DoctorStateMigrationRefusalError ||
           error instanceof ConfigWritePostCommitError
         ) {
+          outcome = "warning";
           throw error;
         }
         const { note } = await loadNoteModule();
         const message = `${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`;
         note(message, "Doctor warnings");
         recordDoctorHealthWarnings(ctx, [], [message]);
+        outcome = "warning";
+      } finally {
+        if (reportProgress) {
+          const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
+          ctx.runtime.log(`Doctor: ${contribution.option.label} ${outcome} (${durationMs}ms)`);
+        }
       }
     }
   } finally {
