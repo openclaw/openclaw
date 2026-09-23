@@ -75,6 +75,10 @@ When deletion history is missing, Doctor reports the number of unverified stores
 held back from repair. Ordinary session creation and database leases record unknown
 deletion history and continue; a missing row or reconstruction receipt does not
 make an agent deleted or unusable. Runtime does not recreate an empty journal on existing state.
+A surviving quarantine/integrity database is evidence of prior state even when the
+shared database and its registry are gone. Reopening shared state without an agent
+path preserves unknown deletion history; retained external stores still need Doctor
+reconstruction before maintenance.
 Verified fresh SQLite setup initializes the journal normally, without a missing-history
 warning. Legacy JSON session files alone do not require journal reconstruction.
 `openclaw doctor --fix` reconstructs the journal and records a receipt listing the

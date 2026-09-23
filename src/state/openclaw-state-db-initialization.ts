@@ -4,7 +4,10 @@ import { readAgentStorePathsFromConfig } from "../config/agent-store-source.js";
 import { listSqliteTargetCandidatePathsInDirectory } from "../config/sessions/session-sqlite-target-paths.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { resolveOpenClawStateDirForDatabasePath } from "./openclaw-state-db.paths.js";
+import {
+  resolveOpenClawStateDirForDatabasePath,
+  resolveQuarantineStorePath,
+} from "./openclaw-state-db.paths.js";
 
 export type StateDatabaseInitialization = { kind: "fresh" | "existing" | "unavailable" };
 
@@ -16,8 +19,11 @@ export function prepareStateDatabaseInitialization(
 ): StateDatabaseInitialization {
   try {
     if (
-      resolveSqliteDatabaseFilePaths(pathname).some((file) =>
-        fs.lstatSync(file, { throwIfNoEntry: false }),
+      // Lease admission leaves a durable integrity store even for unconfigured external agents.
+      [pathname, resolveQuarantineStorePath(env)].some((databasePath) =>
+        resolveSqliteDatabaseFilePaths(databasePath).some((file) =>
+          fs.lstatSync(file, { throwIfNoEntry: false }),
+        ),
       )
     ) {
       return { kind: "existing" };

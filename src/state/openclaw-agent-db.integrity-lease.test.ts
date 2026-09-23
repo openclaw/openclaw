@@ -9,6 +9,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations.media-persistence-targets.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import {
   claimOpenClawAgentDatabaseLease,
@@ -16,7 +17,10 @@ import {
   type OpenClawAgentDatabaseWorkerLeaseReceipt,
 } from "./openclaw-agent-db-lease.js";
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
-import { unregisterOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
+import {
+  listOpenClawRegisteredAgentDatabases,
+  unregisterOpenClawAgentDatabase,
+} from "./openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
@@ -31,7 +35,10 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import {
+  resolveOpenClawStateSqlitePath,
+  resolveQuarantineStorePath,
+} from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -273,7 +280,7 @@ it("records a full check while another lease belongs to the same process", () =>
   }
 });
 
-it.each(["closing", "unregistering"])(
+it.each(["closing", "unregistering", "reopening shared state before closing"])(
   "does not recreate deletion history when %s an external store after shared state is lost",
   (operation) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-lease-lost-state-") };
@@ -281,6 +288,7 @@ it.each(["closing", "unregistering"])(
     const database = openOpenClawAgentDatabase({ agentId: "retained", path: pathname, env });
     database.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{\"ok\":true}', 1)");
     const shared = openOpenClawStateDatabase({ env });
+    const registeredAgentDatabases = listOpenClawRegisteredAgentDatabases({ env });
     if (operation === "unregistering") {
       closeOpenClawAgentDatabaseByPath(pathname);
     }
@@ -291,10 +299,18 @@ it.each(["closing", "unregistering"])(
       fs.rmSync(file, { force: true });
     }
 
+    if (operation === "reopening shared state before closing") {
+      const reopened = openOpenClawStateDatabase({ env });
+      expect(
+        reopened.db
+          .prepare("SELECT name FROM sqlite_schema WHERE name='agent_deletion_journal'")
+          .get(),
+      ).toBeUndefined();
+    }
     expect(() =>
-      operation === "closing"
-        ? closeOpenClawAgentDatabaseByPath(pathname)
-        : unregisterOpenClawAgentDatabase({ agentId: "retained", path: pathname, env }),
+      operation === "unregistering"
+        ? unregisterOpenClawAgentDatabase({ agentId: "retained", path: pathname, env })
+        : closeOpenClawAgentDatabaseByPath(pathname),
     ).not.toThrow();
     expect(database.db.isOpen).toBe(false);
     {
@@ -314,6 +330,17 @@ it.each(["closing", "unregistering"])(
       ).toBeUndefined();
       expect(reopened.prepare("SELECT * FROM agent_database_leases").all()).toEqual([]);
     }
+    const discovery = discoverAgentDatabaseMigrationTargets({
+      env,
+      configuredAgentDatabaseTargets: [],
+      registeredAgentDatabases,
+    });
+    expect(discovery.targets).toEqual([]);
+    expect(discovery.unverifiedTargets).toEqual([
+      expect.objectContaining({ agentId: "retained", path: pathname }),
+    ]);
+    expect(discovery.warnings.join("\n")).toContain(`Held agent retained database ${pathname}`);
+    expect(discovery.warnings.join("\n")).toContain("openclaw doctor --fix");
     const reopened = openOpenClawAgentDatabase({ agentId: "retained", path: pathname, env });
     expect(
       reopened.db
@@ -374,3 +401,23 @@ it("retains the selected sibling inventory when failed-open cleanup must recreat
   expect(fs.existsSync(pathname)).toBe(false);
   expect(fs.readFileSync(siblingPath)).toEqual(before);
 });
+
+it.each(["", "-wal", "-shm", "-journal"])(
+  "preserves unknown deletion history from a surviving integrity-store family (%s)",
+  (suffix) => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-prior-integrity-state-") };
+    const quarantinePath = resolveQuarantineStorePath(env);
+    fs.mkdirSync(path.dirname(quarantinePath));
+    // No live handles or receipt rows exist; the durable footprint alone proves prior admission.
+    fs.writeFileSync(quarantinePath + suffix, "");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const reopened = openOpenClawStateDatabase({ env });
+      expect(
+        reopened.db
+          .prepare("SELECT name FROM sqlite_schema WHERE name='agent_deletion_journal'")
+          .get(),
+      ).toBeUndefined();
+      closeOpenClawStateDatabase();
+    }
+  },
+);

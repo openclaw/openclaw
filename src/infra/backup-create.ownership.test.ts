@@ -18,9 +18,11 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { resolveQuarantineStorePath } from "../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  resolveOpenClawStateSqlitePath,
+  resolveQuarantineStorePath,
+} from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";

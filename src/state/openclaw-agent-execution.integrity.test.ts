@@ -36,14 +36,16 @@ import * as verification from "./openclaw-database-verify.js";
 import {
   clearOpenClawAgentIntegrityVerification,
   readOpenClawAgentIntegrityVerification,
-  resolveQuarantineStorePath,
 } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import {
+  resolveOpenClawStateSqlitePath,
+  resolveQuarantineStorePath,
+} from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 const counter = vi.hoisted(() => ({
